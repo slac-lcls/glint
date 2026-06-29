@@ -1,0 +1,16 @@
+# caches / compiled
+__pycache__/
+*.pyc
+*.pyo
+*.so
+*.o
+# ML models (large; regenerate from training scripts)
+*.joblib
+# empty/CI error logs
+*.err
+# compiled standalone drivers (build from .cpp)
+experiments/xgandalf/xg_driver
+experiments/xgandalf/ffbidx_driver
+# scratch run outputs
+*_out.txt
+qd_sweep.txt

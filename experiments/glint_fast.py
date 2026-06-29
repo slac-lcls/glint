@@ -23,6 +23,7 @@ KEEP = int(os.environ.get("KEEP", "44"))                    # distinct_maxima re
 STEPS = int(os.environ.get("STEPS", "80"))                  # M3 ascent steps (K-sweep: 8 ties 80 at 3.6x)
 QDIST = os.environ.get("QDIST", "0") == "1"                  # D2: reciprocal-distance inlier (sigma-matched)
 QDTOL = float(os.environ.get("QDTOL", "0.004"))             # inlier radius in 1/A (q-space)
+DETREJ = os.environ.get("DETREJ", "0") == "1"               # D1: reject degenerate cell (OFF: regressed deflate)
 
 
 def anneal_batch_t(M0, Q, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02):
@@ -120,7 +121,9 @@ def index_blind_fast(q, acc=None):
     if float(key[b]) <= -1e8:
         return None
     cell = primitivize(buerger_reduce(best), q)
-    if cell is None or abs(np.linalg.det(np.asarray(cell, float))) < 1.0:
+    if cell is None:
+        return None
+    if DETREJ and abs(np.linalg.det(np.asarray(cell, float))) < 1.0:
         return None                                         # D1: reject degenerate (det~0) cell
     return cell
 

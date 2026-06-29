@@ -122,6 +122,8 @@ _CENTERINGS = [
     (lambda h, k, l: (k + l) % 2 == 0, np.array([[1., 0, 0], [0, .5, .5], [0, .5, -.5]])),   # A
     (lambda h, k, l: (h + l) % 2 == 0, np.array([[.5, 0, .5], [0, 1., 0], [.5, 0, -.5]])),   # B
 ]
+_CENTER = os.environ.get("CENTER", "0") == "1"      # D1 centering reduce: OFF by default
+                                                    # (regressed D3/D4 deflate 90->53; opt-in)
 
 
 def primitivize(M, Q):
@@ -135,23 +137,28 @@ def primitivize(M, Q):
     M = M.copy()
     for _ in range(3):
         H = Q @ M; hkl = np.rint(H); inl = np.abs(H - hkl).max(1) < 0.15
-        if inl.sum() < 8:
+        n0 = int(inl.sum())
+        if n0 < 8:
             break
-        reduced = False
+        Mt = M.copy(); reduced = False
         for j in range(3):
             nz = hkl[inl, j].astype(int); nz = nz[nz != 0]
             if len(nz) >= 5 and np.all(nz % 2 == 0):
-                M[:, j] = M[:, j] / 2.0; reduced = True
-        if not reduced:                                     # D1: centering (combination parity)
+                Mt[:, j] = Mt[:, j] / 2.0; reduced = True
+        if _CENTER and not reduced:                         # D1: centering (combination parity)
             hk = hkl[inl].astype(int); hk = hk[np.any(hk != 0, 1)]
             if len(hk) >= 10:
                 h, k, l = hk[:, 0], hk[:, 1], hk[:, 2]
                 for cond, P in _CENTERINGS:
                     if cond(h, k, l).mean() > 0.9:          # centered ~1.0 vs primitive ~0.5
-                        M = M @ P; reduced = True; break
+                        Mt = M @ P; reduced = True; break
         if not reduced:
             break
-        M = anneal(M, Q)
+        Mt = anneal(Mt, Q)
+        Hn = Q @ Mt; n1 = int((np.abs(Hn - np.rint(Hn)).max(1) < 0.15).sum())
+        if n1 < 0.9 * n0:                                   # GUARD: spurious reduction (multi-lattice
+            break                                           # false trigger) loses spots -> revert
+        M = Mt
     return buerger_reduce(M)
 
 

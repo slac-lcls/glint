@@ -18,8 +18,8 @@ import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("STEPS", "8")
 import numpy as np
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex")
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex/experiments")
+_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
+sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 from glint_fast import index_blind_fast, load, matched, LYSO, DEV
 from fftindex.multishot import same_lattice
 from oracle_blind import all_annealed

@@ -30,29 +30,25 @@ def _hkl(q, M):
     return r[inl].astype(int), q[inl], int(inl.sum())
 
 
-if __name__ == "__main__":
-    path = sys.argv[1] if len(sys.argv) > 1 else "frames_cxidb_clean.txt"
-    N = int(sys.argv[2]) if len(sys.argv) > 2 else 0
-    out = sys.argv[3] if len(sys.argv) > 3 else "glint_hybrid.stream"
-    frames = [np.asarray(q, float) for q in load(path) if len(q) >= 6]
-    if N: frames = frames[:N]
+def hybrid_index(frames, images=None, Mc_known=None, warmup=True):
+    """Fully-blind hybrid: blind-index all -> consensus cell -> cell-general rescue of failures ->
+    consensus-consistent results (list of write_stream dicts) + a stats dict. Pass Mc_known to
+    skip consensus and rescue against a supplied cell.  frames: list of (N,3) q in 1/A."""
     n = len(frames)
-    index_blind_fast(frames[0])                                          # warmup
+    images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
+    if warmup and n:
+        index_blind_fast(frames[0])
 
-    # 1) blind pass
     blind = [index_blind_fast(q) for q in frames]
     n_blind = sum(M is not None for M in blind)
 
-    # 2) consensus cell (no cell assumed)
-    Mc, support = consensus_cell([M for M in blind if M is not None])
-    if Mc is None:
-        print(f"consensus failed (support {support}); writing blind-only stream")
-        Mc = None
+    if Mc_known is not None:
+        Mc, support = np.asarray(Mc_known, float), -1
+    else:
+        Mc, support = consensus_cell([M for M in blind if M is not None])
 
-    # 3) rescue failures against Mc (cell-general) + 4) assemble consensus-consistent stream
     results = []; n_idx = n_resc = 0
-    edges = np.round(np.sort(np.linalg.norm(Mc, axis=0)), 1) if Mc is not None else None
-    for i, (q, M) in enumerate(zip(frames, blind)):
+    for q, M, meta in zip(frames, blind, images):
         consistent = M is not None and Mc is not None and same_lattice(M, Mc)
         if not consistent and Mc is not None:
             Mr = index_known_gpu_cell(q, Mc)
@@ -63,11 +59,30 @@ if __name__ == "__main__":
             hkl, qin, _ = _hkl(q, use); n_idx += 1
         else:
             hkl, qin = None, q
-        results.append({"image": os.path.basename(path), "event": i,
+        results.append({"image": meta["image"], "event": meta["event"],
                         "M": use, "q": qin, "hkl": hkl})
+    edges = np.round(np.sort(np.linalg.norm(Mc, axis=0)), 1) if Mc is not None else None
+    stats = {"n": n, "n_blind": n_blind, "support": support, "edges": edges,
+             "n_resc": n_resc, "n_idx": n_idx, "Mc": Mc}
+    return results, stats
+
+
+def _report(stats, out):
+    n = max(stats["n"], 1)
+    print(f"=== GLINT hybrid (blind+consensus+general-rescue), N={stats['n']} ===")
+    print(f"  blind indexed      : {stats['n_blind']}/{stats['n']} ({100*stats['n_blind']//n}%)")
+    print(f"  consensus cell     : {stats['edges']} A  support {stats['support']}")
+    print(f"  rescued failures   : {stats['n_resc']}")
+    print(f"  FINAL indexed      : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
+
+
+if __name__ == "__main__":
+    path = sys.argv[1] if len(sys.argv) > 1 else "frames_cxidb_clean.txt"
+    N = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+    out = sys.argv[3] if len(sys.argv) > 3 else "glint_hybrid.stream"
+    frames = [np.asarray(q, float) for q in load(path) if len(q) >= 6]
+    if N: frames = frames[:N]
+    images = [{"image": os.path.basename(path), "event": i} for i in range(len(frames))]
+    results, stats = hybrid_index(frames, images)
     write_stream(results, out)
-    print(f"=== GLINT hybrid (blind+consensus+general-rescue), N={n} ===")
-    print(f"  blind indexed      : {n_blind}/{n} ({100*n_blind//n}%)")
-    print(f"  consensus cell     : {edges} A  support {support}")
-    print(f"  rescued failures   : {n_resc}")
-    print(f"  FINAL indexed      : {n_idx}/{n} ({100*n_idx//n}%)  -> {out}")
+    _report(stats, out)

@@ -27,6 +27,22 @@ QDIST = os.environ.get("QDIST", "0") == "1"                  # D2: reciprocal-di
 QDTOL = float(os.environ.get("QDTOL", "0.004"))             # inlier radius in 1/A (q-space)
 DETREJ = os.environ.get("DETREJ", "0") == "1"               # D1: reject degenerate cell (OFF: regressed deflate)
 QPOW = float(os.environ.get("QPOW", "1.0"))                 # M2 weight w_i=|q_i|^-QPOW (GLINT 1; xgandalf paper 2)
+QHI = float(os.environ.get("QHI", "0"))                     # erf^2 high-q apodize: taper edge / qmax (0=off)
+QLO = float(os.environ.get("QLO", "0"))                     # erf^2 low-q (beamstop) apodize: edge / qmax (0=off)
+QAPSIG = float(os.environ.get("QAPSIG", "0.08"))            # apodization taper width / qmax
+
+
+def qband_apod(qn, qmax):
+    """Smooth erf^2 band-pass in |q| (apodize high-q resolution edge + low-q beamstop). The
+    square removes the first-order kink: window and slope both ->0 at each edge."""
+    a = torch.ones_like(qn); sig = QAPSIG * qmax
+    if QHI > 0:
+        qhi = QHI * qmax
+        a = a * torch.where(qn < qhi, torch.erf((qhi - qn) / sig) ** 2, torch.zeros_like(qn))
+    if QLO > 0:
+        qlo = QLO * qmax
+        a = a * torch.where(qn > qlo, torch.erf((qn - qlo) / sig) ** 2, torch.zeros_like(qn))
+    return a
 
 
 def anneal_batch_t(M0, Q, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02):
@@ -92,6 +108,8 @@ def index_blind_fast(q, acc=None):
     Q = torch.as_tensor(q, dtype=torch.float32, device=DEV)
     qmax = float(Q.norm(dim=1).max())
     w = invq_weight(Q) if QPOW == 1.0 else Q.norm(dim=1).clamp_min(1e-9) ** (-QPOW)
+    if QHI > 0 or QLO > 0:
+        w = w * qband_apod(Q.norm(dim=1), qmax)
     sync = (DEV == "cuda")
     if sync: torch.cuda.synchronize()
     t = time.time()

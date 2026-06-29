@@ -1,0 +1,73 @@
+"""Productized GLINT hybrid -> CrystFEL .stream (the LUTE/LCLS deliverable, fully blind).
+
+Pipeline (no cell prior):
+  1. blind-index every frame (GPU FAST front-end)            -> per-frame M
+  2. consensus_cell over the blind successes                  -> the run cell Mc (decisive)
+  3. rescue the failures against Mc with the cell-GENERAL     -> recovered orientations
+     known-cell GPU indexer (index_known_gpu_cell, not the lysozyme-specialized one)
+  4. write a .stream where every indexed crystal shares Mc's metric (consensus-consistent)
+
+The rescue is now cell-general, so this runs on ANY protein, not just lysozyme.
+
+  python hybrid_stream.py [frames.txt] [N] [out.stream]
+"""
+import os, sys
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("STEPS", "8")
+import numpy as np
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)
+sys.path.insert(0, _ROOT)
+sys.path.insert(0, _HERE)
+from glint_fast import index_blind_fast, load
+from replica_gpu import index_known_gpu_cell
+from fftindex.multishot import consensus_cell, same_lattice
+from fftindex.stream import write_stream
+
+
+def _hkl(q, M):
+    H = q @ M; r = np.rint(H); inl = np.abs(H - r).max(1) < 0.15
+    return r[inl].astype(int), q[inl], int(inl.sum())
+
+
+if __name__ == "__main__":
+    path = sys.argv[1] if len(sys.argv) > 1 else "frames_cxidb_clean.txt"
+    N = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+    out = sys.argv[3] if len(sys.argv) > 3 else "glint_hybrid.stream"
+    frames = [np.asarray(q, float) for q in load(path) if len(q) >= 6]
+    if N: frames = frames[:N]
+    n = len(frames)
+    index_blind_fast(frames[0])                                          # warmup
+
+    # 1) blind pass
+    blind = [index_blind_fast(q) for q in frames]
+    n_blind = sum(M is not None for M in blind)
+
+    # 2) consensus cell (no cell assumed)
+    Mc, support = consensus_cell([M for M in blind if M is not None])
+    if Mc is None:
+        print(f"consensus failed (support {support}); writing blind-only stream")
+        Mc = None
+
+    # 3) rescue failures against Mc (cell-general) + 4) assemble consensus-consistent stream
+    results = []; n_idx = n_resc = 0
+    edges = np.round(np.sort(np.linalg.norm(Mc, axis=0)), 1) if Mc is not None else None
+    for i, (q, M) in enumerate(zip(frames, blind)):
+        consistent = M is not None and Mc is not None and same_lattice(M, Mc)
+        if not consistent and Mc is not None:
+            Mr = index_known_gpu_cell(q, Mc)
+            if Mr is not None and same_lattice(Mr, Mc):
+                M = Mr; consistent = True; n_resc += 1
+        use = M if (consistent or (Mc is None and M is not None)) else None
+        if use is not None:
+            hkl, qin, _ = _hkl(q, use); n_idx += 1
+        else:
+            hkl, qin = None, q
+        results.append({"image": os.path.basename(path), "event": i,
+                        "M": use, "q": qin, "hkl": hkl})
+    write_stream(results, out)
+    print(f"=== GLINT hybrid (blind+consensus+general-rescue), N={n} ===")
+    print(f"  blind indexed      : {n_blind}/{n} ({100*n_blind//n}%)")
+    print(f"  consensus cell     : {edges} A  support {support}")
+    print(f"  rescued failures   : {n_resc}")
+    print(f"  FINAL indexed      : {n_idx}/{n} ({100*n_idx//n}%)  -> {out}")

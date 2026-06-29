@@ -107,6 +107,102 @@ def index_known_gpu(q, topa=8):
     return Mt[int(torch.argmax(key))].cpu().numpy()
 
 
+# ----- cell-GENERAL known-cell rescue (productization: not tied to lysozyme geometry) --------
+# index_known_gpu above bakes in LYSO's tetragonal sweep (anchor=short axis, perpendicular
+# equal-length a/b). The functions below take an ARBITRARY consensus basis Mc and rescue against
+# its true metric: anchor = shortest real axis (found from data), 2nd axis placed at the cell's
+# actual inter-axis angle (azimuth swept), 3rd axis fixed by the two metric constraints
+# a2.e0 = L2 cos02, a2.e1 = L2 cos12 with |a2|=L2 (handedness picked from det(Mc)). Reduces
+# EXACTLY to index_known_gpu when Mc is tetragonal (cos=0, L1=L2) -> built-in correctness check.
+
+def _axes_from_cell(Mc):
+    """Ordered axes (shortest first = data-robust anchor) from real-space basis Mc (cols a,b,c):
+    returns (L[3] lengths, c01, c02, c12 unit-cosines, sgn handedness)."""
+    A = np.asarray(Mc, float)
+    cols = [A[:, i] for i in range(3)]
+    order = list(np.argsort([np.linalg.norm(c) for c in cols]))
+    v0, v1, v2 = (cols[order[0]], cols[order[1]], cols[order[2]])
+    L = np.array([np.linalg.norm(v0), np.linalg.norm(v1), np.linalg.norm(v2)])
+    un = lambda v: v / np.linalg.norm(v)
+    c01 = float(un(v0) @ un(v1)); c02 = float(un(v0) @ un(v2)); c12 = float(un(v1) @ un(v2))
+    sgn = float(np.sign(np.linalg.det(np.stack([v0, v1, v2], axis=1))) or 1.0)
+    return L, c01, c02, c12, sgn
+
+
+def axis_candidates_t(Q, L0):
+    """c_candidates_t generalized to an arbitrary anchor length L0 (was hardcoded LC)."""
+    inl, sub = objective_t(L0 * DIRS, Q)
+    idx = torch.argsort(inl.double() * 100.0 - sub, descending=True)[:120]
+    ref = refine_vec_t((L0 * DIRS)[idx], Q, steps=30)
+    ref = ref / ref.norm(dim=1, keepdim=True) * L0
+    inl2, sub2 = objective_t(ref, Q)
+    order = torch.argsort(inl2.double() * 100.0 - sub2, descending=True)
+    refc = ref.cpu().numpy(); out = []
+    for j in order.tolist():
+        d = refc[j] / L0
+        if all(abs(d @ (o / L0)) < 0.985 for o in out):
+            out.append(refc[j])
+        if len(out) >= NC:
+            break
+    return torch.as_tensor(np.array(out), dtype=torch.float64, device=DEV) if out else None
+
+
+def _third_axis(a0, a1, L2, c02, c12, sgn):
+    """Place a2 (|a2|=L2) at fixed metric angles to a0,a1: a2.e0=L2 c02, a2.e1=L2 c12, in the
+    {e0,e1,e0xe1} frame; gamma sign = handedness. Infeasible azimuths -> 0 (dropped by det filter)."""
+    e0 = a0 / a0.norm(dim=1, keepdim=True)
+    e1 = a1 / a1.norm(dim=1, keepdim=True)
+    g = (e0 * e1).sum(1)                                     # = c01 per row
+    denom = 1.0 - g * g
+    alpha = L2 * (c02 - g * c12) / denom
+    beta = L2 * (c12 - g * c02) / denom
+    w = torch.cross(e0, e1, dim=1); wn = w.norm(dim=1, keepdim=True)
+    w = w / wn.clamp_min(1e-12)
+    g2 = L2 * L2 - (alpha ** 2 + beta ** 2 + 2 * alpha * beta * g)
+    feas = (denom.abs() > 1e-6) & (g2 > 0) & (wn.squeeze(1) > 1e-6)
+    gamma = sgn * torch.sqrt(g2.clamp_min(0.0))
+    a2 = alpha[:, None] * e0 + beta[:, None] * e1 + gamma[:, None] * w
+    return torch.where(feas[:, None], a2, torch.zeros_like(a2))
+
+
+def index_known_gpu_cell(q, Mc, topa=8):
+    """GPU known-cell rescue against an ARBITRARY consensus cell Mc (3x3 real-space cols)."""
+    L, c01, c02, c12, sgn = _axes_from_cell(Mc)
+    Q = torch.as_tensor(np.asarray(q, float), dtype=torch.float64, device=DEV)
+    if len(Q) < 6:
+        return None
+    C = axis_candidates_t(Q, float(L[0]))                   # anchor = shortest axis
+    if C is None:
+        return None
+    cn = C / C.norm(dim=1, keepdim=True)
+    tmp = torch.where(cn[:, :1].abs() < 0.9,
+                      torch.tensor([1.0, 0, 0], dtype=torch.float64, device=DEV),
+                      torch.tensor([0, 1.0, 0], dtype=torch.float64, device=DEV))
+    u = torch.cross(cn, tmp, dim=1); u = u / u.norm(dim=1, keepdim=True)
+    v = torch.cross(cn, u, dim=1)
+    s01 = float(np.sqrt(max(1.0 - c01 * c01, 0.0)))
+    a1 = float(L[1]) * (c01 * cn[:, None, :] +
+                        s01 * (CA[None, :, None] * u[:, None, :] + SA[None, :, None] * v[:, None, :]))  # (NC,NANG,3)
+    a0 = C[:, None, :].expand(-1, NANG, -1)
+    inl1, _ = objective_t(a1.reshape(-1, 3), Q); inl1 = inl1.reshape(len(C), NANG)
+    ta = min(topa, NANG)
+    topi = torch.topk(inl1, ta, dim=1).indices
+    a0s = torch.gather(a0, 1, topi[:, :, None].expand(-1, -1, 3)).reshape(-1, 3)
+    a1s = torch.gather(a1, 1, topi[:, :, None].expand(-1, -1, 3)).reshape(-1, 3)
+    a2s = _third_axis(a0s, a1s, float(L[2]), c02, c12, sgn)
+    M0 = torch.stack([a0s, a1s, a2s], dim=2)                # cols = anchor, axis1, axis2
+    det = torch.abs(torch.linalg.det(M0))
+    M0 = M0[det >= 1e3]
+    if len(M0) == 0:
+        return None
+    Mt = anneal_batch_t(M0, Q, thr0=0.30, contract=0.82, max_iter=20, min_thr=0.02)
+    H = torch.einsum('pc,bcd->bpd', Q, Mt); dd = torch.abs(H - torch.round(H))
+    main = (dd.amax(2) < 0.15).sum(1)
+    sub = torch.log2(torch.clamp(dd, TRIML, TRIMH) + DELTA).mean((1, 2))
+    key = main.double() * 1000.0 - sub
+    return Mt[int(torch.argmax(key))].cpu().numpy()
+
+
 def load(p):
     fr = []; L = open(p).read().split("\n"); i = 0
     while i < len(L):

@@ -32,6 +32,13 @@ PI = np.pi
 DEV = ("cuda" if torch.cuda.is_available() else
        "mps" if torch.backends.mps.is_available() else "cpu")
 
+# M2 proximity-function form (climb + score). "" = default cos / cos^2 with HARD tol mask.
+# Smooth forms (gauss/vonmises/softcos) carry their OWN falloff, so the hard mask is dropped
+# -> they replace the sharp indicator with a smooth window (sigma/kappa = soft tol).
+OBJFORM = os.environ.get("OBJFORM", "")
+OBJSIG = float(os.environ.get("OBJSIG", "0.12"))            # wrapped-Gaussian / soft-window width
+OBJKAP = float(os.environ.get("OBJKAP", "8.0"))             # von Mises concentration
+
 
 # ---- M1: sample -----------------------------------------------------------------
 def fib_sphere(D):
@@ -59,13 +66,29 @@ def objective(T, Q, w, tol=0.18, sharp=False):
     """M2: sum_i w_i c(q_i . T), c=cos(2pi x) | cos^2(pi x); tolerance-masked. Returns
     (f, grad). w is the SWAP POINT -- pass a photon/weak-peak-aware weight here."""
     proj = T @ Q.t()
-    mask = (torch.abs(proj - torch.round(proj)) < tol).to(T.dtype)
-    if sharp:
-        c = torch.cos(PI * proj) ** 2; dc = -PI * torch.sin(2 * PI * proj)
+    if OBJFORM == "":                                          # default: hard mask + cos / cos^2
+        mask = (torch.abs(proj - torch.round(proj)) < tol).to(T.dtype)
+        if sharp:
+            c = torch.cos(PI * proj) ** 2; dc = -PI * torch.sin(2 * PI * proj)
+        else:
+            c = torch.cos(2 * PI * proj); dc = -2 * PI * torch.sin(2 * PI * proj)
+        wm = w.unsqueeze(0) * mask
+        return (c * wm).sum(1), (dc * wm) @ Q
+    # smooth proximity forms: built-in falloff replaces the sharp indicator (no hard mask)
+    d = proj - torch.round(proj)                              # signed dist to nearest int [-0.5,0.5]
+    if OBJFORM == "gauss":                                    # wrapped Gaussian (smooth all-positive bump)
+        c = torch.exp(-(d * d) / (2 * OBJSIG ** 2)); dc = -(d / OBJSIG ** 2) * c
+    elif OBJFORM == "vonmises":                               # smooth cosine comb
+        c = torch.exp(OBJKAP * (torch.cos(2 * PI * proj) - 1)); dc = -2 * PI * OBJKAP * torch.sin(2 * PI * proj) * c
+    elif OBJFORM == "softcos":                                # cos x Gaussian window (smooth mask on cos)
+        win = torch.exp(-(d * d) / (2 * OBJSIG ** 2)); cc = torch.cos(2 * PI * proj)
+        c = cc * win; dc = (-2 * PI * torch.sin(2 * PI * proj)) * win + cc * (-(d / OBJSIG ** 2) * win)
+    elif OBJFORM == "tent":                                   # xgandalf linear proximity (1 at int, -1 midway)
+        c = 1 - 4 * torch.abs(d); dc = -4 * torch.sign(d)
     else:
-        c = torch.cos(2 * PI * proj); dc = -2 * PI * torch.sin(2 * PI * proj)
-    wm = w.unsqueeze(0) * mask
-    return (c * wm).sum(1), (dc * wm) @ Q
+        raise ValueError(f"unknown OBJFORM {OBJFORM}")
+    w0 = w.unsqueeze(0)
+    return (c * w0).sum(1), (dc * w0) @ Q
 
 
 # ---- M3: robust optimization of candidate vectors -------------------------------

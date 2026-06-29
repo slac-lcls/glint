@@ -23,6 +23,9 @@ PI = np.pi
 DEV = ("cuda" if torch.cuda.is_available() else
        "mps" if torch.backends.mps.is_available() else "cpu")
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
+XGDIR = int(os.environ.get("XGDIR", "2200"))                 # Fibonacci directions
+XGDL = float(os.environ.get("XGDL", "3.0"))                  # length-shell spacing (A)
+XGSTEPS = int(os.environ.get("XGSTEPS", "80"))               # M3 ascent steps (GLINT cut 80->8)
 
 
 def fib(D):
@@ -78,7 +81,7 @@ def cluster(Tn, fn, tol=2.0, keep=44):
     return np.array(vecs)
 
 
-STARTS = _starts().to(DEV)
+STARTS = _starts(n_dir=XGDIR, dl=XGDL).to(DEV)
 
 
 def index_blind(q, n_top=30, weight="invq"):
@@ -89,7 +92,7 @@ def index_blind(q, n_top=30, weight="invq"):
     qn = Q.norm(dim=1)
     qmax = float(qn.max())
     w = (1.0 / qn) if weight == "invq" else torch.ones_like(qn)
-    T = ascend(STARTS.clone(), Q, w, qmax)
+    T = ascend(STARTS.clone(), Q, w, qmax, steps=XGSTEPS)
     f, _ = obj_grad(T, Q, w, sharp=True)
     cands = cluster(T.cpu().numpy(), f.cpu().numpy())[:n_top]
     if len(cands) < 3:

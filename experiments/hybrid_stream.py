@@ -48,24 +48,24 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, xg_fallback=Fa
             xg_blind(frames[0])
 
     blind = [index_blind_fast(q) for q in frames]
-    xg = [xg_blind(q) for q in frames] if xg_blind else [None] * n
     n_blind = sum(M is not None for M in blind)
 
     if Mc_known is not None:
         Mc, support = np.asarray(Mc_known, float), -1
-    else:                                                        # xg cells add independent votes
-        votes = [M for M in blind if M is not None] + [M for M in xg if M is not None]
-        Mc, support = consensus_cell(votes)
+    else:
+        Mc, support = consensus_cell([M for M in blind if M is not None])
 
     results = []; n_idx = n_resc = n_xg = 0
-    for q, M, Mx, meta in zip(frames, blind, xg, images):
+    for q, M, meta in zip(frames, blind, images):
         consistent = M is not None and Mc is not None and same_lattice(M, Mc)
-        if not consistent and Mx is not None and Mc is not None and same_lattice(Mx, Mc):
-            M = Mx; consistent = True; n_xg += 1                 # xgandalf complementary catch
-        if not consistent and Mc is not None:
+        if not consistent and Mc is not None:                    # 1) FAST GPU known-cell rescue (ffbidx-style)
             Mr = index_known_gpu_cell(q, Mc)
             if Mr is not None and same_lattice(Mr, Mc):
                 M = Mr; consistent = True; n_resc += 1
+        if not consistent and xg_blind is not None and Mc is not None:  # 2) SLOW xgandalf, last resort only
+            Mx = xg_blind(q)
+            if Mx is not None and same_lattice(Mx, Mc):
+                M = Mx; consistent = True; n_xg += 1
         use = M if (consistent or (Mc is None and M is not None)) else None
         if use is not None:
             hkl, qin, _ = _hkl(q, use); n_idx += 1

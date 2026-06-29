@@ -26,6 +26,7 @@ STEPS = int(os.environ.get("STEPS", "80"))                  # M3 ascent steps (K
 QDIST = os.environ.get("QDIST", "0") == "1"                  # D2: reciprocal-distance inlier (sigma-matched)
 QDTOL = float(os.environ.get("QDTOL", "0.004"))             # inlier radius in 1/A (q-space)
 DETREJ = os.environ.get("DETREJ", "0") == "1"               # D1: reject degenerate cell (OFF: regressed deflate)
+QPOW = float(os.environ.get("QPOW", "1.0"))                 # M2 weight w_i=|q_i|^-QPOW (GLINT 1; xgandalf paper 2)
 
 
 def anneal_batch_t(M0, Q, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02):
@@ -89,7 +90,8 @@ def index_blind_fast(q, acc=None):
     if len(q) < 6:
         return None
     Q = torch.as_tensor(q, dtype=torch.float32, device=DEV)
-    qmax = float(Q.norm(dim=1).max()); w = invq_weight(Q)
+    qmax = float(Q.norm(dim=1).max())
+    w = invq_weight(Q) if QPOW == 1.0 else Q.norm(dim=1).clamp_min(1e-9) ** (-QPOW)
     sync = (DEV == "cuda")
     if sync: torch.cuda.synchronize()
     t = time.time()

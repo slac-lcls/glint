@@ -10,8 +10,10 @@ both FAST and accurate (xgandalf-class rate at >100x the throughput on sparse SF
 import os, sys, time, itertools
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex")
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex/experiments")
+_HERE = os.path.dirname(os.path.abspath(__file__))              # experiments/
+_ROOT = os.path.dirname(_HERE)                                  # repo root (has fftindex/)
+sys.path.insert(0, _ROOT)
+sys.path.insert(0, _HERE)
 from glint_index import (objective, refine_vec, distinct_maxima, anneal, score_defect,
                          invq_weight, buerger_reduce, primitivize, STARTS, DEV, index_blind)
 from fftindex.lattice import cell_to_Ar

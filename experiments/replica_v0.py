@@ -15,7 +15,8 @@ Modules:
 import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
-sys.path.insert(0, "/Users/smarches/git/fftindex")
+_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
+sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 from fftindex.lattice import cell_to_Ar
 from fftindex.multishot import same_lattice
 from diffgrid import load

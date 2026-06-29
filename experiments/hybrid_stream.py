@@ -30,26 +30,38 @@ def _hkl(q, M):
     return r[inl].astype(int), q[inl], int(inl.sum())
 
 
-def hybrid_index(frames, images=None, Mc_known=None, warmup=True):
+def hybrid_index(frames, images=None, Mc_known=None, warmup=True, xg_fallback=False):
     """Fully-blind hybrid: blind-index all -> consensus cell -> cell-general rescue of failures ->
     consensus-consistent results (list of write_stream dicts) + a stats dict. Pass Mc_known to
-    skip consensus and rescue against a supplied cell.  frames: list of (N,3) q in 1/A."""
+    skip consensus and rescue against a supplied cell.  frames: list of (N,3) q in 1/A.
+    xg_fallback=True also runs the xgandalf-paper indexer (paper_xg_gpu, defect-greedy assembly):
+    its cells add independent consensus votes and rescue GLINT-wrong frames its different
+    selection catches (complementary; tried before the known-cell rescue)."""
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
+    xg_blind = None
+    if xg_fallback:
+        from paper_xg_gpu import index_blind as xg_blind
     if warmup and n:
         index_blind_fast(frames[0])
+        if xg_blind:
+            xg_blind(frames[0])
 
     blind = [index_blind_fast(q) for q in frames]
+    xg = [xg_blind(q) for q in frames] if xg_blind else [None] * n
     n_blind = sum(M is not None for M in blind)
 
     if Mc_known is not None:
         Mc, support = np.asarray(Mc_known, float), -1
-    else:
-        Mc, support = consensus_cell([M for M in blind if M is not None])
+    else:                                                        # xg cells add independent votes
+        votes = [M for M in blind if M is not None] + [M for M in xg if M is not None]
+        Mc, support = consensus_cell(votes)
 
-    results = []; n_idx = n_resc = 0
-    for q, M, meta in zip(frames, blind, images):
+    results = []; n_idx = n_resc = n_xg = 0
+    for q, M, Mx, meta in zip(frames, blind, xg, images):
         consistent = M is not None and Mc is not None and same_lattice(M, Mc)
+        if not consistent and Mx is not None and Mc is not None and same_lattice(Mx, Mc):
+            M = Mx; consistent = True; n_xg += 1                 # xgandalf complementary catch
         if not consistent and Mc is not None:
             Mr = index_known_gpu_cell(q, Mc)
             if Mr is not None and same_lattice(Mr, Mc):
@@ -63,7 +75,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True):
                         "M": use, "q": qin, "hkl": hkl})
     edges = np.round(np.sort(np.linalg.norm(Mc, axis=0)), 1) if Mc is not None else None
     stats = {"n": n, "n_blind": n_blind, "support": support, "edges": edges,
-             "n_resc": n_resc, "n_idx": n_idx, "Mc": Mc}
+             "n_resc": n_resc, "n_xg": n_xg, "n_idx": n_idx, "Mc": Mc}
     return results, stats
 
 
@@ -72,6 +84,8 @@ def _report(stats, out):
     print(f"=== GLINT hybrid (blind+consensus+general-rescue), N={stats['n']} ===")
     print(f"  blind indexed      : {stats['n_blind']}/{stats['n']} ({100*stats['n_blind']//n}%)")
     print(f"  consensus cell     : {stats['edges']} A  support {stats['support']}")
+    if stats.get("n_xg"):
+        print(f"  xgandalf fallback  : {stats['n_xg']} caught")
     print(f"  rescued failures   : {stats['n_resc']}")
     print(f"  FINAL indexed      : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
 
@@ -83,6 +97,6 @@ if __name__ == "__main__":
     frames = [np.asarray(q, float) for q in load(path) if len(q) >= 6]
     if N: frames = frames[:N]
     images = [{"image": os.path.basename(path), "event": i} for i in range(len(frames))]
-    results, stats = hybrid_index(frames, images)
+    results, stats = hybrid_index(frames, images, xg_fallback=os.environ.get("XGFALL", "0") == "1")
     write_stream(results, out)
     _report(stats, out)

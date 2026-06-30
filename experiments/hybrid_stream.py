@@ -31,23 +31,18 @@ def _hkl(q, M):
     return r[inl].astype(int), q[inl], int(inl.sum())
 
 
-def hybrid_index(frames, images=None, Mc_known=None, warmup=True, xg_fallback=False, nbest=3):
+def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3):
     """Fully-blind hybrid. (1) N-BEST blind-index every frame (top-`nbest` distinct cells, not just
     argmax). (2) consensus over the POOLED N-best hypotheses (aliases scatter, truth clusters ->
     sturdier cell). (3) per frame pick the highest-scored N-best cell consistent with the consensus
     Mc -- this recovers reachable-but-not-top-1 cells that single-shot orientation ambiguity demotes
-    (+5 gated, corroborated). (4) cell-general known-cell GPU rescue for the rest; (5) optional slow
-    xgandalf last resort. Returns write_stream dicts + stats. nbest=1 reduces to top-1 consensus.
-    Pass Mc_known to skip consensus and rescue against a supplied cell. frames: list of (N,3) q (1/A)."""
+    (+5 gated, corroborated). (4) cell-general known-cell GPU rescue for the rest. Returns
+    write_stream dicts + stats. nbest=1 reduces to top-1 consensus. Pass Mc_known to skip consensus
+    and rescue against a supplied cell. frames: list of (N,3) q (1/A)."""
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
-    xg_blind = None
-    if xg_fallback:
-        from paper_xg_gpu import index_blind as xg_blind
     if warmup and n:
         index_blind_nbest(frames[0], nbest)
-        if xg_blind:
-            xg_blind(frames[0])
 
     NB = [index_blind_nbest(q, nbest) for q in frames]           # [(cell,score),...] per frame
     top1 = [nb[0][0] if nb else None for nb in NB]
@@ -58,7 +53,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, xg_fallback=Fa
     else:                                                        # consensus over the POOLED hypotheses
         Mc, support = consensus_cell([c for nb in NB for c, _ in nb])
 
-    results = []; n_idx = n_resc = n_xg = n_nb = 0
+    results = []; n_idx = n_resc = n_nb = 0
     for q, nb, t1, meta in zip(frames, NB, top1, images):
         M = None
         if Mc is not None:                                       # pick best consensus-consistent N-best hypothesis
@@ -67,14 +62,10 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, xg_fallback=Fa
                     M = c
                     n_nb += (c is not t1)                        # recovered via a non-top-1 hypothesis
                     break
-        if M is None and Mc is not None:                         # FAST GPU known-cell rescue (ffbidx-style)
+        if M is None and Mc is not None:                         # cell-general GPU known-cell rescue (ffbidx-style)
             Mr = index_known_gpu_cell(q, Mc)
             if Mr is not None and same_lattice(Mr, Mc):
                 M = Mr; n_resc += 1
-        if M is None and xg_blind is not None and Mc is not None:  # SLOW xgandalf, last resort only
-            Mx = xg_blind(q)
-            if Mx is not None and same_lattice(Mx, Mc):
-                M = Mx; n_xg += 1
         if M is None and Mc is None:                             # no consensus formed -> top-1 fallback
             M = t1
         if M is not None:
@@ -84,7 +75,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, xg_fallback=Fa
         results.append({"image": meta["image"], "event": meta["event"], "M": M, "q": qin, "hkl": hkl})
     edges = np.round(np.sort(np.linalg.norm(Mc, axis=0)), 1) if Mc is not None else None
     stats = {"n": n, "n_blind": n_blind, "support": support, "edges": edges, "n_nbest": n_nb,
-             "n_resc": n_resc, "n_xg": n_xg, "n_idx": n_idx, "Mc": Mc}
+             "n_resc": n_resc, "n_idx": n_idx, "Mc": Mc}
     return results, stats
 
 
@@ -95,8 +86,6 @@ def _report(stats, out):
     print(f"  consensus cell     : {stats['edges']} A  support {stats['support']}")
     if stats.get("n_nbest"):
         print(f"  N-best recovered   : {stats['n_nbest']} (consensus-consistent non-top-1 hypothesis)")
-    if stats.get("n_xg"):
-        print(f"  xgandalf fallback  : {stats['n_xg']} caught")
     print(f"  rescued failures   : {stats['n_resc']}")
     print(f"  FINAL indexed      : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
 
@@ -108,6 +97,6 @@ if __name__ == "__main__":
     frames = [np.asarray(q, float) for q in load(path) if len(q) >= 6]
     if N: frames = frames[:N]
     images = [{"image": os.path.basename(path), "event": i} for i in range(len(frames))]
-    results, stats = hybrid_index(frames, images, xg_fallback=os.environ.get("XGFALL", "0") == "1")
+    results, stats = hybrid_index(frames, images)
     write_stream(results, out)
     _report(stats, out)

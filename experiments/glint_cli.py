@@ -55,8 +55,6 @@ def main():
     ap.add_argument("--device", choices=("auto", "cpu"), default="auto")
     ap.add_argument("--nbest", type=int, default=3,
                     help="keep N-best cell hypotheses/frame for consensus (1 = top-1 only)")
-    ap.add_argument("--xg-fallback", action="store_true",
-                    help="also run the xgandalf-paper indexer (complementary assembly) as a fallback")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
     if args.peaks and not args.geom:
@@ -75,8 +73,7 @@ def main():
 
     from hybrid_stream import hybrid_index, _report           # torch import deferred to here
     from fftindex.stream import write_stream
-    results, stats = hybrid_index(frames, images, Mc_known=Mc_known,
-                                  xg_fallback=args.xg_fallback, nbest=args.nbest)
+    results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest)
     write_stream(results, args.out)
     _report(stats, args.out)
 

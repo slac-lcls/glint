@@ -50,6 +50,26 @@ artifact; tapering them off just deletes constraints. Apodization is the right t
 transform-domain ringing (FFT/DPS, real-space windows); kept default-off for real data with genuine
 high-q junk or a beamstop halo.
 
+## 4. Inlier-window half-width `TOL` — hard mask vs apodized edge
+
+The per-peak inlier indicator `1[|q·v−round| < TOL]` (xgandalf's ε). The xgandalf paper leaves ε
+empirical ("the smaller ε, the more resistant to spurious peaks") and notes the hard indicator makes
+the score *discontinuous* — the very thing the smooth `OBJFORM` window (§2) fixes. Sweep on 120 cxidb,
+hard `TOL` vs smooth gauss `OBJSIG`, clean and mild mosaic:
+
+| width | 0.10 | 0.15 | **0.18** | 0.25 | 0.35 |
+|---|---|---|---|---|---|
+| clean, HARD TOL | 59 | 63 | **70** | 63 | 62 |
+| clean, GAUSS σ | 67 | 70 | 66 | 59 | — |
+| mosaic, HARD TOL | 22 | 35 | **37** | 35 | 33 |
+| mosaic, GAUSS σ | 36 | **39** | 37 | 33 | — |
+
+`TOL = 0.18` is the **confirmed hard-mask optimum** (sharp-ish; 0.10/0.35 ~10 pts worse). The smooth
+window ties it (clean) or edges it (mosaic +2). **Widening past the optimum hurts both hard and
+smooth** — a wide window admits spurious peaks regardless of edge shape, so *apodization does not buy a
+wide window*. The lever for catching long-axis inliers under broadening is `QDIST` (isotropic
+reciprocal-distance), not widening the hkl-space window.
+
 ## Takeaway
 
 The front-end is **well-tuned and robust** — no single-knob change cracks the ~70% single-frame

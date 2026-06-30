@@ -1,13 +1,14 @@
 """Productized GLINT hybrid -> CrystFEL .stream (the LUTE/LCLS deliverable, fully blind).
 
 Pipeline (no cell prior):
-  1. blind-index every frame (GPU FAST front-end)            -> per-frame M
-  2. consensus_cell over the blind successes                  -> the run cell Mc (decisive)
-  3. rescue the failures against Mc with the cell-GENERAL     -> recovered orientations
-     known-cell GPU indexer (index_known_gpu_cell, not the lysozyme-specialized one)
-  4. write a .stream where every indexed crystal shares Mc's metric (consensus-consistent)
+  1. N-BEST blind-index every frame (top-3 distinct cells)     -> per-frame hypotheses
+  2. consensus over the POOLED N-best hypotheses               -> the run cell Mc (sturdier)
+  3. per frame pick the consensus-consistent N-best cell       -> recovers ambiguity-demoted truth
+  4. cell-GENERAL known-cell GPU rescue for the rest           -> recovered orientations
+  5. write a .stream where every indexed crystal shares Mc's metric (consensus-consistent)
 
-The rescue is now cell-general, so this runs on ANY protein, not just lysozyme.
+The rescue is cell-general (runs on ANY protein); N-best keeps the reachable-but-not-top-1
+hypotheses that single-shot orientation ambiguity demotes, arbitrated by cross-frame consensus.
 
   python hybrid_stream.py [frames.txt] [N] [out.stream]
 """
@@ -19,7 +20,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 sys.path.insert(0, _HERE)
-from glint_fast import index_blind_fast, load
+from glint_fast import index_blind_fast, index_blind_nbest, load
 from replica_gpu import index_known_gpu_cell
 from fftindex.multishot import consensus_cell, same_lattice
 from fftindex.stream import write_stream
@@ -30,51 +31,59 @@ def _hkl(q, M):
     return r[inl].astype(int), q[inl], int(inl.sum())
 
 
-def hybrid_index(frames, images=None, Mc_known=None, warmup=True, xg_fallback=False):
-    """Fully-blind hybrid: blind-index all -> consensus cell -> cell-general rescue of failures ->
-    consensus-consistent results (list of write_stream dicts) + a stats dict. Pass Mc_known to
-    skip consensus and rescue against a supplied cell.  frames: list of (N,3) q in 1/A.
-    xg_fallback=True also runs the xgandalf-paper indexer (paper_xg_gpu, defect-greedy assembly):
-    its cells add independent consensus votes and rescue GLINT-wrong frames its different
-    selection catches (complementary; tried before the known-cell rescue)."""
+def hybrid_index(frames, images=None, Mc_known=None, warmup=True, xg_fallback=False, nbest=3):
+    """Fully-blind hybrid. (1) N-BEST blind-index every frame (top-`nbest` distinct cells, not just
+    argmax). (2) consensus over the POOLED N-best hypotheses (aliases scatter, truth clusters ->
+    sturdier cell). (3) per frame pick the highest-scored N-best cell consistent with the consensus
+    Mc -- this recovers reachable-but-not-top-1 cells that single-shot orientation ambiguity demotes
+    (+5 gated, corroborated). (4) cell-general known-cell GPU rescue for the rest; (5) optional slow
+    xgandalf last resort. Returns write_stream dicts + stats. nbest=1 reduces to top-1 consensus.
+    Pass Mc_known to skip consensus and rescue against a supplied cell. frames: list of (N,3) q (1/A)."""
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
     xg_blind = None
     if xg_fallback:
         from paper_xg_gpu import index_blind as xg_blind
     if warmup and n:
-        index_blind_fast(frames[0])
+        index_blind_nbest(frames[0], nbest)
         if xg_blind:
             xg_blind(frames[0])
 
-    blind = [index_blind_fast(q) for q in frames]
-    n_blind = sum(M is not None for M in blind)
+    NB = [index_blind_nbest(q, nbest) for q in frames]           # [(cell,score),...] per frame
+    top1 = [nb[0][0] if nb else None for nb in NB]
+    n_blind = sum(1 for nb in NB if nb)
 
     if Mc_known is not None:
         Mc, support = np.asarray(Mc_known, float), -1
-    else:
-        Mc, support = consensus_cell([M for M in blind if M is not None])
+    else:                                                        # consensus over the POOLED hypotheses
+        Mc, support = consensus_cell([c for nb in NB for c, _ in nb])
 
-    results = []; n_idx = n_resc = n_xg = 0
-    for q, M, meta in zip(frames, blind, images):
-        consistent = M is not None and Mc is not None and same_lattice(M, Mc)
-        if not consistent and Mc is not None:                    # 1) FAST GPU known-cell rescue (ffbidx-style)
+    results = []; n_idx = n_resc = n_xg = n_nb = 0
+    for q, nb, t1, meta in zip(frames, NB, top1, images):
+        M = None
+        if Mc is not None:                                       # pick best consensus-consistent N-best hypothesis
+            for c, _ in nb:
+                if same_lattice(c, Mc):
+                    M = c
+                    n_nb += (c is not t1)                        # recovered via a non-top-1 hypothesis
+                    break
+        if M is None and Mc is not None:                         # FAST GPU known-cell rescue (ffbidx-style)
             Mr = index_known_gpu_cell(q, Mc)
             if Mr is not None and same_lattice(Mr, Mc):
-                M = Mr; consistent = True; n_resc += 1
-        if not consistent and xg_blind is not None and Mc is not None:  # 2) SLOW xgandalf, last resort only
+                M = Mr; n_resc += 1
+        if M is None and xg_blind is not None and Mc is not None:  # SLOW xgandalf, last resort only
             Mx = xg_blind(q)
             if Mx is not None and same_lattice(Mx, Mc):
-                M = Mx; consistent = True; n_xg += 1
-        use = M if (consistent or (Mc is None and M is not None)) else None
-        if use is not None:
-            hkl, qin, _ = _hkl(q, use); n_idx += 1
+                M = Mx; n_xg += 1
+        if M is None and Mc is None:                             # no consensus formed -> top-1 fallback
+            M = t1
+        if M is not None:
+            hkl, qin, _ = _hkl(q, M); n_idx += 1
         else:
             hkl, qin = None, q
-        results.append({"image": meta["image"], "event": meta["event"],
-                        "M": use, "q": qin, "hkl": hkl})
+        results.append({"image": meta["image"], "event": meta["event"], "M": M, "q": qin, "hkl": hkl})
     edges = np.round(np.sort(np.linalg.norm(Mc, axis=0)), 1) if Mc is not None else None
-    stats = {"n": n, "n_blind": n_blind, "support": support, "edges": edges,
+    stats = {"n": n, "n_blind": n_blind, "support": support, "edges": edges, "n_nbest": n_nb,
              "n_resc": n_resc, "n_xg": n_xg, "n_idx": n_idx, "Mc": Mc}
     return results, stats
 
@@ -84,6 +93,8 @@ def _report(stats, out):
     print(f"=== GLINT hybrid (blind+consensus+general-rescue), N={stats['n']} ===")
     print(f"  blind indexed      : {stats['n_blind']}/{stats['n']} ({100*stats['n_blind']//n}%)")
     print(f"  consensus cell     : {stats['edges']} A  support {stats['support']}")
+    if stats.get("n_nbest"):
+        print(f"  N-best recovered   : {stats['n_nbest']} (consensus-consistent non-top-1 hypothesis)")
     if stats.get("n_xg"):
         print(f"  xgandalf fallback  : {stats['n_xg']} caught")
     print(f"  rescued failures   : {stats['n_resc']}")

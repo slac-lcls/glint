@@ -150,6 +150,50 @@ def index_blind_fast(q, acc=None):
     return cell
 
 
+def index_blind_nbest(q, N=5):
+    """Return up to N DISTINCT candidate cells (primitivized, deduped by same_lattice) ranked by
+    the M4 score, as [(cell, score), ...] -- the n-best HYPOTHESES per frame. Sparse single-shot
+    indexing is rank-deficient (orientation ambiguous about the unobserved axis), so the true cell
+    is often a reachable-but-not-top-1 hypothesis that single-pass discards as wrong_cell/sel_miss.
+    Keep them (score-tagged) and let cross-frame consensus arbitrate (aliases don't recur)."""
+    q = np.asarray(q, float)
+    if len(q) < 6:
+        return []
+    Q = torch.as_tensor(q, dtype=torch.float32, device=DEV)
+    qmax = float(Q.norm(dim=1).max())
+    w = invq_weight(Q) if QPOW == 1.0 else Q.norm(dim=1).clamp_min(1e-9) ** (-QPOW)
+    if QHI > 0 or QLO > 0:
+        w = w * qband_apod(Q.norm(dim=1), qmax)
+    T = refine_vec(STARTS.clone(), Q, w, qmax, steps=STEPS)
+    f, _ = objective(T, Q, w, sharp=True)
+    cands = distinct_maxima(T.cpu().numpy(), f.cpu().numpy(), keep=KEEP)[:NTOP]
+    if len(cands) < 3:
+        return []
+    nrm = np.linalg.norm(cands, axis=1)
+    tris = np.array(list(itertools.combinations(range(len(cands)), 3)))
+    M0 = np.transpose(cands[tris], (0, 2, 1))
+    sc = nrm[tris].prod(1); det = np.abs(np.linalg.det(M0))
+    M0 = M0[(sc > 0) & (det >= 0.1 * sc)]
+    if len(M0) == 0:
+        return []
+    Qd = Q.double()
+    Mt = anneal_batch_t(torch.as_tensor(M0, dtype=torch.float64, device=DEV), Qd)
+    key, ni = score_batch_t(Mt, Qd)
+    order = torch.argsort(key, descending=True).cpu().numpy()
+    Mtn = Mt.cpu().numpy(); keyn = key.cpu().numpy()
+    out = []
+    for idx in order:
+        if keyn[idx] <= -1e8:
+            break
+        cell = primitivize(buerger_reduce(Mtn[idx]), q)
+        if cell is None or any(same_lattice(cell, c) for c, _ in out):
+            continue
+        out.append((cell, float(keyn[idx])))
+        if len(out) >= N:
+            break
+    return out
+
+
 def load(p):
     fr = []; L = open(p).read().split("\n"); i = 0
     while i < len(L):

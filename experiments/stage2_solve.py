@@ -64,4 +64,13 @@ print(f"  median worst-axis hkl residual = {score:.4f}; {100*frac:.0f}% spots <0
 C = A_recip if cname == "A" else A_recip.T
 hkl = (np.linalg.inv(C) @ G.T @ q_det.T).T
 print(f"  example hkl (rounded): {np.round(hkl[:6]).astype(int).tolist()}")
+# the detector-frame reciprocal/real basis that predict_spots should use: q_det^row = hkl^row @ R_det
+R_det = C.T @ G.T                          # q_det = G@C@hkl  =>  q_det^row = hkl^row @ (G C)^T
+M = np.linalg.inv(R_det)                   # real-space cell (columns a,b,c) in detector frame
+a, b, c = (np.linalg.norm(M[:, i]) for i in range(3))
+def ang(i, j):
+    u, v = M[:, i], M[:, j]
+    return np.degrees(np.arccos(np.clip(u @ v / (np.linalg.norm(u) * np.linalg.norm(v)), -1, 1)))
+print(f"  resulting cell from M=inv(C^T G^T): {a:.2f} {b:.2f} {c:.2f} A, "
+      f"{ang(1,2):.1f} {ang(0,2):.1f} {ang(0,1):.1f} deg  (expect lyso 79 79 38 90 90 90)")
 print("PASS: convention pinned" if score < 0.1 else f"FAIL: residual {score:.3f} (scan scale next)")

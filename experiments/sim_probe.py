@@ -55,7 +55,7 @@ SIM.distance_mm = DIST_MM
 SIM.Ncells_abc = (10, 10, 10)
 SIM.xtal_shape = shapetype.Gauss
 SIM.Fhkl = F
-SIM.Amatrix = sqr(tuple(A_recip.flatten()))          # random orientation: A = U B
+SIM.Amatrix = sqr(tuple(A_recip.T.flatten()))   # nanoBragg wants the transpose          # random orientation: A = U B
 SIM.add_nanoBragg_spots()
 img = SIM.raw_pixels.as_numpy_array().reshape(DET_N, DET_N)
 

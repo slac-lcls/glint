@@ -23,6 +23,7 @@ QDIST = os.environ.get("QDIST", "0") == "1"                  # D2: reciprocal-di
 QDTOL = float(os.environ.get("QDTOL", "0.004"))             # inlier radius in 1/A (q-space)
 DETREJ = os.environ.get("DETREJ", "0") == "1"               # D1: reject degenerate cell (OFF: regressed deflate)
 QPOW = float(os.environ.get("QPOW", "1.0"))                 # M2 weight w_i=|q_i|^-QPOW (GLINT 1; xgandalf paper 2)
+TOL = float(os.environ.get("TOL", "0.18"))                  # M2/M3 hard inlier window |q.v-round|<TOL (xgandalf eps)
 QHI = float(os.environ.get("QHI", "0"))                     # erf^2 high-q apodize: taper edge / qmax (0=off)
 QLO = float(os.environ.get("QLO", "0"))                     # erf^2 low-q (beamstop) apodize: edge / qmax (0=off)
 QAPSIG = float(os.environ.get("QAPSIG", "0.08"))            # apodization taper width / qmax
@@ -109,8 +110,8 @@ def index_blind_fast(q, acc=None):
     sync = (DEV == "cuda")
     if sync: torch.cuda.synchronize()
     t = time.time()
-    T = refine_vec(STARTS.clone(), Q, w, qmax, steps=STEPS)
-    f, _ = objective(T, Q, w, sharp=True)
+    T = refine_vec(STARTS.clone(), Q, w, qmax, steps=STEPS, tol=TOL)
+    f, _ = objective(T, Q, w, sharp=True, tol=TOL)
     cands = distinct_maxima(T.cpu().numpy(), f.cpu().numpy(), keep=KEEP)[:NTOP]
     if sync: torch.cuda.synchronize()
     if acc is not None: acc["gpu_front"] += time.time() - t
@@ -160,8 +161,8 @@ def index_blind_nbest(q, N=5):
     w = invq_weight(Q) if QPOW == 1.0 else Q.norm(dim=1).clamp_min(1e-9) ** (-QPOW)
     if QHI > 0 or QLO > 0:
         w = w * qband_apod(Q.norm(dim=1), qmax)
-    T = refine_vec(STARTS.clone(), Q, w, qmax, steps=STEPS)
-    f, _ = objective(T, Q, w, sharp=True)
+    T = refine_vec(STARTS.clone(), Q, w, qmax, steps=STEPS, tol=TOL)
+    f, _ = objective(T, Q, w, sharp=True, tol=TOL)
     cands = distinct_maxima(T.cpu().numpy(), f.cpu().numpy(), keep=KEEP)[:NTOP]
     if len(cands) < 3:
         return []

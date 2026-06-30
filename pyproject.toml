@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glint-indexer"
+version = "0.1.0"
+description = "GLINT: a fast GPU-native blind crystallography indexer for serial crystallography (SFX)"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{name = "Stefano Marchesini", email = "smarchesini@gmail.com"}]
+keywords = ["crystallography", "indexing", "serial-crystallography", "SFX", "GPU", "diffraction", "LCLS"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Intended Audience :: Science/Research",
+]
+dependencies = [
+    "numpy>=1.21",
+    "scipy>=1.7",
+    "torch>=1.12",          # CPU works out of the box; CUDA is used automatically if present
+]
+
+[project.scripts]
+glint = "fftindex.glint_cli:main"
+
+[tool.setuptools]
+packages = ["fftindex"]     # the engine now lives in the package; experiments/ are research scripts (not shipped)

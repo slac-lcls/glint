@@ -1,4 +1,53 @@
-# fftindex — sparse single-shot crystallography indexing by 3D FFT
+# GLINT — a fast GPU-native blind crystallography indexer
+
+GLINT indexes sparse single-shot serial-crystallography (SFX) diffraction **blind** (no unit
+cell supplied) on the GPU. It proposes candidate real-space axes from a gridless objective,
+anneals cells, keeps the *N*-best hypotheses per frame, derives the unit cell across frames by
+**consensus**, and rescues the remaining frames with a cell-general GPU known-cell indexer. It
+ingests exactly what a CrystFEL / LUTE peak search emits and writes a CrystFEL `.stream`, so it
+drops into the existing CrystFEL-based merging flow (`partialator`).
+
+On one NVIDIA A100, over 120 sparse cxidb-17 lysozyme frames, GLINT matches the blind indexing
+rate of xgandalf at ~340× the throughput and indexes 96% of frames blind.
+
+## Install
+
+```bash
+pip install -e .        # from a checkout; CPU works, CUDA is used automatically if available
+```
+
+Requires Python ≥ 3.9 and `numpy`, `scipy`, `torch` (installed automatically).
+
+## Command-line
+
+```bash
+# what a CrystFEL / peakfinder8 run emits: a peak-search stream + a .geom
+glint --peaks peaks.stream --geom detector.geom -o indexed.stream
+
+# or pre-bridged reciprocal q-vectors (FRAME blocks, 3 cols, 1/Angstrom)
+glint --qframes frames.txt -o indexed.stream
+```
+
+Options: `--cell "a b c al be ga"` (known cell, skip consensus) · `--nbest N` (multi-hypothesis
+consensus, default 3) · `--device cpu|auto` · `-N` (limit frames) · `--min-peaks` · `--wavelength`.
+
+## Library
+
+```python
+from fftindex.geom import parse_geom, read_crystfel_peaks, peaks_to_q   # CrystFEL .geom + peaks -> q
+from fftindex.hybrid_stream import hybrid_index                          # blind -> consensus -> rescue
+from fftindex.stream import write_stream                                 # results -> CrystFEL .stream
+```
+
+The blind front-end (`fftindex.glint_fast.index_blind_nbest`), the consensus
+(`fftindex.multishot.consensus_cell`), and the GPU known-cell rescue
+(`fftindex.replica_gpu.index_known_gpu_cell`) are all individually importable. The `experiments/`
+directory holds the research scripts and diagnostic harness (not shipped in the wheel); they
+import the package through thin back-compat shims.
+
+---
+
+# fftindex — sparse single-shot crystallography indexing by 3D FFT (research lineage)
 
 **Thesis.** Index sparse single-shot (SFX/nanocrystal) diffraction by taking the
 **3D FFT of the reciprocal peak cloud** and reading direct-lattice vectors off the

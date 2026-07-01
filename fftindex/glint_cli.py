@@ -51,6 +51,9 @@ def main():
     ap.add_argument("--device", choices=("auto", "cpu"), default="auto")
     ap.add_argument("--nbest", type=int, default=3,
                     help="keep N-best cell hypotheses/frame for consensus (1 = top-1 only)")
+    ap.add_argument("--cascade", metavar="DRIVER",
+                    help="optional external cell-given indexer binary (e.g. ffbidx/xgandalf driver) to "
+                         "fall back on for frames left unindexed; must use the FRAME-in / basis-out protocol")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
     if args.peaks and not args.geom:
@@ -69,7 +72,11 @@ def main():
 
     from fftindex.hybrid_stream import hybrid_index, _report           # torch import deferred to here
     from fftindex.stream import write_stream
-    results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest)
+    casc = None
+    if args.cascade:
+        from fftindex.cascade import external_cascade
+        casc = external_cascade(args.cascade)
+    results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest, cascade=casc)
     write_stream(results, args.out)
     _report(stats, args.out)
 

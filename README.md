@@ -8,7 +8,12 @@ ingests exactly what a CrystFEL / LUTE peak search emits and writes a CrystFEL `
 drops into the existing CrystFEL-based merging flow (`partialator`).
 
 On one NVIDIA A100, over 120 sparse cxidb-17 lysozyme frames, GLINT matches the blind indexing
-rate of xgandalf at ~340× the throughput and indexes 96% of frames blind.
+rate of xgandalf at ~550× the throughput, and with cross-frame consensus indexes 96% of frames
+blind (≥10 reflections).
+
+> **Naming.** Installed as the **`glint`** command; the importable Python package is still named
+> **`fftindex`** (historical — GLINT grew out of the *fftindex* 3D-FFT indexer documented in the
+> "research lineage" section below), so library imports read `from fftindex… import …`.
 
 ## Install
 

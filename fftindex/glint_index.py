@@ -164,6 +164,31 @@ def distinct_maxima_gpu(T, f, tol=2.0, keep=44, minlen=20.0):
     return Tc[keepmask][:keep]                                # position order == f-descending
 
 
+def distinct_cells_gpu(M, key, tol=1.0):
+    """Group annealed cells M (B,3,3) by a rotation+permutation-invariant METRIC signature -- the
+    sorted sqrt-eigenvalues of the Gram G=M^T M (principal-axis lengths; capture both lengths AND
+    angles), rounded to `tol` A -- and return the MAX-key representative index per group, sorted by
+    key descending (invalid key<=-1e8 dropped). Lets index_blind_nbest reduce only the few DISTINCT
+    cells instead of all ~1200 triplets: ~1000 triplets converge to the identical setting -> one
+    signature. Exactness preserved because same_lattice still arbitrates the reps in the loop, and a
+    candidate dropped here shares a rep of >= its score that reduces to the same lattice."""
+    G = torch.einsum('bji,bjk->bik', M, M)                    # Gram = M^T M  (B,3,3)
+    ev = torch.linalg.eigvalsh(G).clamp_min(0.0).sqrt()       # (B,3) principal lengths, ascending
+    s = torch.round(ev / tol).long()                          # rounded signature (already sorted asc)
+    s = s - s.amin(0)
+    b1 = int(s[:, 1].max()) + 1; b2 = int(s[:, 2].max()) + 1
+    K = (s[:, 0] * b1 + s[:, 1]) * b2 + s[:, 2]               # 3-int signature -> 1D hash
+    order = torch.argsort(key, descending=True)               # score desc
+    Ks = K[order]
+    uniq, inv = torch.unique(Ks, return_inverse=True)
+    N = Ks.shape[0]
+    firstpos = torch.full((uniq.shape[0],), N, device=M.device, dtype=torch.long)
+    firstpos.scatter_reduce_(0, inv, torch.arange(N, device=M.device), reduce="amin", include_self=True)
+    reps = order[firstpos]                                     # max-key rep per signature group
+    reps = reps[key[reps] > -1e8]                             # drop invalid cells
+    return reps[torch.argsort(key[reps], descending=True)]
+
+
 # ---- M5: residual-threshold annealing (cell refine) -----------------------------
 def anneal(M, Q, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02):
     """M5: closed-form OLS fit to inliers; trim residuals; anneal threshold down.

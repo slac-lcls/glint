@@ -11,8 +11,8 @@ import os, sys, time, itertools
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
 from fftindex.glint_index import (objective, refine_vec, refine_vec_newton, distinct_maxima,
-                         distinct_maxima_gpu, anneal, score_defect, invq_weight, buerger_reduce,
-                         primitivize, STARTS, DEV, index_blind)
+                         distinct_maxima_gpu, distinct_cells_gpu, anneal, score_defect, invq_weight,
+                         buerger_reduce, primitivize, STARTS, DEV, index_blind)
 from fftindex.lattice import cell_to_Ar
 from fftindex.multishot import same_lattice
 
@@ -306,16 +306,18 @@ def index_blind_nbest(q, N=5):
         return []
     Mt = anneal_batch_t(M0, Qd)
     key, ni = score_batch_t(Mt, Qd)
-    order = torch.argsort(key, descending=True).cpu().numpy()
-    Mtn = Mt.cpu().numpy(); keyn = key.cpu().numpy()
+    reps = distinct_cells_gpu(Mt, key)                        # GPU metric-dedup: reduce only DISTINCT cells
+    if int(reps.numel()) == 0:
+        return []
+    Mtn = Mt[reps].cpu().numpy(); keyn = key[reps].cpu().numpy()   # only the few reps hit the CPU reduce
     out = []
-    for idx in order:
-        if keyn[idx] <= -1e8:
+    for i in range(len(reps)):
+        if keyn[i] <= -1e8:
             break
-        cell = primitivize(buerger_reduce(Mtn[idx]), q)
+        cell = primitivize(buerger_reduce(Mtn[i]), q)
         if cell is None or any(same_lattice(cell, c) for c, _ in out):
             continue
-        out.append((cell, float(keyn[idx])))
+        out.append((cell, float(keyn[i])))
         if len(out) >= N:
             break
     return out

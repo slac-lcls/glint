@@ -1,0 +1,20 @@
+!LUTE_DAG
+# SFX pipeline with the GLINT GPU indexer as a drop-in for CrystFELIndexer. GLINTIndexer runs on a GPU
+# partition (ampere) -- the one difference from the CPU CrystFEL node. Downstream Concat/Partialator/HKL
+# consume GLINT's .stream unchanged. For the best MERGE, set `fromfile` in the IndexGLINT config and add a
+# CrystFEL `--indexing=file` refine step (see README).
+task_name: "PeakFinderSFX"
+slurm_params: "--account=lcls:prjdat21 --partition=milano --nodes=1 --ntasks-per-node=73 --exclusive"
+next:
+- task_name: "GLINTIndexer"
+  slurm_params: "--account=lcls:default@ampere --partition=ampere --nodes=1 --ntasks-per-node=1 --gres=gpu:a100:1"
+  next:
+  - task_name: "StreamFileConcatenator"
+    slurm_params: "--account=lcls:prjdat21 --partition=milano --nodes=1 --ntasks-per-node=2"
+    next:
+    - task_name: "PartialatorMerger"
+      slurm_params: "--account=lcls:prjdat21 --partition=milano --nodes=1 --ntasks-per-node=73 --exclusive"
+      next:
+      - task_name: "HKLManipulator"
+        slurm_params: "--account=lcls:prjdat21 --partition=milano --nodes=1 --ntasks-per-node=8"
+        next: []

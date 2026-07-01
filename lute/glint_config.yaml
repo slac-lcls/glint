@@ -1,0 +1,26 @@
+%YAML 1.3
+# Example LUTE config for the GLINT SFX DAG. The IndexGLINT section is the new part; FindPeaksSFX and the
+# downstream merge sections are as in the standard peakfinder8_lcls2 example (copy those from there).
+---
+title: "GLINT GPU indexer in the LUTE SFX pipeline (example)"
+experiment: "mfx101343025"
+lute_version: 0.1
+task_timeout: 300000000
+work_dir: "/sdf/data/lcls/ds/prj/prjdat21/scratch/glint_sfx"
+---
+# ... FindPeaksSFX: (copy from tests/functional/peakfinder8_lcls2/config.yaml) ...
+
+IndexGLINT:
+    geom: "{{ work_dir }}/detector.geom"        # CrystFEL .geom
+    peaks: "{{ work_dir }}/peaks.stream"         # FindPeaksSFX peak-search stream
+    out: "{{ work_dir }}/glint.stream"
+    cell: null                                    # blind cross-frame consensus; or "78.6 78.6 37.9 90 90 90"
+    mode: "auto"                                  # auto | sparse | dense
+    nbest: 3
+    device: "auto"
+    # --- for the best MERGE, emit the refined-merge solution and add an indexamajig --indexing=file step: ---
+    # fromfile: "{{ work_dir }}/glint.sol"
+    # lattice: "tPc"                              # tetragonal; then: indexamajig --indexing=file
+    #                                              --fromfile-input-file=glint.sol --tolerance=10,10,10,3
+
+# ... StreamFileConcatenator / PartialatorMerger / HKLManipulator: (copy from the standard example) ...

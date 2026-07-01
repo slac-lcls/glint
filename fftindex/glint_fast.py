@@ -32,6 +32,8 @@ FFTSEED_CAP = int(os.environ.get("FFTSEED_CAP", "700"))     # FFT-seeded: cap rl
 REFINER = os.environ.get("REFINER", "grad")                 # M3: grad (default GD+momentum) | newton (damped 3x3)
 NEWTON_STEPS = int(os.environ.get("NEWTON_STEPS", "4"))     # damped-Newton iterations
 CLUSTER_MIN = int(os.environ.get("CLUSTER_MIN", "3000"))    # cluster-FFT only for genuinely DENSE (rotation) clouds; thin/moderate -> Fibonacci (fast+robust there; SFX <3000 unaffected)
+ANNEAL_FP32 = os.environ.get("ANNEAL_FP32", "0") == "1"     # M5 anneal/score dtype: fp64 (default, bit-matched scalar) | fp32 (faster; validate rate)
+ADT = torch.float32 if ANNEAL_FP32 else torch.float64
 
 
 def qband_apod(qn, qmax):
@@ -129,7 +131,7 @@ def index_blind_fast(q, acc=None, starts=None):
         return None
     # M4: build all valid triplets ON DEVICE, batched anneal + score on GPU (no numpy/host hop)
     t = time.time()
-    Qd = Q.double(); cd = cands.double()                    # M4 in fp64 (matches scalar anneal)
+    Qd = Q.to(ADT); cd = cands.to(ADT)                      # M4/M5 dtype (fp64 default; ANNEAL_FP32 flag)
     tri = torch.combinations(torch.arange(cd.shape[0], device=DEV), 3)  # (B,3) lexicographic
     M0 = cd[tri].permute(0, 2, 1)                           # (B,3,3) cols=axes
     nrm = cd.norm(dim=1); sc = nrm[tri].prod(1)
@@ -297,7 +299,7 @@ def index_blind_nbest(q, N=5):
     cands = distinct_maxima_gpu(T, f, keep=KEEP)[:NTOP]        # M2 dedup ON DEVICE
     if int(cands.shape[0]) < 3:
         return []
-    Qd = Q.double(); cd = cands.double()                      # M4 triplet build ON DEVICE
+    Qd = Q.to(ADT); cd = cands.to(ADT)                        # M4 triplet build ON DEVICE (ANNEAL_FP32 flag)
     tri = torch.combinations(torch.arange(cd.shape[0], device=DEV), 3)
     M0 = cd[tri].permute(0, 2, 1)
     nrm = cd.norm(dim=1); sc = nrm[tri].prod(1); det = torch.linalg.det(M0).abs()

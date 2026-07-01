@@ -102,7 +102,15 @@ def index_known_gpu(q, topa=8):
     main = (dd.amax(2) < 0.15).sum(1)                                                  # ffbidx score_thr
     sub = torch.log2(torch.clamp(dd, TRIML, TRIMH) + DELTA).mean((1, 2))
     key = main.double() * 1000.0 - sub
-    return Mt[int(torch.argmax(key))].cpu().numpy()
+    b = int(torch.argmax(key)); best = Mt[b]
+    # GUARDED gate-matched polish (see index_known_gpu_cell): re-anneal the winner to the 0.15 gate
+    # tolerance for completeness; accept only if it indexes >= spots AND stays the known (LYSO) lattice.
+    pol = anneal_batch_t(best[None], Q, thr0=0.30, contract=0.85, max_iter=10, min_thr=0.15)[0]
+    Hp = Q @ pol; mp = int((torch.abs(Hp - torch.round(Hp)).amax(1) < 0.15).sum())
+    poln = pol.cpu().numpy()
+    if mp >= int(main[b]) and same_lattice(poln, LYSO):                     # more spots AND still LYSO
+        return poln
+    return best.cpu().numpy()
 
 
 # ----- cell-GENERAL known-cell rescue (productization: not tied to lysozyme geometry) --------
@@ -198,7 +206,17 @@ def index_known_gpu_cell(q, Mc, topa=8):
     main = (dd.amax(2) < 0.15).sum(1)
     sub = torch.log2(torch.clamp(dd, TRIML, TRIMH) + DELTA).mean((1, 2))
     key = main.double() * 1000.0 - sub
-    return Mt[int(torch.argmax(key))].cpu().numpy()
+    b = int(torch.argmax(key)); best = Mt[b]
+    # GUARDED gate-matched polish: the winner was annealed tight (min_thr 0.02) and over-fits a few spots;
+    # re-anneal it to the 0.15 gate tolerance so it indexes MORE spots (completeness). Accept the looser
+    # refit ONLY if it indexes at least as many 0.15-inliers (reverts on drift -> never loses the lattice
+    # or a >=10-refl frame; lifts the strict >=25%-of-spots gate).
+    pol = anneal_batch_t(best[None], Q, thr0=0.30, contract=0.85, max_iter=10, min_thr=0.15)[0]
+    Hp = Q @ pol; mp = int((torch.abs(Hp - torch.round(Hp)).amax(1) < 0.15).sum())
+    poln = pol.cpu().numpy()
+    if mp >= int(main[b]) and same_lattice(poln, np.asarray(Mc, float)):    # more spots AND still the known cell
+        return poln
+    return best.cpu().numpy()
 
 
 def load(p):

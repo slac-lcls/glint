@@ -56,6 +56,7 @@ validation gates) is in [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/onboardi
 
 ## Origins
 
-GLINT grew out of an earlier 3D-FFT indexing prototype (a learned peakfinder + multi-shot consensus
-on the transform volume). That research write-up — with its results and the ideas that carried over —
-is preserved in [`docs/lineage.md`](docs/lineage.md).
+GLINT's blind sparse indexer is a gridless **multi-start optimizer + cross-frame selector** (not an
+FFT). The **3-D-FFT** method it grew out of (the *fftindex* prototype — a learned peakfinder + multi-shot
+consensus on the transform volume) is now the **dense-data** (rotation / many-peak) front end. That
+research write-up is preserved in [`docs/lineage.md`](docs/lineage.md).

@@ -4,6 +4,12 @@
 > **3D FFT of the reciprocal peak cloud** and reading lattice vectors off the transform, with a learned
 > peakfinder on the volume and multi-shot consensus. This is the original write-up, preserved for
 > context and results; the shipped indexer is now **GLINT** (see the main [README](../README.md)).
+>
+> **Scope.** In production GLINT this 3-D-FFT method is the **dense-case** (rotation / many-peak) front
+> end. The sparse *blind* path does **not** use an FFT — it is a gridless direct-sum **multi-start
+> optimizer + cross-frame selector** (see the primer in [`onboarding.md`](onboarding.md) §0 and the
+> paper's *Candidate-generation* section, which records why the direct sum won for sparse data). The
+> literature for the whole field is in [`onboarding.md`](onboarding.md) §0 "Further reading".
 
 **Thesis.** Index sparse single-shot (SFX/nanocrystal) diffraction by taking the
 **3D FFT of the reciprocal peak cloud** and reading direct-lattice vectors off the

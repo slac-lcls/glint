@@ -31,14 +31,42 @@ the **Ewald sphere** — typically **~15–60 spots**, sparse, with noise and sp
 case) often **no unit cell known in advance** — "blind". Many classical indexers need the cell; blind +
 sparse is where most methods fall over.
 
-**What GLINT does:** it proposes candidate basis vectors from a gridless objective (the FFT / direct-sum
-lineage — see [`lineage.md`](lineage.md)), refines them by gradient ascent, and keeps the *N* best
-hypotheses per frame. Because every shot in a run shares **one** cell, it then derives that cell by
-**consensus across frames** and re-indexes the stragglers with a fast GPU known-cell matcher. All of it
-is GPU-batched, so it runs at hundreds of frames/s and outputs an oriented lattice per frame → a
-CrystFEL `.stream` → merge. Where the maths lives: `glint/lattice.py` (cell ↔ basis, SO(3)),
-`glint/glint_fast.py` (the objective + ascent), `glint/multishot.py` (consensus). The paper's
-*Architecture* section is the fuller treatment.
+**What GLINT does — a multi-start optimizer + selector.** For the sparse blind case, GLINT is best read
+as *massively parallel multi-start optimization*: it seeds **many** candidate directions distributed over
+the sphere, ascends each on a **gridless** scoring objective — a direct sum $\sum_i w_i \cos(2\pi\,x\cdot
+q_i)$ that peaks when $x$ is a true lattice vector — to its nearest continuous maximum, and then
+**selects** the basis vectors that many starts *and* many frames converge on (the consensus / parsimony
+step). No FFT, no grid: the true lattice vectors are simply the basins that attract the most starts.
+For **dense** data (full / partial rotations, many peaks) it instead seeds from a **3-D FFT** of local
+peak clusters — the transform method the project was originally built on (see [`lineage.md`](lineage.md)).
+Both front ends feed one refine → assemble → anneal → score core plus a GPU known-cell rescue, all
+GPU-batched (hundreds of frames/s), emitting an oriented lattice per frame → CrystFEL `.stream` → merge.
+Where the maths lives: `glint/glint_fast.py` (seed grid + objective + ascent — the *optimizer*),
+`glint/multishot.py` (cross-frame consensus — the *selector*), `glint/lattice.py` (cell ↔ basis, SO(3)).
+The paper's *Architecture* and *Candidate-generation* sections are the fuller treatment.
+
+### Further reading — the indexing literature
+
+GLINT reuses the field's strongest ideas; these are the primary sources, grouped by method family (the
+same taxonomy as the paper's landscape table). Start here to place GLINT in context:
+
+- **1-D-FFT / projection (DPS):** Steller, Bolotovsky & Rossmann, *J. Appl. Cryst.* **30**, 1036 (1997);
+  MOSFLM — Battye *et al.*, *Acta Cryst.* **D67**, 271 (2011); *labelit* — Sauter, Grosse-Kunstleve &
+  Adams, *J. Appl. Cryst.* **37**, 399 (2004).
+- **3-D FFT of the peak cloud** *(GLINT's dense front end; the fftindex origin — [`lineage.md`](lineage.md))*:
+  DIALS `fft3d` — Winter *et al.*, *Acta Cryst.* **D74**, 85 (2018); cctbx — Grosse-Kunstleve *et al.*,
+  *J. Appl. Cryst.* **35**, 126 (2002).
+- **Difference vectors:** DirAx — Duisenberg, *J. Appl. Cryst.* **25**, 92 (1992); TakeTwo — Ginn *et al.*,
+  *Acta Cryst.* **D72**, 956 (2016); CrystFEL `asdf` — White *et al.*, *J. Appl. Cryst.* **45**, 335 (2012).
+- **Sampling / optimization** *(GLINT's family for the sparse blind path)*: xgandalf — Gevorkov *et al.*,
+  *Acta Cryst.* **A75**, 694 (2019); pinkIndexer — Gevorkov *et al.*, *Acta Cryst.* **A76**, 121 (2020);
+  TORO — Gasparotto *et al.*, *J. Appl. Cryst.* **57**, 931 (2024), doi:10.1107/S1600576724003182;
+  *fast feedback indexer* (ffbidx) — PSI software.
+- **Merging / post-refinement:** *partialator* — White, *Phil. Trans. R. Soc. B* **369**, 20130330 (2014).
+- **The fftindex lineage specifically:** *Compressive Auto-Indexing in Femtosecond Nanocrystallography*,
+  arXiv:1011.3072; PeakNet (learned peak finding), arXiv:2303.15301.
+- **Recent / adjacent:** Nasser *et al.*, *Robust Indexing for Challenging Serial X-ray Diffraction
+  Patterns* (2025, symmetry-aware lattice decoding, small-N); CBXD — Li *et al.*, arXiv:2602.14402 (2026).
 
 ## 1. Repository & sync model
 

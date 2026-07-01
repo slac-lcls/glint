@@ -152,6 +152,67 @@ def refine_vec_cg(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None):
     return T
 
 
+def refine_vec_bb(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None):
+    """M3 variant: safeguarded BARZILAI-BORWEIN ascent. Stays in the gradient direction (no basin-jump
+    like Newton/CG) but the STEP SIZE is the BB1 estimate alpha = |s|^2 / -(s.y) (s=ΔT, y=Δg), which
+    captures curvature scaling without a Hessian. First step = normalized GD; degenerate alpha (<=0 /
+    non-finite, i.e. crossing a non-concave region) falls back to normalized GD; the step norm is capped
+    to 2*step0 so it stays gentle on the multimodal cos-comb. Question: converge in fewer steps at equal rate?"""
+    if sharp_last is None:
+        sharp_last = max(1, steps // 3)
+    step0 = 0.25 / qmax
+    T_prev = None; g_prev = None
+    for s in range(steps):
+        _, g = objective(T, Q, w, tol, sharp=(s >= steps - sharp_last))
+        gd = step0 * g / (g.norm(dim=1, keepdim=True) + 1e-12)       # safe normalized-GD step
+        if T_prev is None:
+            step = gd
+        else:
+            sv = T - T_prev; y = g - g_prev
+            alpha = (sv * sv).sum(1, keepdim=True) / (-(sv * y).sum(1, keepdim=True) + 1e-12)   # BB1 (ascent)
+            step = alpha * g
+            sn = step.norm(dim=1, keepdim=True); cap = 2.0 * step0
+            step = torch.where(sn > cap, step * (cap / (sn + 1e-12)), step)                     # gentle cap
+            bad = ~torch.isfinite(alpha) | (alpha <= 0)
+            step = torch.where(bad, gd, step)                                                    # fallback
+        T_prev = T; g_prev = g
+        T = T + step
+    return T
+
+
+def refine_vec_lm(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mu0=None):
+    """M3 variant: LEVENBERG-MARQUARDT ascent (steepest -> Newton) with ADAPTIVE per-seed damping -- the
+    safety valve plain refine_vec_newton (fixed mu) lacked. Step = (H - mu*I)^{-1} g; large mu = small
+    steepest step (safe), small mu = Newton (fast). Accept the step only if the objective improves; on a
+    good step SHRINK mu (toward Newton), on a bad step REJECT + GROW mu (retreat to steepest) -> no
+    basin-jump. mu starts large (steepest) and self-tunes per seed."""
+    if sharp_last is None:
+        sharp_last = max(1, steps // 3)
+    B = T.shape[0]
+    eye = torch.eye(3, dtype=T.dtype, device=T.device)
+    mu = torch.full((B, 1, 1), (2 * PI) ** 2 * (1.0 if mu0 is None else mu0), dtype=T.dtype, device=T.device)
+    f, _ = objective(T, Q, w, tol, sharp=False)                      # (B,) accept metric (consistent)
+    for s in range(steps):
+        sharp = (s >= steps - sharp_last)
+        proj = T @ Q.t()
+        mask = (torch.abs(proj - torch.round(proj)) < tol).to(T.dtype)
+        if sharp:
+            sin2 = PI * torch.sin(2 * PI * proj); cos2 = (2 * PI) * PI * torch.cos(2 * PI * proj)
+        else:
+            sin2 = 2 * PI * torch.sin(2 * PI * proj); cos2 = (2 * PI) ** 2 * torch.cos(2 * PI * proj)
+        wm = w.unsqueeze(0) * mask
+        g = -((sin2 * wm) @ Q)                                       # = objective ascent grad
+        H = -torch.einsum("bn,ni,nj->bij", cos2 * wm, Q, Q)          # Hessian of f (neg-def at max)
+        step = torch.linalg.solve(H - mu * eye, g.unsqueeze(-1)).squeeze(-1)
+        Tn = T - step
+        fn, _ = objective(Tn, Q, w, tol, sharp=False)
+        good = fn >= f                                               # (B,)
+        T = torch.where(good[:, None], Tn, T)
+        f = torch.where(good, fn, f)
+        mu = torch.where(good[:, None, None], mu * 0.5, mu * 4.0).clamp(1e-2, 1e6)   # LM update
+    return T
+
+
 def distinct_maxima(Tn, fn, tol=2.0, keep=44, minlen=20.0):
     """cluster converged vectors, rank by OBJECTIVE VALUE f (not basin count)."""
     s = np.where(Tn[:, 0] != 0, np.sign(Tn[:, 0]), 1.0); Tc = Tn * s[:, None]

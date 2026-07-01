@@ -10,17 +10,20 @@ both FAST and accurate (xgandalf-class rate at >100x the throughput on sparse SF
 import os, sys, time, itertools
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-from fftindex.glint_index import (objective, refine_vec, refine_vec_newton, refine_vec_cg, distinct_maxima,
-                         distinct_maxima_gpu, distinct_cells_gpu, anneal, score_defect, invq_weight,
-                         buerger_reduce, primitivize, STARTS, DEV, index_blind)
+from fftindex.glint_index import (objective, refine_vec, refine_vec_newton, refine_vec_cg, refine_vec_bb,
+                         refine_vec_lm, distinct_maxima, distinct_maxima_gpu, distinct_cells_gpu, anneal,
+                         score_defect, invq_weight, buerger_reduce, primitivize, STARTS, DEV, index_blind)
+
+_REFINERS = {"cg": refine_vec_cg, "bb": refine_vec_bb, "lm": refine_vec_lm}
 
 
 def _refine(S0, Q, w, qmax):
-    """M3 dispatch: grad (default GD+momentum) | cg (nonlinear conjugate-gradient) | newton (damped 3x3)."""
+    """M3 dispatch: grad (default GD+momentum) | cg | bb (Barzilai-Borwein) | lm (Levenberg-Marquardt)
+    | newton (damped 3x3). All flag-gated via REFINER; grad is the validated default."""
     if REFINER == "newton":
         return refine_vec_newton(S0, Q, w, qmax, steps=NEWTON_STEPS, tol=TOL)
-    if REFINER == "cg":
-        return refine_vec_cg(S0, Q, w, qmax, steps=STEPS, tol=TOL)
+    if REFINER in _REFINERS:
+        return _REFINERS[REFINER](S0, Q, w, qmax, steps=STEPS, tol=TOL)
     return refine_vec(S0, Q, w, qmax, steps=STEPS, tol=TOL)
 from fftindex.lattice import cell_to_Ar
 from fftindex.multishot import same_lattice

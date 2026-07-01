@@ -16,13 +16,13 @@ combined. Run on Mac.
 import os, sys, time, itertools
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
-sys.path.insert(0, "/Users/smarches/git/fftindex")
-from fftindex.transform import fft_volume
-from fftindex.peakfind import find_peaks_classical
-from fftindex.seed import projection_axis_seeds
-from fftindex.index import refine
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import same_lattice
+sys.path.insert(0, "/Users/smarches/git/glint")
+from glint.transform import fft_volume
+from glint.peakfind import find_peaks_classical
+from glint.seed import projection_axis_seeds
+from glint.index import refine
+from glint.lattice import cell_to_Ar
+from glint.multishot import same_lattice
 
 LYSO = cell_to_Ar(78.6, 78.6, 37.9, 90, 90, 90)
 FR = "/tmp/frames_cxidb.txt"

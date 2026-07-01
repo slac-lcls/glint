@@ -19,7 +19,7 @@ sys.path.insert(0, "..")
 import torch
 from torch.utils.data import DataLoader
 
-from fftindex.cnn import UNet3D, VolumeHeatmapDataset, dice_bce_loss
+from glint.cnn import UNet3D, VolumeHeatmapDataset, dice_bce_loss
 
 
 def main():

@@ -6,9 +6,9 @@ import os, sys, time
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-import fftindex.glint_fast as gf
-from fftindex.glint_fast import index_blind_fast
-from fftindex.multishot import same_lattice
+import glint.glint_fast as gf
+from glint.glint_fast import index_blind_fast
+from glint.multishot import same_lattice
 frames = [q for q in gf.load("/sdf/home/s/smarches/git/glint/experiments/frames_cxidb_clean.txt") if len(q) >= 6]
 n = len(frames)
 

@@ -6,8 +6,8 @@ import sys
 import numpy as np
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
-from fftindex.multishot import same_lattice
-from fftindex.lattice import cell_to_Ar
+from glint.multishot import same_lattice
+from glint.lattice import cell_to_Ar
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 TOL = 0.15
 

@@ -4,8 +4,8 @@ import os, sys, re
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
 import numpy as np
-import fftindex.glint_fast as gf
-from fftindex.multishot import same_lattice
+import glint.glint_fast as gf
+from glint.multishot import same_lattice
 LYSO = gf.LYSO
 frames = list(gf.load(sys.argv[1])); n = len(frames)
 def parse_stream(path):

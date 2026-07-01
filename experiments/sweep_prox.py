@@ -13,7 +13,7 @@ sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 import numpy as np
 import glint_index as gi
 from glint_fast import index_blind_fast, load, LYSO
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 
 CONFIGS = [  # (OBJFORM, OBJSIG, OBJKAP, label)
     ("",         0.12,  8.0, "default cos/cos^2 + HARD mask (baseline)"),

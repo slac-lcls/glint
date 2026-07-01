@@ -15,8 +15,8 @@ import numpy as np
 import torch
 _HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
-from fftindex.lattice import buerger_reduce, cell_to_Ar
-from fftindex.multishot import same_lattice
+from glint.lattice import buerger_reduce, cell_to_Ar
+from glint.multishot import same_lattice
 from replica_v0 import ifss
 
 PI = np.pi

@@ -13,7 +13,7 @@ sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
 os.environ.setdefault("STEPS", "8")
 import numpy as np
 import torch
-from fftindex.glint_fast import index_blind_fast, index_blind_cluster_seeded
+from glint.glint_fast import index_blind_fast, index_blind_cluster_seeded
 
 
 def timed(fn, g):

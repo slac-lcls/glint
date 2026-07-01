@@ -14,8 +14,8 @@ import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("STEPS", "8")
 import numpy as np, torch
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex")
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex/experiments")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
 from glint_index import objective, refine_vec, distinct_maxima, invq_weight, STARTS, DEV
 from fat_ewald import sim_fat
 

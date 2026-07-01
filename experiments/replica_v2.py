@@ -8,12 +8,12 @@ objective trim (triml=0.001) and denser c-direction sampling.
 import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
-sys.path.insert(0, "/Users/smarches/git/fftindex")
-sys.path.insert(0, "/Users/smarches/git/fftindex/experiments")
+sys.path.insert(0, "/Users/smarches/git/glint")
+sys.path.insert(0, "/Users/smarches/git/glint/experiments")
 import replica_v0 as R
 from replica_v0 import fib_halfsphere, refine_vec, LA, LC
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import same_lattice
+from glint.lattice import cell_to_Ar
+from glint.multishot import same_lattice
 
 R.TRIML = 0.001                                          # ffbidx's real lower trim (was 0.05)
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)

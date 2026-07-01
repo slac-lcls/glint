@@ -17,8 +17,8 @@ import joblib
 import numpy as np
 
 sys.path.insert(0, "..")
-from fftindex import LearnedPeakFinder, index_shot, score, simulate_shot
-from fftindex.peakfind import find_peaks_classical
+from glint import LearnedPeakFinder, index_shot, score, simulate_shot
+from glint.peakfind import find_peaks_classical
 
 N_TRIALS = 20
 SETTING = dict(n_target=45, pos_sigma=0.001, frac_spurious=0.1)

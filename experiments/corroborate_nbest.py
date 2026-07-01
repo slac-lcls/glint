@@ -16,7 +16,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HER
 sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 import numpy as np
 from glint_fast import index_blind_nbest, load, matched, LYSO
-from fftindex.multishot import same_lattice, consensus_cell
+from glint.multishot import same_lattice, consensus_cell
 
 GATE, MININL = 0.25, 10
 

@@ -4,7 +4,7 @@ index_blind_fast (blind Fibonacci) vs index_blind_cluster_seeded per cell x {sti
 import os, sys, time
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint"); os.environ.setdefault("STEPS", "8")
 import numpy as np, torch
-from fftindex.glint_fast import index_blind_fast, index_blind_cluster_seeded
+from glint.glint_fast import index_blind_fast, index_blind_cluster_seeded
 DMIN = 3.0; QMAX = 1.0/DMIN; REPS = 3; LAM = 1.0
 CELLS = [("lyso",(79,79,38,90,90,90)), ("prok",(68.5,68.5,109,90,90,90)),
          ("thaum",(58,58,130,90,90,90)), ("hex",(105,105,75,90,90,120)),

@@ -18,9 +18,9 @@ import numpy as np
 
 def _load_frames(args):
     """Return (frames [list of (N,3) q in 1/A], images [list of {image,event}])."""
-    from fftindex.geom import parse_geom, read_crystfel_peaks, peaks_to_q
+    from glint.geom import parse_geom, read_crystfel_peaks, peaks_to_q
     if args.qframes:
-        from fftindex.glint_fast import load
+        from glint.glint_fast import load
         frames = [np.asarray(q, float) for q in load(args.qframes)]
         images = [{"image": os.path.basename(args.qframes), "event": i} for i in range(len(frames))]
     else:
@@ -80,12 +80,12 @@ def main():
 
     Mc_known = None
     if args.cell:
-        from fftindex.lattice import cell_to_Ar
+        from glint.lattice import cell_to_Ar
         Mc_known = cell_to_Ar(*[float(x) for x in args.cell.split()])
 
-    from fftindex.hybrid_stream import hybrid_index, dense_index, _report   # torch import deferred to here
-    from fftindex.stream import write_stream
-    from fftindex.glint_fast import CLUSTER_MIN
+    from glint.hybrid_stream import hybrid_index, dense_index, _report   # torch import deferred to here
+    from glint.stream import write_stream
+    from glint.glint_fast import CLUSTER_MIN
     mode = args.mode
     if mode == "auto":
         med = int(np.median([len(q) for q in frames]))
@@ -95,14 +95,14 @@ def main():
     else:
         casc = None
         if args.cascade:
-            from fftindex.cascade import external_cascade
+            from glint.cascade import external_cascade
             casc = external_cascade(args.cascade)
         results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest, cascade=casc)
     if args.integrate:
         if not args.geom:
             ap.error("--integrate requires --geom (and --image-dir for the frame images)")
-        from fftindex.predict import integrate_frames, write_stream_integrated
-        from fftindex.geom import parse_geom
+        from glint.predict import integrate_frames, write_stream_integrated
+        from glint.geom import parse_geom
         geomd = parse_geom(args.geom); gg = geomd.get("global", {})
         nint, tot = integrate_frames(results, geomd, image_dir=args.image_dir)
         write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
@@ -113,7 +113,7 @@ def main():
     if args.integrate:
         print(f"  integrated         : {nint} frames / {tot} reflections (real I/sigma) -> {args.out}")
     if args.fromfile:
-        from fftindex.predict import write_fromfile
+        from glint.predict import write_fromfile
         nsol = write_fromfile(results, args.fromfile, args.lattice)
         print(f"  fromfile solutions : {nsol} ({args.lattice}) -> {args.fromfile}"
               f"  [indexamajig --indexing=file --fromfile-input-file={args.fromfile} --tolerance=10,10,10,3]")

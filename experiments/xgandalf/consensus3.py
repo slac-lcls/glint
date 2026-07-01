@@ -1,8 +1,8 @@
 import sys; sys.path.insert(0,"../..")
 import numpy as np
-from fftindex import index_shot
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import (consensus_cell, same_lattice,
+from glint import index_shot
+from glint.lattice import cell_to_Ar
+from glint.multishot import (consensus_cell, same_lattice,
                                 index_known_pairangle, index_known_gd, reference_lattice)
 LYSO=cell_to_Ar(79.02,79.02,37.98,90,90,90)
 def read_frames(path):

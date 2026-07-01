@@ -25,10 +25,10 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 
 sys.path.insert(0, "..")
-from fftindex import LearnedPeakFinder, index_shot, make_dataset, score, simulate_shot
-from fftindex.features import FEATURE_NAMES
-from fftindex.lattice import SYMMETRIES, random_cell
-from fftindex.peakfind import find_peaks_classical
+from glint import LearnedPeakFinder, index_shot, make_dataset, score, simulate_shot
+from glint.features import FEATURE_NAMES
+from glint.lattice import SYMMETRIES, random_cell
+from glint.peakfind import find_peaks_classical
 
 N_TRIALS = 15
 SETTING = dict(n_target=45, pos_sigma=0.001, frac_spurious=0.1)

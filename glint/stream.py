@@ -3,7 +3,7 @@ downstream (cell + per-frame orientation; partialator/CrystFEL predict+integrate
 astar/bstar/cstar). GLINT indexes (assigns hkl to observed peaks); integration is downstream,
 so reflection rows carry h k l and intensity placeholders (fs/ss need detector geometry).
 
-  from fftindex.stream import write_stream
+  from glint.stream import write_stream
   write_stream([{ "image": "run.cxi", "event": 0, "M": M, "q": q, "hkl": hkl }, ...], "out.stream")
 """
 import numpy as np

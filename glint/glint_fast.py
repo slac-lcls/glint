@@ -10,7 +10,7 @@ both FAST and accurate (xgandalf-class rate at >100x the throughput on sparse SF
 import os, sys, time, itertools
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-from fftindex.glint_index import (objective, refine_vec, refine_vec_newton, refine_vec_cg, refine_vec_bb,
+from glint.glint_index import (objective, refine_vec, refine_vec_newton, refine_vec_cg, refine_vec_bb,
                          refine_vec_lm, distinct_maxima, distinct_maxima_gpu, distinct_cells_gpu, anneal,
                          score_defect, invq_weight, buerger_reduce, primitivize, STARTS, DEV, index_blind)
 
@@ -25,8 +25,8 @@ def _refine(S0, Q, w, qmax):
     if REFINER in _REFINERS:
         return _REFINERS[REFINER](S0, Q, w, qmax, steps=STEPS, tol=TOL)
     return refine_vec(S0, Q, w, qmax, steps=STEPS, tol=TOL)
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import same_lattice
+from glint.lattice import cell_to_Ar
+from glint.multishot import same_lattice
 
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 NTOP = int(os.environ.get("NTOP", "30"))                    # ② candidate-pool size (M4 width)
@@ -169,7 +169,7 @@ def _torch_fft_seeds(q, qmax, n=None, min_len=3.0, max_peaks=300, rel=0.06):
     """GPU FFT seed generator (torch): trilinear-deposit the rlps into an n^3 reciprocal grid,
     cuFFT to real space, local-maxima peak-find -> candidate lattice vectors (Angstrom). All on
     device; only the small (m,3) peak list stays on GPU as seeds. Mirrors transform.fft_volume."""
-    from fftindex.transform import estimate_grid_n
+    from glint.transform import estimate_grid_n
     n = int(estimate_grid_n(q, qmax) if n is None else n)
     dq = 2.0 * qmax / n
     Qt = torch.as_tensor(q, dtype=torch.float32, device=DEV)
@@ -278,8 +278,8 @@ def index_blind_fft_seeded(q, also_fib=False, acc=None):
         starts = _torch_fft_seeds(q, qmax)                  # GPU cuFFT seeds (fast, scales to dense)
         n_seed = int(starts.shape[0])
     else:
-        from fftindex.transform import fft_volume, estimate_grid_n
-        from fftindex.peakfind import find_peaks_classical
+        from glint.transform import fft_volume, estimate_grid_n
+        from glint.peakfind import find_peaks_classical
         vol, x = fft_volume(q, qmax, n=estimate_grid_n(q, qmax), gpu=False)
         vecs, _ = find_peaks_classical(vol, x, g=q, qmax=qmax, min_len=3.0)
         starts = torch.as_tensor(np.asarray(vecs, float), dtype=torch.float32, device=DEV)

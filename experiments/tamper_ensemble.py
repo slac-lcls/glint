@@ -15,7 +15,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HER
 sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 import numpy as np
 from glint_fast import index_blind_fast, load, LYSO
-from fftindex.multishot import same_lattice, consensus_cell
+from glint.multishot import same_lattice, consensus_cell
 
 K = 8           # resamples per frame
 DROP = 0.20     # fraction of peaks dropped per resample

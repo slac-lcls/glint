@@ -14,10 +14,10 @@ import numpy as np
 import torch
 
 sys.path.insert(0, "..")
-from fftindex import index_shot, score, simulate_shot
-from fftindex.cnn import CNNPeakFinder, UNet3D
-from fftindex.lattice import random_cell
-from fftindex.peakfind import find_peaks_classical
+from glint import index_shot, score, simulate_shot
+from glint.cnn import CNNPeakFinder, UNet3D
+from glint.lattice import random_cell
+from glint.peakfind import find_peaks_classical
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 ck = torch.load("cnn_peakfinder.pt", map_location=device)

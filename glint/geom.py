@@ -1,7 +1,7 @@
 """CrystFEL .geom parsing + peak(fs,ss) -> reciprocal q bridge, so GLINT ingests exactly what
 a LUTE/CrystFEL peakfinder8 run produces (a .geom + per-frame peak lists in data-array fs/ss).
 
-  from fftindex.geom import parse_geom, peaks_to_q
+  from glint.geom import parse_geom, peaks_to_q
   geom = parse_geom("detector.geom")
   q = peaks_to_q(peaks_fs_ss, geom)        # peaks: (N,2) [fs, ss] in data-array coords -> (N,3) 1/A
 

@@ -17,8 +17,8 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 _HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import same_lattice
+from glint.lattice import cell_to_Ar
+from glint.multishot import same_lattice
 from diffgrid import load
 
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)

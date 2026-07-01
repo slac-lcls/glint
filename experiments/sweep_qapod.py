@@ -12,7 +12,7 @@ sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 import numpy as np
 import glint_fast as gf
 from glint_fast import index_blind_fast, load, LYSO
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 
 CONFIGS = [  # (QHI, QLO, QAPSIG, label)
     (0.00, 0.00, 0.08, "off (baseline 1/|q|)"),

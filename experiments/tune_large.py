@@ -3,7 +3,7 @@
 import os, sys, time
 sys.path.insert(0, "/pscratch/sd/s/smarches/glint_real"); os.environ.setdefault("STEPS", "8")
 import numpy as np, torch
-import fftindex.glint_fast as gf
+import glint.glint_fast as gf
 
 D = np.load("/pscratch/sd/s/smarches/glint_real/cells.npz")
 name = "large_tet"; axes = np.sort(D[f"{name}_axes"]); REPS = int(D["reps"])

@@ -24,8 +24,8 @@ from sklearn.metrics import average_precision_score, classification_report
 from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, "..")
-from fftindex import make_dataset
-from fftindex.features import FEATURE_NAMES
+from glint import make_dataset
+from glint.features import FEATURE_NAMES
 
 if __name__ == "__main__":
     t0 = time.time()

@@ -11,7 +11,7 @@ sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 import numpy as np, torch
 import paper_xg_gpu as xg
 from paper_xg_gpu import load, LYSO
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 
 CONFIGS = [  # (n_dir, dl, steps) -- start count is the bottleneck, so sweep it hard
     (800,  6.0, 8),

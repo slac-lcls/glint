@@ -4,8 +4,8 @@ that holds blind accuracy -- the free throughput win the unrolling POC surfaced 
 import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import torch
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex")
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex/experiments")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
 from train_unroll import make_starts, hand_schedule, eval_rate, NDIR_EVAL
 from glint_fast import load
 from glint_index import DEV

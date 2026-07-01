@@ -10,12 +10,12 @@ import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("CDIRS", "16384")                  # replica sampling density for rescue
 import numpy as np
-sys.path.insert(0, "/Users/smarches/git/fftindex")
-sys.path.insert(0, "/Users/smarches/git/fftindex/experiments")
+sys.path.insert(0, "/Users/smarches/git/glint")
+sys.path.insert(0, "/Users/smarches/git/glint/experiments")
 from glint_index import index_blind
 from replica_v2 import index_known as replica_rescue      # faithful ffbidx replica (tetragonal lyso)
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import (consensus_cell, index_known_pairangle, reference_lattice,
+from glint.lattice import cell_to_Ar
+from glint.multishot import (consensus_cell, index_known_pairangle, reference_lattice,
                                 same_lattice)
 
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)

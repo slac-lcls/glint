@@ -14,7 +14,7 @@ import numpy as np
 import glint_index as gi
 import glint_fast as gf
 from glint_fast import index_blind_fast, load, matched, LYSO
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 
 GATE, MININL = 0.25, 10
 SIGS = [0.0, 0.0006, 0.001, 0.0015, 0.002]

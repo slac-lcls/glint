@@ -13,7 +13,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HER
 sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 import numpy as np
 from scipy.ndimage import maximum_filter
-from fftindex.lute_bridge import peaks_to_q
+from glint.lute_bridge import peaks_to_q
 
 HOME = "/sdf/home/s/smarches"
 img = np.load(f"{HOME}/sim_still0.npy")

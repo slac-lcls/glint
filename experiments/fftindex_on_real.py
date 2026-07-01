@@ -11,13 +11,13 @@ sys.path.insert(0, "..")
 from psana import DataSource
 from psana.pscalib.geometry.GeometryAccess import GeometryAccess
 
-from fftindex import index_shot
-from fftindex.multishot import cell_signature, consensus_cell, same_lattice
+from glint import index_shot
+from glint.multishot import cell_signature, consensus_cell, same_lattice
 
 import os
 
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import index_known_pairangle, reference_lattice
+from glint.lattice import cell_to_Ar
+from glint.multishot import index_known_pairangle, reference_lattice
 
 HC = 12398.42
 N_FRAMES = int(sys.argv[1]) if len(sys.argv) > 1 else 80

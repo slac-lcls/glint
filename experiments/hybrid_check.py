@@ -4,9 +4,9 @@ import os, sys, time
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
 os.environ.setdefault("STEPS", "8"); os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-import fftindex.glint_fast as gf
-from fftindex.hybrid_stream import hybrid_index
-from fftindex.glint_fast import index_blind_nbest
+import glint.glint_fast as gf
+from glint.hybrid_stream import hybrid_index
+from glint.glint_fast import index_blind_nbest
 frames = [q for q in gf.load("/sdf/home/s/smarches/git/glint/experiments/frames_cxidb_clean.txt") if len(q) >= 6]
 n = len(frames)
 index_blind_nbest(frames[0], 3)                                 # warmup

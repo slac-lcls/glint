@@ -15,8 +15,8 @@ sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 os.environ.setdefault("STEPS", "8")
 import numpy as np
 from scipy.ndimage import maximum_filter
-from fftindex.lute_bridge import peaks_to_q
-from fftindex.predict import predict_spots, integrate_spots, write_stream_integrated
+from glint.lute_bridge import peaks_to_q
+from glint.predict import predict_spots, integrate_spots, write_stream_integrated
 
 ORIENT = os.environ.get("ORIENT", "truth")
 TOL = float(sys.argv[1]) if len(sys.argv) > 1 else 0.004

@@ -15,7 +15,7 @@ sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 import numpy as np
 from collections import Counter
 from glint_fast import index_blind_nbest, load, LYSO
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 
 NBEST = 5
 LYSOKEY = tuple((np.round(np.sort(np.linalg.norm(LYSO, axis=0)) / 5) * 5).tolist())

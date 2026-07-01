@@ -6,18 +6,18 @@ Run under CCP4-9 dials.python:
   /sdf/group/lcls/ds/tools/cctbx/ccp4-9/bin/dials.python compare_dials.py [N]
 """
 import sys, time
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex")
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex/experiments")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
 import numpy as np
 from scitbx.array_family import flex
 from dials.algorithms.indexing.basis_vector_search import FFT3D
-from fftindex.index import search_basis
-from fftindex.multishot import same_lattice
-from fftindex.lattice import cell_to_Ar
+from glint.index import search_basis
+from glint.multishot import same_lattice
+from glint.lattice import cell_to_Ar
 
 LYSO = np.asarray(cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90), float)
 TOL = 0.15
-FR = "/sdf/home/s/smarches/git/fftindex/experiments/frames_cxidb_clean.txt"
+FR = "/sdf/home/s/smarches/git/glint/experiments/frames_cxidb_clean.txt"
 
 
 def load(p):

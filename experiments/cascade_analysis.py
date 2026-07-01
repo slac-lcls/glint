@@ -6,10 +6,10 @@ sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("STEPS", "8")
 import numpy as np, torch
-import fftindex.glint_fast as gf
-from fftindex.glint_fast import index_blind_fast
-from fftindex.replica_gpu import index_known_gpu_cell
-from fftindex.multishot import same_lattice
+import glint.glint_fast as gf
+from glint.glint_fast import index_blind_fast
+from glint.replica_gpu import index_known_gpu_cell
+from glint.multishot import same_lattice
 LYSO = gf.LYSO
 frames = list(gf.load("/sdf/home/s/smarches/git/glint/experiments/frames_cxidb_clean.txt"))
 n = len(frames)

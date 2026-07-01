@@ -8,11 +8,11 @@ import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("CDIRS", "16384")
 import numpy as np, torch
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex")
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex/experiments")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
 from glint_fast import index_blind_fast, load, LYSO
 from replica_gpu import index_known_gpu as rescue
-from fftindex.multishot import consensus_cell, same_lattice
+from glint.multishot import consensus_cell, same_lattice
 
 DEV = ("cuda" if torch.cuda.is_available() else "cpu")
 TOL = 0.15

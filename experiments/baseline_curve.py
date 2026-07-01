@@ -17,7 +17,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, "..")
-from fftindex import index_shot, score, simulate_shot
+from glint import index_shot, score, simulate_shot
 
 N_TRIALS = 20
 TOL = 0.02

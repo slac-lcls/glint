@@ -25,7 +25,7 @@ import os, sys, itertools
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 import torch
-from fftindex.lattice import buerger_reduce
+from glint.lattice import buerger_reduce
 
 PI = np.pi
 DEV = ("cuda" if torch.cuda.is_available() else
@@ -395,8 +395,8 @@ STARTS = sample().to(DEV)
 
 if __name__ == "__main__":
     import time
-    from fftindex.lattice import cell_to_Ar
-    from fftindex.multishot import same_lattice
+    from glint.lattice import cell_to_Ar
+    from glint.multishot import same_lattice
     LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
     def load(p):
         fr = []; L = open(p).read().split("\n"); i = 0

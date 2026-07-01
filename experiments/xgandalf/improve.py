@@ -16,15 +16,15 @@ import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 
 sys.path.insert(0, "../..")
-from fftindex import index_shot
-from fftindex.dataset import label_true_axis
-from fftindex.detector import LearnedPeakFinder
-from fftindex.features import peak_features
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import same_lattice
-from fftindex.peakfind import find_peaks_classical
-from fftindex.simulate import simulate_shot
-from fftindex.transform import estimate_grid_n, fft_volume
+from glint import index_shot
+from glint.dataset import label_true_axis
+from glint.detector import LearnedPeakFinder
+from glint.features import peak_features
+from glint.lattice import cell_to_Ar
+from glint.multishot import same_lattice
+from glint.peakfind import find_peaks_classical
+from glint.simulate import simulate_shot
+from glint.transform import estimate_grid_n, fft_volume
 
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 LYSO_CELL = (79.02, 79.02, 37.98, 90, 90, 90)

@@ -22,8 +22,8 @@ import sys
 import numpy as np
 
 sys.path.insert(0, "..")
-from fftindex import index_shot, score, simulate_shot
-from fftindex.joint import cell_from_diag, fit_orthorhombic, pooled_q2, spectrum_peaks
+from glint import index_shot, score, simulate_shot
+from glint.joint import cell_from_diag, fit_orthorhombic, pooled_q2, spectrum_peaks
 
 CELL = (48.0, 48.0, 55.0, 90.0, 90.0, 90.0)   # tetragonal (favorable)
 N_SHOTS = 1500

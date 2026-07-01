@@ -5,10 +5,10 @@ import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("CDIRS", "32768")                  # ffbidx sampling density
 import numpy as np
-sys.path.insert(0, "/Users/smarches/git/fftindex")
-sys.path.insert(0, "/Users/smarches/git/fftindex/experiments")
+sys.path.insert(0, "/Users/smarches/git/glint")
+sys.path.insert(0, "/Users/smarches/git/glint/experiments")
 from replica_v2 import index_known, load, LYSO
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 
 
 def params(M):

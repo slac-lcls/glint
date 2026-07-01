@@ -11,9 +11,9 @@ On one NVIDIA A100, over 120 sparse cxidb-17 lysozyme frames, GLINT matches the 
 rate of xgandalf at ~550× the throughput, and with cross-frame consensus indexes 96% of frames
 blind (≥10 reflections).
 
-> **Naming.** Installed as the **`glint`** command; the importable Python package is still named
-> **`fftindex`** (historical — GLINT grew out of the *fftindex* 3D-FFT indexer documented in the
-> "research lineage" section below), so library imports read `from fftindex… import …`.
+> **Naming.** Installed as the **`glint`** command; the Python package is **`glint`** (`import glint`).
+> An `import fftindex` back-compat alias still resolves to `glint` — the project grew out of the
+> *fftindex* 3D-FFT indexer documented in the "research lineage" section below.
 
 ## Install
 
@@ -39,14 +39,14 @@ consensus, default 3) · `--device cpu|auto` · `-N` (limit frames) · `--min-pe
 ## Library
 
 ```python
-from fftindex.geom import parse_geom, read_crystfel_peaks, peaks_to_q   # CrystFEL .geom + peaks -> q
-from fftindex.hybrid_stream import hybrid_index                          # blind -> consensus -> rescue
-from fftindex.stream import write_stream                                 # results -> CrystFEL .stream
+from glint.geom import parse_geom, read_crystfel_peaks, peaks_to_q   # CrystFEL .geom + peaks -> q
+from glint.hybrid_stream import hybrid_index                         # blind -> consensus -> rescue
+from glint.stream import write_stream                                # results -> CrystFEL .stream
 ```
 
-The blind front-end (`fftindex.glint_fast.index_blind_nbest`), the consensus
-(`fftindex.multishot.consensus_cell`), and the GPU known-cell rescue
-(`fftindex.replica_gpu.index_known_gpu_cell`) are all individually importable. The `experiments/`
+The blind front-end (`glint.glint_fast.index_blind_nbest`), the consensus
+(`glint.multishot.consensus_cell`), and the GPU known-cell rescue
+(`glint.replica_gpu.index_known_gpu_cell`) are all individually importable. The `experiments/`
 directory holds the research scripts and diagnostic harness (not shipped in the wheel); they
 import the package through thin back-compat shims.
 
@@ -81,7 +81,7 @@ baseline.)
 
 ## Layout
 
-    fftindex/
+    glint/           (importable as `glint`; `fftindex` still works as a back-compat alias)
       lattice.py     cell <-> basis conventions, SO(3) sampling
       simulate.py    monochromatic single-shot forward model (-> g_i + ground truth)
       transform.py   fft_volume() : the indexing volume;  central_rays() : 1D baseline

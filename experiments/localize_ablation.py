@@ -11,7 +11,7 @@ import numpy as np
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")   # kill BLAS thread thrash on 3x3 solves
 sys.path.insert(0, "..")
-from fftindex import index_shot, score, simulate_shot
+from glint import index_shot, score, simulate_shot
 
 
 def sweep(localize, spot_counts, n_trials=20):

@@ -13,7 +13,7 @@ _ROOT = os.path.dirname(_HERE)                                 # repo root (has 
 sys.path.insert(0, _ROOT)
 sys.path.insert(0, _HERE)
 from glint_fast import index_blind_fast, load
-from fftindex.stream import write_stream
+from glint.stream import write_stream
 
 if __name__ == "__main__":
     path = sys.argv[1] if len(sys.argv) > 1 else "frames_cxidb_clean.txt"

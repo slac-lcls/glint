@@ -1,11 +1,11 @@
 import sys, time
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
 import numpy as np
 from scitbx.array_family import flex
 from dials.algorithms.indexing.basis_vector_search import FFT3D
-from fftindex.index import search_basis
-from fftindex.multishot import same_lattice
-from fftindex.lattice import cell_to_Ar
+from glint.index import search_basis
+from glint.multishot import same_lattice
+from glint.lattice import cell_to_Ar
 LYSO = np.asarray(cell_to_Ar(79.02,79.02,37.98,90,90,90), float)
 def read_frames(path):
     lines = open(path).read().split("\n"); frames=[]; i=0
@@ -15,7 +15,7 @@ def read_frames(path):
         q=np.array([[float(x) for x in lines[i+1+j].split()] for j in range(npk)])
         frames.append((int(fid), q)); i+=1+npk
     return frames
-frames = read_frames("/sdf/home/s/smarches/git/fftindex/experiments/xgandalf/frames.txt")
+frames = read_frames("/sdf/home/s/smarches/git/glint/experiments/xgandalf/frames.txt")
 fft = FFT3D(max_cell=100.0, min_cell=3.0)
 ok=0; tot_ms=0.0
 for fid, q in frames:

@@ -5,8 +5,8 @@ Usage: bench_kc.py <cxi> <geom> [N] [blind|known]
 import sys, time
 sys.path.insert(0, "..")
 import numpy as np, h5py
-from fftindex.lute_bridge import parse_geom, peaks_to_q, lambda_from_eV
-from fftindex.lattice import cell_to_Ar
+from glint.lute_bridge import parse_geom, peaks_to_q, lambda_from_eV
+from glint.lattice import cell_to_Ar
 
 cxi, geom_path = sys.argv[1], sys.argv[2]
 N = int(sys.argv[3]) if len(sys.argv) > 3 else 200
@@ -32,14 +32,14 @@ n = max(len(frames), 1)
 print(f"MODE={mode}  frames={len(frames)}  ref cell {REF}")
 
 if mode == "blind":
-    from fftindex.hybrid_stream import hybrid_index, _report
+    from glint.hybrid_stream import hybrid_index, _report
     t0 = time.time(); results, stats = hybrid_index(frames, None, Mc_known=None, nbest=3); dt = time.time()-t0
     _report(stats, "(bench)")
     print(f"TIMING: {dt:.1f}s, {1000*dt/n:.1f} ms/frame, {n/max(dt,1e-9):.1f} f/s")
 else:
     import torch
-    from fftindex.replica_gpu import index_known_gpu_cell
-    from fftindex.multishot import same_lattice
+    from glint.replica_gpu import index_known_gpu_cell
+    from glint.multishot import same_lattice
     Mc = cell_to_Ar(*REF)
     if frames: index_known_gpu_cell(frames[0], Mc)              # warmup
     if torch.cuda.is_available(): torch.cuda.synchronize()

@@ -13,11 +13,11 @@ import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("STEPS", "8")
 import numpy as np, torch
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex")
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex/experiments")
-from fftindex.lattice import cell_to_Ar, Ar_to_Br, random_rotation
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
+from glint.lattice import cell_to_Ar, Ar_to_Br, random_rotation
 from glint_fast import index_blind_fast, LYSO, matched
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 
 CELL = (79.02, 79.02, 37.98, 90, 90, 90)
 LAM = 1.322                                   # A (cxidb-17 beam)

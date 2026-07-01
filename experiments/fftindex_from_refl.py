@@ -6,9 +6,9 @@ import sys
 import numpy as np
 
 sys.path.insert(0, "..")
-from fftindex import index_shot
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import (cell_signature, consensus_cell,
+from glint import index_shot
+from glint.lattice import cell_to_Ar
+from glint.multishot import (cell_signature, consensus_cell,
                                 index_known_pairangle, reference_lattice, same_lattice)
 
 d = np.load("/sdf/home/s/smarches/lyso_rlp.npz")

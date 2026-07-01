@@ -12,12 +12,12 @@ A/B the SELECTION: cover-scorer pick vs reverse-recall pick vs combined, same ca
 import os, sys, time, itertools
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex")
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex/experiments")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
 from glint_index import objective, refine_vec, distinct_maxima, invq_weight, buerger_reduce, primitivize, STARTS, DEV
 from glint_fast import anneal_batch_t, load, matched
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import same_lattice
+from glint.lattice import cell_to_Ar
+from glint.multishot import same_lattice
 
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 STEPS = int(os.environ.get("STEPS", "8"))

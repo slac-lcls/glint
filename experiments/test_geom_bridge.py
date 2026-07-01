@@ -9,10 +9,10 @@ import os, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from scipy.spatial.transform import Rotation
-from fftindex import index_shot
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import same_lattice
-from fftindex.geom import parse_geom, peaks_to_q
+from glint import index_shot
+from glint.lattice import cell_to_Ar
+from glint.multishot import same_lattice
+from glint.geom import parse_geom, peaks_to_q
 
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 LAM = 1.322                                              # A (cxidb)
@@ -88,7 +88,7 @@ if __name__ == "__main__":
           f"({'PASS' if nlyso >= trials - 1 else 'CHECK'})")
 
     # --- CrystFEL peak-search stream input path (what LUTE/peakfinder8 emits) ---
-    from fftindex.geom import read_crystfel_peaks
+    from glint.geom import read_crystfel_peaks
     buf = ["CrystFEL stream format 2.3\n"]
     expect = []
     for s in range(3):

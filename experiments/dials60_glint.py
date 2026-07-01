@@ -3,10 +3,10 @@ import os, sys
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint"); sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("STEPS", "8")
 import numpy as np
-import fftindex.glint_fast as gf
-from fftindex.glint_fast import index_blind_fast
-from fftindex.hybrid_stream import hybrid_index
-from fftindex.multishot import same_lattice
+import glint.glint_fast as gf
+from glint.glint_fast import index_blind_fast
+from glint.hybrid_stream import hybrid_index
+from glint.multishot import same_lattice
 LYSO = gf.LYSO
 frames = list(gf.load(sys.argv[1] if len(sys.argv) > 1 else "frames_dials60.txt")); n = len(frames)
 def gate(M, q):

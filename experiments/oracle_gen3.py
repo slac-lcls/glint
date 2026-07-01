@@ -10,14 +10,14 @@ expansion). SEEDS=none|proj  PROJK=12  NTOP=30
 import os, sys, itertools, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex")
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex/experiments")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
 from glint_index import (objective, refine_vec, distinct_maxima, invq_weight, buerger_reduce,
                          primitivize, anneal, STARTS, DEV)
 from glint_fast import anneal_batch_t, load, matched
-from fftindex.seed import projection_axis_seeds
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import same_lattice
+from glint.seed import projection_axis_seeds
+from glint.lattice import cell_to_Ar
+from glint.multishot import same_lattice
 
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 NTOP = int(os.environ.get("NTOP", "30"))

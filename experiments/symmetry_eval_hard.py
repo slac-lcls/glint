@@ -20,9 +20,9 @@ import joblib
 import numpy as np
 
 sys.path.insert(0, "..")
-from fftindex import LearnedPeakFinder, index_shot, score, simulate_shot
-from fftindex.lattice import SYMMETRIES, random_cell
-from fftindex.peakfind import find_peaks_classical
+from glint import LearnedPeakFinder, index_shot, score, simulate_shot
+from glint.lattice import SYMMETRIES, random_cell
+from glint.peakfind import find_peaks_classical
 
 N_TRIALS = 15
 SETTING = dict(n_target=30, pos_sigma=0.0015, frac_spurious=0.2)

@@ -15,7 +15,7 @@ import os
 import subprocess
 import tempfile
 import numpy as np
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 
 
 def write_frames_file(frames, path):

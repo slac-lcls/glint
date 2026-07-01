@@ -15,10 +15,10 @@ import sys
 sys.path.insert(0, "..")
 import numpy as np
 
-from fftindex import index_shot
-from fftindex.lattice import cell_to_Ar
-from fftindex.lute_bridge import lambda_from_eV, parse_geom, peaks_to_q
-from fftindex.multishot import cell_signature, same_lattice
+from glint import index_shot
+from glint.lattice import cell_to_Ar
+from glint.lute_bridge import lambda_from_eV, parse_geom, peaks_to_q
+from glint.multishot import cell_signature, same_lattice
 
 REF_CELL = (28.0, 62.5, 60.9, 90.0, 90.8, 90.0)
 M_REF = cell_to_Ar(*REF_CELL)
@@ -101,7 +101,7 @@ def cmd_diag(cxi, geom):
     """Deep dive on the best frame at the CALIBRATED distance: blind vs known-cell,
     and a tolerance sweep -- isolates 'our indexer is weak on real data' from geometry."""
     import h5py
-    from fftindex.multishot import index_known_pairangle, reference_lattice
+    from glint.multishot import index_known_pairangle, reference_lattice
     panels, glob = parse_geom(geom)
     phot_p = glob.get("photon_energy", "").strip()
     clen_p = glob.get("clen", "").strip()

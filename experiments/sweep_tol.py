@@ -14,7 +14,7 @@ import numpy as np
 import glint_fast as gf
 import glint_index as gi
 from glint_fast import index_blind_fast, load, LYSO
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 
 CONDS = [(0.0, "clean"), (0.001, "mosaic s=.001")]
 HARD = [0.10, 0.15, 0.18, 0.25, 0.35]

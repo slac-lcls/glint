@@ -16,10 +16,10 @@ import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("STEPS", "8")
 import numpy as np
-from fftindex.glint_fast import index_blind_fast, index_blind_nbest, load
-from fftindex.replica_gpu import index_known_gpu_cell
-from fftindex.multishot import consensus_cell, same_lattice
-from fftindex.stream import write_stream
+from glint.glint_fast import index_blind_fast, index_blind_nbest, load
+from glint.replica_gpu import index_known_gpu_cell
+from glint.multishot import consensus_cell, same_lattice
+from glint.stream import write_stream
 
 
 def _hkl(q, M):
@@ -93,7 +93,7 @@ def dense_index(frames, images=None, warmup=True):
     (`index_blind_cluster_seeded`) -- no cross-frame consensus needed because a rotation cloud is
     3D-complete. Below CLUSTER_MIN rlps the front end auto-falls-back to the Fibonacci grid, so this is
     safe on mixed data; the CLI picks this path only when the median rlp count is dense."""
-    from fftindex.glint_fast import index_blind_cluster_seeded
+    from glint.glint_fast import index_blind_cluster_seeded
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
     if warmup and n:

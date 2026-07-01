@@ -12,7 +12,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HER
 sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 import numpy as np
 from glint_fast import index_blind_fast, load, matched, LYSO
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 from fat_ewald import sim_fat
 from d34_deflate import deflate
 

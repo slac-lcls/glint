@@ -15,10 +15,10 @@ os.environ.setdefault("STEPS", "8"); os.environ.setdefault("OMP_NUM_THREADS", "1
 import numpy as np
 import h5py
 from scipy.ndimage import maximum_filter
-from fftindex.lute_bridge import peaks_to_q
-from fftindex.glint_fast import index_blind_fast
-from fftindex.multishot import same_lattice
-from fftindex.predict import predict_spots, integrate_spots, write_stream_integrated
+from glint.lute_bridge import peaks_to_q
+from glint.glint_fast import index_blind_fast
+from glint.multishot import same_lattice
+from glint.predict import predict_spots, integrate_spots, write_stream_integrated
 
 GEOM = "/global/cfs/cdirs/lcls/mnasser/cxidb_62/mpccd-optimized.geom"
 H5DIR = "/global/cfs/cdirs/lcls/dermen/cxidb45/data"

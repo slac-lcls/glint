@@ -20,9 +20,9 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 sys.path.insert(0, "..")
-from fftindex import index_shot, score, simulate_shot
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import (consensus_cell, index_known_pairangle,
+from glint import index_shot, score, simulate_shot
+from glint.lattice import cell_to_Ar
+from glint.multishot import (consensus_cell, index_known_pairangle,
                                 reference_lattice, same_lattice)
 
 TRUE_CELL = (62.0, 67.0, 71.0, 90.0, 90.0, 90.0)   # fixed primitive orthorhombic

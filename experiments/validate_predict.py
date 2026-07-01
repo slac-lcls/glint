@@ -14,8 +14,8 @@ import os, sys
 _HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 import numpy as np
-from fftindex.lute_bridge import parse_geom, peaks_to_q, lambda_from_eV
-from fftindex.predict import project_q, predict_spots
+from glint.lute_bridge import parse_geom, peaks_to_q, lambda_from_eV
+from glint.predict import project_q, predict_spots
 
 GEOM = "/sdf/group/lcls/ds/tools/lute/test_utilities/jf16mgeom.geom"
 astar = np.array([-0.0023779, 0.0600627, -0.4403932])   # nm^-1 (CrystFEL truth)

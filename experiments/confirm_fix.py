@@ -3,7 +3,7 @@ index_blind_cluster_seeded: all 6 corroboration cells + the lyso density sweep, 
 import os, sys, time
 sys.path.insert(0, "/pscratch/sd/s/smarches/glint_real"); os.environ.setdefault("STEPS", "8")
 import numpy as np
-from fftindex.glint_fast import index_blind_cluster_seeded, _cluster_fft_seeds
+from glint.glint_fast import index_blind_cluster_seeded, _cluster_fft_seeds
 
 R = "/pscratch/sd/s/smarches/glint_real"
 

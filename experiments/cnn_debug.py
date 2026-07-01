@@ -4,10 +4,10 @@ import sys
 import numpy as np
 import torch
 sys.path.insert(0, "..")
-from fftindex import simulate_shot
-from fftindex.cnn import UNet3D
-from fftindex.transform import fft_volume
-from fftindex.peakfind import find_peaks_classical
+from glint import simulate_shot
+from glint.cnn import UNet3D
+from glint.transform import fft_volume
+from glint.peakfind import find_peaks_classical
 
 dev = "cuda" if torch.cuda.is_available() else "cpu"
 ck = torch.load("cnn_peakfinder.pt", map_location=dev)

@@ -22,7 +22,8 @@ dependencies = [
 ]
 
 [project.scripts]
-glint = "fftindex.glint_cli:main"
+glint = "glint.glint_cli:main"
 
 [tool.setuptools]
-packages = ["fftindex"]     # the engine now lives in the package; experiments/ are research scripts (not shipped)
+# engine lives in `glint`; `fftindex` is a thin back-compat alias so old `import fftindex` keeps working
+packages = ["glint", "fftindex"]     # experiments/ are research scripts (not shipped)

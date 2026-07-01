@@ -9,11 +9,11 @@ silently break the product surface.
 import os, sys, subprocess, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
-from fftindex.lattice import cell_to_Ar
-from fftindex.predict import (predict_spots, integrate_spots, write_fromfile,
+from glint.lattice import cell_to_Ar
+from glint.predict import (predict_spots, integrate_spots, write_fromfile,
                               write_stream_integrated, panels_from_geom, integrate_frames)
-from fftindex.stream import write_stream
-from fftindex.geom import parse_geom, peaks_to_q
+from glint.stream import write_stream
+from glint.geom import parse_geom, peaks_to_q
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90); LAM = 1.322
@@ -75,7 +75,7 @@ with tempfile.TemporaryDirectory() as d:
     check("write_stream", "Begin chunk" in s and ("crystal" in s.lower() or "cell" in s.lower()),
           f"{s.count('Begin chunk')} chunks")
 
-    rp = subprocess.run([sys.executable, "-m", "fftindex.glint_cli", "--help"],
+    rp = subprocess.run([sys.executable, "-m", "glint.glint_cli", "--help"],
                         cwd=ROOT, capture_output=True, text=True, timeout=120)
     check("glint --help", rp.returncode == 0 and "--fromfile" in rp.stdout and "--mode" in rp.stdout
           and "--integrate" in rp.stdout, "entry point + new flags present")

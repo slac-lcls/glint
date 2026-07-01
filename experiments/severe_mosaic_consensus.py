@@ -22,7 +22,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HER
 sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 import numpy as np
 from glint_fast import index_blind_nbest, load, LYSO
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 
 NB_N, R = 3, 40
 KS = (4, 6, 8, 12, 20, 40, 80, 120)

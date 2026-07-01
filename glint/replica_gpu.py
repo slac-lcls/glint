@@ -9,9 +9,9 @@ The numpy replica is ~127 ms/frame; this targets a few ms on the A100.
 import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-from fftindex.glint_fast import anneal_batch_t
-from fftindex.lattice import cell_to_Ar
-from fftindex.multishot import same_lattice
+from glint.glint_fast import anneal_batch_t
+from glint.lattice import cell_to_Ar
+from glint.multishot import same_lattice
 
 DEV = ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)

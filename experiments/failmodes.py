@@ -21,7 +21,7 @@ import numpy as np
 _HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 from glint_fast import index_blind_fast, load, matched, LYSO, DEV
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 from oracle_blind import all_annealed
 from fat_ewald import sim_fat
 

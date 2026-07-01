@@ -6,13 +6,13 @@ deflate + multi-shot consensus.
   python d34_multishot.py [N_shots]
 """
 import sys
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex")
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex/experiments")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
 import numpy as np
 from d34_deflate import two_crystal, deflate, recovered           # sets QDIST=1
 from d5_multicell import consensus_cells, params
 from glint_fast import LYSO
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 
 if __name__ == "__main__":
     N = int(sys.argv[1]) if len(sys.argv) > 1 else 40

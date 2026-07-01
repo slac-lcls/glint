@@ -5,7 +5,7 @@ import sys
 import numpy as np
 
 sys.path.insert(0, "..")
-from fftindex import index_shot, score, simulate_shot
+from glint import index_shot, score, simulate_shot
 
 
 def one_shot(seed=0, **kw):

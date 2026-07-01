@@ -10,11 +10,11 @@ import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("STEPS", "8")
 import numpy as np
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex")
-sys.path.insert(0, "/sdf/home/s/smarches/git/fftindex/experiments")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
+sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
 from glint_fast import index_blind_fast, load, matched, LYSO
 from replica_gpu import index_known_gpu as rescue
-from fftindex.multishot import same_lattice, consensus_cell
+from glint.multishot import same_lattice, consensus_cell
 
 
 def solved(M, q):

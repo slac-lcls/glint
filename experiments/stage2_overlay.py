@@ -11,7 +11,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HER
 sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 import numpy as np
 from scipy.ndimage import maximum_filter
-from fftindex.predict import predict_spots
+from glint.predict import predict_spots
 
 HOME = "/sdf/home/s/smarches"
 img = np.load(f"{HOME}/sim_still0.npy")

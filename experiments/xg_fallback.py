@@ -12,7 +12,7 @@ sys.path.insert(0, _ROOT); sys.path.insert(0, _HERE)
 import numpy as np
 from glint_fast import index_blind_fast, load, LYSO
 from paper_xg_gpu import index_blind as xg_blind
-from fftindex.multishot import same_lattice
+from glint.multishot import same_lattice
 
 
 def correct(M):

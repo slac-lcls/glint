@@ -5,11 +5,11 @@ import os, sys, time
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("STEPS", "8")
 import numpy as np, torch
-import fftindex.glint_fast as gf
-from fftindex.glint_fast import anneal_batch_t
-from fftindex.glint_index import refine_vec, invq_weight
-from fftindex.replica_gpu import index_known_gpu_cell
-from fftindex.multishot import same_lattice
+import glint.glint_fast as gf
+from glint.glint_fast import anneal_batch_t
+from glint.glint_index import refine_vec, invq_weight
+from glint.replica_gpu import index_known_gpu_cell
+from glint.multishot import same_lattice
 DEV = gf.DEV
 frames = [q for q in gf.load("/sdf/home/s/smarches/git/glint/experiments/frames_cxidb_clean.txt") if len(q) >= 6]
 n = len(frames); LYSO = gf.LYSO

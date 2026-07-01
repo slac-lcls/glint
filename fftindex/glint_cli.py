@@ -57,6 +57,10 @@ def main():
     ap.add_argument("--cascade", metavar="DRIVER",
                     help="optional external cell-given indexer binary (e.g. ffbidx/xgandalf driver) to "
                          "fall back on for frames left unindexed; must use the FRAME-in / basis-out protocol")
+    ap.add_argument("--integrate", action="store_true",
+                    help="native predict+integrate: emit a stream with REAL I/sigma (fast QC path; needs "
+                         "--geom and the frame images via --image-dir). For the best merge use --fromfile instead")
+    ap.add_argument("--image-dir", default=".", help="base directory for the frame image files (with --integrate)")
     ap.add_argument("--fromfile", metavar="SOL",
                     help="also emit a CrystFEL --indexing=file solution file (the refined-merge handoff): "
                          "run 'indexamajig --indexing=file --fromfile-input-file=SOL --tolerance=10,10,10,3' "
@@ -94,8 +98,20 @@ def main():
             from fftindex.cascade import external_cascade
             casc = external_cascade(args.cascade)
         results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest, cascade=casc)
-    write_stream(results, args.out)
+    if args.integrate:
+        if not args.geom:
+            ap.error("--integrate requires --geom (and --image-dir for the frame images)")
+        from fftindex.predict import integrate_frames, write_stream_integrated
+        from fftindex.geom import parse_geom
+        geomd = parse_geom(args.geom); gg = geomd.get("global", {})
+        nint, tot = integrate_frames(results, geomd, image_dir=args.image_dir)
+        write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
+                                photon_eV=float(gg.get("photon_energy", 9392.7)), clen_m=float(gg.get("clen", 0.15)))
+    else:
+        write_stream(results, args.out)
     _report(stats, args.out)
+    if args.integrate:
+        print(f"  integrated         : {nint} frames / {tot} reflections (real I/sigma) -> {args.out}")
     if args.fromfile:
         from fftindex.predict import write_fromfile
         nsol = write_fromfile(results, args.fromfile, args.lattice)

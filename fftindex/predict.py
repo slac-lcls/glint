@@ -13,6 +13,7 @@ Conventions match the rest of fftindex exactly (so a predicted q inverts an obse
   (z = clen + coffset constant; fs/ss z-components ignored, as the forward bridge does).
 """
 from __future__ import annotations
+import os
 import numpy as np
 
 Z_HAT = np.array([0.0, 0.0, 1.0])
@@ -155,13 +156,13 @@ def write_stream_integrated(results, path, panel_name="p0", geom_text=None,
     n_idx = 0
     with open(path, "w") as f:
         f.write(_header(geom_text))
-        for r in results:
+        for serial, r in enumerate(results, 1):
             M = r.get("M")
             valid = M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
             f.write("----- Begin chunk -----\n")
             f.write(f"Image filename: {r.get('image', 'glint.cxi')}\n")
             f.write(f"Event: //{r.get('event', 0)}\n")
-            f.write(f"Image serial number: {r.get('event', 0) + 1}\n")
+            f.write(f"Image serial number: {serial}\n")
             f.write("hit = 1\n")
             f.write(f"indexed_by = {'file' if valid else 'none'}\n")   # 'file' = externally-supplied orientation
             f.write(f"photon_energy_eV = {photon_eV:.2f}\n")
@@ -221,3 +222,50 @@ def write_fromfile(results, path, lattice_code="aP"):
     with open(path, "w") as f:
         f.write("\n".join(rows) + "\n")
     return len(rows)
+
+
+def panels_from_geom(geom):
+    """Convert an ``fftindex.geom.parse_geom()`` result into the panel dicts predict_spots/project_q
+    want (same flat-panel model, different key names). Returns (panels, clen_m)."""
+    g = geom.get("global", {})
+    clen = float(g.get("clen", 0.1)); coff = float(g.get("coffset", 0.0)); res_g = float(g.get("res", 1.0))
+    panels = []
+    for nm, p in geom["panels"].items():
+        panels.append(dict(name=nm, fs=np.array([p["fsx"], p["fsy"]]), ss=np.array([p["ssx"], p["ssy"]]),
+                           res=float(p.get("res", res_g)), cx=float(p["corner_x"]), cy=float(p["corner_y"]),
+                           coffset=float(p.get("coffset", coff)),
+                           min_fs=int(p["min_fs"]), max_fs=int(p["max_fs"]),
+                           min_ss=int(p["min_ss"]), max_ss=int(p["max_ss"])))
+    return panels, clen
+
+
+def _load_image(path, data_path):
+    import h5py
+    with h5py.File(path, "r") as f:
+        a = np.asarray(f[data_path][()], np.float32)
+    if a.ndim == 3:                                  # (event|panel, ss, fs) -> single assembled 2D frame
+        a = a[0] if a.shape[0] > 1 else a[0]
+    return a
+
+
+def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol=0.006):
+    """Native predict + box-integrate (the fast, self-contained QC path; for the best MERGE use
+    ``glint --fromfile`` -> CrystFEL refine). For each result carrying an orientation ``M``: load the
+    frame image (``image_dir/<basename(image)>`` at the geom ``data`` path), predict on-detector spots,
+    integrate. Attaches pred/I/sigma/peak/bg to each result in place. Returns (n_integrated, tot_refl)."""
+    panels, clen = panels_from_geom(geom)
+    if data_path is None:
+        data_path = geom.get("global", {}).get("data", "/data/data")
+    lam = geom.get("wavelength_A")
+    n = tot = 0
+    for r in results:
+        M = r.get("M")
+        if M is None:
+            continue
+        img = _load_image(os.path.join(image_dir, os.path.basename(str(r.get("image", "")))), data_path)
+        pred = predict_spots(M, panels, clen, lam, dmin=dmin, tol=tol)
+        I, sig, peak, bg = integrate_spots(img, pred)
+        keep = (I > 0) & np.isfinite(sig) & (sig > 0)
+        r.update(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=peak[keep], bg=bg[keep])
+        n += 1; tot += int(keep.sum())
+    return n, tot

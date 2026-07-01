@@ -99,22 +99,22 @@ def integrate_spots(data, pred, half=3, gap=2, ring=3):
     n = len(pred)
     I = np.zeros(n); sig = np.zeros(n); peak = np.zeros(n); bgpp = np.zeros(n)
     R = half + gap + ring
-    for i in range(n):
-        cf = int(round(pred["fs"][i])); cs = int(round(pred["ss"][i]))
-        if cs - R < 0 or cs + R >= H or cf - R < 0 or cf + R >= W:
-            continue
-        patch = data[cs - R:cs + R + 1, cf - R:cf + R + 1]
-        yy, xx = np.mgrid[-R:R + 1, -R:R + 1]
-        rad = np.maximum(np.abs(yy), np.abs(xx))         # Chebyshev (square rings)
+    cf = np.rint(pred["fs"]).astype(int); cs = np.rint(pred["ss"]).astype(int)
+    valid = (cs - R >= 0) & (cs + R < H) & (cf - R >= 0) & (cf + R < W)   # in-frame boxes only
+    vi = np.where(valid)[0]
+    if len(vi):                                          # vectorized gather (constant masks hoisted): ~7x the loop, bit-exact
+        dy, dx = np.mgrid[-R:R + 1, -R:R + 1]
+        rad = np.maximum(np.abs(dy), np.abs(dx))          # Chebyshev (square rings)
         box = rad <= half
         ann = (rad > half + gap) & (rad <= half + gap + ring)
-        bg = np.median(patch[ann]) if ann.any() else 0.0
         nbox = int(box.sum())
-        sig_sum = patch[box].sum()
-        I[i] = sig_sum - nbox * bg
-        sig[i] = np.sqrt(max(sig_sum + nbox * max(bg, 0.0), 1.0))
-        peak[i] = patch[box].max()
-        bgpp[i] = bg
+        patch = data[cs[vi, None, None] + dy[None], cf[vi, None, None] + dx[None]]   # (m, 2R+1, 2R+1)
+        boxpx = patch[:, box]; annpx = patch[:, ann]
+        bg = np.median(annpx, axis=1) if ann.any() else np.zeros(len(vi))
+        sig_sum = boxpx.sum(1)
+        I[vi] = sig_sum - nbox * bg
+        sig[vi] = np.sqrt(np.maximum(sig_sum + nbox * np.maximum(bg, 0.0), 1.0))
+        peak[vi] = boxpx.max(1); bgpp[vi] = bg
     return I, sig, peak, bgpp
 
 

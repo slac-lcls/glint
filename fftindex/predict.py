@@ -192,3 +192,32 @@ def write_stream_integrated(results, path, panel_name="p0", geom_text=None,
                 f.write("End of reflections\n--- End crystal\n")
             f.write("----- End chunk -----\n")
     return n_idx
+
+
+def write_fromfile(results, path, lattice_code="aP"):
+    """Emit a CrystFEL ``--indexing=file`` solution file -- the refined-merge handoff. GLINT supplies
+    the orientation; CrystFEL's own prediction-refinement imposes the lattice symmetry (run with a loose
+    ``--tolerance``), which on real data merges better than either freezing GLINT's raw orientation
+    (--no-refine) or pre-symmetrising the cell. One line per indexed frame:
+
+        <image> //<event> a*x a*y a*z b*x b*y b*z c*x c*y c*z shift_x shift_y <lattice_code>
+
+    with the reciprocal cell in nm^-1 and axes reordered to (long, long, short) so the standard setting
+    matches the lattice code (e.g. ``tPc`` for tetragonal lysozyme; ``--tolerance=10,10,10,3`` recommended).
+    """
+    rows = []
+    for r in results:
+        M = r.get("M")
+        if M is None:
+            continue
+        Ar = np.asarray(M, float)                                  # real-space axes a,b,c (A), columns
+        o = np.argsort(np.linalg.norm(Ar, axis=0))                 # shortest axis first
+        Are = Ar[:, [o[1], o[2], o[0]]]                            # -> (long, long, short)
+        Br = np.linalg.inv(Are).T * 10.0                           # reciprocal a*,b*,c* in nm^-1 (1/A -> 1/nm)
+        v = Br[:, 0].tolist() + Br[:, 1].tolist() + Br[:, 2].tolist()
+        ev = r.get("event", "")
+        rows.append("%s //%s %s 0.0 0.0 %s"
+                    % (r.get("image", "glint.cxi"), ev, " ".join("%.7f" % x for x in v), lattice_code))
+    with open(path, "w") as f:
+        f.write("\n".join(rows) + "\n")
+    return len(rows)

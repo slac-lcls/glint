@@ -57,6 +57,12 @@ def main():
     ap.add_argument("--cascade", metavar="DRIVER",
                     help="optional external cell-given indexer binary (e.g. ffbidx/xgandalf driver) to "
                          "fall back on for frames left unindexed; must use the FRAME-in / basis-out protocol")
+    ap.add_argument("--fromfile", metavar="SOL",
+                    help="also emit a CrystFEL --indexing=file solution file (the refined-merge handoff): "
+                         "run 'indexamajig --indexing=file --fromfile-input-file=SOL --tolerance=10,10,10,3' "
+                         "so CrystFEL refines+integrates the GLINT orientations (best merge)")
+    ap.add_argument("--lattice", default="aP",
+                    help="Bravais lattice code for --fromfile (e.g. tPc tetragonal, aP triclinic); default aP")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
     if args.peaks and not args.geom:
@@ -90,6 +96,11 @@ def main():
         results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest, cascade=casc)
     write_stream(results, args.out)
     _report(stats, args.out)
+    if args.fromfile:
+        from fftindex.predict import write_fromfile
+        nsol = write_fromfile(results, args.fromfile, args.lattice)
+        print(f"  fromfile solutions : {nsol} ({args.lattice}) -> {args.fromfile}"
+              f"  [indexamajig --indexing=file --fromfile-input-file={args.fromfile} --tolerance=10,10,10,3]")
 
 
 if __name__ == "__main__":

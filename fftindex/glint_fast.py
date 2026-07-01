@@ -10,8 +10,8 @@ both FAST and accurate (xgandalf-class rate at >100x the throughput on sparse SF
 import os, sys, time, itertools
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-from fftindex.glint_index import (objective, refine_vec, distinct_maxima, anneal, score_defect,
-                         invq_weight, buerger_reduce, primitivize, STARTS, DEV, index_blind)
+from fftindex.glint_index import (objective, refine_vec, refine_vec_newton, distinct_maxima, anneal,
+                         score_defect, invq_weight, buerger_reduce, primitivize, STARTS, DEV, index_blind)
 from fftindex.lattice import cell_to_Ar
 from fftindex.multishot import same_lattice
 
@@ -27,6 +27,10 @@ TOL = float(os.environ.get("TOL", "0.18"))                  # M2/M3 hard inlier 
 QHI = float(os.environ.get("QHI", "0"))                     # erf^2 high-q apodize: taper edge / qmax (0=off)
 QLO = float(os.environ.get("QLO", "0"))                     # erf^2 low-q (beamstop) apodize: edge / qmax (0=off)
 QAPSIG = float(os.environ.get("QAPSIG", "0.08"))            # apodization taper width / qmax
+FFTSEED_CAP = int(os.environ.get("FFTSEED_CAP", "700"))     # FFT-seeded: cap rlps fed to O(N) objective/M4
+REFINER = os.environ.get("REFINER", "grad")                 # M3: grad (default GD+momentum) | newton (damped 3x3)
+NEWTON_STEPS = int(os.environ.get("NEWTON_STEPS", "4"))     # damped-Newton iterations
+CLUSTER_MIN = int(os.environ.get("CLUSTER_MIN", "3000"))    # cluster-FFT only for genuinely DENSE (rotation) clouds; thin/moderate -> Fibonacci (fast+robust there; SFX <3000 unaffected)
 
 
 def qband_apod(qn, qmax):
@@ -98,7 +102,7 @@ def score_batch_t(M, Q, inl_tol=0.15, cover=0.30):
     return key, ni
 
 
-def index_blind_fast(q, acc=None):
+def index_blind_fast(q, acc=None, starts=None):
     q = np.asarray(q, float)
     if len(q) < 6:
         return None
@@ -110,7 +114,12 @@ def index_blind_fast(q, acc=None):
     sync = (DEV == "cuda")
     if sync: torch.cuda.synchronize()
     t = time.time()
-    T = refine_vec(STARTS.clone(), Q, w, qmax, steps=STEPS, tol=TOL)
+    # M1 seeds: blind Fibonacci grid (default) OR caller-supplied candidate vectors (e.g. FFT-predicted)
+    S0 = STARTS.clone() if starts is None else starts
+    if REFINER == "newton":
+        T = refine_vec_newton(S0, Q, w, qmax, steps=NEWTON_STEPS, tol=TOL)
+    else:
+        T = refine_vec(S0, Q, w, qmax, steps=STEPS, tol=TOL)
     f, _ = objective(T, Q, w, sharp=True, tol=TOL)
     cands = distinct_maxima(T.cpu().numpy(), f.cpu().numpy(), keep=KEEP)[:NTOP]
     if sync: torch.cuda.synchronize()
@@ -145,6 +154,131 @@ def index_blind_fast(q, acc=None):
     if DETREJ and abs(np.linalg.det(np.asarray(cell, float))) < 1.0:
         return None                                         # D1: reject degenerate (det~0) cell
     return cell
+
+
+def _torch_fft_seeds(q, qmax, n=None, min_len=3.0, max_peaks=300, rel=0.06):
+    """GPU FFT seed generator (torch): trilinear-deposit the rlps into an n^3 reciprocal grid,
+    cuFFT to real space, local-maxima peak-find -> candidate lattice vectors (Angstrom). All on
+    device; only the small (m,3) peak list stays on GPU as seeds. Mirrors transform.fft_volume."""
+    from fftindex.transform import estimate_grid_n
+    n = int(estimate_grid_n(q, qmax) if n is None else n)
+    dq = 2.0 * qmax / n
+    Qt = torch.as_tensor(q, dtype=torch.float32, device=DEV)
+    gi = Qt / dq + n / 2.0
+    base = torch.floor(gi).long(); frac = gi - base.float()
+    rho = torch.zeros(n * n * n, device=DEV)
+    for dx in (0, 1):
+        for dy in (0, 1):
+            for dz in (0, 1):
+                idx = base + torch.tensor([dx, dy, dz], device=DEV)
+                inb = ((idx >= 0) & (idx < n)).all(1)
+                wx = frac[:, 0] if dx else 1 - frac[:, 0]
+                wy = frac[:, 1] if dy else 1 - frac[:, 1]
+                wz = frac[:, 2] if dz else 1 - frac[:, 2]
+                w = (wx * wy * wz)[inb]; ii = idx[inb]
+                flat = (ii[:, 0] * n + ii[:, 1]) * n + ii[:, 2]
+                rho.scatter_add_(0, flat, w)
+    rho = rho.view(n, n, n)
+    vol = torch.fft.fftshift(torch.fft.fftn(torch.fft.ifftshift(rho))).abs()
+    x = torch.fft.fftshift(torch.fft.fftfreq(n, d=dq)).to(DEV)
+    mx = torch.nn.functional.max_pool3d(vol[None, None], 3, 1, 1)[0, 0]
+    ispk = (vol == mx) & (vol > rel * vol.max())
+    ijk = torch.nonzero(ispk)
+    vecs = torch.stack([x[ijk[:, 0]], x[ijk[:, 1]], x[ijk[:, 2]]], 1)
+    lens = vecs.norm(dim=1); keep = lens >= min_len
+    vecs, amps = vecs[keep], vol[ispk][keep]
+    order = torch.argsort(amps, descending=True)[:max_peaks]
+    return vecs[order].float()
+
+
+def _cluster_fft_seeds(q, n_clusters=28, cpts=300, n_grid=96, fov=200.0, min_len=3.0, rel=0.12, seed=0):
+    """LOCAL-CLUSTER autocorrelation seeds (user idea): instead of one global O(N) FFT (whose peak
+    extraction explodes on dense data), FFT several SMALL centered Bragg-peak clusters on a fine local
+    grid. |F| is translation-invariant so each cluster can be centered at the origin; its
+    autocorrelation peaks at the (short) lattice vectors. O(K*cpts) + K tiny FFTs -> flat in density.
+    The cluster extent sets seed resolution (coarse); GLINT's refine then polishes against the data."""
+    q = np.asarray(q, float)
+    rng = np.random.default_rng(seed)
+    dq = 1.0 / (2.0 * fov)                                   # grid spacing -> real-space FOV = fov A
+    QT = torch.as_tensor(q, dtype=torch.float32, device=DEV)
+    centers = rng.choice(len(q), min(n_clusters, len(q)), replace=False)
+    half = n_grid // 2
+    out = []
+    for ci in centers:
+        d = (QT - QT[ci]).norm(dim=1)
+        idx = torch.argsort(d)[:cpts]
+        c = QT[idx]; c = c - c.mean(0)                      # center the cluster
+        gi = torch.round(c / dq).long() + half
+        inb = ((gi >= 0) & (gi < n_grid)).all(1); gi = gi[inb]
+        if len(gi) < 6:
+            continue
+        rho = torch.zeros(n_grid ** 3, device=DEV)
+        rho.scatter_add_(0, (gi[:, 0] * n_grid + gi[:, 1]) * n_grid + gi[:, 2],
+                         torch.ones(len(gi), device=DEV))
+        vol = torch.fft.fftshift(torch.fft.fftn(torch.fft.ifftshift(rho.view(n_grid, n_grid, n_grid)))).abs()
+        x = torch.fft.fftshift(torch.fft.fftfreq(n_grid, d=dq)).to(DEV)
+        mx = torch.nn.functional.max_pool3d(vol[None, None], 3, 1, 1)[0, 0]
+        ispk = (vol == mx) & (vol > rel * vol.max())
+        ijk = torch.nonzero(ispk)
+        vecs = torch.stack([x[ijk[:, 0]], x[ijk[:, 1]], x[ijk[:, 2]]], 1)
+        L = vecs.norm(dim=1); keep = (L >= min_len) & (L <= 0.9 * fov)
+        vecs, amps = vecs[keep], vol[ispk][keep]
+        out.append(vecs[torch.argsort(amps, descending=True)[:24]])
+    return torch.cat(out, 0) if out else torch.zeros((0, 3), device=DEV)
+
+
+def index_blind_cluster_seeded(q, acc=None):
+    """Index using LOCAL-CLUSTER FFT seeds -> GLINT refine/M4 (scales flat with rlp density). Below
+    CLUSTER_MIN rlps the autocorrelation is starved (thin slice) -> fall back to the Fibonacci grid."""
+    q = np.asarray(q, float)
+    if len(q) < 6:
+        return None
+    if len(q) < CLUSTER_MIN:
+        return index_blind_fast(q, acc)                     # sparse -> Fibonacci owns this regime
+    t = time.time()
+    starts = _cluster_fft_seeds(q)
+    if acc is not None: acc["fft_seed"] = acc.get("fft_seed", 0.0) + time.time() - t
+    if int(starts.shape[0]) < 3:
+        return index_blind_fast(q, acc)                     # starved -> Fibonacci fallback
+    if len(q) > FFTSEED_CAP:
+        q = q[np.argsort(np.linalg.norm(q, axis=1))[:FFTSEED_CAP]]
+    return index_blind_fast(q, acc, starts=starts)
+
+
+def index_blind_fft_seeded(q, also_fib=False, acc=None):
+    """Hybrid (user idea): use the OLD 3D-FFT method as a SEED GENERATOR for GLINT's GPU pipeline.
+
+    fft_volume(q) -> find_peaks gives the handful of data-driven candidate lattice vectors (sharp on
+    dense/rotation data); these replace the ~70k blind Fibonacci starts feeding refine_vec -> M4. On
+    dense data this is far fewer, better seeds; when the FFT is starved (sparse single shot) it falls
+    back to the Fibonacci grid (also_fib unions both). The seed FFT runs on CPU (one cheap FFT/frame);
+    the expensive refine + GPU M4 assembly are unchanged -- so the old method's CPU basis-search blowup
+    on dense data is avoided (M4 is the batched-GPU 220x replacement)."""
+    q = np.asarray(q, float)
+    if len(q) < 6:
+        return None
+    qmax = float(np.linalg.norm(q, axis=1).max())
+    t = time.time()
+    if DEV == "cuda":
+        starts = _torch_fft_seeds(q, qmax)                  # GPU cuFFT seeds (fast, scales to dense)
+        n_seed = int(starts.shape[0])
+    else:
+        from fftindex.transform import fft_volume, estimate_grid_n
+        from fftindex.peakfind import find_peaks_classical
+        vol, x = fft_volume(q, qmax, n=estimate_grid_n(q, qmax), gpu=False)
+        vecs, _ = find_peaks_classical(vol, x, g=q, qmax=qmax, min_len=3.0)
+        starts = torch.as_tensor(np.asarray(vecs, float), dtype=torch.float32, device=DEV)
+        n_seed = len(vecs)
+    if acc is not None: acc["fft_seed"] = acc.get("fft_seed", 0.0) + time.time() - t
+    if n_seed < 3:
+        return index_blind_fast(q, acc)                     # FFT starved -> Fibonacci fallback
+    if also_fib:
+        starts = torch.cat([starts, STARTS], 0)
+    # the FFT used ALL rlps; the objective/refine/M4 only need enough points to verify -> cap to the
+    # strongest (lowest-|q|) so the O(N) GLINT stages stay fast on dense rotation data (FFTSEED_CAP).
+    if len(q) > FFTSEED_CAP:
+        q = q[np.argsort(np.linalg.norm(q, axis=1))[:FFTSEED_CAP]]
+    return index_blind_fast(q, acc, starts=starts)
 
 
 def index_blind_nbest(q, N=5):

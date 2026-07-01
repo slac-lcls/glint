@@ -102,6 +102,31 @@ def refine_vec(T, Q, w, qmax, steps=80, tol=0.18, sharp_last=25, mom=0.5):
         T = T + lr * vel
     return T
 
+
+def refine_vec_newton(T, Q, w, qmax, steps=4, tol=0.18, mu=None, sharp_last=1):
+    """M3 variant: damped-NEWTON ascent of the default hard-masked cos objective. Analytic per-seed
+    3x3 gradient + Hessian (g = -2pi (sin.wm)@Q ; H = -(2pi)^2 sum (cos.wm) q q^T); damped H-mu*I to
+    stay negative-definite (ascent) and avoid basin-jumping on the multimodal comb. Batched 3x3 solve.
+    Converges in ~2-4 steps where GD takes 8-80 -- tested for the dense/cluster path (small #seeds)."""
+    B = T.shape[0]
+    eye = torch.eye(3, dtype=T.dtype, device=T.device)
+    mu = (2 * PI) ** 2 * 0.05 if mu is None else mu       # damping ~ small fraction of |H| scale
+    for s in range(steps):
+        proj = T @ Q.t()
+        mask = (torch.abs(proj - torch.round(proj)) < tol).to(T.dtype)
+        if s >= steps - sharp_last:                        # cos^2 sharpen at the end (as in refine_vec)
+            sin2 = PI * torch.sin(2 * PI * proj); cos2 = (2 * PI) * PI * torch.cos(2 * PI * proj)
+        else:
+            sin2 = 2 * PI * torch.sin(2 * PI * proj); cos2 = (2 * PI) ** 2 * torch.cos(2 * PI * proj)
+        wm = w.unsqueeze(0) * mask
+        g = -((sin2 * wm) @ Q)                             # (B,3)
+        H = -torch.einsum("bn,ni,nj->bij", cos2 * wm, Q, Q)  # (B,3,3)
+        Hd = H - mu * eye                                  # damp toward neg-definite
+        step = torch.linalg.solve(Hd, g.unsqueeze(-1)).squeeze(-1)
+        T = T - step
+    return T
+
+
 def distinct_maxima(Tn, fn, tol=2.0, keep=44, minlen=20.0):
     """cluster converged vectors, rank by OBJECTIVE VALUE f (not basin count)."""
     s = np.where(Tn[:, 0] != 0, np.sign(Tn[:, 0]), 1.0); Tc = Tn * s[:, None]

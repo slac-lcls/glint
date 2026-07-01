@@ -10,9 +10,18 @@ both FAST and accurate (xgandalf-class rate at >100x the throughput on sparse SF
 import os, sys, time, itertools
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-from fftindex.glint_index import (objective, refine_vec, refine_vec_newton, distinct_maxima,
+from fftindex.glint_index import (objective, refine_vec, refine_vec_newton, refine_vec_cg, distinct_maxima,
                          distinct_maxima_gpu, distinct_cells_gpu, anneal, score_defect, invq_weight,
                          buerger_reduce, primitivize, STARTS, DEV, index_blind)
+
+
+def _refine(S0, Q, w, qmax):
+    """M3 dispatch: grad (default GD+momentum) | cg (nonlinear conjugate-gradient) | newton (damped 3x3)."""
+    if REFINER == "newton":
+        return refine_vec_newton(S0, Q, w, qmax, steps=NEWTON_STEPS, tol=TOL)
+    if REFINER == "cg":
+        return refine_vec_cg(S0, Q, w, qmax, steps=STEPS, tol=TOL)
+    return refine_vec(S0, Q, w, qmax, steps=STEPS, tol=TOL)
 from fftindex.lattice import cell_to_Ar
 from fftindex.multishot import same_lattice
 
@@ -119,10 +128,7 @@ def index_blind_fast(q, acc=None, starts=None):
     t = time.time()
     # M1 seeds: blind Fibonacci grid (default) OR caller-supplied candidate vectors (e.g. FFT-predicted)
     S0 = STARTS.clone() if starts is None else starts
-    if REFINER == "newton":
-        T = refine_vec_newton(S0, Q, w, qmax, steps=NEWTON_STEPS, tol=TOL)
-    else:
-        T = refine_vec(S0, Q, w, qmax, steps=STEPS, tol=TOL)
+    T = _refine(S0, Q, w, qmax)                            # M3 (grad | cg | newton via REFINER)
     f, _ = objective(T, Q, w, sharp=True, tol=TOL)
     cands = distinct_maxima_gpu(T, f, keep=KEEP)[:NTOP]     # M2 dedup ON DEVICE (no host round-trip)
     if sync: torch.cuda.synchronize()
@@ -294,7 +300,7 @@ def index_blind_nbest(q, N=5):
     w = invq_weight(Q) if QPOW == 1.0 else Q.norm(dim=1).clamp_min(1e-9) ** (-QPOW)
     if QHI > 0 or QLO > 0:
         w = w * qband_apod(Q.norm(dim=1), qmax)
-    T = refine_vec(STARTS.clone(), Q, w, qmax, steps=STEPS, tol=TOL)
+    T = _refine(STARTS.clone(), Q, w, qmax)                   # M3 (grad | cg | newton via REFINER)
     f, _ = objective(T, Q, w, sharp=True, tol=TOL)
     cands = distinct_maxima_gpu(T, f, keep=KEEP)[:NTOP]        # M2 dedup ON DEVICE
     if int(cands.shape[0]) < 3:

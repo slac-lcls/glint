@@ -127,6 +127,31 @@ def refine_vec_newton(T, Q, w, qmax, steps=4, tol=0.18, mu=None, sharp_last=1):
     return T
 
 
+def refine_vec_cg(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None):
+    """M3 variant: nonlinear CONJUGATE-GRADIENT (Polak-Ribiere+) ascent of the M2 objective. Gradient-only
+    (no Hessian -> gentler than refine_vec_newton, which basin-jumps on the multimodal cos-comb). The CG
+    direction replaces the momentum average of refine_vec; the direction is normalized and driven by the
+    SAME lr schedule so step control is identical -- only the direction differs. Question: does the
+    conjugate direction reach the M2 maxima in fewer steps at equal rate? (M3 is compute-saturated, so
+    fewer steps = proportional time.) `mom` accepted+ignored for a drop-in signature with refine_vec."""
+    if sharp_last is None:
+        sharp_last = max(1, steps // 3)
+    step0 = 0.25 / qmax
+    d = torch.zeros_like(T); g_prev = None
+    for s in range(steps):
+        lr = step0 * (1 - 0.7 * s / steps)
+        _, g = objective(T, Q, w, tol, sharp=(s >= steps - sharp_last))
+        if g_prev is None:
+            d = g
+        else:
+            num = (g * (g - g_prev)).sum(1, keepdim=True)         # Polak-Ribiere
+            den = (g_prev * g_prev).sum(1, keepdim=True) + 1e-12
+            d = g + (num / den).clamp_min(0.0) * d                # PR+ (restart when beta<0)
+        g_prev = g
+        T = T + lr * d / (d.norm(dim=1, keepdim=True) + 1e-12)    # normalized dir (step control as refine_vec)
+    return T
+
+
 def distinct_maxima(Tn, fn, tol=2.0, keep=44, minlen=20.0):
     """cluster converged vectors, rank by OBJECTIVE VALUE f (not basin count)."""
     s = np.where(Tn[:, 0] != 0, np.sign(Tn[:, 0]), 1.0); Tc = Tn * s[:, None]

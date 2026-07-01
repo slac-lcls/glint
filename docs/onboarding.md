@@ -5,6 +5,41 @@ This page gets a new collaborator from zero to a validated change. See also the 
 [`README.md`](../README.md) (what GLINT does + the library API) and [`CONTRIBUTING.md`](../CONTRIBUTING.md)
 (the short version of the rules below).
 
+## 0. Background — what indexing is, and what GLINT does
+
+*(If you already do crystallography, skip to §1. This is a primer for a maths / GPU reader.)*
+
+A crystal is a 3-D periodic lattice of molecules. Illuminate it with X-rays and it diffracts: the
+detector records a set of bright spots (**Bragg peaks**). After correcting for the detector geometry
+and wavelength, each spot maps to a point **q** in 3-D *reciprocal space*, and those points lie on a
+lattice — the reciprocal of the crystal's real-space lattice.
+
+**Indexing is the inverse problem:** given the cloud of measured points {q_i}, recover the lattice
+that generated them. Every spot is an integer combination of three unknown basis vectors,
+
+    q_i = h_i·a* + k_i·b* + l_i·c*,     (h_i, k_i, l_i) ∈ ℤ³,
+
+so indexing = find the basis B = (a*, b*, c*) — equivalently the **unit cell** (three lengths + three
+angles) and the crystal's **orientation** R ∈ SO(3) — and assign each spot its integer (h, k, l). It's
+lattice-basis recovery from a noisy point cloud: a cousin of lattice reduction and integer least
+squares. The cell is orientation-invariant (a Gram / metric-tensor quantity); the orientation is the
+rotation on top.
+
+**Why it's hard in serial crystallography (SFX):** each shot is a single *still* from a crystal in a
+random, unknown orientation, so you see only the thin curved slice of the reciprocal lattice that meets
+the **Ewald sphere** — typically **~15–60 spots**, sparse, with noise and spurious peaks, and (the hard
+case) often **no unit cell known in advance** — "blind". Many classical indexers need the cell; blind +
+sparse is where most methods fall over.
+
+**What GLINT does:** it proposes candidate basis vectors from a gridless objective (the FFT / direct-sum
+lineage — see [`lineage.md`](lineage.md)), refines them by gradient ascent, and keeps the *N* best
+hypotheses per frame. Because every shot in a run shares **one** cell, it then derives that cell by
+**consensus across frames** and re-indexes the stragglers with a fast GPU known-cell matcher. All of it
+is GPU-batched, so it runs at hundreds of frames/s and outputs an oriented lattice per frame → a
+CrystFEL `.stream` → merge. Where the maths lives: `glint/lattice.py` (cell ↔ basis, SO(3)),
+`glint/glint_fast.py` (the objective + ascent), `glint/multishot.py` (consensus). The paper's
+*Architecture* section is the fuller treatment.
+
 ## 1. Repository & sync model
 
 **GitHub is the source of truth:** `git@github.com:slac-lcls/glint.git` (private, in the `slac-lcls` org).

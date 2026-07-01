@@ -88,8 +88,35 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     return results, stats
 
 
+def dense_index(frames, images=None, warmup=True):
+    """Dense/rotation path: each frame self-indexes via the local-cluster-FFT front end
+    (`index_blind_cluster_seeded`) -- no cross-frame consensus needed because a rotation cloud is
+    3D-complete. Below CLUSTER_MIN rlps the front end auto-falls-back to the Fibonacci grid, so this is
+    safe on mixed data; the CLI picks this path only when the median rlp count is dense."""
+    from fftindex.glint_fast import index_blind_cluster_seeded
+    n = len(frames)
+    images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
+    if warmup and n:
+        index_blind_cluster_seeded(frames[0])
+    results = []; n_idx = 0
+    for q, meta in zip(frames, images):
+        M = index_blind_cluster_seeded(q)
+        if M is not None:
+            hkl, qin, _ = _hkl(q, M); n_idx += 1
+        else:
+            hkl, qin = None, q
+        results.append({"image": meta["image"], "event": meta["event"], "M": M, "q": qin, "hkl": hkl})
+    stats = {"n": n, "mode": "dense", "n_blind": n_idx, "support": -1, "edges": None,
+             "n_nbest": 0, "n_resc": 0, "n_casc": 0, "n_idx": n_idx, "Mc": None}
+    return results, stats
+
+
 def _report(stats, out):
     n = max(stats["n"], 1)
+    if stats.get("mode") == "dense":
+        print(f"=== GLINT dense/rotation (local-cluster FFT), N={stats['n']} ===")
+        print(f"  indexed            : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
+        return
     print(f"=== GLINT hybrid (blind+consensus+general-rescue), N={stats['n']} ===")
     print(f"  blind indexed      : {stats['n_blind']}/{stats['n']} ({100*stats['n_blind']//n}%)")
     print(f"  consensus cell     : {stats['edges']} A  support {stats['support']}")

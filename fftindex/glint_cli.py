@@ -51,6 +51,9 @@ def main():
     ap.add_argument("--device", choices=("auto", "cpu"), default="auto")
     ap.add_argument("--nbest", type=int, default=3,
                     help="keep N-best cell hypotheses/frame for consensus (1 = top-1 only)")
+    ap.add_argument("--mode", choices=("auto", "sparse", "dense"), default="auto",
+                    help="front end: sparse=nbest+consensus (SFX stills); dense=local-cluster FFT "
+                         "(rotation clouds, self-indexing); auto=pick by median rlp count (default)")
     ap.add_argument("--cascade", metavar="DRIVER",
                     help="optional external cell-given indexer binary (e.g. ffbidx/xgandalf driver) to "
                          "fall back on for frames left unindexed; must use the FRAME-in / basis-out protocol")
@@ -70,13 +73,21 @@ def main():
         from fftindex.lattice import cell_to_Ar
         Mc_known = cell_to_Ar(*[float(x) for x in args.cell.split()])
 
-    from fftindex.hybrid_stream import hybrid_index, _report           # torch import deferred to here
+    from fftindex.hybrid_stream import hybrid_index, dense_index, _report   # torch import deferred to here
     from fftindex.stream import write_stream
-    casc = None
-    if args.cascade:
-        from fftindex.cascade import external_cascade
-        casc = external_cascade(args.cascade)
-    results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest, cascade=casc)
+    from fftindex.glint_fast import CLUSTER_MIN
+    mode = args.mode
+    if mode == "auto":
+        med = int(np.median([len(q) for q in frames]))
+        mode = "dense" if med >= CLUSTER_MIN else "sparse"
+    if mode == "dense":
+        results, stats = dense_index(frames, images)
+    else:
+        casc = None
+        if args.cascade:
+            from fftindex.cascade import external_cascade
+            casc = external_cascade(args.cascade)
+        results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest, cascade=casc)
     write_stream(results, args.out)
     _report(stats, args.out)
 

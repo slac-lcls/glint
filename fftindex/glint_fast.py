@@ -10,8 +10,9 @@ both FAST and accurate (xgandalf-class rate at >100x the throughput on sparse SF
 import os, sys, time, itertools
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-from fftindex.glint_index import (objective, refine_vec, refine_vec_newton, distinct_maxima, anneal,
-                         score_defect, invq_weight, buerger_reduce, primitivize, STARTS, DEV, index_blind)
+from fftindex.glint_index import (objective, refine_vec, refine_vec_newton, distinct_maxima,
+                         distinct_maxima_gpu, anneal, score_defect, invq_weight, buerger_reduce,
+                         primitivize, STARTS, DEV, index_blind)
 from fftindex.lattice import cell_to_Ar
 from fftindex.multishot import same_lattice
 
@@ -121,31 +122,27 @@ def index_blind_fast(q, acc=None, starts=None):
     else:
         T = refine_vec(S0, Q, w, qmax, steps=STEPS, tol=TOL)
     f, _ = objective(T, Q, w, sharp=True, tol=TOL)
-    cands = distinct_maxima(T.cpu().numpy(), f.cpu().numpy(), keep=KEEP)[:NTOP]
+    cands = distinct_maxima_gpu(T, f, keep=KEEP)[:NTOP]     # M2 dedup ON DEVICE (no host round-trip)
     if sync: torch.cuda.synchronize()
     if acc is not None: acc["gpu_front"] += time.time() - t
-    if len(cands) < 3:
+    if int(cands.shape[0]) < 3:
         return None
-    # M4: build all valid triplets, batched anneal + score on GPU
+    # M4: build all valid triplets ON DEVICE, batched anneal + score on GPU (no numpy/host hop)
     t = time.time()
-    nrm = np.linalg.norm(cands, axis=1)
-    tris = np.array(list(itertools.combinations(range(len(cands)), 3)))
-    M0 = np.transpose(cands[tris], (0, 2, 1))               # (B,3,3) cols=axes
-    sc = nrm[tris].prod(1)
-    det = np.abs(np.linalg.det(M0))
-    keep = (sc > 0) & (det >= 0.1 * sc)
-    M0 = M0[keep]
-    if len(M0) == 0:
+    Qd = Q.double(); cd = cands.double()                    # M4 in fp64 (matches scalar anneal)
+    tri = torch.combinations(torch.arange(cd.shape[0], device=DEV), 3)  # (B,3) lexicographic
+    M0 = cd[tri].permute(0, 2, 1)                           # (B,3,3) cols=axes
+    nrm = cd.norm(dim=1); sc = nrm[tri].prod(1)
+    det = torch.linalg.det(M0).abs()
+    M0 = M0[(sc > 0) & (det >= 0.1 * sc)]
+    if int(M0.shape[0]) == 0:
         return None
-    # M4 in float64 to match the scalar numpy anneal exactly (A100 fp64 is cheap here)
-    Qd = Q.double()
-    M0t = torch.as_tensor(M0, dtype=torch.float64, device=DEV)
-    Mt = anneal_batch_t(M0t, Qd)
+    Mt = anneal_batch_t(M0, Qd)
     key, ni = score_batch_t(Mt, Qd)
     b = int(torch.argmax(key).item())
     best = Mt[b].cpu().numpy()
     if sync: torch.cuda.synchronize()
-    if acc is not None: acc["m4_gpu"] += time.time() - t; acc["ntri"] += len(M0)
+    if acc is not None: acc["m4_gpu"] += time.time() - t; acc["ntri"] += int(M0.shape[0])
     if float(key[b]) <= -1e8:
         return None
     cell = primitivize(buerger_reduce(best), q)
@@ -297,18 +294,17 @@ def index_blind_nbest(q, N=5):
         w = w * qband_apod(Q.norm(dim=1), qmax)
     T = refine_vec(STARTS.clone(), Q, w, qmax, steps=STEPS, tol=TOL)
     f, _ = objective(T, Q, w, sharp=True, tol=TOL)
-    cands = distinct_maxima(T.cpu().numpy(), f.cpu().numpy(), keep=KEEP)[:NTOP]
-    if len(cands) < 3:
+    cands = distinct_maxima_gpu(T, f, keep=KEEP)[:NTOP]        # M2 dedup ON DEVICE
+    if int(cands.shape[0]) < 3:
         return []
-    nrm = np.linalg.norm(cands, axis=1)
-    tris = np.array(list(itertools.combinations(range(len(cands)), 3)))
-    M0 = np.transpose(cands[tris], (0, 2, 1))
-    sc = nrm[tris].prod(1); det = np.abs(np.linalg.det(M0))
+    Qd = Q.double(); cd = cands.double()                      # M4 triplet build ON DEVICE
+    tri = torch.combinations(torch.arange(cd.shape[0], device=DEV), 3)
+    M0 = cd[tri].permute(0, 2, 1)
+    nrm = cd.norm(dim=1); sc = nrm[tri].prod(1); det = torch.linalg.det(M0).abs()
     M0 = M0[(sc > 0) & (det >= 0.1 * sc)]
-    if len(M0) == 0:
+    if int(M0.shape[0]) == 0:
         return []
-    Qd = Q.double()
-    Mt = anneal_batch_t(torch.as_tensor(M0, dtype=torch.float64, device=DEV), Qd)
+    Mt = anneal_batch_t(M0, Qd)
     key, ni = score_batch_t(Mt, Qd)
     order = torch.argsort(key, descending=True).cpu().numpy()
     Mtn = Mt.cpu().numpy(); keyn = key.cpu().numpy()

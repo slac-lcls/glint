@@ -140,6 +140,30 @@ def distinct_maxima(Tn, fn, tol=2.0, keep=44, minlen=20.0):
     return np.array(out)
 
 
+def distinct_maxima_gpu(T, f, tol=2.0, keep=44, minlen=20.0):
+    """GPU port of distinct_maxima: stays ON DEVICE (no host round-trip). Canonicalize the sign,
+    drop |v|<minlen, keep the highest-f vector per tol-voxel, return the top-`keep` by f (device
+    tensor, f-descending). Exact match to distinct_maxima up to argsort ties on equal f."""
+    s = torch.where(T[:, 0] != 0, torch.sign(T[:, 0]), torch.ones_like(T[:, 0]))
+    Tc = T * s[:, None]
+    m = Tc.norm(dim=1) >= minlen
+    Tc, fm = Tc[m], f[m]
+    if Tc.shape[0] == 0:
+        return Tc
+    order = torch.argsort(fm, descending=True)                # process high-f first (greedy)
+    Tc = Tc[order]
+    key = torch.round(Tc / tol).long(); key = key - key.amin(0)
+    b1 = int(key[:, 1].max()) + 1; b2 = int(key[:, 2].max()) + 1
+    K = (key[:, 0] * b1 + key[:, 1]) * b2 + key[:, 2]         # 3D voxel -> 1D hash
+    uniq, inv = torch.unique(K, return_inverse=True)
+    N = K.shape[0]
+    firstpos = torch.full((uniq.shape[0],), N, device=T.device, dtype=torch.long)
+    firstpos.scatter_reduce_(0, inv, torch.arange(N, device=T.device), reduce="amin", include_self=True)
+    keepmask = torch.zeros(N, dtype=torch.bool, device=T.device)
+    keepmask[firstpos] = True                                 # first (=max-f) row per voxel
+    return Tc[keepmask][:keep]                                # position order == f-descending
+
+
 # ---- M5: residual-threshold annealing (cell refine) -----------------------------
 def anneal(M, Q, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02):
     """M5: closed-form OLS fit to inliers; trim residuals; anneal threshold down.

@@ -43,6 +43,7 @@ NEWTON_STEPS = int(os.environ.get("NEWTON_STEPS", "4"))     # damped-Newton iter
 CLUSTER_MIN = int(os.environ.get("CLUSTER_MIN", "3000"))    # cluster-FFT only for genuinely DENSE (rotation) clouds; thin/moderate -> Fibonacci (fast+robust there; SFX <3000 unaffected)
 ANNEAL_FP32 = os.environ.get("ANNEAL_FP32", "0") == "1"     # M5 anneal/score dtype: fp64 (default, bit-matched scalar) | fp32 (faster; validate rate)
 ADT = torch.float32 if ANNEAL_FP32 else torch.float64
+BIGCELL_RLPS = int(os.environ.get("BIGCELL_RLPS", "200000"))  # cluster-FFT: above this rlp count (large-volume/long-axis cell) enlarge the seed grid (adaptive fov)
 
 
 def qband_apod(qn, qmax):
@@ -241,7 +242,13 @@ def index_blind_cluster_seeded(q, acc=None):
     if len(q) < CLUSTER_MIN:
         return index_blind_fast(q, acc)                     # sparse -> Fibonacci owns this regime
     t = time.time()
-    starts = _cluster_fft_seeds(q)
+    # ADAPTIVE FOV: a very dense cloud (large-volume cell, long axes) under-resolves at the default grid
+    # (fov=200/g96); use a larger, finer grid there. rlp count is the size proxy (large_tet 456k vs the
+    # rest <=138k). Fires only for genuinely large cells; a false trigger only costs speed, never accuracy.
+    if len(q) > BIGCELL_RLPS:
+        starts = _cluster_fft_seeds(q, fov=280.0, n_grid=128)   # 0.9*fov=252 A cutoff, ~4.4 A/voxel
+    else:
+        starts = _cluster_fft_seeds(q)                          # default grid (fov=200, n_grid=96)
     if acc is not None: acc["fft_seed"] = acc.get("fft_seed", 0.0) + time.time() - t
     if int(starts.shape[0]) < 3:
         return index_blind_fast(q, acc)                     # starved -> Fibonacci fallback

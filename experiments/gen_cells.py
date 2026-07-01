@@ -7,13 +7,17 @@ as npz shared by glint_cells.py (GPU) and dials_cells.py (cctbx) -> identical in
 import numpy as np
 
 DMIN = 3.0; QMAX = 1.0 / DMIN; REPS = 4
-CELLS = [                                   # name, (a,b,c,alpha,beta,gamma); axes <=135A (cluster FOV)
+CELLS = [                                   # name, (a,b,c,alpha,beta,gamma); axes <=180A (cluster FOV=200)
     ("lyso_tet",   (79.0, 79.0, 38.0, 90, 90, 90)),
     ("prok_tet",   (68.5, 68.5, 109.0, 90, 90, 90)),
     ("thaum_tet",  (58.0, 58.0, 130.0, 90, 90, 90)),    # long c
     ("hex_P6",     (105.0, 105.0, 75.0, 90, 90, 120)),  # hexagonal
     ("cubic_ins",  (78.0, 78.0, 78.0, 90, 90, 90)),     # insulin-like cubic
     ("ortho_lg",   (60.0, 110.0, 135.0, 90, 90, 90)),   # large anisotropic
+    ("tricl",      (45.0, 55.0, 65.0, 80, 85, 95)),     # triclinic (low symmetry, oblique)
+    ("mono",       (60.0, 70.0, 90.0, 90, 105, 90)),    # monoclinic (beta != 90)
+    ("large_tet",  (140.0, 140.0, 150.0, 90, 90, 90)),  # large (axes near the 180A cutoff)
+    ("trig_ob",    (70.0, 70.0, 70.0, 100, 100, 100)),  # rhombohedral-like oblique
 ]
 
 

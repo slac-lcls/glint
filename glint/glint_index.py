@@ -40,6 +40,8 @@ OBJKAP = float(os.environ.get("OBJKAP", "8.0"))             # von Mises concentr
 LS_CAPK = float(os.environ.get("LS_CAPK", "0.5"))          # refine_vec_ls: step cap = LS_CAPK period (0.5=quarter)
 LS_CAPQ = float(os.environ.get("LS_CAPQ", "1.0"))          # refine_vec_ls: cap keyed to this |psi| quantile (1=max)
 LS_MOM = float(os.environ.get("LS_MOM", "0.0"))            # refine_vec_ls: momentum on the line-search step (0=pure)
+BETA = float(os.environ.get("BETA", "0.7"))                # refine_vec_raar: RAAR feedback parameter (0..1)
+SO_WS = float(os.environ.get("SO_WS", "1.0"))              # refine_vec_so2d: support-error weight in L=e_d^2 - w_s e_s^2
 
 
 # ---- M1: sample -----------------------------------------------------------------
@@ -261,6 +263,42 @@ def refine_vec_ls(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None, l
         vel = LS_MOM * vel + a * d                                             # momentum coast (LS_MOM=0 -> pure LS)
         T = T + vel
     return T
+
+
+def _psupport(Rd, Q, wm, eye, reg=1e-3):
+    """P_support: weighted least-squares fit of a lattice vector to the (B,N) working projections Rd, then
+    re-project. v = argmin_v sum wm (Rd - Q v)^2 via batched 3x3 normal equations; returns (u_s=Qv, v)."""
+    A = torch.einsum("bn,ni,nj->bij", wm, Q, Q) + reg * eye                     # (B,3,3)
+    rhs = torch.einsum("bn,ni->bi", wm * Rd, Q)                                 # (B,3)
+    v = torch.linalg.solve(A, rhs.unsqueeze(-1)).squeeze(-1)                    # (B,3)
+    return v @ Q.t(), v
+
+
+def refine_vec_raar(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None, beta=None):
+    """M3 variant: RAAR (relaxed averaged alternating reflections) -- INDEXING AS PHASE RETRIEVAL. Work in
+    the per-peak projections u = q.v. Two constraint sets, both cheap: P_data = round the INLIER u_i to the
+    nearest integer (the 'magnitude'/Miller-index constraint, elementwise, outliers left free); P_support =
+    weighted least-squares refit v=Q^+u then u=Qv (project onto range(Q), the 'support' -- one batched 3x3
+    solve, the anneal step). RAAR: u <- (beta/2)(R_s R_d + I)u + (1-beta) P_d u, R=2P-I. The reflections give
+    HIO-style FEEDBACK that escapes the spurious basins plain ascent / error-reduction fall into; range(Q) is
+    a FIXED linear subspace, so the support is maximally stable (the regime where saddle/DR methods work).
+    beta via BETA env. Returns the feasible v fit to the confident integer assignments."""
+    b = BETA if beta is None else beta
+    eye = torch.eye(3, dtype=T.dtype, device=T.device)
+    w0 = w.unsqueeze(0)
+    u = T @ Q.t()                                                              # (B,N) initial projections
+    for s in range(steps):
+        r = torch.round(u)
+        inl = (torch.abs(u - r) < tol).to(u.dtype)
+        wm = w0 * inl                                                          # weight only current inliers
+        Pd = torch.where(inl > 0, r, u)                                        # round inliers, keep outliers
+        Rd = 2 * Pd - u
+        PsRd, _ = _psupport(Rd, Q, wm, eye)                                    # P_support(R_d u)
+        RsRd = 2 * PsRd - Rd
+        u = 0.5 * b * (RsRd + u) + (1 - b) * Pd                                # RAAR update
+    r = torch.round(u); inl = (torch.abs(u - r) < tol).to(u.dtype)            # extract feasible v from
+    _, v = _psupport(r, Q, w0 * inl, eye)                                      # the confident integer hkl
+    return v
 
 
 def distinct_maxima(Tn, fn, tol=2.0, keep=44, minlen=20.0):

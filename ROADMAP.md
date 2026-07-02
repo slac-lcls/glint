@@ -115,8 +115,13 @@ they are here to be argued about.
   *sharply* at the true cell (orthorhombic forsterite/topaz recover exact, FOM 0.9 at truth vs ~0.6 for
   wrong cells) — exactly where a massively-parallel 6-parameter metric search pays off, unlike the trivial
   1-D cubic scan. Next: a real M20 FOM + systematic-absence/centering handling and a fuller metric search
-  (the two ortho misses are search-depth, not degeneracy), the **pyFAI radial average front end**
-  (`slac-lcls/drp-benchmarks/radial_integration`) → peak-find → this indexer → Rietveld.
+  (the two ortho misses are search-depth, not degeneracy), the radial-average front end → peak-find → this
+  indexer → Rietveld. **Front end is now dependency-free** (`experiments/radial.py`): a self-contained
+  azimuthal integrator (numpy/cupy, credits pyFAI) keeping pyFAI's two wins — fractional pixel-splitting
+  (sub-bin-accurate \(q_n\)) and a load-balanced `bincount` reduction (avoids the `cuSPARSE csrmv`
+  radial-bin imbalance that slowed a hand-rolled CSR SpMV) — so no pyFAI install is needed. Validated on
+  numpy; cupy path is code-identical (benchmark vs the CSR SpMV in a cupy env). Origin:
+  `slac-lcls/drp-benchmarks/radial_integration`.
 - **Laue / pink-beam — the fat Ewald sphere.** A polychromatic beam turns the Ewald sphere into a thick
   shell between \(\lambda_{\min}\) and \(\lambda_{\max}\), so one shot samples much *more* of the 3-D
   lattice — the same "fat slice buys out-of-plane information" argument the paper already makes for

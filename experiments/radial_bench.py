@@ -109,9 +109,11 @@ try:
     gim = cupy.asarray(img.ravel()); gbi = cupy.asarray(binidx)
     thr, blk = 256, 512; shmem = 2 * nbin * 4
 
+    n_i32 = np.int32(gim.size); nb_i32 = np.int32(nbin)
+
     def run_kernel():
         num = cupy.zeros(nbin, cupy.float32); cnt = cupy.zeros(nbin, cupy.float32)
-        ker((blk,), (thr,), (gim, gbi, gim.size, nbin, num, cnt), shared_mem=shmem)
+        ker((blk,), (thr,), (gim, gbi, n_i32, nb_i32, num, cnt), shared_mem=shmem)
         cupy.cuda.Stream.null.synchronize()
         return num, cnt
 

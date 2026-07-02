@@ -37,7 +37,9 @@ Thrust A. This is the figure kept in the paper's *Outlook* — a live direction 
 Audit and speed up M1–M6 + consensus + rescue. Full plan in
 [`docs/research-plan-yuan.md`](docs/research-plan-yuan.md), Thrust B. Background: the paper's
 *Architecture*, *Accuracy-ceiling*, and *Throughput* sections. Concrete experiments, several of them from
-a re-audit of the "attic" where we pruned in the wrong regime or at a fixed setting:
+a re-audit of the "attic" where we pruned in the wrong regime or at a fixed setting. Priority now sits
+with the two **accuracy-neutral** engineering levers (NUFFT dense-M1, CUDA-graph M5): the two
+accuracy-coupled ones (STARTS-down, CG) were tested 2026-07-01 and confirmed non-free (below).
 
 - **NUFFT the dense cluster-seeding** *(highest-value; a prune in the wrong regime)*. NUFFT (cuFINUFFT)
   was benchmarked only on the *sparse* path, where M1 is ~0 ms and it can't help. On the *dense* path M1
@@ -47,14 +49,18 @@ a re-audit of the "attic" where we pruned in the wrong regime or at a fixed sett
   at a 6.1 ms floor (15 sequential 3×3 solves). Capture the fixed-iteration loop in a CUDA graph; the
   padding that collides with the `cnt≥6` inlier guard is solvable by masking the guard on padded entries.
   Then re-test fp32 M5 *on top* (it was negative only because it was launch-bound — the two were coupled).
-- **Sweep M1 STARTS down** *(never tested in the direction that matters)*. We cut M3 STEPS 80→8 but only
-  ever grew the 70,400 start grid, never shrank it; M3 is compute-saturated (cost ∝ starts), so the
-  smallest `n_dir` that still solves 84/120 is a proportional win. Script: `experiments/starts_sweep.py`.
-- **Period-bounded trust-region M3** *(the refiner negatives were all at fixed STEPS)*. Newton/CG/BB/LM
-  all lost to momentum-GD at STEPS=8 by *overshooting basins from imperfect seeds*. A trust region sized
-  to the lattice period (cap the step below half the inter-maximum spacing) could get 2nd-order speed
-  safely; and cleanly answer the unresolved *fewer-steps* question (CG-4 vs GD-8). Script:
-  `experiments/cg_test.py`.
+- ~~**Sweep M1 STARTS down.**~~ **TESTED 2026-07-01 (A100, `experiments/starts_sweep.py`) — no free
+  lunch.** Blind rate drops monotonically as the grid thins: n_dir 2200/1600/1100/700 → 84/80/76/65 of
+  120 at 19.2/16.6/15.3/13.8 ms. The 70,400 starts are *load-bearing for generation* (consistent with the
+  generation-limited diagnosis), not redundant. Still usable as a smooth speed/accuracy **knob** for
+  latency-sensitive online triage. **Open follow-up (the real production question):** does the
+  consensus + rescue **absorb** the blind loss so the *hybrid* rate holds at, say, n_dir 1100? If yes,
+  STARTS-pruning is nearly free end-to-end. Needs an n_dir override in `hybrid_check.py`.
+- ~~**Period-bounded trust-region M3 / CG fewer steps.**~~ **CG TESTED 2026-07-01 (`experiments/cg_test.py`)
+  — clean negative, closes the fewer-steps question.** Momentum-GD Pareto-dominates CG at *every* step
+  count and equal wall-time (grad-4 = 76/120 @15.3 ms vs cg-4 = 67 @15.7; grad-8 = 84 @19.7). The
+  bottleneck is *basin-landing from imperfect seeds*, not step-direction efficiency, so a trust region
+  (the one untried variant) has limited expected headroom — deprioritized. GD STEPS=8 stands.
 - **`torch.compile` fusion** on the M3 gradient / anneal normal-equations — untried, modest expected gain.
 - GPU-batch the known-cell rescue's candidate search to close the last ~4× gap to ffbidx.
 

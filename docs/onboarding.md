@@ -65,8 +65,17 @@ same taxonomy as the paper's landscape table). Start here to place GLINT in cont
 - **Merging / post-refinement:** *partialator* — White, *Phil. Trans. R. Soc. B* **369**, 20130330 (2014).
 - **The fftindex lineage specifically:** *Compressive Auto-Indexing in Femtosecond Nanocrystallography*,
   arXiv:1011.3072; PeakNet (learned peak finding), arXiv:2303.15301.
+- **Polychromatic / averaged regimes** *(exploratory — [`../ROADMAP.md`](../ROADMAP.md) track 5)*:
+  Laue / pink-beam is `pinkIndexer`'s regime (above); powder auto-indexing — ITO (Visser, *J. Appl.
+  Cryst.* **2**, 89, 1969), TREOR (Werner, Eriksson & Westdahl, *J. Appl. Cryst.* **18**, 367, 1985),
+  DICVOL (Boultif & Louër, *J. Appl. Cryst.* **24**, 987, 1991), McMaille (Le Bail, *Powder Diffr.*
+  **19**, 249, 2004); Rietveld refinement — Rietveld, *J. Appl. Cryst.* **2**, 65 (1969), GSAS-II —
+  Toby & Von Dreele, *J. Appl. Cryst.* **46**, 544 (2013).
 - **Recent / adjacent:** Nasser *et al.*, *Robust Indexing for Challenging Serial X-ray Diffraction
   Patterns* (2025, symmetry-aware lattice decoding, small-N); CBXD — Li *et al.*, arXiv:2602.14402 (2026).
+
+New collaborators: the focused, self-contained research plan (blind CBXD + M1–M6 throughput) is
+[`research-plan-yuan.md`](research-plan-yuan.md); the full direction map is [`../ROADMAP.md`](../ROADMAP.md).
 
 ## 1. Repository & sync model
 

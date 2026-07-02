@@ -51,7 +51,11 @@ directory holds the research scripts and diagnostic harness (not shipped in the 
 
 ## Roadmap & contributing
 
-Open directions live in [`ROADMAP.md`](ROADMAP.md); how to work in the repo (branches/PRs, envs,
+Open directions live in [`ROADMAP.md`](ROADMAP.md): real-data validation and LCLS productization,
+faster M1–M6, breaking the **blind convergent-beam (CBXD)** wall, and exploratory extensions to
+**powder** (metric-tensor auto-indexing → Rietveld) and **Laue / pink-beam** (the fat Ewald sphere) —
+all resting on the same gridless objective + GPU consensus. Yuan's focused plan (CBXD + throughput) is
+[`docs/research-plan-yuan.md`](docs/research-plan-yuan.md). How to work in the repo (branches/PRs, envs,
 validation gates) is in [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/onboarding.md`](docs/onboarding.md).
 
 ## Origins

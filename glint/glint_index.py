@@ -301,6 +301,38 @@ def refine_vec_raar(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None,
     return v
 
 
+def refine_vec_so2d(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None, beta=None):
+    """M3 variant: SO2D saddle-point optimizer -- RAAR whose feedback beta is chosen PER SEED PER STEP by an
+    analytic inner solve of the saddle metric L = e_d^2 - w_s e_s^2 (data error minus support error), instead
+    of a fixed beta. Along the RAAR direction u(b) = P_d u + b*Delta (Delta = M1 - P_d u, M1 the DR average),
+    both e_d^2 and e_s^2 are quadratic in b (frozen hkl + the linear support projector), so the stationary
+    b* = -(b_d - w_s b_s)/(c_d - w_s c_s) is closed-form (HIO fallback b=0.75 on a degenerate denominator).
+    range(Q) is a FIXED linear subspace -> maximally stable support, the regime SO is built for. w_s via SO_WS."""
+    eye = torch.eye(3, dtype=T.dtype, device=T.device)
+    w0 = w.unsqueeze(0); ws = SO_WS
+    u = T @ Q.t()
+    for s in range(steps):
+        r = torch.round(u); inl = (torch.abs(u - r) < tol).to(u.dtype); wm = w0 * inl
+        Pd = torch.where(inl > 0, r, u)
+        Rd = 2 * Pd - u
+        PsRd, _ = _psupport(Rd, Q, wm, eye)
+        M1 = 0.5 * (2 * PsRd - Rd + u)                                          # DR average (RAAR beta=1 point)
+        Delta = M1 - Pd                                                         # search direction from P_d u
+        base_d = Pd - r                                                         # data residual at b=0 (0 on inliers)
+        b_d = (wm * base_d * Delta).sum(1, keepdim=True)
+        c_d = (wm * Delta * Delta).sum(1, keepdim=True)
+        PsPd, _ = _psupport(Pd, Q, wm, eye); es_base = Pd - PsPd                # support residual at b=0
+        PsDl, _ = _psupport(Delta, Q, wm, eye); es_del = Delta - PsDl           # its rate along Delta
+        b_s = (wm * es_base * es_del).sum(1, keepdim=True)
+        c_s = (wm * es_del * es_del).sum(1, keepdim=True)
+        den = c_d - ws * c_s
+        bstar = torch.where(den.abs() > 1e-9, -(b_d - ws * b_s) / den, torch.full_like(den, 0.75))
+        u = Pd + bstar.clamp(-0.5, 2.5) * Delta                                # saddle step (HIO-range clamp)
+    r = torch.round(u); inl = (torch.abs(u - r) < tol).to(u.dtype)
+    _, v = _psupport(r, Q, w0 * inl, eye)
+    return v
+
+
 def distinct_maxima(Tn, fn, tol=2.0, keep=44, minlen=20.0):
     """cluster converged vectors, rank by OBJECTIVE VALUE f (not basin count)."""
     s = np.where(Tn[:, 0] != 0, np.sign(Tn[:, 0]), 1.0); Tc = Tn * s[:, None]

@@ -68,20 +68,21 @@ accuracy-coupled ones (STARTS-down, CG) were tested 2026-07-01 and confirmed non
   across grad/cg/bb/lm/newton/ls: **greedy per-step optimality lands more starts in spurious maxima on the
   multimodal comb; momentum-GD's gentle, non-greedy, schedule-annealed ascent is the actual mechanism.**
   GD STEPS=8 stands as the default.
-- **★ Indexing-as-phase-retrieval — RAAR breaks the single-frame wall (WIN, `refine_vec_raar`,
-  `raar_test.py`).** Casting M3 as phase retrieval (P_data = round inlier projections to integer hkl;
-  P_support = least-squares refit onto range(Q)) and using **RAAR** feedback is the *first* refiner to beat
-  momentum-GD: **blind 84 → 88/120** (β=0.7, ~16 iters; reproduced exactly), landing right at the
-  oracle-reachable ceiling (73–76%). The HIO feedback recovers the selection-miss frames GD loses to
-  spurious basins — so the ~71% single-frame ceiling *is* breakable, not absolute. Costs ~2× (a 3×3 solve
-  per step). Its blind edge **grows on hard data** — under mosaic broadening blind GD→RAAR is 70→76 at
-  σ=.0005 and 11→17 at σ=.0015 (+55% relative) — and it firms the derived cell (support 91→94). **But it is
-  hybrid-neutral in *every* regime tested** (full 120, few-frame down to N=5, mosaic to σ=.0015 — all
-  114–118/120 either way): the consensus+rescue net absorbs the single-frame gain everywhere (an early
-  N=8 "+8" was small-sample noise; K=40 shows a tie). ⇒ RAAR's home is **blind-only mode** (no cell, no
-  pooling), hard single frames, and cell-derivation quality — *not* a hybrid default (2× cost, 0 hybrid
-  gain). Keep `REFINER=raar` opt-in; feature it in the paper's accuracy-ceiling section as the single-frame
-  lever that *doesn't* fail (the ~71% ceiling is breakable, not absolute). **SO2D** (adaptive-β saddle,
+- **★ Indexing-as-phase-retrieval — RAAR, a SPARSE-REGIME-SPECIFIC single-frame lever (`refine_vec_raar`).**
+  Casting M3 as phase retrieval (P_data = round inlier projections to integer hkl; P_support = least-squares
+  refit onto range(Q)) and using **RAAR** feedback lifts the **sparse** blind rate **84 → 88/120** (β=0.7,
+  ~16 iters; reproduced), right at the oracle-reachable ceiling (73–76%) — the *first* single-frame lever to
+  beat momentum-GD, recovering the selection-miss frames GD loses to spurious basins, and it **grows on hard
+  data** (mosaic blind 11→17 at σ=.0015, +55% rel). **But two corroborations bound it hard:** (1)
+  **hybrid-neutral in every regime** (full 120, few-frame to N=5, mosaic to σ=.0015 — all 114–118/120; the
+  early N=8 "+8" was noise, K=40 ties) — consensus+rescue already covers those frames; (2) **it regresses on
+  RICH stills** (dials60 blind GD 56/60 vs RAAR 45/60) and **no β/step setting recovers it** (all ~75–78%): on
+  well-determined frames the hard round-to-integer projection locks onto wrong self-consistent (alias)
+  assignments that GD's soft cosine ascent avoids. ⇒ **do NOT feature as a rate headline / table row.** Feature
+  instead: the *concept* (indexing = phase retrieval, singular-vectors-as-FFT) as a framing paragraph in
+  §lineage, and a short honest remark in the accuracy-ceiling § — phase-retrieval feedback confirms the
+  single-frame ceiling is an under-determination/spurious phenomenon (it helps exactly in the sparse
+  under-determined regime and nowhere else). Keep `REFINER=raar` opt-in for blind-only/sparse. **SO2D** (adaptive-β saddle,
   `refine_vec_so2d`): cold = negative (needs a stable iterate; 70k blind seeds are the opposite) — but a
   **RAAR warm-up rescues it to 88** (ties RAAR at 2× cost), confirming the saddle-point literature. **HIO**
   (β=1) underperforms at a short budget (83; wilder, needs a long run + polish); **ADMM** +1 over GD but

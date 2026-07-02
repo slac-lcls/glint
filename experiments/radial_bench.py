@@ -145,6 +145,7 @@ except Exception as e:
 
 # ---- pyFAI ----------------------------------------------------------------------------------------
 try:
+    import logging; logging.getLogger("pyFAI").setLevel(logging.ERROR)   # silence method-fallback spam
     try:
         from pyFAI.integrator.azimuthal import AzimuthalIntegrator
     except Exception:

@@ -34,12 +34,29 @@ the solvability-phase-diagram target in [`docs/research-plan-yuan.md`](docs/rese
 Thrust A. This is the figure kept in the paper's *Outlook* — a live direction with a home for the result.
 
 ## 4. Throughput & the optimizer  *(suggested lead: Yuan)*
-Audit and speed up M1–M6 + consensus + rescue. The pipeline is host-bound (~59% GPU busy). Open levers:
-CUDA-graph the M5 anneal (collapse the 6.1 ms launch floor), a batched concurrent-frame front end, and —
-the mathematical part — a better-conditioned M3 ascent on the almost-periodic cosine objective (Newton
-basin-jumps; CG was a wash). Also: GPU-batch the known-cell rescue's candidate search to close the last
-gap to ffbidx; trim the M1 seed grid. Full plan in [`docs/research-plan-yuan.md`](docs/research-plan-yuan.md),
-Thrust B. Background: the paper's *Architecture*, *Accuracy-ceiling*, and *Throughput* sections.
+Audit and speed up M1–M6 + consensus + rescue. Full plan in
+[`docs/research-plan-yuan.md`](docs/research-plan-yuan.md), Thrust B. Background: the paper's
+*Architecture*, *Accuracy-ceiling*, and *Throughput* sections. Concrete experiments, several of them from
+a re-audit of the "attic" where we pruned in the wrong regime or at a fixed setting:
+
+- **NUFFT the dense cluster-seeding** *(highest-value; a prune in the wrong regime)*. NUFFT (cuFINUFFT)
+  was benchmarked only on the *sparse* path, where M1 is ~0 ms and it can't help. On the *dense* path M1
+  (the cluster-FFT) is **30 ms = 62%** of the frame — the whole dense bottleneck — and NUFFT was never
+  evaluated there. Swap the 28 gridded cluster-FFTs for a cuFINUFFT and re-profile.
+- **CUDA-graph the M5 anneal** *(deferred, not disproven; ~29% of the sparse frame)*. M5 is launch-bound
+  at a 6.1 ms floor (15 sequential 3×3 solves). Capture the fixed-iteration loop in a CUDA graph; the
+  padding that collides with the `cnt≥6` inlier guard is solvable by masking the guard on padded entries.
+  Then re-test fp32 M5 *on top* (it was negative only because it was launch-bound — the two were coupled).
+- **Sweep M1 STARTS down** *(never tested in the direction that matters)*. We cut M3 STEPS 80→8 but only
+  ever grew the 70,400 start grid, never shrank it; M3 is compute-saturated (cost ∝ starts), so the
+  smallest `n_dir` that still solves 84/120 is a proportional win. Script: `experiments/starts_sweep.py`.
+- **Period-bounded trust-region M3** *(the refiner negatives were all at fixed STEPS)*. Newton/CG/BB/LM
+  all lost to momentum-GD at STEPS=8 by *overshooting basins from imperfect seeds*. A trust region sized
+  to the lattice period (cap the step below half the inter-maximum spacing) could get 2nd-order speed
+  safely; and cleanly answer the unresolved *fewer-steps* question (CG-4 vs GD-8). Script:
+  `experiments/cg_test.py`.
+- **`torch.compile` fusion** on the M3 gradient / anneal normal-equations — untried, modest expected gain.
+- GPU-batch the known-cell rescue's candidate search to close the last ~4× gap to ffbidx.
 
 ## 5. Exploratory regimes — beyond monochromatic serial/rotation  *(open; ideas welcome)*
 The paper's *Outlook* frames these; they are speculative but share GLINT's core — a gridless objective
@@ -61,10 +78,14 @@ they are here to be argued about.
   lattice — the same "fat slice buys out-of-plane information" argument the paper already makes for
   bandwidth and for CBXD. The catch is the per-spot wavelength unknown (a reflection fixes the
   *direction* of \(q\) but not its radius until \(\lambda\) is chosen — the harmonic degeneracy). This
-  is `pinkIndexer`'s home turf (already in our literature table); GLINT's angle is that the direct-sum
-  objective is naturally radius-tolerant along a fixed direction, and the fat slice should *raise* the
+  is `pinkIndexer`'s home turf (already in our literature table); GLINT's angle is that each spot still
+  pins the *direction* of q and the fat slice adds many more constraints per shot, so it may *raise* the
   blind ceiling rather than lower it. A clean first experiment: simulate a pink-beam still and test
-  whether the extra bandwidth lifts blind indexing as the geometry predicts.
+  whether the extra bandwidth lifts blind indexing as the geometry predicts. This is also the regime to
+  **revive the reverse/Chamfer selection cost**: it was negative on thin-slice data but our own notes
+  flag that as premature — it needs the 3-D information a fat slice provides and was confounded by
+  missing weak peaks. Re-test it where the geometry supports it (`experiments/reverse_cost.py`,
+  `fat_ewald.py`).
 
 ---
 *Directions are open and discussed in the Issues. Ownership is proposed here, decided there.*

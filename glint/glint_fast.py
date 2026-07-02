@@ -11,10 +11,10 @@ import os, sys, time, itertools
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
 from glint.glint_index import (objective, refine_vec, refine_vec_newton, refine_vec_cg, refine_vec_bb,
-                         refine_vec_lm, distinct_maxima, distinct_maxima_gpu, distinct_cells_gpu, anneal,
-                         score_defect, invq_weight, buerger_reduce, primitivize, STARTS, DEV, index_blind)
+                         refine_vec_lm, refine_vec_ls, distinct_maxima, distinct_maxima_gpu, distinct_cells_gpu,
+                         anneal, score_defect, invq_weight, buerger_reduce, primitivize, STARTS, DEV, index_blind)
 
-_REFINERS = {"cg": refine_vec_cg, "bb": refine_vec_bb, "lm": refine_vec_lm}
+_REFINERS = {"cg": refine_vec_cg, "bb": refine_vec_bb, "lm": refine_vec_lm, "ls": refine_vec_ls}
 
 
 def _refine(S0, Q, w, qmax):

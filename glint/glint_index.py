@@ -213,6 +213,48 @@ def refine_vec_lm(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mu0=None):
     return T
 
 
+def refine_vec_ls(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None, ls_iters=2):
+    """M3 variant: gradient ascent with an EXACT 1-D Newton LINE SEARCH per outer step, at ~gradient cost.
+    Along the ascent direction d, the cos objective is CLOSED FORM  S(a) = sum wm cos(phi + a*psi)  with
+    phi = 2pi (T.q)  (base phase)  and  psi = 2pi (d.q)  (phase rate along d) -- so after the SINGLE matmul
+    T@Q^T that gives phi, BOTH the gradient direction AND the line-search f/f'/f'' along d are matmul-free
+    elementwise reductions (the fused f,f',f'' the idea calls for). a-Newton (a <- a - S'/S'') gives a
+    parameter-free step tuned to the LOCAL curvature; a per-seed cap keeping max|a*psi| < pi/2 holds the
+    step inside the current oscillation, so -- unlike plain Newton/CG which basin-jump -- it cannot overshoot
+    into a wrong maximum, and an accept-guard zeroes any non-improving step. Hypothesis: the exact stride
+    reaches the M2 maxima in FEWER outer steps than momentum-GD (each outer step is ONE matmul, as in GD),
+    so ls-4 ~ gd-8 at ~half the matmuls. `mom` accepted+ignored for a drop-in signature with refine_vec."""
+    if sharp_last is None:
+        sharp_last = max(1, steps // 3)
+    step0 = 0.25 / qmax
+    twopi = 2 * PI
+    for s in range(steps):
+        sharp = (s >= steps - sharp_last)
+        proj = T @ Q.t()                                            # (B,N)  -- the ONE matmul / outer step
+        mask = (torch.abs(proj - torch.round(proj)) < tol).to(T.dtype)
+        wm = w.unsqueeze(0) * mask                                  # mask frozen for this outer step
+        phi = twopi * proj                                         # base phase (= line arg at a=0)
+        sin_p = torch.sin(phi); cos_p = torch.cos(phi)
+        cf = PI if sharp else twopi                                # cos^2(pi x) vs cos(2pi x) grad prefactor
+        g = -((cf * sin_p) * wm) @ Q                               # (B,3) ascent gradient (matches objective())
+        d = g / (g.norm(dim=1, keepdim=True) + 1e-12)              # normalized steepest direction
+        psi = twopi * (d @ Q.t())                                 # (B,N) phase rate along d
+        a = torch.zeros(T.shape[0], 1, dtype=T.dtype, device=T.device)
+        acap = (0.5 * PI) / (psi.abs().amax(dim=1, keepdim=True) + 1e-12)     # keep fastest phase < 1/4 period
+        for _ in range(ls_iters):                                  # exact 1-D Newton on the step a (matmul-free)
+            arg = phi + a * psi
+            Sp = -(wm * psi * torch.sin(arg)).sum(1, keepdim=True)              # S'(a)
+            Spp = -(wm * psi * psi * torch.cos(arg)).sum(1, keepdim=True)       # S''(a)
+            concave = Spp < -1e-12                                              # near a max -> Newton valid
+            astep = torch.where(concave, -Sp / Spp.clamp_max(-1e-12),          # Newton toward S'=0 (S''<0)
+                                torch.sign(Sp) * step0)                         # else a gentle uphill GD step
+            a = (a + astep).clamp(-acap, acap)
+        f1 = (wm * torch.cos(phi + a * psi)).sum(1, keepdim=True)               # accept-guard: improve or stay
+        a = torch.where(f1 >= (wm * cos_p).sum(1, keepdim=True), a, torch.zeros_like(a))
+        T = T + a * d
+    return T
+
+
 def distinct_maxima(Tn, fn, tol=2.0, keep=44, minlen=20.0):
     """cluster converged vectors, rank by OBJECTIVE VALUE f (not basin count)."""
     s = np.where(Tn[:, 0] != 0, np.sign(Tn[:, 0]), 1.0); Tc = Tn * s[:, None]

@@ -69,6 +69,16 @@ class RadialLUT:
         """image -> (q_centres, I(q)). One CSR matvec; same code on numpy or cupy arrays."""
         return self.q, (self.M @ image.ravel().astype(self._xp.float64)) / self.den
 
+    def integrate_batch(self, images, dtype=None):
+        """Stack of B frames -> I(q) for all of them in ONE sparse-dense matmul (SpMM), amortising the
+        per-call overhead -- the fast path for many radial averages. `images`: (B,H,W) or (B,npix).
+        Returns (q_centres, I) with I shape (B, nbin). Keep the frames on the GPU (transfer dominates)."""
+        xp = self._xp
+        X = images.reshape(images.shape[0], -1)
+        X = X.astype(self.M.dtype if dtype is None else dtype)
+        num = self.M @ X.T                                       # (nbin, npix)@(npix, B) -> (nbin, B)
+        return self.q, (num / self.den[:, None]).T              # (B, nbin)
+
 
 # ------------------------------------------------------------------ self-test (numpy) ------------------
 if __name__ == "__main__":

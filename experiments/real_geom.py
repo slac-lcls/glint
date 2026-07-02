@@ -30,24 +30,25 @@ for qr in rings:
     img += np.exp(-((qpp - qr) ** 2) / (2 * sig ** 2)).astype(np.float32)
 
 npt = 2000                                                      # oversampled (> ~1024 radial pixels)
-q_pf, I_pf = ai.integrate1d(img, npt, unit="q_nm^-1", radial_range=(qmin, qmax),
-                            method=("full", "csr", "opencl"))
-I_pf = np.asarray(I_pf, np.float64)
-
-
-def rms(I):
-    I = np.asarray(I, np.float64); m = np.isfinite(I) & np.isfinite(I_pf)
-    return np.sqrt(np.mean(((I - I_pf)[m]) ** 2)) / np.nanmax(I_pf) * 1e3
-
-
-lin = RadialLUT(qpp, nbin=npt, qmin=qmin, qmax=qmax, split="linear")
-aG = RadialLUT(qpp, nbin=npt, qmin=qmin, qmax=qmax, split="area")               # gradient half-width
+sa = np.asarray(ai.solidAngleArray((H, W)), np.float64)         # per-pixel solid angle (pyFAI's correction)
 print(f"geometry: dist=0.10 m, 2theta_max~{th_max:.0f} deg, q={qmin:.2f}-{qmax:.2f} nm^-1, npt={npt} (oversampled)")
-print(f"nnz/pixel: linear {lin.M.nnz/(H*W):.2f}   area(grad) {aG.M.nnz/(H*W):.2f}")
-print("\nRMS of I(q) vs pyFAI full-split  [x1e-3, relative to peak]:")
-print(f"  linear split              {rms(lin.integrate(img)[1]):6.2f}")
-print(f"  area split (gradient hw)  {rms(aG.integrate(img)[1]):6.2f}")
-if dqpp is not None:
-    for scale, tag in ((1.0, "deltaQ"), (0.5, "deltaQ/2")):
-        aD = RadialLUT(qpp, nbin=npt, qmin=qmin, qmax=qmax, split="area", q_halfwidth=dqpp * scale)
-        print(f"  area split (pyFAI {tag:8s}) {rms(aD.integrate(img)[1]):6.2f}   (nnz/px {aD.M.nnz/(H*W):.2f})")
+lin = RadialLUT(qpp, nbin=npt, qmin=qmin, qmax=qmax, split="linear")
+aG = RadialLUT(qpp, nbin=npt, qmin=qmin, qmax=qmax, split="area")
+linS = RadialLUT(qpp, nbin=npt, qmin=qmin, qmax=qmax, split="linear", norm=sa)  # solid-angle-corrected
+aGS = RadialLUT(qpp, nbin=npt, qmin=qmin, qmax=qmax, split="area", norm=sa)
+print(f"nnz/pixel: linear {lin.M.nnz/(H*W):.2f}   area {aG.M.nnz/(H*W):.2f}")
+
+for corr in (False, True):
+    _, I_pf = ai.integrate1d(img, npt, unit="q_nm^-1", radial_range=(qmin, qmax),
+                             method=("full", "csr", "opencl"),
+                             correctSolidAngle=corr, polarization_factor=None)
+    I_pf = np.asarray(I_pf, np.float64)
+
+    def rms(I):
+        I = np.asarray(I, np.float64); m = np.isfinite(I) & np.isfinite(I_pf)
+        return np.sqrt(np.mean(((I - I_pf)[m]) ** 2)) / np.nanmax(I_pf) * 1e3
+
+    print(f"\n== pyFAI correctSolidAngle={corr} ==   RMS vs pyFAI-full [x1e-3, rel to peak]:")
+    L, A = (linS, aGS) if corr else (lin, aG)                   # match the correction
+    print(f"  linear split   {rms(L.integrate(img)[1]):6.2f}")
+    print(f"  area   split   {rms(A.integrate(img)[1]):6.2f}")

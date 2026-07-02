@@ -37,6 +37,9 @@ DEV = ("cuda" if torch.cuda.is_available() else
 OBJFORM = os.environ.get("OBJFORM", "")
 OBJSIG = float(os.environ.get("OBJSIG", "0.12"))            # wrapped-Gaussian / soft-window width
 OBJKAP = float(os.environ.get("OBJKAP", "8.0"))             # von Mises concentration
+LS_CAPK = float(os.environ.get("LS_CAPK", "0.5"))          # refine_vec_ls: step cap = LS_CAPK period (0.5=quarter)
+LS_CAPQ = float(os.environ.get("LS_CAPQ", "1.0"))          # refine_vec_ls: cap keyed to this |psi| quantile (1=max)
+LS_MOM = float(os.environ.get("LS_MOM", "0.0"))            # refine_vec_ls: momentum on the line-search step (0=pure)
 
 
 # ---- M1: sample -----------------------------------------------------------------
@@ -228,6 +231,7 @@ def refine_vec_ls(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None, l
         sharp_last = max(1, steps // 3)
     step0 = 0.25 / qmax
     twopi = 2 * PI
+    vel = torch.zeros_like(T)                                       # LS_MOM>0: momentum on the line-search step
     for s in range(steps):
         sharp = (s >= steps - sharp_last)
         proj = T @ Q.t()                                            # (B,N)  -- the ONE matmul / outer step
@@ -240,7 +244,10 @@ def refine_vec_ls(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None, l
         d = g / (g.norm(dim=1, keepdim=True) + 1e-12)              # normalized steepest direction
         psi = twopi * (d @ Q.t())                                 # (B,N) phase rate along d
         a = torch.zeros(T.shape[0], 1, dtype=T.dtype, device=T.device)
-        acap = (0.5 * PI) / (psi.abs().amax(dim=1, keepdim=True) + 1e-12)     # keep fastest phase < 1/4 period
+        pabs = psi.abs()
+        psi_scale = pabs.amax(dim=1, keepdim=True) if LS_CAPQ >= 1.0 else \
+            torch.quantile(pabs, LS_CAPQ, dim=1, keepdim=True)               # cap keyed to a |psi| quantile
+        acap = (LS_CAPK * PI) / (psi_scale + 1e-12)                          # step cap = LS_CAPK*pi phase move
         for _ in range(ls_iters):                                  # exact 1-D Newton on the step a (matmul-free)
             arg = phi + a * psi
             Sp = -(wm * psi * torch.sin(arg)).sum(1, keepdim=True)              # S'(a)
@@ -251,7 +258,8 @@ def refine_vec_ls(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None, l
             a = (a + astep).clamp(-acap, acap)
         f1 = (wm * torch.cos(phi + a * psi)).sum(1, keepdim=True)               # accept-guard: improve or stay
         a = torch.where(f1 >= (wm * cos_p).sum(1, keepdim=True), a, torch.zeros_like(a))
-        T = T + a * d
+        vel = LS_MOM * vel + a * d                                             # momentum coast (LS_MOM=0 -> pure LS)
+        T = T + vel
     return T
 
 

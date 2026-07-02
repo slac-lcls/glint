@@ -110,3 +110,53 @@ report("rutile (tet)",   "tetragonal", (4.593, 2.959))
 report("anatase (tet)",  "tetragonal", (3.785, 9.514))
 report("quartz (hex)",   "hexagonal",  (4.913, 5.405))
 report("Mg (hex)",       "hexagonal",  (3.209, 5.211))
+
+
+# ---- ORTHORHOMBIC a!=b!=c: distinct lines (no symmetry coincidence) -> the general, more informative case.
+# q^2 = h^2 A + k^2 B + l^2 C, LINEAR in the metric (A,B,C)=(2pi/a)^2.. -> GLINT-style discrete multi-start
+# over which low observed lines are the principal (100)/(010)/(001), solve, score with the M20-ish FOM.
+from itertools import combinations, product
+_HKL = np.array([[h, k, l] for h, k, l in product(range(6), repeat=3) if (h, k, l) != (0, 0, 0)], float)
+_H2 = _HKL ** 2
+
+
+def index_ortho(qo, tol=0.02, nlow=9):
+    q2 = np.sort(qo ** 2); lows = q2[:nlow]
+    lo, hi = qo.min() - tol, qo.max() + tol
+    best = (-1.0, None)
+    for A, B, C in combinations(lows, 3):                       # try low lines as the 3 principal reflections
+        for perm in ((A, B, C),):                              # A,B,C symmetric under axis relabel -> one order
+            pred2 = _H2 @ np.array(perm)                       # predicted q^2 for every hkl
+            qp = np.sqrt(pred2[pred2 > 0]); qp = np.unique(np.round(qp[(qp >= lo) & (qp <= hi)], 3))
+            if len(qp) < len(qo):
+                continue
+            D = np.abs(qo[:, None] - qp[None, :])
+            fom = (D.min(1) < tol).mean() * (D.min(0) < tol).mean()
+            if fom > best[0]:
+                best = (fom, perm)
+    A, B, C = sorted(best[1])                                  # smallest metric comp = longest axis
+    return np.sort(TP / np.sqrt([A, B, C])), best[0]
+
+
+def report_o(name, ptrue):
+    q = rings("ortho_gen", None) if False else None
+    # inline generic-ortho rings
+    a, b, c = ptrue
+    d2 = _H2 @ np.array([1/a**2, 1/b**2, 1/c**2]); qq = TP * np.sqrt(d2[d2 > 0])
+    qq = qq[TP / qq >= 0.9]; qs = np.sort(np.unique(np.round(qq, 6)))
+    out = [qs[0]]
+    for x in qs[1:]:
+        if x - out[-1] > 0.02:
+            out.append(x)
+    qo = observe(np.array(out))
+    rec, fom = index_ortho(qo); tp = np.sort(ptrue)
+    err = 100 * np.abs(rec - tp) / tp
+    print(f"{name:26s} true {tp[0]:.2f}/{tp[1]:.2f}/{tp[2]:.2f} -> {rec[0]:.2f}/{rec[1]:.2f}/{rec[2]:.2f}  "
+          f"err {err[0]:.1f}/{err[1]:.1f}/{err[2]:.1f}%  fom {fom:.2f}  [{len(qo)} lines]")
+
+
+print("\nORTHORHOMBIC (a!=b!=c, distinct lines -- the general, more interesting case):")
+report_o("generic 5.1/7.3/9.8", (5.1, 7.3, 9.8))
+report_o("forsterite 4.75/10.2/5.98", (4.75, 10.20, 5.98))
+report_o("aragonite 4.96/7.97/5.74", (4.96, 7.97, 5.74))
+report_o("topaz 4.65/8.80/8.40", (4.65, 8.80, 8.40))

@@ -52,15 +52,22 @@ accuracy-coupled ones (STARTS-down, CG) were tested 2026-07-01 and confirmed non
 - ~~**Sweep M1 STARTS down.**~~ **TESTED 2026-07-01 (A100, `experiments/starts_sweep.py`) — no free
   lunch.** Blind rate drops monotonically as the grid thins: n_dir 2200/1600/1100/700 → 84/80/76/65 of
   120 at 19.2/16.6/15.3/13.8 ms. The 70,400 starts are *load-bearing for generation* (consistent with the
-  generation-limited diagnosis), not redundant. Still usable as a smooth speed/accuracy **knob** for
-  latency-sensitive online triage. **Open follow-up (the real production question):** does the
-  consensus + rescue **absorb** the blind loss so the *hybrid* rate holds at, say, n_dir 1100? If yes,
-  STARTS-pruning is nearly free end-to-end. Needs an n_dir override in `hybrid_check.py`.
-- ~~**Period-bounded trust-region M3 / CG fewer steps.**~~ **CG TESTED 2026-07-01 (`experiments/cg_test.py`)
-  — clean negative, closes the fewer-steps question.** Momentum-GD Pareto-dominates CG at *every* step
-  count and equal wall-time (grad-4 = 76/120 @15.3 ms vs cg-4 = 67 @15.7; grad-8 = 84 @19.7). The
-  bottleneck is *basin-landing from imperfect seeds*, not step-direction efficiency, so a trust region
-  (the one untried variant) has limited expected headroom — deprioritized. GD STEPS=8 stands.
+  generation-limited diagnosis), not redundant. **Follow-up ANSWERED (`experiments/hybrid_starts.py`):
+  the consensus + rescue fully absorb it** — the *hybrid* rate holds at **115–118/120 down to n_dir 700**
+  (a 3× smaller grid) as the rescue picks up what blind drops (n_resc 26→38). So the blind grid can be set
+  2–3× smaller with **no end-to-end accuracy cost** — a safe latency/memory knob. Not a wall-time win,
+  though: the saved blind compute is offset by more rescues, so end-to-end ms is ~flat.
+- ~~**M3 second-order / line-search refiners.**~~ **CLOSED — six optimizers now agree GD STEPS=8 is the
+  M3 optimum.** CG tested (`cg_test.py`): momentum-GD Pareto-dominates it at every step count and equal
+  wall-time (grad-4 = 76 @15.3 ms vs cg-4 = 67 @15.7; grad-8 = 84 @19.7). The elegant one — an **exact
+  fused-phase 1-D Newton line-search** (`refine_vec_ls`, `ls_test.py`/`ls_cap_test.py`): along a direction
+  the cos objective is closed-form `S(a)=Σ wm cos(φ+aψ)`, so f/f'/f'' are matmul-free once the phases are
+  computed — was built and swept (cap + momentum knobs). Verdict **negative**: ls-8 = 72, relaxing the
+  anti-jump cap gives nothing (72), momentum recovers only part (77), all still < GD's 84 and at ~2× cost
+  (the direction's `ψ=d·q` is a *second* matmul, so it was never gradient-cost). Root cause is the same
+  across grad/cg/bb/lm/newton/ls: **greedy per-step optimality lands more starts in spurious maxima on the
+  multimodal comb; momentum-GD's gentle, non-greedy, schedule-annealed ascent is the actual mechanism.**
+  GD STEPS=8 stands.
 - **`torch.compile` fusion** on the M3 gradient / anneal normal-equations — untried, modest expected gain.
 - GPU-batch the known-cell rescue's candidate search to close the last ~4× gap to ffbidx.
 

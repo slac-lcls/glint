@@ -40,8 +40,11 @@ OBJKAP = float(os.environ.get("OBJKAP", "8.0"))             # von Mises concentr
 LS_CAPK = float(os.environ.get("LS_CAPK", "0.5"))          # refine_vec_ls: step cap = LS_CAPK period (0.5=quarter)
 LS_CAPQ = float(os.environ.get("LS_CAPQ", "1.0"))          # refine_vec_ls: cap keyed to this |psi| quantile (1=max)
 LS_MOM = float(os.environ.get("LS_MOM", "0.0"))            # refine_vec_ls: momentum on the line-search step (0=pure)
-BETA = float(os.environ.get("BETA", "0.7"))                # refine_vec_raar: RAAR feedback parameter (0..1)
+BETA = float(os.environ.get("BETA", "0.7"))                # refine_vec_raar: RAAR feedback (beta=1 -> DR/HIO)
 SO_WS = float(os.environ.get("SO_WS", "1.0"))              # refine_vec_so2d: support-error weight in L=e_d^2 - w_s e_s^2
+WARM = int(os.environ.get("WARM", "0"))                    # refine_vec_so2d: RAAR warm-up iters before saddle (basin)
+POLISH = int(os.environ.get("POLISH", "0"))               # raar/so2d/admm: final ER (alt-projection) cleanup steps
+RHO = float(os.environ.get("RHO", "1.0"))                 # refine_vec_admm: dual penalty (scaled-ADMM)
 
 
 # ---- M1: sample -----------------------------------------------------------------
@@ -274,6 +277,16 @@ def _psupport(Rd, Q, wm, eye, reg=1e-3):
     return v @ Q.t(), v
 
 
+def _er_polish(u, Q, w0, eye, tol, k):
+    """k error-reduction (alternating-projection) steps u <- P_support(P_data(u)) -- the clean-up the wild
+    HIO/DR dynamics needs (its fixed points aren't clean projections). Returns the extracted feasible v."""
+    v = None
+    for _ in range(max(1, k)):
+        r = torch.round(u); inl = (torch.abs(u - r) < tol).to(u.dtype)
+        u, v = _psupport(torch.where(inl > 0, r, u), Q, w0 * inl, eye)
+    return v
+
+
 def refine_vec_raar(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None, beta=None):
     """M3 variant: RAAR (relaxed averaged alternating reflections) -- INDEXING AS PHASE RETRIEVAL. Work in
     the per-peak projections u = q.v. Two constraint sets, both cheap: P_data = round the INLIER u_i to the
@@ -295,7 +308,9 @@ def refine_vec_raar(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None,
         Rd = 2 * Pd - u
         PsRd, _ = _psupport(Rd, Q, wm, eye)                                    # P_support(R_d u)
         RsRd = 2 * PsRd - Rd
-        u = 0.5 * b * (RsRd + u) + (1 - b) * Pd                                # RAAR update
+        u = 0.5 * b * (RsRd + u) + (1 - b) * Pd                                # RAAR update (b=1 -> DR/HIO)
+    if POLISH:                                                                 # HIO/DR needs an ER polish
+        return _er_polish(u, Q, w0, eye, tol, POLISH)
     r = torch.round(u); inl = (torch.abs(u - r) < tol).to(u.dtype)            # extract feasible v from
     _, v = _psupport(r, Q, w0 * inl, eye)                                      # the confident integer hkl
     return v
@@ -311,6 +326,11 @@ def refine_vec_so2d(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None,
     eye = torch.eye(3, dtype=T.dtype, device=T.device)
     w0 = w.unsqueeze(0); ws = SO_WS
     u = T @ Q.t()
+    for _ in range(WARM):                                                       # RAAR warm-up: form the basin
+        r = torch.round(u); inl = (torch.abs(u - r) < tol).to(u.dtype); wm = w0 * inl   # (SO needs a stable
+        Pd = torch.where(inl > 0, r, u); Rd = 2 * Pd - u                        #  iterate; raw seeds aren't)
+        PsRd, _ = _psupport(Rd, Q, wm, eye)
+        u = 0.5 * BETA * (2 * PsRd - Rd + u) + (1 - BETA) * Pd
     for s in range(steps):
         r = torch.round(u); inl = (torch.abs(u - r) < tol).to(u.dtype); wm = w0 * inl
         Pd = torch.where(inl > 0, r, u)
@@ -328,7 +348,31 @@ def refine_vec_so2d(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None,
         den = c_d - ws * c_s
         bstar = torch.where(den.abs() > 1e-9, -(b_d - ws * b_s) / den, torch.full_like(den, 0.75))
         u = Pd + bstar.clamp(-0.5, 2.5) * Delta                                # saddle step (HIO-range clamp)
+    if POLISH:
+        return _er_polish(u, Q, w0, eye, tol, POLISH)
     r = torch.round(u); inl = (torch.abs(u - r) < tol).to(u.dtype)
+    _, v = _psupport(r, Q, w0 * inl, eye)
+    return v
+
+
+def refine_vec_admm(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None, beta=None):
+    """M3 variant: ADMM (scaled-dual splitting) for indexing-as-phase-retrieval. Split variables x (data)
+    and z (support) with a dual u: x = P_data(z - u); z = P_support(x + u); u = u + rho*(x - z). For two
+    indicator sets this is Douglas-Rachford on the dual, but the EXPLICIT multiplier + penalty rho give a
+    differently-conditioned trajectory than fixed-beta RAAR. rho via RHO env; optional ER polish."""
+    eye = torch.eye(3, dtype=T.dtype, device=T.device)
+    w0 = w.unsqueeze(0); rho = RHO
+    z = T @ Q.t()                                                              # support-side var (start feasible)
+    dual = torch.zeros_like(z)
+    for s in range(steps):
+        a = z - dual                                                          # x = P_data(z - u)
+        r = torch.round(a); inl = (torch.abs(a - r) < tol).to(a.dtype); wm = w0 * inl
+        x = torch.where(inl > 0, r, a)
+        z, _ = _psupport(x + dual, Q, wm, eye)                                # z = P_support(x + u)
+        dual = dual + rho * (x - z)                                           # scaled dual update
+    if POLISH:
+        return _er_polish(z, Q, w0, eye, tol, POLISH)
+    r = torch.round(z); inl = (torch.abs(z - r) < tol).to(z.dtype)
     _, v = _psupport(r, Q, w0 * inl, eye)
     return v
 

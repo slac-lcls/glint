@@ -128,17 +128,17 @@ except Exception as e:
 try:
     sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
     from radial import RadialLUT
-    lut = RadialLUT(r, nbin=nbin, qmin=0.0, qmax=float(nbin))
-    results["split-LUT numpy(CPU)"] = (lut.integrate(img)[1], timeit(lambda: lut.integrate(img)))
-    try:
-        import cupy
-        glut = RadialLUT(cupy.asarray(r), nbin=nbin, qmin=0.0, qmax=float(nbin))
-        gimg = cupy.asarray(img)
-        cupy.cuda.Stream.null.synchronize()
-        results["split-LUT cupy(GPU)"] = (cupy.asnumpy(glut.integrate(gimg)[1]),
-                                          timeit(lambda: (glut.integrate(gimg), cupy.cuda.Stream.null.synchronize())))
-    except Exception as e:
-        print("skip split-LUT-cupy:", repr(e)[:80])
+    for sp, tag in (("linear", "split-LUT"), ("area", "area-LUT ")):
+        lut = RadialLUT(r, nbin=nbin, qmin=0.0, qmax=float(nbin), split=sp)
+        results[f"{tag} numpy(CPU)"] = (lut.integrate(img)[1], timeit(lambda l=lut: l.integrate(img)))
+        try:
+            import cupy
+            glut = RadialLUT(cupy.asarray(r), nbin=nbin, qmin=0.0, qmax=float(nbin), split=sp)
+            gimg = cupy.asarray(img); cupy.cuda.Stream.null.synchronize()
+            results[f"{tag} cupy(GPU)"] = (cupy.asnumpy(glut.integrate(gimg)[1]),
+                                           timeit(lambda g=glut: (g.integrate(gimg), cupy.cuda.Stream.null.synchronize())))
+        except Exception as e:
+            print(f"skip {tag}-cupy:", repr(e)[:80])
 except Exception as e:
     print("skip split-LUT:", repr(e)[:80])
 

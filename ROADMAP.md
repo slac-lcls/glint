@@ -116,12 +116,14 @@ they are here to be argued about.
   wrong cells) — exactly where a massively-parallel 6-parameter metric search pays off, unlike the trivial
   1-D cubic scan. Next: a real M20 FOM + systematic-absence/centering handling and a fuller metric search
   (the two ortho misses are search-depth, not degeneracy), the radial-average front end → peak-find → this
-  indexer → Rietveld. **Front end is now dependency-free** (`experiments/radial.py`): a self-contained
-  azimuthal integrator (numpy/cupy, credits pyFAI) keeping pyFAI's two wins — fractional pixel-splitting
-  (sub-bin-accurate \(q_n\)) and a load-balanced `bincount` reduction (avoids the `cuSPARSE csrmv`
-  radial-bin imbalance that slowed a hand-rolled CSR SpMV) — so no pyFAI install is needed. Validated on
-  numpy; cupy path is code-identical (benchmark vs the CSR SpMV in a cupy env). Origin:
-  `slac-lcls/drp-benchmarks/radial_integration`.
+  indexer → Rietveld. **Front end is dependency-free** (`experiments/radial.py`): a self-contained azimuthal
+  integrator (numpy/cupy, credits pyFAI) with fractional pixel-splitting (sub-bin-accurate \(q_n\)) and the
+  reduction as a **sparse CSR matrix-vector product** — benchmarked on an A100 (`radial_bench.py`) at
+  **0.22 ms**/16-MB-frame, vs a weighted `bincount` at 4.7 ms (~20×; bincount contends on hot outer bins —
+  my first "cuSPARSE load-imbalance" guess was **wrong**, cuSPARSE csrmv is memory-bound-optimal here at
+  0.12 ms; a custom privatized kernel ties it and beats bincount 40×). Origin:
+  `slac-lcls/drp-benchmarks/radial_integration`; pyFAI's own OpenCL path couldn't be timed on the node
+  (no OpenCL runtime → it fell back to slow cython).
 - **Laue / pink-beam — the fat Ewald sphere.** A polychromatic beam turns the Ewald sphere into a thick
   shell between \(\lambda_{\min}\) and \(\lambda_{\max}\), so one shot samples much *more* of the 3-D
   lattice — the same "fat slice buys out-of-plane information" argument the paper already makes for

@@ -86,14 +86,14 @@ class RadialLUT:
         ok &= (qhi > qlo)
         counts = xp.where(ok, jhi - jlo + 1, 0).astype(xp.int64)  # bins each pixel touches
         total = int(counts.sum())
-        starts = xp.cumsum(counts) - counts                      # ragged-range expansion:
-        cols = xp.repeat(xp.arange(q.size), counts)              #   pixel index per nnz
-        within = xp.arange(total) - xp.repeat(starts, counts)    #   0,1,.. within each pixel's run
-        rows = xp.repeat(jlo, counts) + within                   #   bin index per nnz
+        csum = xp.cumsum(counts); ranges = xp.arange(total)      # ragged-range expansion (numpy+cupy
+        cols = xp.searchsorted(csum, ranges, side="right")       #   portable: no array-repeat) -> pixel/nnz
+        within = ranges - (csum - counts)[cols]                  #   0,1,.. within each pixel's run
+        rows = jlo[cols] + within                                #   bin index per nnz
         elo = self.qmin + rows * self.dq; ehi = elo + self.dq    # this bin's edges
-        a = xp.repeat(qlo, counts); b = xp.repeat(qhi, counts)
+        a = qlo[cols]; b = qhi[cols]                             # gather (== repeat, but portable)
         ov = xp.clip(xp.minimum(b, ehi) - xp.maximum(a, elo), 0.0, None)   # [qlo,qhi] ∩ bin length
-        vals = ov / xp.repeat(qhi - qlo, counts)                 # fraction of the pixel's q-range
+        vals = ov / (qhi - qlo)[cols]                            # fraction of the pixel's q-range
         return rows, cols, vals
 
     def integrate(self, image):

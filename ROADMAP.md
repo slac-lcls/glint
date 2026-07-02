@@ -74,13 +74,18 @@ accuracy-coupled ones (STARTS-down, CG) were tested 2026-07-01 and confirmed non
   momentum-GD: **blind 84 → 88/120** (β=0.7, ~16 iters; reproduced exactly), landing right at the
   oracle-reachable ceiling (73–76%). The HIO feedback recovers the selection-miss frames GD loses to
   spurious basins — so the ~71% single-frame ceiling *is* breakable, not absolute. Costs ~2× (a 3×3 solve
-  per step). **End-to-end it's rate-neutral** (hybrid 116–117/120 either way — the consensus+rescue net
-  already caught those frames) but firms the derived cell (**support 91→94**) and shifts rescue→blind. So
-  its real payoff is **blind-only / few-frame / hard-data**, where the net is thin — the promising untested
-  follow-up (RAAR on the mosaic stressors and N<20-frame subsets). Worth featuring in the paper's
-  accuracy-ceiling section as the single-frame lever that *doesn't* fail. **SO2D** (adaptive-β saddle,
-  `refine_vec_so2d`) = negative: it needs a stable iterate, and 70k blind seeds are the opposite (matches
-  the saddle-point literature); fixed-β RAAR is what the garbage-seed batch needs.
+  per step). Its blind edge **grows on hard data** — under mosaic broadening blind GD→RAAR is 70→76 at
+  σ=.0005 and 11→17 at σ=.0015 (+55% relative) — and it firms the derived cell (support 91→94). **But it is
+  hybrid-neutral in *every* regime tested** (full 120, few-frame down to N=5, mosaic to σ=.0015 — all
+  114–118/120 either way): the consensus+rescue net absorbs the single-frame gain everywhere (an early
+  N=8 "+8" was small-sample noise; K=40 shows a tie). ⇒ RAAR's home is **blind-only mode** (no cell, no
+  pooling), hard single frames, and cell-derivation quality — *not* a hybrid default (2× cost, 0 hybrid
+  gain). Keep `REFINER=raar` opt-in; feature it in the paper's accuracy-ceiling section as the single-frame
+  lever that *doesn't* fail (the ~71% ceiling is breakable, not absolute). **SO2D** (adaptive-β saddle,
+  `refine_vec_so2d`): cold = negative (needs a stable iterate; 70k blind seeds are the opposite) — but a
+  **RAAR warm-up rescues it to 88** (ties RAAR at 2× cost), confirming the saddle-point literature. **HIO**
+  (β=1) underperforms at a short budget (83; wilder, needs a long run + polish); **ADMM** +1 over GD but
+  < RAAR; **ER-polish** neutral. RAAR β≈0.7 is the pick of the whole phase-retrieval family.
 - **`torch.compile` fusion** on the M3 gradient / anneal normal-equations — untried, modest expected gain.
 - GPU-batch the known-cell rescue's candidate search to close the last ~4× gap to ffbidx.
 

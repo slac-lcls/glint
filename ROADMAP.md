@@ -67,7 +67,20 @@ accuracy-coupled ones (STARTS-down, CG) were tested 2026-07-01 and confirmed non
   (the direction's `ψ=d·q` is a *second* matmul, so it was never gradient-cost). Root cause is the same
   across grad/cg/bb/lm/newton/ls: **greedy per-step optimality lands more starts in spurious maxima on the
   multimodal comb; momentum-GD's gentle, non-greedy, schedule-annealed ascent is the actual mechanism.**
-  GD STEPS=8 stands.
+  GD STEPS=8 stands as the default.
+- **★ Indexing-as-phase-retrieval — RAAR breaks the single-frame wall (WIN, `refine_vec_raar`,
+  `raar_test.py`).** Casting M3 as phase retrieval (P_data = round inlier projections to integer hkl;
+  P_support = least-squares refit onto range(Q)) and using **RAAR** feedback is the *first* refiner to beat
+  momentum-GD: **blind 84 → 88/120** (β=0.7, ~16 iters; reproduced exactly), landing right at the
+  oracle-reachable ceiling (73–76%). The HIO feedback recovers the selection-miss frames GD loses to
+  spurious basins — so the ~71% single-frame ceiling *is* breakable, not absolute. Costs ~2× (a 3×3 solve
+  per step). **End-to-end it's rate-neutral** (hybrid 116–117/120 either way — the consensus+rescue net
+  already caught those frames) but firms the derived cell (**support 91→94**) and shifts rescue→blind. So
+  its real payoff is **blind-only / few-frame / hard-data**, where the net is thin — the promising untested
+  follow-up (RAAR on the mosaic stressors and N<20-frame subsets). Worth featuring in the paper's
+  accuracy-ceiling section as the single-frame lever that *doesn't* fail. **SO2D** (adaptive-β saddle,
+  `refine_vec_so2d`) = negative: it needs a stable iterate, and 70k blind seeds are the opposite (matches
+  the saddle-point literature); fixed-β RAAR is what the garbage-seed batch needs.
 - **`torch.compile` fusion** on the M3 gradient / anneal normal-equations — untried, modest expected gain.
 - GPU-batch the known-cell rescue's candidate search to close the last ~4× gap to ffbidx.
 

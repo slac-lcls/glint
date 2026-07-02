@@ -1,13 +1,15 @@
 """Self-contained azimuthal (radial) integration -- no pyFAI dependency, CPU (numpy) or GPU (cupy) via the
-same code. Keeps the two things that make pyFAI fast+accurate on this problem, without cuSPARSE:
+same code. Keeps the two things that make pyFAI good on this problem:
 
   * FRACTIONAL PIXEL-SPLITTING (each pixel spread over its two neighbouring q-bins by 1-frac / frac)
     -> sub-bin-accurate ring positions, the property that matters for indexing (vs nearest-bin aliasing).
-  * a LOAD-BALANCED reduction via `bincount` (num & denom sums per bin) instead of a (bins x pixels) CSR
-    matrix-vector product. Radial bins have hugely uneven pixel counts (pixels/bin grows ~linearly with
-    radius), which wrecks a generic cuSPARSE `csrmv` (row-per-bin load imbalance + scattered gather);
-    `bincount` sidesteps both. The per-pixel bin/weight LUT and the denominator are precomputed ONCE, so
-    the per-frame cost is two weighted bincounts.
+  * the reduction as a precomputed sparse (nbin x npix) CSR MATRIX-VECTOR PRODUCT, I = (M@signal)/(M@norm).
+    This is the FAST path on both CPU (scipy, ~5x faster than bincount) and GPU (cupy/cuSPARSE): benchmarked
+    on an A100 (16 MB image, radial_bench.py), CSR matvec = 0.13 ms vs a weighted `bincount` = 6.3 ms (~50x
+    -- bincount contends on the hot outer bins; a generic csrmv does NOT suffer the load imbalance I first
+    guessed, it is memory-bound-optimal). A custom privatized-shared-memory kernel (radial_bench.py) matches
+    CSR and also beats bincount ~40x, but CSR is simplest and fastest here. M and the denominator are built
+    ONCE; the per-frame cost is one sparse matvec.
 
 Algorithm (numerator/denominator form, as pyFAI): I(bin) = sum_i w_i s_i / sum_i w_i n_i, w = split weight,
 s = signal, n = per-pixel normalisation (solid angle x polarisation x flat; default 1). Geometry (q per
@@ -30,44 +32,42 @@ def _xp(a):
 
 
 class RadialLUT:
-    """Precomputed per-pixel bin/weight table for one detector geometry. Build once, reuse per frame."""
+    """Precomputed sparse (nbin x npix) integration matrix M for one detector geometry: each pixel contributes
+    to its two neighbouring q-bins with split weights (1-frac, frac). Build once; per frame I = (M@signal)/
+    (M@norm). The reduction is a CSR sparse matrix-vector product -- the FAST path on both CPU (scipy) and
+    GPU (cupy), ~50x faster than a weighted `bincount` on GPU (which contends on hot outer bins). Same code
+    numpy/cupy."""
     def __init__(self, q_per_pixel, nbin=None, qmin=None, qmax=None, mask=None, norm=None):
-        xp = _xp(q_per_pixel)
-        q = q_per_pixel.ravel().astype(xp.float64)
+        xp = _xp(q_per_pixel); self._xp = xp
+        q = q_per_pixel.ravel().astype(xp.float64); npix = q.size
         self.qmin = float(q.min() if qmin is None else qmin)
         self.qmax = float(q.max() if qmax is None else qmax)
-        self.nbin = int(nbin if nbin is not None else np.sqrt(q.size) / 2)
-        self.dq = (self.qmax - self.qmin) / self.nbin
-        self.q = self.qmin + (xp.arange(self.nbin) + 0.5) * self.dq     # bin centres
-        t = (q - self.qmin) / self.dq - 0.5                            # split about CENTRES (not edges)
-        b0 = xp.floor(t).astype(xp.int64)
-        frac = t - b0
-        ok = xp.ones(q.size, bool)
+        self.nbin = int(nbin if nbin is not None else np.sqrt(npix) / 2)
+        NB = self.nbin
+        self.dq = (self.qmax - self.qmin) / NB
+        self.q = self.qmin + (xp.arange(NB) + 0.5) * self.dq           # bin centres
+        t = (q - self.qmin) / self.dq - 0.5                           # split about CENTRES (not edges)
+        b0 = xp.floor(t).astype(xp.int64); frac = t - b0
+        ok = xp.ones(npix, bool)
         if mask is not None:
             ok &= mask.ravel().astype(bool)
-        wlo = xp.where(ok, 1.0 - frac, 0.0)                             # -> bin b0
-        whi = xp.where(ok, frac, 0.0)                                   # -> bin b0+1 (pixel splitting)
-        NB = self.nbin
-        self._b0 = xp.clip(b0, -1, NB)                                  # out-of-range -> overflow bins
-        self._b1 = xp.clip(b0 + 1, -1, NB)
-        self._b0 = xp.where((self._b0 < 0), NB, self._b0)               # fold -1 into the NB overflow slot
-        self._b1 = xp.where((self._b1 < 0), NB, self._b1)
-        self._wlo, self._whi = wlo, whi
-        self._xp = xp
-        n = xp.ones(q.size, xp.float64) if norm is None else norm.ravel().astype(xp.float64)
-        self.den = self._reduce(n)                                      # normalisation sum per bin (static)
+        ok0 = ok & (b0 >= 0) & (b0 < NB)                              # in-range for the lo/hi bin
+        ok1 = ok & (b0 + 1 >= 0) & (b0 + 1 < NB)
+        rows = xp.concatenate([xp.where(ok0, b0, 0), xp.where(ok1, b0 + 1, 0)])
+        cols = xp.concatenate([xp.arange(npix), xp.arange(npix)])
+        vals = xp.concatenate([xp.where(ok0, 1.0 - frac, 0.0), xp.where(ok1, frac, 0.0)])
+        if xp is np:
+            import scipy.sparse as sp
+        else:
+            import cupyx.scipy.sparse as sp
+        self.M = sp.coo_matrix((vals, (rows, cols)), shape=(NB, npix)).tocsr()   # the integration operator
+        n = xp.ones(npix, xp.float64) if norm is None else norm.ravel().astype(xp.float64)
+        self.den = self.M @ n                                        # normalisation sum per bin (static)
         self.den = xp.where(self.den == 0, xp.nan, self.den)
 
-    def _reduce(self, vals):
-        xp = self._xp; NB = self.nbin
-        r = (xp.bincount(self._b0, self._wlo * vals, minlength=NB + 1)
-             + xp.bincount(self._b1, self._whi * vals, minlength=NB + 1))
-        return r[:NB]
-
     def integrate(self, image):
-        """image -> (q_centres, I(q)). Same code on numpy or cupy arrays."""
-        num = self._reduce(image.ravel().astype(self._xp.float64))
-        return self.q, num / self.den
+        """image -> (q_centres, I(q)). One CSR matvec; same code on numpy or cupy arrays."""
+        return self.q, (self.M @ image.ravel().astype(self._xp.float64)) / self.den
 
 
 # ------------------------------------------------------------------ self-test (numpy) ------------------
@@ -104,4 +104,4 @@ if __name__ == "__main__":
         print(f"      {tq:6.4f}   {ps:8.5f}  {1000*(ps-tq):+5.1f}m   {pr:8.5f}  {1000*(pr-tq):+5.1f}m")
     finite = np.isfinite(I) & np.isfinite(ref)
     print("\nmean |split - nearest| where both defined:", float(np.nanmean(np.abs(I - ref)[finite])))
-    print("LUT: %d bins, %d pixels, per-frame = 2 weighted bincounts" % (lut.nbin, N * N))
+    print("LUT: %d bins, %d pixels, per-frame = one CSR sparse matvec (M has %d nnz)" % (lut.nbin, N * N, lut.M.nnz))

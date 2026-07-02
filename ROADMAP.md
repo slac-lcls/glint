@@ -110,9 +110,13 @@ they are here to be argued about.
   \(<1\%\). It also surfaced the two real crux problems, exactly as the literature says: the **supercell
   degeneracy** (a bigger cell explains every line too → needs a proper **de Wolff M20** figure of merit; a
   crude precision×recall already fixes tet/hex) and **centering/extinctions** (F/I cells like NaCl show the
-  \(\sqrt2\) sub-cell). Next: a real M20 FOM + systematic-absence/centering handling, the **pyFAI radial
-  average front end** (`slac-lcls/drp-benchmarks/radial_integration`) → peak-find → this indexer → Rietveld,
-  starting (as intended) on **simple, low-overlap crystals**.
+  \(\sqrt2\) sub-cell). Note the *interesting* regime is **low symmetry** (\(a\neq b\neq c\)): distinct
+  \((hkl)\) no longer coincide in \(q\), so every line independently constrains the metric and the FOM peaks
+  *sharply* at the true cell (orthorhombic forsterite/topaz recover exact, FOM 0.9 at truth vs ~0.6 for
+  wrong cells) — exactly where a massively-parallel 6-parameter metric search pays off, unlike the trivial
+  1-D cubic scan. Next: a real M20 FOM + systematic-absence/centering handling and a fuller metric search
+  (the two ortho misses are search-depth, not degeneracy), the **pyFAI radial average front end**
+  (`slac-lcls/drp-benchmarks/radial_integration`) → peak-find → this indexer → Rietveld.
 - **Laue / pink-beam — the fat Ewald sphere.** A polychromatic beam turns the Ewald sphere into a thick
   shell between \(\lambda_{\min}\) and \(\lambda_{\max}\), so one shot samples much *more* of the 3-D
   lattice — the same "fat slice buys out-of-plane information" argument the paper already makes for

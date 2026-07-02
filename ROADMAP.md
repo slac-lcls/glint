@@ -103,8 +103,16 @@ they are here to be argued about.
   parallel search over a 6-parameter metric — exactly GLINT's multi-start-on-GPU shape, with the cosine
   objective replaced by a metric-residual score. GLINT would be the auto-indexer; **Rietveld**
   (GSAS-II / FullProf) is the established whole-profile *refinement* it feeds — the powder analog of how
-  the SFX path feeds `partialator`. Honest scope: no orientation, harder degeneracies (dominant zones,
-  impurity lines); a GPU-DICVOL is the concrete first experiment.
+  the SFX path feeds `partialator`. **Prototype done** (`experiments/powder_index.py`): for **cubic** this
+  is *literally* GLINT's direct-sum cos-comb in 1-D — \((q_n a/2\pi)^2=h^2+k^2+l^2\) must be integer, so
+  \(\sum_n\cos^2(\pi(q_n a/2\pi)^2)\) peaks at the true \(a\); tet/hex are a 2-param \((a,c)\) metric grid.
+  Blind on simple crystals it recovers Si and all four tet/hex cells (rutile, anatase, quartz, Mg) to
+  \(<1\%\). It also surfaced the two real crux problems, exactly as the literature says: the **supercell
+  degeneracy** (a bigger cell explains every line too → needs a proper **de Wolff M20** figure of merit; a
+  crude precision×recall already fixes tet/hex) and **centering/extinctions** (F/I cells like NaCl show the
+  \(\sqrt2\) sub-cell). Next: a real M20 FOM + systematic-absence/centering handling, the **pyFAI radial
+  average front end** (`slac-lcls/drp-benchmarks/radial_integration`) → peak-find → this indexer → Rietveld,
+  starting (as intended) on **simple, low-overlap crystals**.
 - **Laue / pink-beam — the fat Ewald sphere.** A polychromatic beam turns the Ewald sphere into a thick
   shell between \(\lambda_{\min}\) and \(\lambda_{\max}\), so one shot samples much *more* of the 3-D
   lattice — the same "fat slice buys out-of-plane information" argument the paper already makes for

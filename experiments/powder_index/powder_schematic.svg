@@ -1,0 +1,65 @@
+<svg viewBox="0 0 900 360" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">Powder autoindexing: ring positions -> unit cell</title>
+  <desc id="d">The powder ring positions become 1/d^2 values; each is a quadratic form in the Miller indices and the reciprocal metric. Assign trial indices to a few lines, batch-solve the metric, verify all lines, rank by de Wolff M20, recover the unit cell.</desc>
+  <rect x="0" y="0" width="900" height="360" fill="#ffffff"/>
+  <text x="450" y="28" text-anchor="middle" font-size="18" font-weight="700" fill="#1a1a2e">Powder autoindexing:  ring positions  →  unit cell</text>
+  <text x="450" y="48" text-anchor="middle" font-size="12.5" fill="#5b6070">each ring is a quadratic form  <tspan font-weight="700" fill="#2a9d8f">1/d² = h²A₁₁ + k²A₂₂ + l²A₃₃ + 2kl·A₂₃ + 2hl·A₁₃ + 2hk·A₁₂</tspan>  (A = reciprocal metric)</text>
+
+  <!-- Panel 1: observed powder lines -->
+  <g>
+    <rect x="24" y="76" width="228" height="150" rx="6" fill="#f6f7fb" stroke="#c9ccd6"/>
+    <text x="138" y="98" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a2e">observed lines  (radial.py peaks)</text>
+    <line x1="44" y1="196" x2="236" y2="196" stroke="#8a8f9c" stroke-width="1.2"/>
+    <!-- peaks -->
+    <g stroke="#457b9d" stroke-width="2.4">
+      <line x1="66" y1="196" x2="66" y2="150"/>
+      <line x1="98" y1="196" x2="98" y2="128"/>
+      <line x1="132" y1="196" x2="132" y2="160"/>
+      <line x1="168" y1="196" x2="168" y2="140"/>
+      <line x1="206" y1="196" x2="206" y2="166"/>
+    </g>
+    <text x="138" y="216" text-anchor="middle" font-size="11.5" fill="#5b6070">Q = 1/d²  (from q, d, or 2θ)</text>
+  </g>
+
+  <text x="270" y="156" text-anchor="middle" font-size="22" font-weight="700" fill="#8a8f9c">→</text>
+
+  <!-- Panel 2: seed-and-verify -->
+  <g>
+    <rect x="292" y="76" width="300" height="210" rx="6" fill="#f6f7fb" stroke="#c9ccd6"/>
+    <text x="442" y="98" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a2e">seed &amp; verify  (batched on GPU/CPU)</text>
+    <circle cx="312" cy="122" r="6" fill="#2a9d8f"/>
+    <text x="326" y="126" font-size="12" fill="#3a3f4b"><tspan font-weight="700" fill="#1a1a2e">assign</tspan> trial hkl to a few low lines</text>
+    <circle cx="312" cy="150" r="6" fill="#2a9d8f"/>
+    <text x="326" y="154" font-size="12" fill="#3a3f4b"><tspan font-weight="700" fill="#1a1a2e">solve</tspan> the small metric system (linear!)</text>
+    <circle cx="312" cy="178" r="6" fill="#2a9d8f"/>
+    <text x="326" y="182" font-size="12" fill="#3a3f4b"><tspan font-weight="700" fill="#1a1a2e">verify</tspan> every line at once vs all hkl</text>
+    <circle cx="312" cy="206" r="6" fill="#2a9d8f"/>
+    <text x="326" y="210" font-size="12" fill="#3a3f4b"><tspan font-weight="700" fill="#1a1a2e">rank</tspan> by de Wolff <tspan font-weight="700">M20</tspan>, dedup settings</text>
+    <text x="442" y="244" text-anchor="middle" font-size="11.5" fill="#5b6070">millions of trials in parallel — the classic</text>
+    <text x="442" y="260" text-anchor="middle" font-size="11.5" fill="#5b6070">exhaustive search, as batched array ops</text>
+  </g>
+
+  <text x="612" y="156" text-anchor="middle" font-size="22" font-weight="700" fill="#8a8f9c">→</text>
+
+  <!-- Panel 3: unit cell -->
+  <g>
+    <rect x="634" y="76" width="242" height="210" rx="6" fill="#f6f7fb" stroke="#c9ccd6"/>
+    <text x="755" y="98" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a2e">unit cell + indices</text>
+    <!-- parallelepiped -->
+    <g stroke="#1a1a2e" stroke-width="1.6" fill="none">
+      <path d="M700,190 L780,190 L812,158 L732,158 Z" fill="#2a9d8f" fill-opacity="0.10"/>
+      <path d="M700,190 L700,140 L732,108 L732,158" />
+      <path d="M780,190 L780,140 L812,108 L812,158"/>
+      <path d="M700,140 L780,140 L812,108 L732,108 Z" fill="#457b9d" fill-opacity="0.10"/>
+      <path d="M780,140 L780,190" />
+    </g>
+    <text x="742" y="205" font-size="11.5" fill="#e63946" font-weight="700">a</text>
+    <text x="690" y="168" font-size="11.5" fill="#2a9d8f" font-weight="700">c</text>
+    <text x="800" y="132" font-size="11.5" fill="#457b9d" font-weight="700">b</text>
+    <text x="755" y="238" text-anchor="middle" font-size="11.5" fill="#3a3f4b">a, b, c, α, β, γ + centering</text>
+    <rect x="686" y="250" width="138" height="24" rx="12" fill="#2a9d8f" fill-opacity="0.15" stroke="#2a9d8f"/>
+    <text x="755" y="266" text-anchor="middle" font-size="12" font-weight="700" fill="#1a7f72">M20 = 72   ✓ reliable</text>
+  </g>
+
+  <text x="450" y="320" text-anchor="middle" font-size="11.5" fill="#5b6070">cubic · tetragonal · hexagonal/trigonal · orthorhombic · monoclinic  (seed-and-verify)   ·   triclinic  (simulated annealing)</text>
+</svg>

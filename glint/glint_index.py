@@ -578,3 +578,37 @@ if __name__ == "__main__":
         n += 1; M = index_blind(q); ok += M is not None and same_lattice(M, LYSO)
     print(f"device={DEV} starts={STARTS.shape[0]}  GLINT modular BLIND: {ok}/{n} "
           f"({100*ok/n:.0f}%)  {1e3*(time.time()-t0)/n:.0f} ms/frame")
+
+
+# ---- M3 ADAPTIVE: step count keyed to the top-seed inlier RESIDUAL -------------
+_ADAPT_LOG = []
+
+
+def refine_vec_adapt(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=25, mom=0.5,
+                     patience=2, rel=0.03, kbest=64, min_steps=2):
+    """M3 variant: same GD-momentum ascent as refine_vec, but EARLY-STOPS keyed to RESIDUAL -- the median
+    inlier |q.v - round(q.v)| of the top-K seeds (by inlier count). When that stops decreasing, the good
+    vectors have locked onto integer lattice positions and extra steps only churn the rest. ``steps`` caps
+    the loop. Records steps used in ``_ADAPT_LOG``."""
+    vel = torch.zeros_like(T); step0 = 0.25 / qmax
+    prev = None; stall = 0; used = steps
+    for s in range(steps):
+        lr = step0 * (1 - 0.7 * s / steps)
+        _, g = objective(T, Q, w, tol, sharp=(s >= steps - sharp_last))
+        vel = mom * vel + g / (g.norm(dim=1, keepdim=True) + 1e-12)
+        T = T + lr * vel
+        if s + 1 >= min_steps:
+            proj = T @ Q.t(); d = torch.abs(proj - torch.round(proj))
+            inl = (d < tol).to(d.dtype); nin = inl.sum(1)
+            seedres = (d * inl).sum(1) / (nin + 1e-9)
+            k = min(kbest, int(nin.shape[0])); idx = torch.topk(nin, k).indices
+            cur = float(seedres[idx].median())
+            if prev is not None and cur >= prev * (1 - rel):
+                stall += 1
+                if stall >= patience:
+                    used = s + 1; break
+            else:
+                stall = 0
+            prev = cur
+    _ADAPT_LOG.append(used)
+    return T

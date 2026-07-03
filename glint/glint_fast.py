@@ -15,7 +15,8 @@ from glint.glint_index import (objective, refine_vec, refine_vec_newton, refine_
                          distinct_maxima, distinct_maxima_gpu, distinct_cells_gpu, anneal, score_defect,
                          invq_weight, buerger_reduce, primitivize, STARTS, DEV, index_blind)
 
-_REFINERS = {"cg": refine_vec_cg, "bb": refine_vec_bb, "lm": refine_vec_lm, "ls": refine_vec_ls,
+from glint.glint_index import refine_vec_adapt
+_REFINERS = {"adapt": refine_vec_adapt, "cg": refine_vec_cg, "bb": refine_vec_bb, "lm": refine_vec_lm, "ls": refine_vec_ls,
              "raar": refine_vec_raar, "so2d": refine_vec_so2d, "admm": refine_vec_admm}
 
 

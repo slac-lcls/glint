@@ -13,6 +13,8 @@ reduction is needed for the prototype.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from scipy.spatial import cKDTree
 
@@ -314,33 +316,63 @@ def index_shots_batch_known(gs, qmaxs, M_ref, n="auto", min_len=3.0, topk=12,
     return out
 
 
+def _grp_reduced(reps, RP, rtol, ctol, vtol):
+    """Greedy same_lattice grouping over (rep_index, weight) pairs using cached RP[idx]=((l,c),det)."""
+    groups = []                                               # [rep_index, total_weight]
+    for idx, w in reps:
+        (li, ci), di = RP[idx]
+        for grp in groups:
+            (lj, cj), dj = RP[grp[0]]
+            if (abs(di - dj) <= vtol * dj and bool(np.all(np.abs(li - lj) <= rtol * lj))
+                    and bool(np.all(np.abs(ci - cj) <= ctol))):
+                grp[1] += w
+                break
+        else:
+            groups.append([idx, w])
+    return max(groups, key=lambda g: g[1])                    # [rep_index, total_weight]
+
+
+def _consensus_exact(valid, min_support, rtol, ctol, vtol):
+    """One Buerger reduction per hypothesis, then greedy same_lattice grouping (reference / CONSENSUS_EXACT=1)."""
+    RP = [(reduced_params(M), abs(np.linalg.det(M))) for M in valid]
+    ridx, cnt = _grp_reduced(list(enumerate([1] * len(valid))), RP, rtol, ctol, vtol)
+    return (valid[ridx] if cnt >= min_support else None), cnt
+
+
+def _consensus_fast(valid, min_support, rtol, ctol, vtol, sig_tol=0.5):
+    """Bucket hypotheses by a cheap rotation/perm-invariant signature (sqrt-eig of the Gram G=M^T M, no
+    Buerger), run ONE reduced_params per bucket, then group the bucket reps weighted by bucket count.
+    ~10x fewer Buerger reductions; sig_tol keeps genuinely-distinct lattices in separate buckets."""
+    buckets = {}                                              # sigkey -> [rep_index, count]
+    order = []
+    for i, M in enumerate(valid):
+        ev = np.sqrt(np.clip(np.linalg.eigvalsh(M.T @ M), 0.0, None))   # sorted principal-axis lengths
+        k = tuple(int(round(float(x) / sig_tol)) for x in ev)
+        b = buckets.get(k)
+        if b is None:
+            buckets[k] = [i, 1]; order.append(k)
+        else:
+            b[1] += 1
+    reps = [tuple(buckets[k]) for k in order]                 # [(rep_index, count), ...]
+    RP = {idx: (reduced_params(valid[idx]), abs(np.linalg.det(valid[idx]))) for idx, _ in reps}
+    ridx, cnt = _grp_reduced(reps, RP, rtol, ctol, vtol)
+    return (valid[ridx] if cnt >= min_support else None), cnt
+
+
 def consensus_cell(Ms, min_support=3, rtol=0.05, ctol=0.06, vtol=0.10):
     """Group recovered bases by shared lattice; return (representative M, support).
 
-    Fast path: reduced_params (and det) are cached, one Buerger reduction per hypothesis, instead of
-    same_lattice recomputing them on every pairwise comparison -- the pooled N-best consensus over ~360
-    hypotheses was ~0.9s of repeated reductions (the largest serial barrier). Same greedy grouping and
-    same tolerances as same_lattice (rtol/ctol/vtol) -> identical (representative, support)."""
+    Default = per-hypothesis path (`_consensus_exact`): reduced_params cached once per hypothesis (was
+    ~0.9s of repeated Buerger reductions in same_lattice; now ~5x less), PROVABLY bit-exact. CONSENSUS_FAST=1
+    opts into the signature-bucketed path (`_consensus_fast`): buckets by the cheap Gram-eigenvalue signature
+    and runs one reduction per distinct lattice (~2x more on real data, most hypotheses being distinct
+    spurious cells) -- helps the one-time latency, negligible on bulk throughput; approximate-by-design."""
     valid = [M for M in Ms if M is not None]
     if not valid:
         return None, 0
-    dets = [abs(np.linalg.det(M)) for M in valid]
-    RP = [reduced_params(M) for M in valid]                   # (lengths, angle-cosines) -- Buerger, once each
-    groups = []                                               # [rep_index, count]
-    for i in range(len(valid)):
-        (li, ci), di = RP[i], dets[i]
-        for grp in groups:
-            (lj, cj), dj = RP[grp[0]], dets[grp[0]]
-            same = (abs(di - dj) <= vtol * dj
-                    and np.all(np.abs(li - lj) <= rtol * lj)
-                    and np.all(np.abs(ci - cj) <= ctol))
-            if same:
-                grp[1] += 1
-                break
-        else:
-            groups.append([i, 1])
-    ridx, cnt = max(groups, key=lambda g: g[1])
-    return (valid[ridx] if cnt >= min_support else None), cnt
+    if os.environ.get("CONSENSUS_FAST", "0") == "1" and len(valid) > 8:
+        return _consensus_fast(valid, min_support, rtol, ctol, vtol)
+    return _consensus_exact(valid, min_support, rtol, ctol, vtol)
 
 
 def index_known(g, qmax, M_ref, tol_frac=0.02, topk=15, min_inlier_frac=0.5):

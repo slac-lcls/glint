@@ -314,20 +314,33 @@ def index_shots_batch_known(gs, qmaxs, M_ref, n="auto", min_len=3.0, topk=12,
     return out
 
 
-def consensus_cell(Ms, min_support=3):
-    """Group recovered bases by shared lattice; return (representative M, support)."""
-    groups = []  # [representative_M, [members]]
-    for M in (M for M in Ms if M is not None):
+def consensus_cell(Ms, min_support=3, rtol=0.05, ctol=0.06, vtol=0.10):
+    """Group recovered bases by shared lattice; return (representative M, support).
+
+    Fast path: reduced_params (and det) are cached, one Buerger reduction per hypothesis, instead of
+    same_lattice recomputing them on every pairwise comparison -- the pooled N-best consensus over ~360
+    hypotheses was ~0.9s of repeated reductions (the largest serial barrier). Same greedy grouping and
+    same tolerances as same_lattice (rtol/ctol/vtol) -> identical (representative, support)."""
+    valid = [M for M in Ms if M is not None]
+    if not valid:
+        return None, 0
+    dets = [abs(np.linalg.det(M)) for M in valid]
+    RP = [reduced_params(M) for M in valid]                   # (lengths, angle-cosines) -- Buerger, once each
+    groups = []                                               # [rep_index, count]
+    for i in range(len(valid)):
+        (li, ci), di = RP[i], dets[i]
         for grp in groups:
-            if same_lattice(M, grp[0]):
-                grp[1].append(M)
+            (lj, cj), dj = RP[grp[0]], dets[grp[0]]
+            same = (abs(di - dj) <= vtol * dj
+                    and np.all(np.abs(li - lj) <= rtol * lj)
+                    and np.all(np.abs(ci - cj) <= ctol))
+            if same:
+                grp[1] += 1
                 break
         else:
-            groups.append([M, [M]])
-    if not groups:
-        return None, 0
-    rep, mem = max(groups, key=lambda g: len(g[1]))
-    return (rep if len(mem) >= min_support else None), len(mem)
+            groups.append([i, 1])
+    ridx, cnt = max(groups, key=lambda g: g[1])
+    return (valid[ridx] if cnt >= min_support else None), cnt
 
 
 def index_known(g, qmax, M_ref, tol_frac=0.02, topk=15, min_inlier_frac=0.5):

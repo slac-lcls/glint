@@ -52,11 +52,40 @@ def refine_vec_t(V, Q, steps=30):
     return V
 
 
+RESCUE_CG = os.environ.get("RESCUE_CG", "0") == "1"   # flag: rescue uses conjugate-gradient refiner (wider basin)
+
+
+def refine_vec_cg_t(V, Q, steps=30):
+    """Nonlinear conjugate-gradient (Polak-Ribiere+) analog of refine_vec_t -- same objective, but the
+    conjugate direction has a WIDER basin than plain GD (measured on synthetic M3: a CG restart-ensemble
+    reaches full recovery at ~5x fewer restarts than GD). Normalized-direction step control
+    (step0=0.25/qmax, decaying) as the validated blind refine_vec_cg."""
+    qmax = float(Q.norm(dim=1).max())
+    step0 = 0.25 / qmax
+    d = torch.zeros_like(V); a_prev = None
+    for s in range(steps):
+        lr = step0 * (1 - 0.7 * s / steps)
+        a = -(2 * PI * (torch.sin(2 * PI * (V @ Q.T)) @ Q))       # ascend dir (= -descent grad of refine_vec_t)
+        if a_prev is None:
+            d = a
+        else:
+            num = (a * (a - a_prev)).sum(1, keepdim=True)         # Polak-Ribiere
+            den = (a_prev * a_prev).sum(1, keepdim=True) + 1e-12
+            d = a + (num / den).clamp_min(0.0) * d                # PR+ (restart when beta<0)
+        a_prev = a
+        V = V + lr * d / (d.norm(dim=1, keepdim=True) + 1e-12)
+    return V
+
+
+def _resc_refine(V, Q, steps=30):
+    return refine_vec_cg_t(V, Q, steps) if RESCUE_CG else refine_vec_t(V, Q, steps)
+
+
 def c_candidates_t(Q):
     inl, sub = objective_t(LC * DIRS, Q)
     key = inl.double() * 100.0 - sub                      # max inl, then min sub
     idx = torch.argsort(key, descending=True)[:120]
-    ref = refine_vec_t((LC * DIRS)[idx], Q, steps=30)
+    ref = _resc_refine((LC * DIRS)[idx], Q, steps=30)
     ref = ref / ref.norm(dim=1, keepdim=True) * LC
     inl2, sub2 = objective_t(ref, Q)
     order = torch.argsort(inl2.double() * 100.0 - sub2, descending=True)
@@ -139,7 +168,7 @@ def axis_candidates_t(Q, L0):
     """c_candidates_t generalized to an arbitrary anchor length L0 (was hardcoded LC)."""
     inl, sub = objective_t(L0 * DIRS, Q)
     idx = torch.argsort(inl.double() * 100.0 - sub, descending=True)[:120]
-    ref = refine_vec_t((L0 * DIRS)[idx], Q, steps=30)
+    ref = _resc_refine((L0 * DIRS)[idx], Q, steps=30)
     ref = ref / ref.norm(dim=1, keepdim=True) * L0
     inl2, sub2 = objective_t(ref, Q)
     order = torch.argsort(inl2.double() * 100.0 - sub2, descending=True)

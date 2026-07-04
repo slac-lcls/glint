@@ -20,6 +20,10 @@ python eval.py               # denoising / latent / accuracy / head-to-head vs i
 - `eval.py` — the four evals below.
 
 ## Results (measured, A100; synthetic held-out)
+![powder-AE overview](powder_ae.png)
+
+*Left→right: denoising (noisy input → AE reconstruction vs clean truth); latent PCA coloured by crystal system (overlap ≈ chance, silhouette ~0); cell-regression scatter (predicted vs true a, edge MAE ~2 Å).*
+
 | eval | result |
 |---|---|
 | **Denoising** | recon RMS ~0.133 **flat** across input noise 0→0.10 (noise doesn't propagate) |

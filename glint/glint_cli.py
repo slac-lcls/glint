@@ -23,6 +23,10 @@ def _load_frames(args):
         from glint.glint_fast import load
         frames = [np.asarray(q, float) for q in load(args.qframes)]
         images = [{"image": os.path.basename(args.qframes), "event": i} for i in range(len(frames))]
+    elif args.images:
+        from glint.lute_bridge import frames_from_cxi
+        frames, images = frames_from_cxi(args.images, args.geom, wavelength_A=args.wavelength,
+                                         n=args.N, min_peaks=args.min_peaks)
     else:
         geom = parse_geom(args.geom)
         if geom["wavelength_A"] is None and args.wavelength is None:
@@ -42,8 +46,10 @@ def main():
     ap = argparse.ArgumentParser(prog="glint", description="Blind GPU SFX indexer -> CrystFEL .stream")
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--peaks", help="CrystFEL peak-search stream (needs --geom)")
+    src.add_argument("--images", help="raw detector .cxi (jf16m); GLINT peak-finds it with peakfinder_v4 "
+                                      "then indexes -- self-contained GPU front end (needs --geom)")
     src.add_argument("--qframes", help="pre-bridged q-vector FRAME blocks (1/A)")
-    ap.add_argument("--geom", help="CrystFEL .geom (with --peaks)")
+    ap.add_argument("--geom", help="CrystFEL .geom (with --peaks or --images)")
     ap.add_argument("--wavelength", type=float, help="wavelength in A (overrides .geom)")
     ap.add_argument("--cell", help='known cell "a b c al be ga" (skip consensus)')
     ap.add_argument("-N", type=int, default=0, help="limit to first N frames")
@@ -69,8 +75,8 @@ def main():
                     help="Bravais lattice code for --fromfile (e.g. tPc tetragonal, aP triclinic); default aP")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
-    if args.peaks and not args.geom:
-        ap.error("--peaks requires --geom")
+    if (args.peaks or args.images) and not args.geom:
+        ap.error("--peaks/--images requires --geom")
     if args.device == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 

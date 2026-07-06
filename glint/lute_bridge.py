@@ -45,13 +45,14 @@ def parse_geom(path):
             else:
                 glob[key] = val
     out = []
+    gres = glob.get("res")                                  # res may be global or per-panel
     for name, d in panels.items():
         if "fs" not in d or "corner_x" not in d:
             continue
         out.append(dict(
-            name=name, fs=_vec(d["fs"]), ss=_vec(d["ss"]), res=float(d["res"]),
+            name=name, fs=_vec(d["fs"]), ss=_vec(d["ss"]), res=float(d.get("res", gres)),
             cx=float(d["corner_x"]), cy=float(d["corner_y"]),
-            coffset=float(d.get("coffset", 0.0)),
+            coffset=float(d.get("coffset", glob.get("coffset", 0.0))),
             min_fs=int(d["min_fs"]), max_fs=int(d["max_fs"]),
             min_ss=int(d["min_ss"]), max_ss=int(d["max_ss"])))
     return out, glob
@@ -89,3 +90,60 @@ def peaks_to_q(fs_arr, ss_arr, panels, clen_m, wavelength_A):
 
 def lambda_from_eV(eV):
     return HC_EV_A / float(eV)
+
+
+def _meta(spec, h5, i, default):
+    """A .geom global value: a plain float, or an h5 path ('/...') read per event from the CXI."""
+    if spec is None:
+        return default
+    try:
+        return float(spec)
+    except (TypeError, ValueError):
+        pass
+    if isinstance(spec, str) and spec.startswith("/") and h5 is not None and spec in h5:
+        v = h5[spec]
+        return float(v[i]) if getattr(v, "ndim", 0) >= 1 and v.shape[0] > i else float(v[()])
+    return default
+
+
+def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6,
+                    data_key=None, clen_scale=None, **pf_kw):
+    """Self-contained GLINT front end: read raw detector images from a jf16m .cxi, GPU peak-find them with
+    our peakfinder_v4, and bridge to reciprocal q-vectors -- no CrystFEL peak-search stream in between.
+    Returns (frames [(N,3) q in 1/A], images [{image,event}]). clen/photon_energy may be per-event h5 paths
+    (read from the CXI); clen_scale converts the encoder units to metres (auto: >10 => assume mm)."""
+    import h5py
+    from glint.peakfinder_v4 import peakfinder_v4
+    panels, glob = parse_geom(geom_path)
+    data_key = data_key or glob.get("data", "/entry_1/data_1/data")
+    clen_spec, en_spec, mask_key = glob.get("clen"), glob.get("photon_energy"), glob.get("mask")
+    coff = float(glob.get("coffset", 0.0))
+    f = h5py.File(cxi_path, "r")
+    data = f[data_key]
+    nfr = data.shape[0] if data.ndim >= 3 else 1
+    if n:
+        nfr = min(n, nfr)
+    cmask = None
+    if mask_key and mask_key in f:
+        m = f[mask_key]
+        m = np.asarray(m[0] if m.ndim >= 3 else m)
+        cmask = (m == int(str(glob.get("mask_good", "0")), 0))     # True = good pixel
+    frames, images = [], []
+    for i in range(nfr):
+        img = np.asarray(data[i] if data.ndim >= 3 else data, np.float32)
+        pk = peakfinder_v4(img, mask=cmask, **pf_kw)
+        images.append({"image": cxi_path, "event": i})
+        if len(pk["x"]) < min_peaks:
+            frames.append(np.empty((0, 3)))
+            continue
+        clen = _meta(clen_spec, f, i, 0.1)
+        scale = clen_scale if clen_scale is not None else (0.001 if abs(clen) > 10 else 1.0)
+        clen = clen * scale + coff
+        wl = wavelength_A
+        if wl is None:
+            eV = _meta(en_spec, f, i, None)
+            wl = lambda_from_eV(eV) if eV else None
+        if wl is None:
+            raise SystemExit("frames_from_cxi: no wavelength (geom photon_energy path or --wavelength)")
+        frames.append(peaks_to_q(np.asarray(pk["x"]), np.asarray(pk["y"]), panels, clen, wl))
+    return frames, images

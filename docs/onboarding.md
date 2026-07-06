@@ -123,6 +123,13 @@ lute/           LUTE `GLINTIndexer` task (drop-in for CrystFELIndexer in the SFX
 docs/           this file + notes
 ```
 
+> **Two indexers — don't start from `demo.py`.** `experiments/demo.py` calls `glint.index_shot`
+> (`glint/index.py`), the *legacy* **FFT-volume** route: 3-D FFT of the whole peak cloud → peak-pick →
+> basis search — the original `fftindex` idea, kept for pedagogy (and its lineage into the dense front
+> end; see [`lineage.md`](lineage.md)). The **production** SFX indexer is the modular **M1–M6** pipeline
+> listed above (`glint_fast` → `hybrid_stream`, driven by `glint_cli.py`) — that's what the paper and the
+> LUTE DAG use. Read `index.py` to grok the FFT-of-peak-cloud concept, but work against the M1–M6 path.
+
 ## 4. Run it
 
 ```bash

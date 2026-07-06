@@ -45,6 +45,15 @@ SO_WS = float(os.environ.get("SO_WS", "1.0"))              # refine_vec_so2d: su
 WARM = int(os.environ.get("WARM", "0"))                    # refine_vec_so2d: RAAR warm-up iters before saddle (basin)
 POLISH = int(os.environ.get("POLISH", "0"))               # raar/so2d/admm: final ER (alt-projection) cleanup steps
 RHO = float(os.environ.get("RHO", "1.0"))                 # refine_vec_admm: dual penalty (scaled-ADMM)
+RAAR_ANNEAL = int(os.environ.get("RAAR_ANNEAL", "0"))     # refine_vec_raar: soft->hard round-to-hkl schedule (0=off = hard from step 0).
+                                                          # NEGATIVE (cxidb-120): hard-round baseline 88/120 beats every soft->hard schedule
+                                                          # (79-84); the reflection feedback IS the escape, softening P_data just mushes it. Kept default-off.
+RAAR_A0 = float(os.environ.get("RAAR_A0", "0.3"))         #   starting round hardness (0=identity/no pull, 1=hard round); ramps ->1 over steps
+RAAR_TOLK = float(os.environ.get("RAAR_TOLK", "2.0"))     #   starting inlier-tol multiplier (wide window early); ramps ->1 over steps
+BETA_SCHED = int(os.environ.get("BETA_SCHED", "0"))       # refine_vec_raar: ramp beta BETA_HI->BETA over steps = HIO/DR -> RAAR (0=off, fixed beta).
+                                                          # NEGATIVE (cxidb-120): fixed beta=0.7 (88/120) beats every 1.0->beta schedule (81-86);
+                                                          # 16 steps/seed is too short for beta-relaxation to pay (seed ensemble does the exploration). Default-off.
+BETA_HI = float(os.environ.get("BETA_HI", "1.0"))         #   starting beta (1.0 = pure DR/HIO reflection averaging); ends at BETA (RAAR)
 
 
 # ---- M1: sample -----------------------------------------------------------------
@@ -296,15 +305,26 @@ def refine_vec_raar(T, Q, w, qmax, steps=8, tol=0.18, sharp_last=None, mom=None,
     HIO-style FEEDBACK that escapes the spurious basins plain ascent / error-reduction fall into; range(Q) is
     a FIXED linear subspace, so the support is maximally stable (the regime where saddle/DR methods work).
     beta via BETA env. Returns the feasible v fit to the confident integer assignments."""
-    b = BETA if beta is None else beta
+    b_end = BETA if beta is None else beta
+    b = b_end
     eye = torch.eye(3, dtype=T.dtype, device=T.device)
     w0 = w.unsqueeze(0)
     u = T @ Q.t()                                                              # (B,N) initial projections
     for s in range(steps):
+        if BETA_SCHED:                                                         # HIO/DR (beta=BETA_HI, aggressive reflection) ->
+            p = s / max(steps - 1, 1)                                          #   RAAR (beta=b_end, data-projection weight): explore
+            b = BETA_HI * (1.0 - p) + b_end * p                                #   early to escape spurious basins, settle late
         r = torch.round(u)
-        inl = (torch.abs(u - r) < tol).to(u.dtype)
+        if RAAR_ANNEAL:                                                        # soft->hard round-to-hkl (deterministic annealing):
+            p = s / max(steps - 1, 1)                                          #   the round constraint HARDENS as it ramps, co-active
+            alpha = RAAR_A0 + (1.0 - RAAR_A0) * p                              #   with the RAAR reflection kick -- ambiguous peaks stay
+            tol_s = tol * (1.0 + (RAAR_TOLK - 1.0) * (1.0 - p))                #   undecided until range(Q) resolves them, before the
+            rr = alpha * r + (1.0 - alpha) * u                                 #   integer commitment locks a short-vector sublattice.
+        else:
+            tol_s = tol; rr = r
+        inl = (torch.abs(u - r) < tol_s).to(u.dtype)
         wm = w0 * inl                                                          # weight only current inliers
-        Pd = torch.where(inl > 0, r, u)                                        # round inliers, keep outliers
+        Pd = torch.where(inl > 0, rr, u)                                       # (soft-)round inliers, keep outliers
         Rd = 2 * Pd - u
         PsRd, _ = _psupport(Rd, Q, wm, eye)                                    # P_support(R_d u)
         RsRd = 2 * PsRd - Rd

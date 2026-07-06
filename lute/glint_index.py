@@ -30,7 +30,7 @@ class IndexGLINTParameters(ThirdPartyParameters):
 
     executable: str = Field(
         "/sdf/home/s/smarches/git/glint/lute/glint_launch.sh",
-        description="Launcher that activates the GLINT GPU (torch) env and runs fftindex.glint_cli.",
+        description="Launcher that activates the GLINT GPU (torch) env and runs glint.glint_cli.",
         flag_type="",
     )
     peaks: str = Field(

@@ -4,5 +4,5 @@
 # invokes:  glint_launch.sh <flags>.  Point IndexGLINTParameters.executable at this script.
 source /sdf/group/lcls/ds/ana/sw/conda1/manage/bin/psconda.sh >/dev/null 2>&1
 conda activate ana-4.0.58-py3-minipytorch >/dev/null 2>&1
-cd "$(dirname "$0")/.." || exit 1                       # repo root (so `fftindex` imports)
-exec python -m fftindex.glint_cli "$@"
+cd "$(dirname "$0")/.." || exit 1                       # repo root (so `glint` imports)
+exec python -m glint.glint_cli "$@"

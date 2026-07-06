@@ -111,7 +111,22 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6,
     """Self-contained GLINT front end: read raw detector images from a jf16m .cxi, GPU peak-find them with
     our peakfinder_v4, and bridge to reciprocal q-vectors -- no CrystFEL peak-search stream in between.
     Returns (frames [(N,3) q in 1/A], images [{image,event}]). clen/photon_energy may be per-event h5 paths
-    (read from the CXI); clen_scale converts the encoder units to metres (auto: >10 => assume mm)."""
+    (read from the CXI); clen_scale converts the encoder units to metres (auto: >10 => assume mm).
+
+    cxi_path may also be a CrystFEL-style .list/.lst of .cxi files (FindPeaksSFX's result) -- one path per
+    line ('path' or 'path //event'); frames from all listed .cxi are concatenated so IndexGLINT is a drop-in
+    for the .list that feeds CrystFELIndexer."""
+    if str(cxi_path).endswith((".list", ".lst")):
+        with open(cxi_path) as fh:
+            paths = [ln.split()[0] for ln in fh if ln.strip() and not ln.lstrip().startswith("#")]
+        frames, images = [], []
+        for pth in paths:
+            fr, im = frames_from_cxi(pth, geom_path, wavelength_A=wavelength_A, n=0, min_peaks=min_peaks,
+                                     data_key=data_key, clen_scale=clen_scale, **pf_kw)
+            frames += fr; images += im
+            if n and len(frames) >= n:
+                break
+        return (frames[:n], images[:n]) if n else (frames, images)
     import h5py
     from glint.peakfinder_v4 import peakfinder_v4
     panels, glob = parse_geom(geom_path)

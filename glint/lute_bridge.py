@@ -121,7 +121,8 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6,
             paths = [ln.split()[0] for ln in fh if ln.strip() and not ln.lstrip().startswith("#")]
         frames, images = [], []
         for pth in paths:
-            fr, im = frames_from_cxi(pth, geom_path, wavelength_A=wavelength_A, n=0, min_peaks=min_peaks,
+            remaining = (n - len(frames)) if n else 0   # pass the REMAINING budget so we don't read whole files
+            fr, im = frames_from_cxi(pth, geom_path, wavelength_A=wavelength_A, n=remaining, min_peaks=min_peaks,
                                      data_key=data_key, clen_scale=clen_scale, **pf_kw)
             frames += fr; images += im
             if n and len(frames) >= n:

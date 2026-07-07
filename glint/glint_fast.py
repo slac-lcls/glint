@@ -239,6 +239,54 @@ def _cluster_fft_seeds(q, n_clusters=28, cpts=300, n_grid=96, fov=200.0, min_len
     return torch.cat(out, 0) if out else torch.zeros((0, 3), device=DEV)
 
 
+def _cluster_fft_seeds_coherent(q, n_clusters=28, cpts=300, n_grid=96, fov=200.0, min_len=3.0, rel=0.12, seed=0):
+    """COHERENT single-volume variant of _cluster_fft_seeds (the COHERENT_SEEDS option). Instead of peak-
+    picking EACH cluster and pooling, phase-back each centered cluster's FFT to the common origin
+    (multiply by exp(-2pi i x.q0_c)) and sum the COMPLEX volumes, then do ONE peak-pick of |sum|. The
+    matched-filter sqrt(K) background cancellation sharpens the weak/anisotropic-cell vectors, and the
+    single peak search (vs K) is the speedup. MEASURED (10 dense cells x15 rot, A100): ~97% vs the pooled
+    _cluster_fft_seeds 100%, at ~1.5x faster M1 and ~7x fewer, higher-quality seeds. DEFAULT OFF -- the
+    pooled per-cluster peak-pick is uniquely 100% (the K separate searches isolate each cluster's local
+    structure a single summed field can't); this is the fast/fewer-seeds trade. See memory glint-dense-coherent-seeds."""
+    q = np.asarray(q, float)
+    rng = np.random.default_rng(seed)
+    dq = 1.0 / (2.0 * fov)
+    QT = torch.as_tensor(q, dtype=torch.float32, device=DEV)
+    centers = rng.choice(len(q), min(n_clusters, len(q)), replace=False)
+    half = n_grid // 2
+    x = torch.fft.fftshift(torch.fft.fftfreq(n_grid, d=dq)).to(DEV)
+    acc = None
+    for ci in centers:
+        d = (QT - QT[ci]).norm(dim=1)
+        idx = torch.argsort(d)[:cpts]
+        cl = QT[idx]; q0 = cl.mean(0); c = cl - q0            # center; keep q0 for the phase-back
+        gi = torch.round(c / dq).long() + half
+        inb = ((gi >= 0) & (gi < n_grid)).all(1); gi = gi[inb]
+        if len(gi) < 6:
+            continue
+        rho = torch.zeros(n_grid ** 3, device=DEV)
+        rho.scatter_add_(0, (gi[:, 0] * n_grid + gi[:, 1]) * n_grid + gi[:, 2],
+                         torch.ones(len(gi), device=DEV))
+        Fc = torch.fft.fftshift(torch.fft.fftn(torch.fft.ifftshift(rho.view(n_grid, n_grid, n_grid))))
+        ph = (torch.exp((-2j * np.pi * float(q0[0])) * x)[:, None, None]      # separable exp(-2pi i x.q0)
+              * torch.exp((-2j * np.pi * float(q0[1])) * x)[None, :, None]
+              * torch.exp((-2j * np.pi * float(q0[2])) * x)[None, None, :])
+        Fp = ph * Fc
+        acc = Fp if acc is None else acc + Fp
+    if acc is None:
+        return torch.zeros((0, 3), device=DEV)
+    vol = acc.abs()
+    mx = torch.nn.functional.max_pool3d(vol[None, None], 3, 1, 1)[0, 0]
+    ispk = (vol == mx) & (vol > rel * vol.max())
+    ijk = torch.nonzero(ispk)
+    if len(ijk) == 0:
+        return torch.zeros((0, 3), device=DEV)
+    vecs = torch.stack([x[ijk[:, 0]], x[ijk[:, 1]], x[ijk[:, 2]]], 1)
+    L = vecs.norm(dim=1); keep = (L >= min_len) & (L <= 0.9 * fov)
+    vecs, amps = vecs[keep], vol[ispk][keep]
+    return vecs[torch.argsort(amps, descending=True)[:672]]
+
+
 def index_blind_cluster_seeded(q, acc=None):
     """Index using LOCAL-CLUSTER FFT seeds -> GLINT refine/M4 (scales flat with rlp density). Below
     CLUSTER_MIN rlps the autocorrelation is starved (thin slice) -> fall back to the Fibonacci grid."""
@@ -251,16 +299,27 @@ def index_blind_cluster_seeded(q, acc=None):
     # ADAPTIVE FOV: a very dense cloud (large-volume cell, long axes) under-resolves at the default grid
     # (fov=200/g96); use a larger, finer grid there. rlp count is the size proxy (large_tet 456k vs the
     # rest <=138k). Fires only for genuinely large cells; a false trigger only costs speed, never accuracy.
-    if len(q) > BIGCELL_RLPS:
-        starts = _cluster_fft_seeds(q, fov=280.0, n_grid=128)   # 0.9*fov=252 A cutoff, ~4.4 A/voxel
+    big = len(q) > BIGCELL_RLPS
+    coh = os.environ.get("COHERENT_SEEDS")                   # optional dense speedup: coherent phased-sum
+    #   unset -> pooled per-cluster peak-pick (default, 100%); "1" -> coherent only (~1.5x faster, ~97%);
+    #   "fallback" -> coherent first, pooled retry if it fails to index (100% at amortized ~1.45x M1).
+    if coh:
+        starts = _cluster_fft_seeds_coherent(q, fov=280.0, n_grid=128) if big else _cluster_fft_seeds_coherent(q)
+        if int(starts.shape[0]) < 3:                        # coherent starved -> pooled
+            starts = _cluster_fft_seeds(q, fov=280.0, n_grid=128) if big else _cluster_fft_seeds(q)
     else:
-        starts = _cluster_fft_seeds(q)                          # default grid (fov=200, n_grid=96)
+        starts = _cluster_fft_seeds(q, fov=280.0, n_grid=128) if big else _cluster_fft_seeds(q)
     if acc is not None: acc["fft_seed"] = acc.get("fft_seed", 0.0) + time.time() - t
     if int(starts.shape[0]) < 3:
         return index_blind_fast(q, acc)                     # starved -> Fibonacci fallback
     if len(q) > FFTSEED_CAP:
         q = q[np.argsort(np.linalg.norm(q, axis=1))[:FFTSEED_CAP]]
-    return index_blind_fast(q, acc, starts=starts)
+    res = index_blind_fast(q, acc, starts=starts)
+    if res is None and coh == "fallback":                   # coherent failed -> pooled retry (robust default rate)
+        pooled = _cluster_fft_seeds(q, fov=280.0, n_grid=128) if big else _cluster_fft_seeds(q)
+        if int(pooled.shape[0]) >= 3:
+            res = index_blind_fast(q, acc, starts=pooled)
+    return res
 
 
 def index_blind_fft_seeded(q, also_fib=False, acc=None):

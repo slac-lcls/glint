@@ -26,7 +26,8 @@ def _load_frames(args):
     elif args.images:
         from glint.lute_bridge import frames_from_cxi
         frames, images = frames_from_cxi(args.images, args.geom, wavelength_A=args.wavelength,
-                                         n=args.N, min_peaks=args.min_peaks)
+                                         n=args.N, min_peaks=args.min_peaks,
+                                         peakfinder=args.peakfinder, top_n=args.top_peaks)
     else:
         geom = parse_geom(args.geom)
         if geom["wavelength_A"] is None and args.wavelength is None:
@@ -46,14 +47,19 @@ def main():
     ap = argparse.ArgumentParser(prog="glint", description="Blind GPU SFX indexer -> CrystFEL .stream")
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--peaks", help="CrystFEL peak-search stream (needs --geom)")
-    src.add_argument("--images", help="raw detector .cxi (jf16m); GLINT peak-finds it with peakfinder_v4 "
-                                      "then indexes -- self-contained GPU front end (needs --geom)")
+    src.add_argument("--images", help="raw detector .cxi; GLINT peak-finds it (see --peakfinder) then indexes "
+                                      "-- self-contained GPU front end (needs --geom)")
     src.add_argument("--qframes", help="pre-bridged q-vector FRAME blocks (1/A)")
     ap.add_argument("--geom", help="CrystFEL .geom (with --peaks or --images)")
     ap.add_argument("--wavelength", type=float, help="wavelength in A (overrides .geom)")
     ap.add_argument("--cell", help='known cell "a b c al be ga" (skip consensus)')
     ap.add_argument("-N", type=int, default=0, help="limit to first N frames")
     ap.add_argument("--min-peaks", type=int, default=6, help="skip frames with fewer peaks")
+    ap.add_argument("--peakfinder", choices=("v4", "pf9", "pf8", "stored"), default="v4",
+                    help="with --images: 'v4'/'pf9' self peak-find the images; 'stored' reuses the .cxi's own "
+                         "peakfinder8/Cheetah peaks (/entry_1/result_1, no redundant peak-find); 'pf8' TBD")
+    ap.add_argument("--top-peaks", type=int, default=0,
+                    help="with --images: keep only the N strongest peaks/frame (0=all; guards over-finding)")
     ap.add_argument("--device", choices=("auto", "cpu"), default="auto")
     ap.add_argument("--nbest", type=int, default=3,
                     help="keep N-best cell hypotheses/frame for consensus (1 = top-1 only)")

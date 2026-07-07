@@ -106,16 +106,31 @@ def _meta(spec, h5, i, default):
     return default
 
 
-def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6,
-                    data_key=None, clen_scale=None, **pf_kw):
-    """Self-contained GLINT front end: read raw detector images from a jf16m .cxi, GPU peak-find them with
-    our peakfinder_v4, and bridge to reciprocal q-vectors -- no CrystFEL peak-search stream in between.
-    Returns (frames [(N,3) q in 1/A], images [{image,event}]). clen/photon_energy may be per-event h5 paths
-    (read from the CXI); clen_scale converts the encoder units to metres (auto: >10 => assume mm).
+def _get_finder(name):
+    """Peakfinder dispatch. v4/pf9 self-peak-find the image (portable numpy/cupy DRP finders)."""
+    if name == "v4":
+        from glint.peakfinder_v4 import peakfinder_v4; return peakfinder_v4
+    if name == "pf9":
+        from glint.peakfinder9 import peakfinder9; return peakfinder9
+    if name == "pf8":
+        raise SystemExit("frames_from_cxi: peakfinder='pf8' needs a per-pixel q map + radial.py (not yet "
+                         "vendored). Use 'stored' to reuse the .cxi's own peakfinder8 peaks, or 'v4'/'pf9'.")
+    raise SystemExit("frames_from_cxi: unknown peakfinder %r (use v4|pf9|pf8|stored)" % name)
 
-    cxi_path may also be a CrystFEL-style .list/.lst of .cxi files (FindPeaksSFX's result) -- one path per
-    line ('path' or 'path //event'); frames from all listed .cxi are concatenated so IndexGLINT is a drop-in
-    for the .list that feeds CrystFELIndexer."""
+
+def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, data_key=None,
+                    clen_scale=None, peakfinder="v4", top_n=0, **pf_kw):
+    """Self-contained GLINT front end: read a .cxi and bridge detector peaks to reciprocal q-vectors -- no
+    CrystFEL peak-search stream in between. Returns (frames [(N,3) q in 1/A], images [{image,event}]).
+
+    peakfinder: 'v4' (default) / 'pf9' -> self peak-find each image with the vendored DRP finder; 'stored'
+    -> REUSE the .cxi's own peakfinder8/Cheetah peaks in /entry_1/result_1 (no redundant peak-find -- the
+    efficient path when FindPeaksSFX/Cheetah already stored them); 'pf8' -> not yet vendored (needs a q-map).
+    top_n: keep only the N strongest peaks per frame (0 = all; guards a finder that over-finds on background).
+    clen/photon_energy may be per-event h5 paths; clen_scale converts encoder units to metres (auto: >10 => mm).
+
+    cxi_path may also be a CrystFEL .list/.lst of .cxi files (FindPeaksSFX's result); frames from all listed
+    .cxi are concatenated so IndexGLINT is a drop-in for the .list that feeds CrystFELIndexer."""
     if str(cxi_path).endswith((".list", ".lst")):
         with open(cxi_path) as fh:
             paths = [ln.split()[0] for ln in fh if ln.strip() and not ln.lstrip().startswith("#")]
@@ -123,35 +138,20 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6,
         for pth in paths:
             remaining = (n - len(frames)) if n else 0   # pass the REMAINING budget so we don't read whole files
             fr, im = frames_from_cxi(pth, geom_path, wavelength_A=wavelength_A, n=remaining, min_peaks=min_peaks,
-                                     data_key=data_key, clen_scale=clen_scale, **pf_kw)
+                                     data_key=data_key, clen_scale=clen_scale, peakfinder=peakfinder,
+                                     top_n=top_n, **pf_kw)
             frames += fr; images += im
             if n and len(frames) >= n:
                 break
         return (frames[:n], images[:n]) if n else (frames, images)
     import h5py
-    from glint.peakfinder_v4 import peakfinder_v4
     panels, glob = parse_geom(geom_path)
     data_key = data_key or glob.get("data", "/entry_1/data_1/data")
     clen_spec, en_spec, mask_key = glob.get("clen"), glob.get("photon_energy"), glob.get("mask")
     coff = float(glob.get("coffset", 0.0))
     f = h5py.File(cxi_path, "r")
-    data = f[data_key]
-    nfr = data.shape[0] if data.ndim >= 3 else 1
-    if n:
-        nfr = min(n, nfr)
-    cmask = None
-    if mask_key and mask_key in f:
-        m = f[mask_key]
-        m = np.asarray(m[0] if m.ndim >= 3 else m)
-        cmask = (m == int(str(glob.get("mask_good", "0")), 0))     # True = good pixel
-    frames, images = [], []
-    for i in range(nfr):
-        img = np.asarray(data[i] if data.ndim >= 3 else data, np.float32)
-        pk = peakfinder_v4(img, mask=cmask, **pf_kw)
-        images.append({"image": cxi_path, "event": i})
-        if len(pk["x"]) < min_peaks:
-            frames.append(np.empty((0, 3)))
-            continue
+
+    def _q(xarr, yarr, i):                                          # (fs,ss) peaks -> q for event i
         clen = _meta(clen_spec, f, i, 0.1)
         scale = clen_scale if clen_scale is not None else (0.001 if abs(clen) > 10 else 1.0)
         clen = clen * scale + coff
@@ -161,5 +161,34 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6,
             wl = lambda_from_eV(eV) if eV else None
         if wl is None:
             raise SystemExit("frames_from_cxi: no wavelength (geom photon_energy path or --wavelength)")
-        frames.append(peaks_to_q(np.asarray(pk["x"]), np.asarray(pk["y"]), panels, clen, wl))
+        return peaks_to_q(np.asarray(xarr, float), np.asarray(yarr, float), panels, clen, wl)
+
+    frames, images = [], []
+    if peakfinder == "stored":                                     # reuse the .cxi's own peakfinder8/Cheetah peaks
+        rl = glob.get("peak_list", "/entry_1/result_1")
+        px, py, npk = f[rl + "/peakXPosRaw"], f[rl + "/peakYPosRaw"], f[rl + "/nPeaks"]
+        nfr = min(n, px.shape[0]) if n else px.shape[0]
+        for i in range(nfr):
+            k = int(npk[i]); images.append({"image": cxi_path, "event": i})
+            frames.append(_q(px[i, :k], py[i, :k], i) if k >= min_peaks else np.empty((0, 3)))
+        return frames, images
+
+    data = f[data_key]
+    nfr = data.shape[0] if data.ndim >= 3 else 1
+    if n:
+        nfr = min(n, nfr)
+    cmask = None
+    if mask_key and mask_key in f:
+        m = f[mask_key]; m = np.asarray(m[0] if m.ndim >= 3 else m)
+        cmask = (m == int(str(glob.get("mask_good", "0")), 0))     # True = good pixel
+    finder = _get_finder(peakfinder)
+    for i in range(nfr):
+        img = np.asarray(data[i] if data.ndim >= 3 else data, np.float32)
+        pk = finder(img, mask=cmask, **pf_kw)
+        images.append({"image": cxi_path, "event": i})
+        x, y = np.asarray(pk["x"]), np.asarray(pk["y"])
+        if top_n and len(x) > top_n:                               # keep the strongest (guards over-finding)
+            s = np.asarray(pk.get("intensity", pk.get("snr", np.zeros(len(x)))))
+            keep = np.argsort(s)[::-1][:top_n]; x, y = x[keep], y[keep]
+        frames.append(_q(x, y, i) if len(x) >= min_peaks else np.empty((0, 3)))
     return frames, images

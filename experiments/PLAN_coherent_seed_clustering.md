@@ -79,18 +79,24 @@ coherent for precise localization — coarse-to-fine across the incoherent↔coh
   `constraint-hardening-schedule`; the kick pays only while the restoring constraint is co-active + hardening).
 - Metric: does annealing beat both fixed endpoints (pooled 100% / coherent 97%) on rate×speed, esp. recover tricl?
 
-## Axis F — weighted FFT deposit (~1/|q|, xgandalf-style)  [user question]
-Current: `_cluster_fft_seeds` deposits `torch.ones` — every peak weighted EQUALLY in the autocorrelation, NO
-1/|q| weight. (Downstream M2/M3 DOES weight: `invq_weight(Q)` ≈ `QPOW=1.0` ~1/|q| on the ORIGINAL q; xgandalf's
-1/|q|² measured WORSE in GLINT — notes_m2_tuning.) So only the SEEDING is unweighted.
-- **F1. Weight the deposit** `scatter_add_(…, w_j)` with `w_j ∝ 1/|q_j|^p`, `p∈{0,0.5,1,2}` — using the
-  TRUE-ORIGIN `|q_j|` (resolution), NOT the centroid-recentered local `|q−q0|`. Emphasizes strong low-res peaks
-  in the autocorrelation. Predict: may sharpen toward the true SHORT lattice vectors, or hurt by down-weighting
-  the high-q fine structure. Sweep p, rate/M1/per-cell.
-- **F2. Recentering note:** peaks are recentered by CENTROID for POSITION only (local grid + |F| translation-
-  invariance); the weight must use true-origin |q| (resolution), never the recentered local magnitude.
-- **F3.** Composes with A (soft deposit) and E (annealing) — weighted + sub-pixel splat is one op; and a
-  `p`-schedule is another annealing knob (heavy low-res detect → flat high-res localize).
+## Axis F — weighted / apodized FFT deposit  [user question + correction]
+Current deposit = `torch.ones` (unweighted). Downstream M2/M3 DOES weight (`invq_weight(Q)` ≈ QPOW=1.0 ~1/|q|
+on ORIGINAL q; xgandalf's 1/|q|² measured WORSE — notes_m2_tuning), but only the SEEDING is unweighted. TWO
+distinct deposit weights, doing DIFFERENT jobs:
+- **F1 (primary) — LOCAL apodization `w_j = window(|q_j − q0_c|)`.** [User correction: within a compact 300-peak
+  cluster `|q_global|` is ~constant, so it can't differentiate peaks — the global origin drops out under
+  recentering; the meaningful per-peak magnitude is the COM-centered local one.] Weighting by local radius
+  APODIZES the cluster aperture (up-weight center, taper edges) → **suppresses the |F(x)| sidelobe RIPPLES** (the
+  false-peak / tricl mechanism in the coherent sum) AND emphasizes central-peak pairs = SHORT lattice-vector
+  separations (the basis vectors we seed). Test `1/|q_local|` (user's; note the COM singularity → over-weights
+  center) vs BOUNDED windows (Gaussian / Hann / Tukey). **Composes with the coherent option**: apodize each
+  cluster BEFORE the phase-back sum → cleaner coherent peaks → candidate fix for the tricl ripple misses.
+- **F2 (separate, coarser) — GLOBAL per-CLUSTER shell/SNR weight** `∝ 1/|q0_c|^p`: down-weight far-out (high-
+  resolution, noisier) clusters. This is where TRUE-ORIGIN |q| legitimately matters (resolution/SNR), but it's a
+  per-cluster SCALAR, not a per-peak weight. Composes with F1.
+- **F3.** Composes with A (sub-pixel deposit) and E (annealing) — apodized + soft splat is one op; a window-width
+  schedule is another annealing knob (wide/flat window = detect → narrow/tapered = sharpen). Sweep; rate/M1/per-
+  cell, watching tricl (ripple-limited) + the long-axis cells.
 
 ## Execution / parallelism
 Independent axes → run concurrently as self-contained GPU sweeps (S3DF ampere / NERSC), each reusing the

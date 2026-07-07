@@ -52,7 +52,10 @@ def main():
     src.add_argument("--qframes", help="pre-bridged q-vector FRAME blocks (1/A)")
     ap.add_argument("--geom", help="CrystFEL .geom (with --peaks or --images)")
     ap.add_argument("--wavelength", type=float, help="wavelength in A (overrides .geom)")
-    ap.add_argument("--cell", help='known cell "a b c al be ga" (skip consensus)')
+    ap.add_argument("--cell", nargs="+", metavar="V",
+                    help='known cell (skip consensus): one quoted string "a b c al be ga" OR six '
+                         'space-separated values a b c al be ga (both accepted, e.g. for LUTE which '
+                         'splits the field into separate argv tokens)')
     ap.add_argument("-N", type=int, default=0, help="limit to first N frames")
     ap.add_argument("--min-peaks", type=int, default=6, help="skip frames with fewer peaks")
     ap.add_argument("--peakfinder", choices=("v4", "pf9", "pf8", "stored"), default="v4",
@@ -97,7 +100,8 @@ def main():
     Mc_known = None
     if args.cell:
         from glint.lattice import cell_to_Ar
-        Mc_known = cell_to_Ar(*[float(x) for x in args.cell.split()])
+        vals = [float(x) for x in " ".join(args.cell).split()]   # accepts one quoted string OR 6 tokens
+        Mc_known = cell_to_Ar(*vals)
 
     from glint.hybrid_stream import hybrid_index, dense_index, _report   # torch import deferred to here
     from glint.stream import write_stream

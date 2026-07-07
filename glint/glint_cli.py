@@ -70,9 +70,13 @@ def main():
                     help="optional external cell-given indexer binary (e.g. ffbidx/xgandalf driver) to "
                          "fall back on for frames left unindexed; must use the FRAME-in / basis-out protocol")
     ap.add_argument("--integrate", action="store_true",
-                    help="native predict+integrate: emit a stream with REAL I/sigma (fast QC path; needs "
-                         "--geom and the frame images via --image-dir). For the best merge use --fromfile instead")
-    ap.add_argument("--image-dir", default=".", help="base directory for the frame image files (with --integrate)")
+                    help="native predict+integrate -> a stream with REAL I/sigma, self-contained (no CrystFEL). "
+                         "With --images the frames are read straight from the stacked .cxi by event; with --peaks "
+                         "supply the per-frame image files via --image-dir. For the best (refined) merge use --fromfile")
+    ap.add_argument("--image-dir", default=".", help="base directory for per-file frame images (--integrate with --peaks)")
+    ap.add_argument("--int-dmin", type=float, default=2.0, help="--integrate resolution limit in A (default 2.0)")
+    ap.add_argument("--int-tol", type=float, default=0.006,
+                    help="--integrate Ewald excitation-error gate in 1/A (stills partiality window; default 0.006)")
     ap.add_argument("--fromfile", metavar="SOL",
                     help="also emit a CrystFEL --indexing=file solution file (the refined-merge handoff): "
                          "run 'indexamajig --indexing=file --fromfile-input-file=SOL --tolerance=10,10,10,3' "
@@ -113,12 +117,28 @@ def main():
     if args.integrate:
         if not args.geom:
             ap.error("--integrate requires --geom (and --image-dir for the frame images)")
-        from glint.predict import integrate_frames, write_stream_integrated
-        from glint.geom import parse_geom
-        geomd = parse_geom(args.geom); gg = geomd.get("global", {})
-        nint, tot = integrate_frames(results, geomd, image_dir=args.image_dir)
-        write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
-                                photon_eV=float(gg.get("photon_energy", 9392.7)), clen_m=float(gg.get("clen", 0.15)))
+        from glint.predict import write_stream_integrated
+        if args.images:                                          # stacked .cxi: read data[event] directly (self-contained)
+            from glint.predict import integrate_cxi
+            from glint.lute_bridge import parse_geom as _pg
+            nint, tot = integrate_cxi(results, args.geom, wavelength_A=args.wavelength,
+                                      dmin=args.int_dmin, tol=args.int_tol)
+            _, _g = _pg(args.geom)
+            def _f(v, d):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return d
+            write_stream_integrated(results, args.out,
+                                    photon_eV=_f(_g.get("photon_energy"), 9392.7), clen_m=_f(_g.get("clen"), 0.15))
+        else:                                                    # per-file images (legacy detectors)
+            from glint.predict import integrate_frames
+            from glint.geom import parse_geom
+            geomd = parse_geom(args.geom); gg = geomd.get("global", {})
+            nint, tot = integrate_frames(results, geomd, image_dir=args.image_dir,
+                                         dmin=args.int_dmin, tol=args.int_tol)
+            write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
+                                    photon_eV=float(gg.get("photon_energy", 9392.7)), clen_m=float(gg.get("clen", 0.15)))
     else:
         write_stream(results, args.out)
     _report(stats, args.out)

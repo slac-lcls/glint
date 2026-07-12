@@ -49,6 +49,7 @@ NEWTON_STEPS = int(os.environ.get("NEWTON_STEPS", "4"))     # damped-Newton iter
 CLUSTER_MIN = int(os.environ.get("CLUSTER_MIN", "3000"))    # cluster-FFT only for genuinely DENSE (rotation) clouds; thin/moderate -> Fibonacci (fast+robust there; SFX <3000 unaffected)
 ANNEAL_FP32 = os.environ.get("ANNEAL_FP32", "0") == "1"     # M5 anneal/score dtype: fp64 (default, bit-matched scalar) | fp32 (faster; validate rate)
 ADT = torch.float32 if ANNEAL_FP32 else torch.float64
+ANNEAL_ITERS = int(os.environ.get("ANNEAL_ITERS", "15"))    # M5 anneal iteration count (default 15; reduce + lean on consensus/rescue)
 BIGCELL_RLPS = int(os.environ.get("BIGCELL_RLPS", "200000"))  # cluster-FFT: above this rlp count (large-volume/long-axis cell) enlarge the seed grid (adaptive fov)
 
 
@@ -152,7 +153,7 @@ def index_blind_fast(q, acc=None, starts=None):
     M0 = M0[(sc > 0) & (det >= 0.1 * sc)]
     if int(M0.shape[0]) == 0:
         return None
-    Mt = anneal_batch_t(M0, Qd)
+    Mt = anneal_batch_t(M0, Qd, max_iter=ANNEAL_ITERS)
     key, ni = score_batch_t(Mt, Qd)
     b = int(torch.argmax(key).item())
     best = Mt[b].cpu().numpy()
@@ -384,7 +385,7 @@ def index_blind_nbest(q, N=5):
     M0 = M0[(sc > 0) & (det >= 0.1 * sc)]
     if int(M0.shape[0]) == 0:
         return []
-    Mt = anneal_batch_t(M0, Qd)
+    Mt = anneal_batch_t(M0, Qd, max_iter=ANNEAL_ITERS)
     key, ni = score_batch_t(Mt, Qd)
     reps = distinct_cells_gpu(Mt, key)                        # GPU metric-dedup: reduce only DISTINCT cells
     if int(reps.numel()) == 0:

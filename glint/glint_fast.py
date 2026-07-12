@@ -49,7 +49,7 @@ NEWTON_STEPS = int(os.environ.get("NEWTON_STEPS", "4"))     # damped-Newton iter
 CLUSTER_MIN = int(os.environ.get("CLUSTER_MIN", "3000"))    # cluster-FFT only for genuinely DENSE (rotation) clouds; thin/moderate -> Fibonacci (fast+robust there; SFX <3000 unaffected)
 ANNEAL_FP32 = os.environ.get("ANNEAL_FP32", "0") == "1"     # M5 anneal/score dtype: fp64 (default, bit-matched scalar) | fp32 (faster; validate rate)
 ADT = torch.float32 if ANNEAL_FP32 else torch.float64
-ANNEAL_ITERS = int(os.environ.get("ANNEAL_ITERS", "15"))    # M5 anneal iteration count (default 15; reduce + lean on consensus/rescue)
+ANNEAL_ITERS = int(os.environ.get("ANNEAL_ITERS", "3"))     # M5 anneal iterations. Default 3: 15->3 holds blind (85 vs 84 same_lattice, 78 gated) AND consensus (117/120), anneal stage 7.8->2.5ms (3.1x); the 15-iter default was over-provisioned. Set 15 for a GPU-native merge wanting a fully-refined cell.
 BIGCELL_RLPS = int(os.environ.get("BIGCELL_RLPS", "200000"))  # cluster-FFT: above this rlp count (large-volume/long-axis cell) enlarge the seed grid (adaptive fov)
 
 

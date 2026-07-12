@@ -34,7 +34,7 @@ from glint.multishot import same_lattice
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 NTOP = int(os.environ.get("NTOP", "30"))                    # ② candidate-pool size (M4 width)
 KEEP = int(os.environ.get("KEEP", "44"))                    # distinct_maxima retained
-STEPS = int(os.environ.get("STEPS", "80"))                  # M3 ascent steps (K-sweep: 8 ties 80 at 3.6x)
+STEPS = int(os.environ.get("STEPS", "5"))                   # M3 ascent steps. Default 5: rescue-buffered hybrid holds 118/120 (edges [37.9,78.7,79.0]) at ~4x the blind speed of 80 (front-end 7.9 vs 83ms); blind-standalone 77 vs 84@8 recovered by rescue (n_resc 28, nbest_rec 13). Sweep 2026-07-12: rate saturates >=8 blind / >=4 hybrid, 32-80 flat = noise.
 QDIST = os.environ.get("QDIST", "0") == "1"                  # D2: reciprocal-distance inlier (sigma-matched)
 QDTOL = float(os.environ.get("QDTOL", "0.004"))             # inlier radius in 1/A (q-space)
 DETREJ = os.environ.get("DETREJ", "0") == "1"               # D1: reject degenerate cell (OFF: regressed deflate)

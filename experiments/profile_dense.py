@@ -96,7 +96,7 @@ def index_dense_profiled(q, acc):
     if len(M0) == 0:
         return None
     Qd = Q.double(); M0t = torch.as_tensor(M0, dtype=torch.float64, device=DEV)
-    t = time.perf_counter(); Mt = anneal_batch_t(M0t, Qd); sync()          # M5: batched anneal
+    t = time.perf_counter(); Mt = anneal_batch_t(M0t, Qd, max_iter=gf.ANNEAL_ITERS); sync()          # M5: batched anneal
     acc['m5_anneal'] += time.perf_counter() - t; t = time.perf_counter()
     key, ni = score_batch_t(Mt, Qd); b = int(torch.argmax(key).item())     # M6: score + reduce
     cell = None if float(key[b]) <= -1e8 else primitivize(buerger_reduce(Mt[b].cpu().numpy()), q)

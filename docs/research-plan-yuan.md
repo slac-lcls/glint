@@ -52,6 +52,9 @@ characterizing where it succeeds.
 2. **The GPU arc-Hough accumulator.** Build `distinct` orientation voting over Kossel arcs on the GPU —
    batched over candidate orientations × streaks, the arc-curvature analog of `index_blind_fast`'s
    cosine sum. This is the core, and it is a lovely GPU-parallel voting kernel: your wheelhouse.
+   In the reflection-starved corner (few streaks / small cells), add each streak's **tangent** as an
+   extra per-streak vote weight — sketch + note in `experiments/ridge_moments.py` +
+   `experiments/RIDGE_MOMENTS_HANDOFF.md` (robust tangent only, *not* curvature); see #9.
 3. **Blind solvability phase diagram.** The clean, publishable result: map, over (NA, streak length,
    streak-point noise, #streaks), the boundary between *blind-solvable* and *walled*. Where does the
    third dimension become recoverable? A crisp phase boundary is exactly the kind of figure a

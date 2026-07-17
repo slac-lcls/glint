@@ -27,7 +27,7 @@ shadow of a 3-D lattice, which is exactly why blind SFX indexing has a ceiling. 
 reflection — the third dimension a point-spot throws away. In principle a single convergent-beam shot
 could fix orientation **and** cell with no prior. In practice:
 
-- **Known-cell CBXD is already solved** (97% at the true orientation, `cbxd_joint`).
+- **Known-cell CBXD is already solved** (97% at the true orientation, `experiments/cbxd_joint.py`).
 - **Blind CBXD is walled** by per-streak precision: the sagitta scales like \(\sim\!\text{NA}^2\), so
   fitting one streak's curvature is hopelessly noise-sensitive at realistic detector resolution
   (it collapses to 0% once streak-point noise exceeds \(\sim\!2\times10^{-5}\,\text{Å}^{-1}\)).
@@ -52,6 +52,9 @@ characterizing where it succeeds.
 2. **The GPU arc-Hough accumulator.** Build `distinct` orientation voting over Kossel arcs on the GPU —
    batched over candidate orientations × streaks, the arc-curvature analog of `index_blind_fast`'s
    cosine sum. This is the core, and it is a lovely GPU-parallel voting kernel: your wheelhouse.
+   In the reflection-starved corner (few streaks / small cells), add each streak's **tangent** as an
+   extra per-streak vote weight — sketch + note in `experiments/ridge_moments.py` +
+   `experiments/RIDGE_MOMENTS_HANDOFF.md` (robust tangent only, *not* curvature); see #9.
 3. **Blind solvability phase diagram.** The clean, publishable result: map, over (NA, streak length,
    streak-point noise, #streaks), the boundary between *blind-solvable* and *walled*. Where does the
    third dimension become recoverable? A crisp phase boundary is exactly the kind of figure a
@@ -66,8 +69,10 @@ formulation, a GPU-voting heart, and a likely-publishable phase-boundary. It is 
 there is a natural home for the result.
 
 **Start here:** paper *Outlook: convergent-beam streaks* section (the geometry, the sagitta argument,
-the joint-fit sketch) → `fig_cbxd.png` and its generator → ROADMAP track 5. Ask Stefano for the existing
-`cbxd_joint` known-cell code as the scaffold.
+the joint-fit sketch) → `fig_cbxd.png` and its generator → ROADMAP track 5. The known-cell scaffold is now **in the repo** —
+`experiments/cbxd_joint.py` (forward model `simulate` / `rand_rot` / `B` / `HS` + the joint Kossel-overlay
+solver `score` / `refine` / `seed_index`); `cbxd_multishot.py`, `cbxd_angles.py`, `cbxd_ransac.py` all
+import it. (`fig_cbxd.png` and its generator still live with the paper repo — ask Stefano for those.)
 
 ---
 

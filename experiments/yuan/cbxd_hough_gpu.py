@@ -43,34 +43,52 @@ def rand_rot_batch(rng, n):
     return R
 
 
-def score_batch_gpu(Rs, kobs, tol, r_chunk=20000, node_chunk=64, device=DEVICE):
+def _score_chunk(Rc_np, kobs_t, kx, ky, kz, GB_t, tol, node_chunk, device):
+    Rc = torch.as_tensor(Rc_np, dtype=torch.float32, device=device)        # (C,3,3)
+    C, Np, Nn = Rc.shape[0], kobs_t.shape[0], GB_t.shape[1]
+    matched = torch.zeros(C, Np, dtype=torch.bool, device=device)
+    for j0 in range(0, Nn, node_chunk):
+        GBc = GB_t[:, j0:j0 + node_chunk]                          # (3,M)
+        G = torch.einsum('cij,jm->cmi', Rc, GBc)                   # (C,M,3)
+        Gn = G.norm(dim=2)                                          # (C,M)
+        Ghat = G / Gn.unsqueeze(-1)
+        dot = torch.einsum('pk,cmk->cpm', kobs_t, Ghat)             # (C,Np,M)
+        resid = (dot - (Gn / 2).unsqueeze(1)).abs()
+        kin_z = kz.view(1, -1, 1) - G[..., 2].unsqueeze(1)
+        kin_x = kx.view(1, -1, 1) - G[..., 0].unsqueeze(1)
+        kin_y = ky.view(1, -1, 1) - G[..., 1].unsqueeze(1)
+        cone = (kin_z > K * COSA) & ((kin_x ** 2 + kin_y ** 2).sqrt() < K * SINA)
+        matched |= ((resid < tol) & cone).any(dim=2)
+    return matched.sum(dim=1).cpu().numpy()
+
+
+def score_batch_gpu(Rs, kobs, tol, r_chunk=20000, node_chunk=64, device=DEVICE, min_chunk=64):
     """GPU arc-Hough accumulator: vote count per candidate orientation.
 
     Rs: (Nr,3,3). kobs: (Np,3) observed points (real + spurious). Returns (Nr,) int array,
     same definition as cbxd_joint.score(R, kobs, tol) for each R in Rs.
+
+    On CUDA OOM (shared GPU, contention from other users' jobs), halves r_chunk for that span
+    and retries rather than failing outright.
     """
     kobs_t = torch.as_tensor(kobs, dtype=torch.float32, device=device)
     GB_t = torch.as_tensor(_GB, dtype=torch.float32, device=device)
     kx, ky, kz = kobs_t[:, 0], kobs_t[:, 1], kobs_t[:, 2]
-    Nr, Np, Nn = len(Rs), kobs_t.shape[0], GB_t.shape[1]
+    Nr = len(Rs)
     counts = np.empty(Nr, dtype=np.int64)
-    for i0 in range(0, Nr, r_chunk):
-        Rc = torch.as_tensor(Rs[i0:i0 + r_chunk], dtype=torch.float32, device=device)  # (C,3,3)
-        C = Rc.shape[0]
-        matched = torch.zeros(C, Np, dtype=torch.bool, device=device)
-        for j0 in range(0, Nn, node_chunk):
-            GBc = GB_t[:, j0:j0 + node_chunk]                          # (3,M)
-            G = torch.einsum('cij,jm->cmi', Rc, GBc)                   # (C,M,3)
-            Gn = G.norm(dim=2)                                          # (C,M)
-            Ghat = G / Gn.unsqueeze(-1)
-            dot = torch.einsum('pk,cmk->cpm', kobs_t, Ghat)             # (C,Np,M)
-            resid = (dot - (Gn / 2).unsqueeze(1)).abs()
-            kin_z = kz.view(1, -1, 1) - G[..., 2].unsqueeze(1)
-            kin_x = kx.view(1, -1, 1) - G[..., 0].unsqueeze(1)
-            kin_y = ky.view(1, -1, 1) - G[..., 1].unsqueeze(1)
-            cone = (kin_z > K * COSA) & ((kin_x ** 2 + kin_y ** 2).sqrt() < K * SINA)
-            matched |= ((resid < tol) & cone).any(dim=2)
-        counts[i0:i0 + C] = matched.sum(dim=1).cpu().numpy()
+    i0 = 0
+    chunk = r_chunk
+    while i0 < Nr:
+        c = min(chunk, Nr - i0)
+        try:
+            counts[i0:i0 + c] = _score_chunk(Rs[i0:i0 + c], kobs_t, kx, ky, kz, GB_t, tol,
+                                             node_chunk, device)
+            i0 += c
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if chunk <= min_chunk:
+                raise
+            chunk = max(chunk // 2, min_chunk)
     return counts
 
 
@@ -104,6 +122,13 @@ SEED = 2                                    # same crystals as cbxd_baseline.py 
 
 
 def run(n_coarse, ncry=6):
+    """NOTE: crystal generation (rand_rot/simulate, driven by `rng`) and each crystal's search
+    (hough_seed_index, driven by its own np.random.default_rng(SEARCH_SEED_BASE + c)) use
+    INDEPENDENT rng streams. Earlier this used one shared rng for both -- hough_seed_index's
+    millions of candidate draws left crystal N+1's orientation dependent on how much random state
+    crystal N's SEARCH consumed, so "crystal #4" wasn't the same physical crystal across runs with
+    different n_coarse. See experiments/yuan/generate_dataset.py's docstring for the full story;
+    that + run_three_arms.py is the fixed, on-disk-dataset version of this same benchmark."""
     print(f"hough_seed_index  device={DEVICE}  n_coarse={n_coarse}  ncry={ncry}  seed={SEED}")
     print(f"{'noise(1/A)':>11} {'wall/crystal(s)':>16} {'success':>9} {'median real idx':>16}")
     for noise in NOISE_LEVELS:
@@ -111,11 +136,11 @@ def run(n_coarse, ncry=6):
         ok = 0
         fr = []
         times = []
-        for _ in range(ncry):
+        for c in range(ncry):
             Rt = rand_rot(rng)
             kobs, lab, cents = simulate(Rt, rng, noise)
             t0 = time.perf_counter()
-            Rh = hough_seed_index(kobs, rng, n_coarse=n_coarse)
+            Rh = hough_seed_index(kobs, np.random.default_rng(SEED + 1000 + c), n_coarse=n_coarse)
             times.append(time.perf_counter() - t0)
             idx = score(Rh, kobs, 0.0025, ret_mask=True)
             fr.append(idx[lab].mean())

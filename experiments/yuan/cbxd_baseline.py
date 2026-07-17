@@ -19,6 +19,9 @@ SEED = 2                      # matches cbxd_joint.py's own __main__ "blind" mod
 
 
 def run(ncry):
+    """NOTE: crystal generation and each crystal's search use INDEPENDENT rng streams (see
+    experiments/yuan/generate_dataset.py's docstring) -- seed_index's own internal 20k-candidate
+    rand_rot draws must not perturb the next crystal's orientation."""
     print(f"seed_index baseline (blind: 20k-candidate cent_score search -> refine top-10)")
     print(f"ncry={ncry}  seed={SEED}")
     print(f"{'noise(1/A)':>11} {'wall/crystal(s)':>16} {'success':>9} {'median real idx':>16}")
@@ -27,11 +30,11 @@ def run(ncry):
         ok = 0
         fr = []
         times = []
-        for _ in range(ncry):
+        for c in range(ncry):
             Rt = rand_rot(rng)
             kobs, lab, cents = simulate(Rt, rng, noise)
             t0 = time.perf_counter()
-            Rh = seed_index(kobs, cents, rng)
+            Rh = seed_index(kobs, cents, np.random.default_rng(SEED + 1000 + c))
             times.append(time.perf_counter() - t0)
             idx = score(Rh, kobs, 0.0025, ret_mask=True)
             fr.append(idx[lab].mean())

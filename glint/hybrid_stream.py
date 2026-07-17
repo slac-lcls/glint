@@ -138,3 +138,28 @@ if __name__ == "__main__":
     results, stats = hybrid_index(frames, images)
     write_stream(results, out)
     _report(stats, out)
+
+
+def index_known_fast(frames, Mc, batch=32, images=None):
+    """Throughput-critical KNOWN-CELL steady state: batch the known-cell engine across frames
+    (glint.replica_gpu_batch), skipping the blind N-best pass entirely -- use once consensus (or a
+    supplied prior) fixes the cell. ~7x faster than per-frame index_known_gpu_cell rescue and
+    self-contained (no ffbidx handoff). Returns (results, stats) in the same shape as hybrid_index;
+    for max known-cell ACCURACY use hybrid_index(..., Mc_known=Mc) instead (runs the N-best pass)."""
+    from glint.replica_gpu_batch import index_known_gpu_cell_batch
+    n = len(frames)
+    images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
+    Ms = []
+    for i in range(0, n, batch):
+        Ms += index_known_gpu_cell_batch(frames[i:i + batch], Mc)
+    Mcn = np.asarray(Mc, float)
+    results = []; n_idx = 0
+    for M, q, meta in zip(Ms, frames, images):
+        if M is not None and same_lattice(M, Mcn):
+            hkl, qin, _ = _hkl(q, M); n_idx += 1
+        else:
+            M, hkl, qin = None, None, q
+        results.append({"image": meta["image"], "event": meta["event"], "M": M, "q": qin, "hkl": hkl})
+    stats = {"n": n, "n_idx": n_idx, "mode": "known_fast", "Mc": Mcn,
+             "edges": np.round(np.sort(np.linalg.norm(Mcn, axis=0)), 1)}
+    return results, stats

@@ -5,12 +5,31 @@ Keeps replica_gpu (per-frame) and the ffbidx handoff as the other two options.""
 import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("CDIRS", "16384")
 import numpy as np, torch
-from glint.replica_gpu import DIRS, CA, SA, TRIML, TRIMH, DELTA, NC, NANG, _axes_from_cell, _third_axis
+from glint.replica_gpu import DIRS, CA, SA, TRIML, TRIMH, DELTA, NC, NANG, _axes_from_cell, _third_axis, _fib_halfsphere
 from glint.multishot import same_lattice
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 FP = torch.float64; PI = np.pi
 _CA = CA.to(FP); _SA = SA.to(FP); _DIRS = DIRS.to(FP)
+
+# --- adaptive orientation-grid density (cross-cell-validated 2026-07-17) ---
+# 4096 dirs is rate-neutral for orthogonal cells (all angles ~90: cubic/tet/ortho, incl. the
+# anisotropic long-axis case) at ~1.3x speed, but regresses triclinic ~8pts. So: coarse grid for
+# all-90 cells, full CDIRS grid for oblique (mono/tricl/rhomb). KC_ADAPTIVE_DIRS=0 forces full.
+_ADAPT = os.environ.get("KC_ADAPTIVE_DIRS", "1") != "0"
+_DIRS_LO = torch.as_tensor(_fib_halfsphere(min(4096, int(os.environ.get("CDIRS", "16384")))), dtype=FP, device=DEV)
+
+
+def _adaptive_dirs(Mc):
+    """Coarse (4096) Fibonacci half-sphere for orthogonal known cells; full grid for oblique."""
+    if not _ADAPT:
+        return _DIRS
+    M = np.asarray(Mc, float); a, b, c = M[:, 0], M[:, 1], M[:, 2]
+
+    def _ang(u, v):
+        return np.degrees(np.arccos(np.clip(u @ v / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-12), -1.0, 1.0)))
+    orthogonal = all(abs(x - 90.0) < 2.0 for x in (_ang(b, c), _ang(a, c), _ang(a, b)))
+    return _DIRS_LO if orthogonal else _DIRS
 
 
 def pad(frames, Pmax):
@@ -58,7 +77,7 @@ def index_known_gpu_cell_batch(frames, Mc, topa=8):
     F = len(frames); Pmax = max(len(f) for f in frames)
     Q, m = pad(frames, Pmax)
     # --- anchor search (shortest axis) + greedy dedup to NC ---
-    V0 = (float(L[0]) * _DIRS)[None].expand(F, -1, -1)
+    V0 = (float(L[0]) * _adaptive_dirs(Mc))[None].expand(F, -1, -1)
     inl, sub = obj_b(V0, Q, m); top = (inl.double() * 100 - sub).topk(120, 1).indices
     Vsel = torch.gather(V0, 1, top[:, :, None].expand(-1, -1, 3))
     Vref = refine_b(Vsel, Q, m, 30); Vref = Vref / Vref.norm(dim=2, keepdim=True) * float(L[0])

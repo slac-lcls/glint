@@ -92,8 +92,18 @@ def show(label, gs, extra=""):
           f">=25% {sum(b for _,b,_ in gs)}/{n}   >=10refl {sum(c for _,_,c in gs)}/{n}{extra}")
 
 
+# Which repo figure is which (reconciled 2026-07-19 -- these get quoted interchangeably and are NOT
+# the same measurement; all three below were confirmed against their sources on this run):
+#   "blind 84/120"   = BLIND FRONT END alone, index_blind_fast, same_lattice only, no consensus/rescue
+#                      (validate_gpu_dedup.py:42, stream_probe.py:4). Measured 85 -- glint_fast.py:52
+#                      records exactly this drift ("85 vs 84 same_lattice" at the ANNEAL_ITERS=3 default).
+#   "hybrid 117/120" = hybrid same_lattice / stats['n_idx'], NOT the >=25% gate. Measured 115, inside
+#                      ROADMAP.md:56's documented 115-118/120 band.
+#   "73 / 113"       = the bare rescue's >=25% ('frac') and >=10refl ('loose'), kf_validate.py:16. Exact.
+# The >=25%-of-spots gate is a FOURTH number (blind-hybrid 93, known-hybrid 91) and matches none of the
+# quoted figures -- do not compare it against 84 or 117.
 print(f"\n3. cxidb gate ({n} frames) -- reference values in the repo:")
-print(f"   glint_fast.py:37  blind same_lattice 84/120, hybrid 117/120")
+print(f"   glint_fast.py:37  blind same_lattice 84/120 (85 at ANNEAL_ITERS=3), hybrid 117/120 (band 115-118)")
 print(f"   kf_validate.py:16 bare rescue 73/120 frac, 113/120 loose")
 show("bare rescue (per-frame)", [gate(M, q) for M, q in zip(post[0], frames)])
 results, stats = hybrid_index(frames, Mc_known=LYSO, warmup=True)

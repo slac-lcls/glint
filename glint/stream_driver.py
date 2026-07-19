@@ -51,21 +51,35 @@ class HKLGrid:
     a per-frame refined cell whose axes differ slightly from the reference cannot clip the edge.
     """
 
-    def __init__(self, Mc, dmin, margin=1.02):
+    def __init__(self, Mc, dmin, margin=1.02, gpu=True):
         self.qmax = 1.0 / float(dmin)
         R = recip_from_M(np.asarray(Mc, float))
         self.g, _ = _hkl_grid(R, self.qmax * margin)
+        # the two gates below are elementwise over ~10^5 hkl -- run them on the device and bring
+        # back only the few hundred survivors, which is what the (already vectorised) host-side
+        # projection then works on.
+        self.gpu = bool(gpu) and _HAVE_CP
+        self._gg = cp.asarray(self.g.astype(np.float64)) if self.gpu else None
 
     def predict(self, M_or_R, panels, clen_m, wavelength_A, tol=0.006, is_recip=False):
         """Same result as predict_spots(..., dmin=self.dmin, tol=tol) with the grid reused."""
         R = np.asarray(M_or_R, float) if is_recip else recip_from_M(M_or_R)
-        q = self.g @ R
-        qn2 = np.einsum("ij,ij->i", q, q)
-        keep = qn2 <= self.qmax * self.qmax                  # exact cut, per frame
-        hkl, q, qn2 = self.g[keep], q[keep], qn2[keep]
-        exc = q[:, 2] + 0.5 * wavelength_A * qn2             # 0 on the Ewald sphere
-        near = np.abs(exc) < tol
-        hkl, q, exc, qn2 = hkl[near], q[near], exc[near], qn2[near]
+        if self.gpu:
+            qg = self._gg @ cp.asarray(R)
+            qn2g = (qg * qg).sum(1)
+            excg = qg[:, 2] + 0.5 * wavelength_A * qn2g      # 0 on the Ewald sphere
+            sel = (qn2g <= self.qmax * self.qmax) & (cp.abs(excg) < tol)
+            idx = cp.asnumpy(cp.where(sel)[0])
+            hkl = self.g[idx]
+            q = cp.asnumpy(qg[sel]); qn2 = cp.asnumpy(qn2g[sel]); exc = cp.asnumpy(excg[sel])
+        else:
+            q = self.g @ R
+            qn2 = np.einsum("ij,ij->i", q, q)
+            keep = qn2 <= self.qmax * self.qmax              # exact cut, per frame
+            hkl, q, qn2 = self.g[keep], q[keep], qn2[keep]
+            exc = q[:, 2] + 0.5 * wavelength_A * qn2
+            near = np.abs(exc) < tol
+            hkl, q, exc, qn2 = hkl[near], q[near], exc[near], qn2[near]
         fs, ss, pan = project_q(q, panels, clen_m, wavelength_A)
         on = pan >= 0
         out = np.zeros(int(on.sum()), dtype=[("h", int), ("k", int), ("l", int),
@@ -176,15 +190,21 @@ class MergeAccumulator:
         hkl = hkl[keep]
         half = frame_index & 1
         keys = _asu_key(hkl, self.ops)
-        for kk, vv, ww, bb in zip(keys, v, w, b):
-            r = self._row.get(kk)
+        # Map keys -> rows with one dict pass over PYTHON ints (.tolist() avoids boxing a numpy
+        # scalar per element), then accumulate with np.add.at. The old per-element
+        # `self.sw[r, half, bb] += w` was ~1 us of numpy fancy-indexing EACH, which dominated.
+        row = self._row; nr = self.n_rows
+        rows = np.empty(len(keys), np.int64)
+        for i, kk in enumerate(keys.tolist()):
+            r = row.get(kk)
             if r is None:
-                self._grow(self.n_rows + 1)
-                r = self._row[kk] = self.n_rows
-                self.n_rows += 1
-            self.sw[r, half, bb] += ww
-            self.swv[r, half, bb] += ww * vv
-            self.cnt[r, half, bb] += 1.0
+                r = row[kk] = nr; nr += 1
+            rows[i] = r
+        if nr > self.n_rows:
+            self._grow(nr); self.n_rows = nr
+        np.add.at(self.sw, (rows, half, b), w)
+        np.add.at(self.swv, (rows, half, b), w * v)
+        np.add.at(self.cnt, (rows, half, b), 1.0)
         self.n_meas += int(keep.sum())
         self.n_frames += 1
 
@@ -252,7 +272,7 @@ class StreamDriver:
         self._n = 0
         self._frame_no = 0
 
-        self.grid = HKLGrid(self.Mc, self.dmin)      # built once, reused every frame
+        self.grid = HKLGrid(self.Mc, self.dmin, gpu=self.gpu)   # built once, reused every frame
         self.ops = laue_ops_4mmm()
         self.acc = MergeAccumulator(snr_bins, self.ops)
         self.n_theoretical = theoretical_unique(self.Mc, self.dmin, self.ops)

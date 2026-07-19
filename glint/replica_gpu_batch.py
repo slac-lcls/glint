@@ -298,7 +298,12 @@ def index_fused(frames, Mc, B=32):
     fp64 on one A100 -- 2.2x (fp64) to 6.7x (fp32) over index_all_graph -- with per-frame output
     IDENTICAL (bit-exact fp64; rate + lattice identical fp32, 75/114 on 120 cxidb) to the stock engine.
     Sorts frames by peak count so each batch pads to its own tight Pmax. Requires cupy on a GPU; falls
-    back to index_all_graph (graph path) when cupy is unavailable or on CPU."""
+    back to index_all_graph (graph path) when cupy is unavailable or on CPU.
+
+    Throughput scales with the batch B: each frame is one thread-block, so B sets GPU occupancy.
+    B>=64 saturates an A100 (120 cxidb frames: B=32 -> 0.33/0.45 ms/fr fp32/fp64; B=64 -> 0.21/0.31;
+    B=120 -> 0.16/0.26). Output is batch-invariant -- the kernels loop each frame's real peak count,
+    not Pmax, so a looser per-batch pad costs no work (fp64 bit-identical across B)."""
     if DEV != "cuda":
         return index_all_graph(frames, Mc, B)
     try:

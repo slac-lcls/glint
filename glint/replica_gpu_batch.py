@@ -16,7 +16,14 @@ from glint.replica_gpu import DIRS, CA, SA, TRIML, TRIMH, DELTA, NC, NANG, _axes
 from glint.multishot import same_lattice
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
-FP = torch.float64; PI = np.pi
+PI = np.pi
+# Working precision (KC_FP: "64" default | "32") and 3x3-solve precision (KC_SOLVE_FP: defaults to
+# KC_FP). fp32 is measured rate/lattice-IDENTICAL to fp64 across all lattice systems + sparse frames
+# (2026-07-18), so KC_FP=32 unlocks fp32-strong GPUs (e.g. RTX Blackwell, ~2x fp32 / half price) at no
+# accuracy cost; KC_SOLVE_FP=64 keeps just the tiny 3x3 solve in fp64 as a hedge. Default stays fp64.
+_W = os.environ.get("KC_FP", "64"); _S = os.environ.get("KC_SOLVE_FP", _W)
+FP = torch.float32 if _W == "32" else torch.float64
+_SOLVE_FP = torch.float32 if _S == "32" else torch.float64
 _CA = CA.to(FP); _SA = SA.to(FP); _DIRS = DIRS.to(FP)
 
 # Analytic 3x3 solve + det (pure elementwise, no cuSOLVER). cuSOLVER's linalg.solve/det each force
@@ -27,7 +34,13 @@ _ANALYTIC = os.environ.get("KC_ANALYTIC", "1") != "0"
 
 
 def solve3x3(A, rhs):
-    """Solve A X = rhs for A:(...,3,3), rhs:(...,3,k) via closed-form inverse (adjugate/det)."""
+    """Solve A X = rhs for A:(...,3,3), rhs:(...,3,k) via closed-form inverse (adjugate/det). The
+    linear algebra runs at _SOLVE_FP (default = working precision); result cast back to A's dtype.
+    A fp64 solve under fp32 working precision (KC_SOLVE_FP=64) is the 'mixed' hedge for ill-conditioned
+    (near-coplanar / sparse) frames."""
+    wdt = A.dtype
+    if wdt != _SOLVE_FP:
+        A = A.to(_SOLVE_FP); rhs = rhs.to(_SOLVE_FP)
     a00, a01, a02 = A[..., 0, 0], A[..., 0, 1], A[..., 0, 2]
     a10, a11, a12 = A[..., 1, 0], A[..., 1, 1], A[..., 1, 2]
     a20, a21, a22 = A[..., 2, 0], A[..., 2, 1], A[..., 2, 2]
@@ -38,7 +51,8 @@ def solve3x3(A, rhs):
     inv = torch.stack([torch.stack([c00, c10, c20], -1),
                        torch.stack([c01, c11, c21], -1),
                        torch.stack([c02, c12, c22], -1)], -2) / det[..., None, None]
-    return inv @ rhs
+    out = inv @ rhs
+    return out.to(wdt) if out.dtype != wdt else out
 
 
 def det3(M):

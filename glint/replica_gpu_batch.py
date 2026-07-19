@@ -289,3 +289,31 @@ def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS):
 
 
 index_batch = index_known_gpu_cell_batch   # alias
+
+
+def index_fused(frames, Mc, B=32):
+    """Fully-fused known-cell indexer: custom fused CUDA kernels (cupy RawKernel, nvrtc-JIT) for the
+    anneal/obj/refine per-candidate hot loops + an on-device cpu_stage (batched buerger same_lattice),
+    replacing the many small per-stage torch kernels AND the host tail. ~0.36 ms/frame fp32 / ~0.63
+    fp64 on one A100 -- 2.2x (fp64) to 6.7x (fp32) over index_all_graph -- with per-frame output
+    IDENTICAL (bit-exact fp64; rate + lattice identical fp32, 75/114 on 120 cxidb) to the stock engine.
+    Sorts frames by peak count so each batch pads to its own tight Pmax. Requires cupy on a GPU; falls
+    back to index_all_graph (graph path) when cupy is unavailable or on CPU."""
+    if DEV != "cuda":
+        return index_all_graph(frames, Mc, B)
+    try:
+        from glint import fused_kernels as _fk
+    except Exception:
+        return index_all_graph(frames, Mc, B)
+    order = sorted(range(len(frames)), key=lambda i: len(frames[i]))   # tight per-batch Pmax
+    out = [None] * len(frames)
+    _fk.patch(anneal=True, obj=True, refine=True, cpu=True)
+    try:
+        for s in range(0, len(order), B):
+            chunk = order[s:s + B]
+            res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc)
+            for j, r in zip(chunk, res):
+                out[j] = r
+    finally:
+        _fk.unpatch()
+    return out

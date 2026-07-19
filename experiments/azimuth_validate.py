@@ -76,25 +76,36 @@ for nm, a, b in zip(names, post, pre):
 
 # ---- 3. cxidb gate --------------------------------------------------------------
 def gate(M, q):
+    """Three metrics that the repo quotes interchangeably -- keep them apart:
+       lat    = same_lattice only          (glint_fast.py:37 'same_lattice 84/120', hybrid 117/120)
+       >=25%  = lattice AND >=25% of spots (kf_validate.py 'frac')
+       >=10   = lattice AND >=10 refl      (kf_validate.py 'loose')"""
     if M is None or not same_lattice(np.asarray(M, float), LYSO):
-        return (0, 0)
+        return (0, 0, 0)
     r = np.asarray(q) @ M
     m = int((np.abs(r - np.rint(r)).max(1) < 0.15).sum())
-    return (int(m / len(q) >= 0.25), int(m >= 10))
+    return (1, int(m / len(q) >= 0.25), int(m >= 10))
 
 
-rr = [gate(M, q) for M, q in zip(post[0], frames)]
-print(f"\n3. cxidb gate ({n} frames)")
-print(f"   bare rescue (index_known_gpu_cell): >=25% {sum(a for a,_ in rr)}/{n}  "
-      f">=10refl {sum(b for _,b in rr)}/{n}")
+def show(label, gs, extra=""):
+    print(f"   {label:<34} same_lattice {sum(a for a,_,_ in gs)}/{n}   "
+          f">=25% {sum(b for _,b,_ in gs)}/{n}   >=10refl {sum(c for _,_,c in gs)}/{n}{extra}")
+
+
+print(f"\n3. cxidb gate ({n} frames) -- reference values in the repo:")
+print(f"   glint_fast.py:37  blind same_lattice 84/120, hybrid 117/120")
+print(f"   kf_validate.py:16 bare rescue 73/120 frac, 113/120 loose")
+show("bare rescue (per-frame)", [gate(M, q) for M, q in zip(post[0], frames)])
 results, stats = hybrid_index(frames, Mc_known=LYSO, warmup=True)
-hh = [gate(res["M"], q) for res, q in zip(results, frames)]
-print(f"   hybrid Mc_known=LYSO:              >=25% {sum(a for a,_ in hh)}/{n}  "
-      f">=10refl {sum(b for _,b in hh)}/{n}")
+show("hybrid Mc_known=LYSO", [gate(res["M"], q) for res, q in zip(results, frames)],
+     f"   n_idx {stats['n_idx']}/{n}")
 rb, sb = hybrid_index(frames, None, Mc_known=None, nbest=3)
-hb = [gate(res["M"], q) for res, q in zip(rb, frames)]
-print(f"   hybrid BLIND (self-derived cell):  >=25% {sum(a for a,_ in hb)}/{n}  "
-      f">=10refl {sum(b for _,b in hb)}/{n}")
+show("hybrid BLIND (self-derived cell)", [gate(res["M"], q) for res, q in zip(rb, frames)],
+     f"   n_idx {sb['n_idx']}/{n}")
+# The 84/120 figure is the BLIND FRONT END alone, per-frame index_blind_fast scored by
+# same_lattice only (validate_gpu_dedup.py:42, stream_probe.py:4) -- no consensus, no rescue.
+from glint.glint_fast import index_blind_fast
+show("blind front end (index_blind_fast)", [gate(index_blind_fast(q), q) for q in frames])
 
 # ---- 4. batched == per-frame on an OBLIQUE cell ---------------------------------
 sys.path.insert(0, HERE)

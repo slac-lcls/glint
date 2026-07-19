@@ -7,12 +7,13 @@ os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("CDIRS", "1
 import numpy as np, torch
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
-from glint.replica_gpu import DIRS, CA, SA, TRIML, TRIMH, DELTA, NC, NANG, _axes_from_cell, _third_axis
+from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, _axes_from_cell, _third_axis,
+                               _azimuth_grid)
 from glint.multishot import same_lattice
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 FP = torch.float64; PI = np.pi
-_CA = CA.to(FP); _SA = SA.to(FP); _DIRS = DIRS.to(FP)
+_DIRS = DIRS.to(FP)          # azimuth grid is per-cell: _azimuth_grid(c01), see replica_gpu
 
 
 def pad(frames, Pmax):
@@ -79,8 +80,9 @@ def index_batch(frames, Mc, topa=8):
     tmp = torch.where(cn[..., :1].abs() < 0.9, ex, ey)
     u = torch.cross(cn, tmp, dim=2); u = u / u.norm(dim=2, keepdim=True); v = torch.cross(cn, u, dim=2)
     s01 = float(np.sqrt(max(1.0 - c01 * c01, 0.0)))
+    _ca, _sa = (t.to(FP) for t in _azimuth_grid(c01))       # half turn iff perpendicular
     a1 = float(L[1]) * (c01 * cn[:, :, None, :] +
-                        s01 * (_CA[None, None, :, None] * u[:, :, None, :] + _SA[None, None, :, None] * v[:, :, None, :]))
+                        s01 * (_ca[None, None, :, None] * u[:, :, None, :] + _sa[None, None, :, None] * v[:, :, None, :]))
     a0 = C[:, :, None, :].expand(-1, -1, NANG, -1)
     inl1, _ = obj_b(a1.reshape(F, NC * NANG, 3), Q, m); inl1 = inl1.reshape(F, NC, NANG)
     ta = min(topa, NANG); topi = inl1.topk(ta, 2).indices

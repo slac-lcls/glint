@@ -206,9 +206,14 @@ cell (`sign(det)` of Mc's columns *after* they are sorted shortest-first, in `_a
 
 Two scoping notes that bite if you skip them:
 
-- `TH = linspace(0, π, 360)` sweeps **half** the cone, at 0.5° steps. For a perpendicular pair (`c01 = 0`)
-  that is complete — `θ+π` maps `a1` to `−a1`, the same lattice vector — but for an **oblique** cell it is
-  not, and half the cone is never generated. See the caveat under "Good first tasks".
+- The azimuth grid is **per-cell** (`_azimuth_grid(c01)`). A perpendicular pair (`c01 = 0`) gets
+  `linspace(0, π, 360)` — half the cone at 0.5° steps, which is complete there because `θ+π` maps `a1`
+  to `−a1`, the same lattice vector. An **oblique** pair gets `linspace(0, 2π, 360)` instead: `θ+π` then
+  maps `a1` to `2·c01·L1·ĉ − a1`, which is *not* `−a1`, and the `−a1` partner lies on the supplementary
+  cone `x·ĉ = −L1·c01` that a half sweep never visits. Same sample count either way, so the full turn
+  costs nothing (23.9 vs 24.0 ms/frame) — it trades 0.5° → 1° step for the missing half, which the
+  annealer absorbs. Sweeping half a cone on oblique cells was a real bug, worth 28–37 points; see the
+  resolved entry under "Good first tasks".
 - The 16,384 → 4,096 adaptive anchor grid (`_adaptive_dirs`, angles within 2° of 90°; rate-neutral on
   orthogonal cells, ~8 pts worse on triclinic, `KC_ADAPTIVE_DIRS=0` forces full) lives in
   **`replica_gpu_batch.py`** and applies to the batched family only. The per-frame rescue in
@@ -310,14 +315,36 @@ Useful flags: `--cell "a b c al be ga"` (known cell) · `--nbest N` (consensus h
   beats ffbidx; the *blind* front end is not — the same treatment on M1/M3 (and trimming the 70,400-seed
   start grid) is the open lever.
 - A symmetry-constrained (Bravais) GPU orientation refiner, or the learned CNN peakfinder on the FFT volume.
-- **Open question — the rescue's half-turn azimuth sweep on oblique cells.** `replica_gpu.py` builds the
-  second axis over `TH = linspace(0, π, 360)`, i.e. half the cone. With `a1 = L1·(c01·ĉ + s01·(cosθ·u +
-  sinθ·v))`, the map `θ → θ+π` sends `a1 → 2·c01·L1·ĉ − a1`, which equals `−a1` (the same lattice vector,
-  so the half sweep is complete) **only when `c01 = 0`** — the perpendicular case `index_known_gpu` was
-  originally written for. But `index_known_gpu_cell` advertises "an ARBITRARY consensus cell Mc", and the
-  batched path imports the same `TH`. For a monoclinic / triclinic / rhombohedral cell half the cone may
-  never be generated. Worth checking whether this costs rescue rate on oblique cells — if so it is a bug,
-  not a doc fix. (Flagged 2026-07-19 from the algebra alone; no coverage experiment has been run.)
+- ~~**Open question** — the rescue's half-turn azimuth sweep on oblique cells.~~ **RESOLVED 2026-07-19:
+  it was a bug, and it cost a lot.** `replica_gpu.py` built the second axis over `TH = linspace(0, π, 360)`,
+  half the cone. With `a1 = L1·(c01·ĉ + s01·(cosθ·u + sinθ·v))`, `θ → θ+π` sends `a1 → 2·c01·L1·ĉ − a1`,
+  which equals `−a1` (same lattice vector, half sweep complete) **only when `c01 = 0`**. For an oblique
+  pair the `−a1` partner sits on the supplementary cone and was never generated, so the true axis was
+  missed for ~50% of orientations — by the full cone offset (10° triclinic, 20° rhombohedral-oblique),
+  far outside the annealer's basin. Measured on A100 over 24 random triclinic cells × 60 orientations
+  (`experiments/azimuth_oblique.py`), half → full turn at matched sample count:
+
+  | `\|c01\|` | dense half → full | still half → full |
+  |---|---|---|
+  | 0.00–0.02 | 98.3% → 100% | 89.2% → 96.7% |
+  | 0.02–0.05 | 71.7% → 100% | 92.5% → 97.1% |
+  | 0.05–0.10 | 70.0% → 98.9% | 92.1% → 99.6% |
+  | 0.10–0.20 | 66.3% → 100% | 89.2% → 97.3% |
+  | 0.20–1.00 | 62.7% → 99.8% | 88.3% → 95.0% |
+
+  Even ~1° of obliquity costs ~28 points. Fixed by `_azimuth_grid(c01)` (half turn iff perpendicular,
+  else full turn at the *same* sample count — cost-neutral; doubling `NANG` instead buys nothing).
+  Perpendicular cells keep the half turn and are **bit-identical**, verified elementwise on the 120
+  sparse cxidb frames across per-frame, batched and fused (`experiments/azimuth_validate.py`).
+
+  Two traps this exposed, worth internalising before you trust a cross-cell benchmark:
+  - `_axes_from_cell` sorts axes by **length**, so `c01` is the angle between the two *shortest* axes.
+    `gen_cells`' monoclinic case (60/70/90, β=105°) has `c01 = 0` and is unaffected — cell obliquity is
+    **not** the obliquity of the swept pair.
+  - `trig_ob` (rhombohedral, all angles 100°) scored 100% even with the half sweep, because its
+    symmetry-equivalent anchors supply a covered-half alternative. **Symmetry masked the bug**; only the
+    low-symmetry cells ate it. A 10-cell set with one true triclinic case is thin cover for this class of
+    error.
 
 ## 8. The paper
 

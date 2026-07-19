@@ -24,9 +24,20 @@ Money result (3-way, swept over NA):
   (3) 2-colour data, 2-sphere index  = the two-Ewald accumulator
 Expect a low-NA band where (1),(2) fail and (3) recovers the blind orientation = the wall moves.
 (3) also assigns each peak to lambda1/lambda2 (which cone fits) = the within-shot XTCAV-labelled
-consistency check = cross-frame consensus INSIDE one shot. Follow-on steps (an SO(3) orientation
-accumulator to replace the placeholder seeder, real per-shot XTCAV lambda assignment, real data)
-are out of scope here -- this file is the forward sim + accumulator testbed.
+consistency check = cross-frame consensus INSIDE one shot.
+
+This file is STEP 1 only: the forward sim + accumulator testbed. The measured results, the two
+evaluation traps, and the step-2 spec item (the centroid seeder's parallel-beam assumption breaks
+for wide cones) are written up in CBXD_TWOCOLOR_STEP1.md next to this file -- read that first.
+
+Steps 2-4 are Yuan Ni's:
+  (2) replace the placeholder random-SO(3) seeder with a real arc-Hough orientation accumulator
+      over SO(3) -- the money figure: blind-recovery-vs-single-colour at matched candidate budget
+      across (NA, noise).
+  (3) real per-shot XTCAV energies -> per-peak lambda assignment + within-shot consistency filter
+      (assign_colour here is the stub showing the mechanism).
+  (4) run on the real Chapman two-colour frames (337 TB), which needs full BayFAI-style geometry
+      refinement + peakfinder8 first -- on that data geometry, not the beam, is the barrier.
 
 modes:  contrast [na]     fast landscape diagnostic: truth-vs-decoy tower height, 3 configs
         blind [na] [ncry] full blind recovery sweep over NA, 3 configs
@@ -42,7 +53,11 @@ LAM1 = 12.398 / E1_keV; K1 = 1.0 / LAM1
 LAM2 = 12.398 / E2_keV; K2 = 1.0 / LAM2
 KMAX = max(K1, K2)
 DMIN = 3.5
-CELL = (16.0, 21.0, 25.0, 90.0, 90.0, 90.0)   # same cell as cbxd_joint (orthorhombic)
+CELL = (16.0, 21.0, 25.0, 90.0, 90.0, 90.0)   # same cell as cbxd_joint (orthorhombic).
+# The real step-4 target is the MONOCLINIC iodine cell ~11/13/9/90/102/90. Swapping this in (plus
+# mosaicity, a per-reflection convergence q-disk rather than a smear, and the true lambda1/lambda2
+# split) is the step-2/3 realism work -- see CBXD_TWOCOLOR_STEP1.md. Note the ortho default makes
+# the 222 symmetry-aware success test below necessary; a monoclinic cell changes that subgroup.
 NA0 = 0.028                                     # default convergence half-angle (rad)
 SPUR = 0.30                                     # spurious fraction (of real points)
 

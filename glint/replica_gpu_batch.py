@@ -12,7 +12,8 @@ is uncapturable and forces a stream sync)."""
 import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("CDIRS", "16384")
 import numpy as np, torch
-from glint.replica_gpu import DIRS, CA, SA, TRIML, TRIMH, DELTA, NC, NANG, _axes_from_cell, _third_axis, _fib_halfsphere
+from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, _axes_from_cell,
+                               _third_axis, _fib_halfsphere, _azimuth_grid)
 from glint.multishot import same_lattice
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
@@ -24,7 +25,7 @@ PI = np.pi
 _W = os.environ.get("KC_FP", "64"); _S = os.environ.get("KC_SOLVE_FP", _W)
 FP = torch.float32 if _W == "32" else torch.float64
 _SOLVE_FP = torch.float32 if _S == "32" else torch.float64
-_CA = CA.to(FP); _SA = SA.to(FP); _DIRS = DIRS.to(FP)
+_DIRS = DIRS.to(FP)          # azimuth grid is per-cell now: _cell_params -> _azimuth_grid(c01)
 
 # Analytic 3x3 solve + det (pure elementwise, no cuSOLVER). cuSOLVER's linalg.solve/det each force
 # a STREAM SYNC, which serializes _gpu_stage and makes it impossible to overlap the host tail with
@@ -140,14 +141,16 @@ def _cell_params(Mc, topa=8):
     """Host-side cell geometry (numpy) + the adaptive orientation grid, hoisted out of the compute
     so _stage_compute is pure-torch (and CUDA-graph capturable for a fixed cell)."""
     L, c01, c02, c12, sgn = _axes_from_cell(Mc)
-    return (float(L[0]), float(L[1]), float(L[2]), c01, c02, c12, sgn, _adaptive_dirs(Mc), topa)
+    ca, sa = _azimuth_grid(c01)                     # half turn iff perpendicular (see replica_gpu)
+    return (float(L[0]), float(L[1]), float(L[2]), c01, c02, c12, sgn, _adaptive_dirs(Mc), topa,
+            ca.to(FP), sa.to(FP))
 
 
 def _stage_compute(Q, m, P):
     """Pure-torch known-cell compute on padded (F,Pmax,3) Q + (F,Pmax) m; returns GPU tensors
     (best, pol, mp, mainb). No cuSOLVER (analytic solve/det) and static-shape => CUDA-graph
     capturable, which collapses the ~thousands of host kernel dispatches (the dominant cost)."""
-    L0, L1, L2, c01, c02, c12, sgn, dirs, topa = P
+    L0, L1, L2, c01, c02, c12, sgn, dirs, topa, _ca, _sa = P
     F = Q.shape[0]
     # --- anchor search (shortest axis) + greedy dedup to NC ---
     V0 = (L0 * dirs)[None].expand(F, -1, -1)
@@ -169,7 +172,7 @@ def _stage_compute(Q, m, P):
     u = torch.cross(cn, tmp, dim=2); u = u / u.norm(dim=2, keepdim=True); v = torch.cross(cn, u, dim=2)
     s01 = float(np.sqrt(max(1.0 - c01 * c01, 0.0)))
     a1 = L1 * (c01 * cn[:, :, None, :] +
-               s01 * (_CA[None, None, :, None] * u[:, :, None, :] + _SA[None, None, :, None] * v[:, :, None, :]))
+               s01 * (_ca[None, None, :, None] * u[:, :, None, :] + _sa[None, None, :, None] * v[:, :, None, :]))
     a0 = C[:, :, None, :].expand(-1, -1, NANG, -1)
     inl1, _ = obj_b(a1.reshape(F, NC * NANG, 3), Q, m); inl1 = inl1.reshape(F, NC, NANG)
     ta = min(topa, NANG); topi = inl1.topk(ta, 2).indices

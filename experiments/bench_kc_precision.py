@@ -24,7 +24,7 @@ def cfg(work, solve):
     WFP = torch.float32 if work == 32 else torch.float64
     SFP = torch.float32 if solve == 32 else torch.float64
     rgb.FP = WFP; rgb._SOLVE_FP = SFP
-    rgb._CA = CA.to(WFP); rgb._SA = SA.to(WFP); rgb._DIRS = DIRS.to(WFP)
+    rgb._DIRS = DIRS.to(WFP)          # azimuth grid follows rgb.FP via _cell_params/_azimuth_grid
     rgb._DIRS_LO = torch.as_tensor(_fib_halfsphere(min(4096, int(os.environ.get("CDIRS", "16384")))), dtype=WFP, device=rgb.DEV)
     rgb._EX = torch.tensor([1., 0., 0.], dtype=WFP, device=rgb.DEV)
     rgb._EY = torch.tensor([0., 1., 0.], dtype=WFP, device=rgb.DEV)

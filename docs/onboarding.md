@@ -27,8 +27,10 @@ rotation on top.
 
 **Why it's hard in serial crystallography (SFX):** each shot is a single *still* from a crystal in a
 random, unknown orientation, so you see only the thin curved slice of the reciprocal lattice that meets
-the **Ewald sphere** — typically **~15–60 spots**, sparse, with noise and spurious peaks, and (the hard
-case) often **no unit cell known in advance** — "blind". Many classical indexers need the cell; blind +
+the **Ewald sphere** — typically **a few tens to a couple of hundred spots** (GLINT's own cxidb corpus
+stratifies sparse `<70` / moderate `70–150` / dense `>150`; the front end's floor is `--min-peaks 6`, and
+~100 strongest peaks is the working point), with noise and spurious peaks, and (the hard case) often
+**no unit cell known in advance** — "blind". Many classical indexers need the cell; blind +
 sparse is where most methods fall over.
 
 **What GLINT does — a multi-start optimizer + selector.** For the sparse blind case, GLINT is best read
@@ -220,10 +222,8 @@ inlier count + trimmed-log2 defect) rather than the blind pass's `|q|⁻¹`-weig
 coverage-gated `score_batch_t`. It wins because it has **information the frame does not contain**,
 imported from the other frames.
 
-A sparse still is rank-deficient: with a few tens to ~100 spots many bases fit about equally well (the
-front end's floor is `--min-peaks 6`; the cxidb corpus splits sparse <70 / 70–150 / >150, and ~100
-strongest peaks is the working point). Blind indexing then fails in two distinguishable ways that the
-rescue kills separately:
+A sparse still is rank-deficient: at the spot counts of §0 many bases fit about equally well. Blind
+indexing then fails in two distinguishable ways that the rescue kills separately:
 
 - **Generation miss** — the true axes never appear among the 30 candidate vectors, so no triplet can span
   the true cell. Better scoring cannot help: it was never a candidate. The rescue doesn't need them to

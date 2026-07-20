@@ -9,7 +9,9 @@ script.
 It checks four things, in rough order of how much damage each does:
 
   1. RETIRED values      -- a number we have superseded, appearing anywhere. The 15 ms / 21 ms /
-                            47 f/s / 160x / 76% family. Each carries what it should say instead.
+                            47 f/s / 160x family. Each carries what it should say instead. Also the
+                            71%-attributed-to-GLINT swap: 71% is XGANDALF's blind rate, GLINT-(1) is
+                            76%, and conflating them once cost two decks a wrong headline.
   2. OVERCLAIMS          -- language asserting end-to-end real-time / live merge, which the measured
                             179 frames/s (vs ~3500 hits/s needed) does not support.
   3. AMBIGUITY           -- `0.33 ms` means fp32 INDEXING at B=32 *and* fused INTEGRATION per frame.
@@ -58,7 +60,8 @@ FACTS: dict[str, float | str] = {
     "fused_fps":           3800.0,  # = 1000/fused_b120_ms
     "saturating_batch":    64,      # one block per frame; 108 SMs on an A100
     "indexing_rate":       "75/114",
-    "blind_rate_pct":      71,      # NOT 76 -- the spurious-limited ceiling
+    "glint_blind_rate_pct":    76,  # GLINT-(1) blind, paper tab:summary
+    "xgandalf_blind_rate_pct": 71,  # xgandalf blind, same table and same gate -- DIFFERENT indexers
     # integration ----------------------------------------------------------------------------------
     "integ_before_ms":     585.0,   # 16 Mpix / 800 reflections, whole-frame float64 upcast
     "integ_after_ms":      7.6,     # upcast removed, bit-identical                           (#17)
@@ -124,8 +127,9 @@ RETIRED = [
          "47 f/s is the reciprocal of the old 21.3 ms; 34 ms gives 29 f/s", "29"),
     Rule("speedup-160", r"[~≈]?\s*160\s*(?:×|x|\\times)",
          "the scalar->GPU blind ratio follows 2342/34, not 2342/15", "~69x"),
-    Rule("blind-rate-76", r"\b76\s*%",
-         "the blind ceiling is 71% (spurious-limited); nothing supports 76%", "71%"),
+    Rule("blind-rate-swap", r"GLINT[^\n]{0,40}\b71\s*\\?%",
+         "71% is XGANDALF's blind rate; GLINT-(1) blind is 76% (paper tab:summary). Attributing 71% "
+         "to GLINT understates it and confuses two indexers measured at the same gate", "76%"),
     Rule("fused-pred-2.4", r"2\.4\s*(?:→|->|-->)\s*0\.45",
          "the fused kernel replaced the 1.46 ms CUDA-graph path, not a 2.4 ms one; "
          "2.4 inflates the gain from 3.1x to an implied 5.3x", "1.46 -> 0.45"),

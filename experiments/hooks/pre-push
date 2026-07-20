@@ -1,0 +1,53 @@
+#!/bin/sh
+# Pre-push guard: run check_numbers.py before anything leaves the machine.
+#
+# Two modes, because the deliverables are spread across repos:
+#
+#   STRICT (default in ~/git/papers/glint)  -- a failure BLOCKS the push. The paper is the artifact
+#       that goes to Overleaf and from there to collaborators and a journal; a stale derived number
+#       there is the expensive kind.
+#
+#   WARN (default in ~/git/glint)           -- a failure prints and lets the push through. The
+#       checker's targets (glint.tex, the deck builders) are NOT in this repo, so blocking a code
+#       push because a slide deck drifted would be the wrong coupling: you would be unable to ship
+#       an engine fix until an unrelated document was tidied.
+#
+# Override per invocation:   GLINT_NUMCHECK=strict|warn|off git push
+# Install:                   experiments/hooks/install.sh
+set -u
+
+CHECKER="${GLINT_NUMCHECK_PATH:-$HOME/git/glint/experiments/check_numbers.py}"
+MODE="${GLINT_NUMCHECK:-@MODE@}"
+
+[ "$MODE" = "off" ] && exit 0
+
+if [ ! -f "$CHECKER" ]; then
+    echo "pre-push: check_numbers.py not found at $CHECKER -- skipping (set GLINT_NUMCHECK_PATH)" >&2
+    exit 0
+fi
+
+echo "pre-push: checking deliverable numbers ..."
+if python3 "$CHECKER" --pdf; then
+    exit 0
+fi
+
+if [ "$MODE" = "strict" ]; then
+    cat >&2 <<'MSG'
+
+pre-push: BLOCKED -- a deliverable contradicts the measured numbers.
+
+Fix the file, or -- if a measurement genuinely changed -- update FACTS in
+check_numbers.py and re-run against every target, so the derived quantities
+(frames/s, speedups, tier sizing) move with it.
+
+To push anyway:  GLINT_NUMCHECK=off git push
+MSG
+    exit 1
+fi
+
+cat >&2 <<'MSG'
+
+pre-push: WARNING -- the above deliverables contradict the measured numbers.
+Not blocking (they live outside this repo), but they are wrong right now.
+MSG
+exit 0

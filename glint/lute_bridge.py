@@ -70,6 +70,11 @@ def peaks_to_q(fs_arr, ss_arr, panels, clen_m, wavelength_A):
     """Detector peak (fs,ss) arrays -> (n,3) reciprocal vectors q [1/A].
 
     clen_m: detector distance [m] (per event). wavelength_A: [A].
+
+    Peaks that land on no panel come back as NaN rows, and so do NON-FINITE inputs (NaN/inf
+    fs or ss) -- they match no panel rather than raising, which the per-peak predecessor did
+    via int(np.floor(x)). Callers are expected to filter, as stream_driver does with
+    q[np.isfinite(q).all(1)]; a bad coordinate is dropped exactly like an off-panel peak.
     """
     fs_arr = np.asarray(fs_arr, float)
     ss_arr = np.asarray(ss_arr, float)

@@ -70,19 +70,31 @@ def peaks_to_q(fs_arr, ss_arr, panels, clen_m, wavelength_A):
     """Detector peak (fs,ss) arrays -> (n,3) reciprocal vectors q [1/A].
 
     clen_m: detector distance [m] (per event). wavelength_A: [A].
+
+    Peaks that land on no panel come back as NaN rows, and so do NON-FINITE inputs (NaN/inf
+    fs or ss) -- they match no panel rather than raising, which the per-peak predecessor did
+    via int(np.floor(x)). Callers are expected to filter, as stream_driver does with
+    q[np.isfinite(q).all(1)]; a bad coordinate is dropped exactly like an off-panel peak.
     """
     fs_arr = np.asarray(fs_arr, float)
     ss_arr = np.asarray(ss_arr, float)
-    r = np.zeros((len(fs_arr), 3))
-    for k, (fs, ss) in enumerate(zip(fs_arr, ss_arr)):
-        i = panel_of(fs, ss, panels)
-        if i < 0:
-            r[k] = np.nan
+    n = len(fs_arr)
+    r = np.full((n, 3), np.nan)
+    # Loop over PANELS (a handful) rather than peaks (hundreds to thousands): the per-peak Python
+    # loop this replaces cost ~4 ms for 458 peaks on a single-panel detector. `free` reproduces
+    # panel_of's "first panel that catches it" rule. Peaks on no panel stay NaN, as before.
+    fi = np.floor(fs_arr); si = np.floor(ss_arr)
+    free = np.ones(n, bool)
+    for p in panels:
+        m = (free & (fi >= p["min_fs"]) & (fi <= p["max_fs"])
+             & (si >= p["min_ss"]) & (si <= p["max_ss"]))
+        if not m.any():
             continue
-        p = panels[i]
-        lf, ls = fs - p["min_fs"], ss - p["min_ss"]
-        xy = (np.array([p["cx"], p["cy"], 0.0]) + lf * p["fs"] + ls * p["ss"]) / p["res"]
-        r[k] = [xy[0], xy[1], clen_m + p["coffset"]]
+        lf = fs_arr[m] - p["min_fs"]; ls = ss_arr[m] - p["min_ss"]
+        r[m, 0] = (p["cx"] + lf * p["fs"][0] + ls * p["ss"][0]) / p["res"]
+        r[m, 1] = (p["cy"] + lf * p["fs"][1] + ls * p["ss"][1]) / p["res"]
+        r[m, 2] = clen_m + p["coffset"]
+        free &= ~m
     s_hat = r / np.linalg.norm(r, axis=1, keepdims=True)
     z_hat = np.array([0.0, 0.0, 1.0])
     return (s_hat - z_hat) / wavelength_A      # q in 1/A

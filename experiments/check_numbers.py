@@ -69,10 +69,16 @@ FACTS: dict[str, float | str] = {
     "integ_fused_ms":      0.33,    # fused GPU box-integration, per frame                    (#18)
     "h2d_16mpix_ms":       4.0,     # ~3-5 ms; why the fused kernel only pays device-resident
     # streaming (NOT merged) -----------------------------------------------------------------------
-    "stream_ms":           5.58,    # end-to-end per frame, B=40                       (#19, open)
-    "stream_fps":          179.0,   # = 1000/stream_ms                                 (#19, open)
-    "peakfind_ms":         2.38,    # largest single stage, already on GPU             (#19, open)
-    "fused_share_ms":      0.89,    # index+integrate share of the 5.58
+    # Re-measured 2026-07-21 after the fused peakfind reduction, as ONE coherent set: both arms in the
+    # same job on the same A100, interleaved, steady state (driver built OUTSIDE the timer), min of 15
+    # passes over the 40-frame 1024^2 sim. Do not mix these with the #19 values -- a same-protocol
+    # re-measure of the PRE-change code gave 5.88 ms / 2.79 ms / 0.98 ms, i.e. 5-17% above what #19
+    # recorded, so the honest speedup is 5.88 -> 4.50 (1.31x), not 5.58 -> 4.50.
+    "stream_ms":           4.50,    # steady state per frame, B=40 (median 4.6)  (#41, open; was 5.58)
+    "stream_fps":          222.0,   # = 1000/stream_ms                           (#41, open; was 179)
+    "peakfind_ms":         1.58,    # still the largest stage, but only just      (#41, open; was 2.38)
+    "fused_share_ms":      0.98,    # index+integrate share of the 4.50           (re-measured; was 0.89)
+    "predict_ms":          1.34,    # hoisted-grid spot prediction -- now within 15% of peakfind
     # source / sizing ------------------------------------------------------------------------------
     "rep_rate_hz":         35000.0,
     "hit_rate":            0.10,
@@ -136,6 +142,17 @@ RETIRED = [
     Rule("fused-pred-2.4", r"2\.4\s*(?:→|->|-->)\s*0\.45",
          "the fused kernel replaced the 1.46 ms CUDA-graph path, not a 2.4 ms one; "
          "2.4 inflates the gain from 3.1x to an implied 5.3x", "1.46 -> 0.45"),
+    # --- the streaming block, superseded 2026-07-21 by the fused peakfind reduction (#41) ---
+    Rule("stream-5.58", r"(?<![\d.])5\.58\s*ms",
+         "the streaming driver was re-measured at steady state after the fused peakfind reduction; "
+         "5.58 ms/frame is the pre-#41 figure", "4.50 ms"),
+    Rule("stream-179", r"(?<![\d.])179\b(?=[^\n]{0,60}(?:frames?\s*/\s*s|f/s|fps))",
+         "179 f/s is the reciprocal of the retired 5.58 ms", "222"),
+    Rule("peakfind-2.38", r"(?<![\d.])2\.38\s*ms",
+         "peakfind in the streaming driver is 1.58 ms after #41; 2.38 is the pre-#41 figure", "1.58 ms"),
+    Rule("live-gap-20x", r"[~≈]?\s*20\s*(?:×|x|\\times)(?=[^\n]{0,40}(?:gap|short|hits))",
+         "the end-to-end gap to ~3500 hits/s is 3500/222 = ~16x, not ~20x, now that streaming is "
+         "4.50 ms/frame", "~16x"),
     Rule("legacy-shots", r"\b892\b",
          "892 shots/s is the LEGACY FFT-volume micro-bench, not the current pipeline",
          "mark LEGACY, or use ~29 shots/s", exempt=("legacy",)),
@@ -297,6 +314,16 @@ def check_arithmetic() -> list[str]:
     if float(F["fused_share_ms"]) >= float(F["stream_ms"]) / 2:
         bad.append("  FACTS: fused kernels are no longer a minority of stream_ms -- the 'peakfind is "
                    "the wall' framing needs rechecking")
+    # "peakfind is the LARGEST stage" is a framing no arithmetic was watching, and it is the one the
+    # deliverables lean on to argue for an FPGA front end. #41 cut peakfind 2.79 -> 1.58 while predict
+    # stayed at 1.34, so the margin is now 1.18x. If predict ever overtakes it, that argument inverts.
+    if float(F["predict_ms"]) >= float(F["peakfind_ms"]):
+        bad.append("  FACTS: predict is now >= peakfind -- 'peakfind is the largest single stage' is "
+                   "FALSE, and the FPGA-offload argument built on it must be rewritten, not renumbered")
+    elif float(F["peakfind_ms"]) < 1.25 * float(F["predict_ms"]):
+        bad.append(f"  FACTS: peakfind {F['peakfind_ms']} ms leads predict {F['predict_ms']} ms by only "
+                   f"{float(F['peakfind_ms'])/float(F['predict_ms']):.2f}x -- 'peakfind is the largest "
+                   f"stage' is still true but is no longer a comfortable claim; say the margin out loud")
     return bad
 
 

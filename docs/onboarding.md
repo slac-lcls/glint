@@ -76,8 +76,9 @@ same taxonomy as the paper's landscape table). Start here to place GLINT in cont
 - **Recent / adjacent:** Nasser *et al.*, *Robust Indexing for Challenging Serial X-ray Diffraction
   Patterns* (2025, symmetry-aware lattice decoding, small-N); CBXD — Li *et al.*, arXiv:2602.14402 (2026).
 
-New collaborators: the focused, self-contained research plan (blind CBXD + M1–M6 throughput) is
-[`research-plan-yuan.md`](research-plan-yuan.md); the full direction map is [`../ROADMAP.md`](../ROADMAP.md).
+New collaborators: the direction map is [`../ROADMAP.md`](../ROADMAP.md) — open work, per track, with
+issue numbers. Questions already settled (and the levers that did not pay) are in
+[`results.md`](results.md).
 
 ## 1. Repository & sync model
 

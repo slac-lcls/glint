@@ -4,6 +4,14 @@
 lysozyme frames + 60 rich DIALS frames. All numbers below are measured, gated, and
 reproduced from the experiment scripts in `experiments/`.*
 
+> **Snapshot: 2026-06-29. The throughput figures here are superseded.** The known-cell
+> engine has since been CUDA-graphed and fused (issue #5, PRs #14/#15/#16): the 16.5 ms
+> row below is now **0.26 ms/hit** at batch 120, i.e. ~12× *faster* than pipelined ffbidx
+> rather than slower, and §7's "remaining gap to ffbidx" is closed.
+> For current numbers use `python experiments/check_numbers.py --facts`, which is the
+> single source of truth and self-checks its own arithmetic. The *analysis* below — failure
+> modes, ablations, the accuracy-ceiling argument — still stands.
+
 ## 1. Summary
 
 GLINT indexes sparse single-shot diffraction **blind** (no unit cell supplied) by a
@@ -17,14 +25,14 @@ ffbidx when both solve.**
 
 | indexer | mode | indexing rate | ms/frame | frames/s |
 |---|---|---|---|---|
-| **GLINT-①** | **blind** | **~71% / 94% ≥10 refl** | **34** | **30** |
+| **GLINT-①** | **blind** | **~76% / 94% ≥10 refl** | **34** | **30** |
 | xgandalf | blind | 71% | 11,542 | 0.087 |
 | ffbidx | known-cell | 75% | 4.4 | 226 |
 | GLINT (known-cell mode) | cell given | matches ffbidx | 16.5 | 60 |
 
 *(120 sparse cxidb frames, one A100, same gate: correct lattice AND indexes ≥25% of
 spots / ≥10 reflections. "GLINT-①" = blind + consensus cell + GPU rescue. Rich DIALS-60:
-GLINT-① = 47 ms/frame, 21 f/s, 100/100.)*
+GLINT-① = 21 f/s (47 ms/frame), 100/100.)*
 
 ## 2. Architecture (M1–M6)
 

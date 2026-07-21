@@ -108,5 +108,28 @@ with tempfile.TemporaryDirectory() as td:
     except Exception as e:
         check(f"falls back without raising (got {type(e).__name__}: {e})", False)
 
+    # 6. CONSTANT intensities: worse than absent ones, because sorting a constant array yields an
+    # arbitrary subset that LOOKS ranked. experiments/cf_peaks.cxi is exactly this -- 1000.0 for all
+    # 16545 peaks -- which silently invalidated the "intensity ranking" arm of #34.
+    print("\n6. stored path with CONSTANT peakTotalIntensity -> detect and fall back")
+    cxi3 = os.path.join(td, "constint.cxi")
+    Xc = np.zeros((NFR, PMAX), np.float32); Yc = np.zeros((NFR, PMAX), np.float32)
+    for i in range(NFR):
+        k = int(COUNTS[i])
+        Xc[i, :k] = np.arange(k) * 7.0 + 10.0        # positions strictly increasing -> order is visible
+        Yc[i, :k] = np.arange(k) * 3.0 + 10.0
+    with h5py.File(cxi3, "w") as fh:
+        g = fh.create_group("entry_1/result_1")
+        g.create_dataset("peakXPosRaw", data=Xc); g.create_dataset("peakYPosRaw", data=Yc)
+        g.create_dataset("nPeaks", data=COUNTS)
+        g.create_dataset("peakTotalIntensity", data=np.full((NFR, PMAX), 1000.0, np.float32))
+    f3, _ = frames_from_cxi(cxi3, gpath, peakfinder="stored", top_n=TOP, min_peaks=6)
+    fref, _ = frames_from_cxi(cxi3, gpath, peakfinder="stored", top_n=0, min_peaks=6)
+    check(f"still truncates -> {[len(q) for q in f3]}",
+          [len(q) for q in f3] == [10, 10, 10, 8, 10, 0])
+    # the fallback must keep the FIRST 10, i.e. match the head of the untruncated frame
+    head_ok = all(np.allclose(f3[i], fref[i][:TOP], atol=1e-9) for i in (0, 1, 4))
+    check("falls back to stored ORDER (keeps the head, not an arbitrary subset)", head_ok)
+
 print("\n" + ("ALL PASS" if ok else "*** FAILURES ***"))
 sys.exit(0 if ok else 1)

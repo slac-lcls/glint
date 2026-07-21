@@ -21,11 +21,27 @@ _REFINERS = {"adapt": refine_vec_adapt, "cg": refine_vec_cg, "bb": refine_vec_bb
 
 
 M3_FUSED = os.environ.get("M3_FUSED", "0") == "1"   # M3: one fused CUDA kernel instead of the torch loop
+M3_CAP = int(os.environ.get("M3_CAP", "0"))         # M3: cap peaks fed to the ASCENT only (0 = all)
 
 
 def _refine(S0, Q, w, qmax):
     """M3 dispatch: grad (default GD+momentum) | cg | bb (Barzilai-Borwein) | lm (Levenberg-Marquardt)
     | newton (damped 3x3). All flag-gated via REFINER; grad is the validated default.
+
+    M3_CAP=N feeds the ascent at most N peaks while M2/M4/M5/M6 keep the FULL set. M3 is linear in
+    peak count, and the ascent only needs enough peaks to FIND a direction -- the scorer needs all of
+    them to JUDGE it. Measured on 120 cxidb frames: M3-only cap 100 holds 84/80 against an 85/79
+    baseline at ~1.29x, while truncating the frame outright (what `frames_from_cxi(top_n=)` does at
+    ingest) collapses to 71/66. Same peak budget, very different cost -- see #36.
+
+    Deliberately NOT wired to `top_peaks`. That flag exists to drop peaks a finder should not have
+    emitted (v4/pf9 over-finding on water rings), where removing the junk from scoring too is the
+    point. This one keeps every real peak and only cheapens the search. Two different jobs, so two
+    names rather than one flag that changes meaning with the peak source.
+
+    Selection is the frame's own order, which measured best: intensity ranking is NOT better
+    (82/78 vs 84/80 at cap 100) and lowest-|q| is worst (81/76), since dropping high-resolution
+    shells costs the lever-arm the cell determination needs.
 
     M3_FUSED=1 swaps the default grad path for glint.fused_m3's single kernel: 2.43x end-to-end on
     the 120 cxidb frames at an unchanged blind rate (85/120), because it never materialises the ~10
@@ -33,6 +49,9 @@ def _refine(S0, Q, w, qmax):
     bit-exact -- sequential vs matmul reduction order moves 3/120 cells -- which is the same bar
     KC_FP and ANNEAL_FP32 are held to. Only the grad path has a fused twin; cg/bb/lm/newton fall
     through unchanged, as does any frame the kernel cannot take (no cupy, non-fp32, P > MAX_P)."""
+    if M3_CAP and int(Q.shape[0]) > M3_CAP:
+        Q, w = Q[:M3_CAP], w[:M3_CAP]      # ascent only; qmax stays the FULL-frame value, so the
+                                           # step schedule (step0 = 0.25/qmax) is unchanged
     if REFINER == "newton":
         return refine_vec_newton(S0, Q, w, qmax, steps=NEWTON_STEPS, tol=TOL)
     if REFINER in _REFINERS:

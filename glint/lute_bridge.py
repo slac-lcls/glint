@@ -17,6 +17,7 @@ experiments/bench_lute.py `inspect`.
 from __future__ import annotations
 
 import re
+import sys
 
 import numpy as np
 
@@ -175,8 +176,21 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
         # intensities alongside the positions, so rank by them and match what v4/pf9 mean by
         # "strongest"; a flag must not change meaning when the peak SOURCE changes. Files without
         # the dataset fall back to stored order rather than failing.
+        # Ranking needs intensities that actually VARY. experiments/cf_peaks.cxi carries
+        # peakTotalIntensity = 1000.0 for all 16545 peaks (std 0, one unique value) -- a placeholder
+        # some writers emit. Sorting a constant array yields an ARBITRARY subset unrelated to peak
+        # strength, so a present-but-degenerate dataset is worse than an absent one: it looks like a
+        # ranked selection and is not. Detect it and fall back to stored order.
         ipath = rl + "/peakTotalIntensity"
-        pint = f[ipath] if ipath in f else None
+        pint = f[ipath] if (top_n and ipath in f) else None
+        if pint is not None:
+            probe = np.concatenate([np.asarray(pint[i, :int(npk[i])], float)
+                                    for i in range(min(len(npk), 32))]) if len(npk) else np.empty(0)
+            if probe.size == 0 or np.ptp(probe) == 0:
+                sys.stderr.write(
+                    f"glint: {ipath} is constant ({probe[0] if probe.size else 'empty'}) -- it carries "
+                    f"no ranking information, so top_n={top_n} falls back to stored peak order.\n")
+                pint = None
         nfr = min(n, px.shape[0]) if n else px.shape[0]
         for i in range(nfr):
             k = int(npk[i]); images.append({"image": cxi_path, "event": i})

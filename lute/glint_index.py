@@ -65,8 +65,9 @@ class IndexGLINTParameters(ThirdPartyParameters):
     top_peaks: Optional[PositiveInt] = Field(
         None,
         description="ONLY with `images`: keep the N strongest peaks per frame (~100 is the measured "
-                    "sweet spot; weak peaks HURT the indexing rate). The `peaks` path ignores it -- "
-                    "truncate in FindPeaksSFX instead. Unset = keep all.",
+                    "sweet spot; weak peaks HURT the indexing rate). REJECTED at config time if set "
+                    "alongside `peaks`, because the CLI would not read it -- truncate the peak list "
+                    "in FindPeaksSFX instead. Unset = keep all.",
         flag_type="--", rename_param="top-peaks",
     )
     wavelength: Optional[PositiveFloat] = Field(
@@ -158,9 +159,11 @@ class IndexGLINTParameters(ThirdPartyParameters):
 
     @validator("top_peaks", always=True)
     def _top_peaks_images_only(cls, top_peaks: Optional[int], values: Dict[str, Any]) -> Optional[int]:
-        """--top-peaks is only read on the `images` path; silently ignored with `peaks`."""
+        """--top-peaks is only read on the `images` path. Reject it with `peaks` rather than accept
+        it: the CLI would ignore the flag, so a silent pass would let a run look like it truncated
+        the peak list when it did not."""
         if top_peaks and (values.get("peaks") or ""):
-            raise ValueError("`top_peaks` applies only to `images`; on the `peaks` path it is ignored "
+            raise ValueError("`top_peaks` applies only to `images`; the `peaks` path would ignore it "
                              "-- truncate the peak list in FindPeaksSFX instead")
         return top_peaks
 

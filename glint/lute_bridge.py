@@ -169,10 +169,25 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
     if peakfinder == "stored":                                     # reuse the .cxi's own peakfinder8/Cheetah peaks
         rl = glob.get("peak_list", "/entry_1/result_1")
         px, py, npk = f[rl + "/peakXPosRaw"], f[rl + "/peakYPosRaw"], f[rl + "/nPeaks"]
+        # top_n MUST work here too. It used to be applied only on the self-peak-find path below, so
+        # with peakfinder='stored' -- the LUTE default -- `top_peaks` was a silent no-op: the config
+        # validated and the peak list came through untruncated. Cheetah/peakfinder8 write the
+        # intensities alongside the positions, so rank by them and match what v4/pf9 mean by
+        # "strongest"; a flag must not change meaning when the peak SOURCE changes. Files without
+        # the dataset fall back to stored order rather than failing.
+        ipath = rl + "/peakTotalIntensity"
+        pint = f[ipath] if ipath in f else None
         nfr = min(n, px.shape[0]) if n else px.shape[0]
         for i in range(nfr):
             k = int(npk[i]); images.append({"image": cxi_path, "event": i})
-            frames.append(_q(px[i, :k], py[i, :k], i) if k >= min_peaks else np.empty((0, 3)))
+            x, y = np.asarray(px[i, :k], float), np.asarray(py[i, :k], float)
+            if top_n and k > top_n:
+                if pint is not None:
+                    keep = np.argsort(np.asarray(pint[i, :k], float))[::-1][:top_n]
+                else:
+                    keep = np.arange(top_n)
+                x, y = x[keep], y[keep]
+            frames.append(_q(x, y, i) if len(x) >= min_peaks else np.empty((0, 3)))
         return frames, images
 
     data = f[data_key]

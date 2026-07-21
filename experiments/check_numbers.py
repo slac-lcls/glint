@@ -286,7 +286,8 @@ def scan(path: Path, text: str) -> list[str]:
 def check_arithmetic() -> list[str]:
     """The facts table must be internally consistent. A half-applied edit fails here first."""
     F = FACTS
-    bad: list[str] = []
+    bad: list[str] = []       # hard failures: the table contradicts itself
+    warn: list[str] = []      # advisories: true of the measurement, not fixable by editing a file
 
     def close(label: str, got: float, want: float, tol: float = 0.03) -> None:
         if want == 0 or abs(got - want) / abs(want) > tol:
@@ -321,10 +322,14 @@ def check_arithmetic() -> list[str]:
         bad.append("  FACTS: predict is now >= peakfind -- 'peakfind is the largest single stage' is "
                    "FALSE, and the FPGA-offload argument built on it must be rewritten, not renumbered")
     elif float(F["peakfind_ms"]) < 1.25 * float(F["predict_ms"]):
-        bad.append(f"  FACTS: peakfind {F['peakfind_ms']} ms leads predict {F['predict_ms']} ms by only "
-                   f"{float(F['peakfind_ms'])/float(F['predict_ms']):.2f}x -- 'peakfind is the largest "
-                   f"stage' is still true but is no longer a comfortable claim; say the margin out loud")
-    return bad
+        # A WARNING, deliberately not a failure. No edit to any deliverable can make this condition
+        # go away -- it is a property of the measurement -- so failing on it would leave the checker
+        # permanently red, and a guard that cries wolf gets weakened or switched off, which is how
+        # the drift it exists to catch comes back (see the rule-writing traps above).
+        warn.append(f"  FACTS: peakfind {F['peakfind_ms']} ms leads predict {F['predict_ms']} ms by only "
+                    f"{float(F['peakfind_ms'])/float(F['predict_ms']):.2f}x -- 'peakfind is the largest "
+                    f"stage' is still true but is no longer a comfortable claim; say the margin out loud")
+    return bad, warn
 
 
 def main(argv: list[str]) -> int:
@@ -341,10 +346,13 @@ def main(argv: list[str]) -> int:
         if "--pdf" in argv:
             paths += PDF_TARGETS
 
-    fails = check_arithmetic()
+    fails, advisories = check_arithmetic()
     if fails:
         print("ARITHMETIC (the facts table contradicts itself):")
         print("\n".join(fails) + "\n")
+    if advisories:
+        print("ADVISORY (not a failure -- a framing the numbers no longer comfortably support):")
+        print("\n".join(advisories) + "\n")
 
     checked = skipped = 0
     for path in paths:

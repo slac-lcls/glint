@@ -7,9 +7,9 @@ anneals cells, keeps the *N*-best hypotheses per frame, derives the unit cell ac
 ingests exactly what a CrystFEL / LUTE peak search emits and writes a CrystFEL `.stream`, so it
 drops into the existing CrystFEL-based merging flow (`partialator`).
 
-On one NVIDIA A100, over 120 sparse cxidb-17 lysozyme frames, GLINT matches the blind indexing
-rate of xgandalf at ~550× the throughput, and with cross-frame consensus indexes 96% of frames
-blind (≥10 reflections).
+On one NVIDIA A100, over 120 sparse cxidb-17 lysozyme frames, GLINT indexes blind
+*above* xgandalf's rate (76% vs 71% at the same gate) at ~340× the throughput, and with cross-frame
+consensus indexes 97% of frames blind (≥10 reflections).
 
 **New here?** [`docs/onboarding.md`](docs/onboarding.md) has a short primer on *what crystallographic
 indexing is and what GLINT does*, plus how to set up, run, and contribute.
@@ -54,9 +54,9 @@ directory holds the research scripts and diagnostic harness (not shipped in the 
 Open directions live in [`ROADMAP.md`](ROADMAP.md): real-data validation and LCLS productization,
 faster M1–M6, breaking the **blind convergent-beam (CBXD)** wall, and exploratory extensions to
 **powder** (metric-tensor auto-indexing → Rietveld) and **Laue / pink-beam** (the fat Ewald sphere) —
-all resting on the same gridless objective + GPU consensus. Yuan's focused plan (CBXD + throughput) is
-[`docs/research-plan-yuan.md`](docs/research-plan-yuan.md). How to work in the repo (branches/PRs, envs,
-validation gates) is in [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/onboarding.md`](docs/onboarding.md).
+all resting on the same gridless objective + GPU consensus. Settled questions and negative results are
+in [`docs/results.md`](docs/results.md). How to work in the repo (branches/PRs, envs, validation gates)
+is in [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/onboarding.md`](docs/onboarding.md).
 
 ## Origins
 

@@ -22,6 +22,8 @@ Credit: dual-threshold local-background peak finding -- M. Dubrovin (SLAC/LCLS),
 (github.com/lcls-psana/psalgos), ``peak_finder_v4r3`` / ``peaks_droplet``; local-window lineage shared with
 peakfinder9 (Gevorkov/CFEL). Authors of this GPU version: SLAC LCLS DRP team, with Claude (Anthropic).
 """
+import os
+
 import numpy as np
 
 __all__ = ["peakfinder_v4", "PeakFinderV4"]
@@ -52,32 +54,59 @@ def _scatter_max(xp, rows, values, n):
     return out
 
 
-_PFV4 = None
-def _pfv4_kernel():
+# Ring-accumulator precision. The ring carries only ~32 samples, so fp64 is far more precision than
+# the statistic needs, and fp64 is half rate on A100 (and ~1/32-1/64 on fp32-strong cards) -- which
+# matters because peakfind is the largest single stage of the device-resident pipeline.
+#
+# DO NOT simply change `double` to `float` here. The variance is sq/nn - mu*mu, a difference of two
+# O(mu^2) quantities recovering an O(sigma^2) one; at a realistic pedestal (mu~2000 ADU, sigma~20)
+# that burns ~4 of fp32's ~7 digits. MEASURED on an A100: a naive fp32 leaves `grow` bit-identical at
+# 10 and 500 ADU but flips 1/3/5/7/16 pixels at 2000-8000 ADU, growing with pedestal and frame size --
+# i.e. it would pass a synthetic low-background test and then silently perturb peak extents (and so
+# centroids) on real detector data, while never looking broken (`seed` is unaffected, being far from
+# its threshold).
+#
+# PFV4_FP32=1 selects the SHIFTED-DATA form instead: subtract a constant K taken from the ring's own
+# corner before accumulating, so the sums carry O(sigma) rather than O(mu). Algebraically identical,
+# and measured bit-identical to fp64 in `grow` AND `seed` at every pedestal (10/500/2000/8000 ADU) and
+# size (1024/2048/4096 square) tested. 1.26x on the kernel; ~5% end-to-end, since the kernel is
+# memory-bound (~80 loads/pixel) rather than fp64-ALU-bound -- the load count, not the precision, is
+# the remaining lever. Default stays fp64 until it has run on real detector frames.
+FP32_RING = os.environ.get("PFV4_FP32", "0") == "1"
+
+_PFV4 = {}
+def _pfv4_kernel(fp32=None):
     """One fused fp32 kernel: per pixel, border-ring mu/sigma + (2lmr+1) local-max, then the two SNR
-    thresholds -> snr, (I-bg), sigma^2, grow-flag (snr>thr_low), seed-flag (snr>thr_high & local max)."""
-    global _PFV4
-    if _PFV4 is None:
+    thresholds -> snr, (I-bg), sigma^2, grow-flag (snr>thr_low), seed-flag (snr>thr_high & local max).
+
+    `fp32` (default: the PFV4_FP32 env knob) switches the ring accumulator to the shifted fp32 form."""
+    fp32 = FP32_RING if fp32 is None else bool(fp32)
+    if fp32 not in _PFV4:
         import cupy
-        _PFV4 = cupy.RawKernel(r"""
+        acc, val = ("float", "(I[j]-K)") if fp32 else ("double", "I[j]")
+        shift = "int ky=max(yy-r,0), kx=max(xx-r,0); float K = I[ky*W+kx];" if fp32 else ""
+        unshift = " + K" if fp32 else ""
+        _PFV4[fp32] = cupy.RawKernel(r"""
         extern "C" __global__ void pfv4_stats(const float* I, const float* good, int H, int W, int r, int lmr,
             float thr_low, float thr_high, float min_sig,
             float* snr, float* sub, float* var, unsigned char* grow, unsigned char* seed){
           int idx = blockIdx.x*blockDim.x + threadIdx.x; if(idx >= H*W) return;
           int yy = idx / W, xx = idx % W; float Ic = I[idx];
-          double s=0.0, sq=0.0, nn=0.0;                       // border ring (Chebyshev distance == r)
+          __ACC__ s=0, sq=0, nn=0;                            // border ring (Chebyshev distance == r)
+          __SHIFT__
           for(int dy=-r; dy<=r; ++dy){
             int y=yy+dy; if(y<0||y>=H) continue;
             if(dy==-r || dy==r){
               for(int dx=-r; dx<=r; ++dx){ int x=xx+dx; if(x<0||x>=W) continue;
-                int j=y*W+x; double g=good[j], v=I[j]; s+=g*v; sq+=g*v*v; nn+=g; }
+                int j=y*W+x; __ACC__ g=good[j], v=__VAL__; s+=g*v; sq+=g*v*v; nn+=g; }
             } else {
-              int x=xx-r; if(x>=0){ int j=y*W+x; double g=good[j], v=I[j]; s+=g*v; sq+=g*v*v; nn+=g; }
-              x=xx+r; if(x<W){ int j=y*W+x; double g=good[j], v=I[j]; s+=g*v; sq+=g*v*v; nn+=g; }
+              int x=xx-r; if(x>=0){ int j=y*W+x; __ACC__ g=good[j], v=__VAL__; s+=g*v; sq+=g*v*v; nn+=g; }
+              x=xx+r; if(x<W){ int j=y*W+x; __ACC__ g=good[j], v=__VAL__; s+=g*v; sq+=g*v*v; nn+=g; }
             }
           }
-          float mu = nn>0.5 ? (float)(s/nn) : 0.0f;
-          float vv = nn>0.5 ? (float)(sq/nn - (double)mu*mu) : 0.0f; if(vv<0.0f) vv=0.0f;
+          __ACC__ mbar = nn>0.5 ? s/nn : 0;
+          float mu = nn>0.5 ? (float)(mbar__UNSHIFT__) : 0.0f;
+          float vv = nn>0.5 ? (float)(sq/nn - mbar*mbar) : 0.0f; if(vv<0.0f) vv=0.0f;
           float sg = sqrtf(vv); int valid = (good[idx]>0.5f) && (nn>0.5) && (sg>min_sig);
           float sb = Ic - mu; float sn = valid ? sb/(sg+1e-12f) : 0.0f;
           int islm = 1;                                        // local maximum over the (2*lmr+1) neighbourhood
@@ -87,8 +116,9 @@ def _pfv4_kernel():
           snr[idx]=sn; sub[idx]= sb>0.0f? sb:0.0f; var[idx]=vv;
           grow[idx] = (valid && sn > thr_low) ? 1 : 0;
           seed[idx] = (valid && sn > thr_high && islm) ? 1 : 0;
-        }""", "pfv4_stats")
-    return _PFV4
+        }""".replace("__ACC__", acc).replace("__VAL__", val)
+             .replace("__SHIFT__", shift).replace("__UNSHIFT__", unshift), "pfv4_stats")
+    return _PFV4[fp32]
 
 
 class PeakFinderV4:

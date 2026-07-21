@@ -69,10 +69,37 @@ FACTS: dict[str, float | str] = {
     "integ_fused_ms":      0.33,    # fused GPU box-integration, per frame                    (#18)
     "h2d_16mpix_ms":       4.0,     # ~3-5 ms; why the fused kernel only pays device-resident
     # streaming (NOT merged) -----------------------------------------------------------------------
-    "stream_ms":           5.58,    # end-to-end per frame, B=40                       (#19, open)
-    "stream_fps":          179.0,   # = 1000/stream_ms                                 (#19, open)
-    "peakfind_ms":         2.38,    # largest single stage, already on GPU             (#19, open)
-    "fused_share_ms":      0.89,    # index+integrate share of the 5.58
+    # Re-measured 2026-07-21 after the fused peakfind reduction, as ONE coherent set: both arms in the
+    # same job on the same A100, interleaved, steady state (driver built OUTSIDE the timer), 5 warmups
+    # + 40 reps per stage, over the 40-frame 1024^2 sim.
+    #
+    # WARMUP MATTERS MORE THAN EXPECTED. An earlier pass warmed each stage ONCE and inflated the whole
+    # stage block -- integrate read 0.41 instead of 0.31 (-22%), peakfind 1.58 instead of 1.16. Two
+    # internal checks say this warmed set is the trustworthy one: the stages the change cannot affect
+    # measure IDENTICALLY across both arms (index 0.535/0.535, integrate 0.312/0.313, peaks_to_q
+    # 0.082/0.082), and the end-to-end delta (1.066 ms) matches the peakfind delta (1.087 ms) to 2%,
+    # where the cold numbers mismatched by 14%.
+    #
+    # Same-protocol PRE-change arm: stream 5.49, peakfind 2.24, everything else unchanged. So the
+    # honest figures are stream 5.49 -> 4.42 (1.24x) and peakfind 2.24 -> 1.16 (1.93x). Do NOT compare
+    # against the #19 values (5.58 / 2.38 / 0.89), which came from a different protocol.
+    "stream_ms":           4.42,    # steady state per frame, B=40               (#41, open; was 5.58)
+    "stream_fps":          226.0,   # = 1000/stream_ms                           (#41, open; was 179)
+    "peakfind_ms":         1.16,    # largest stage, but only by 1.04x -- a TIE   (#41, open; was 2.38)
+    "predict_ms":          1.11,    # hoisted-grid spot prediction -- tied with peakfind
+    "index_b40_ms":        0.54,    # fused index, B=40 (NOT the 0.26 B=120 amortization)
+    "integrate_ms":        0.31,    # fused box-integration, per frame
+    "peaks_to_q_ms":       0.08,    # geometry, on the host
+    "fused_share_ms":      0.85,    # = index_b40_ms + integrate_ms               (re-measured; was 0.89)
+    # The host side, measured explicitly rather than left as one "overhead" bucket -- a bucket would
+    # have double-counted `accumulate`, which the DRP table already carries as its own row. These
+    # eight components close to stream_ms exactly, which the arithmetic check below enforces.
+    "accumulate_ms":       0.51,    # running merge accumulation, on the host
+    "h2d_ms":              0.19,    # 2.1 MB upload into the resident ring slot (1024^2 uint16)
+    "misc_ms":             0.52,    # peaks D2H (0.02) + python loop and glue
+    # Host total = accumulate + h2d + misc = 1.22 (28% of the frame). Not a stage, so it does not
+    # unseat "largest stage" -- but it is bigger than peakfind, and no deliverable mentions it.
+    "host_total_ms":       1.22,
     # source / sizing ------------------------------------------------------------------------------
     "rep_rate_hz":         35000.0,
     "hit_rate":            0.10,
@@ -136,6 +163,31 @@ RETIRED = [
     Rule("fused-pred-2.4", r"2\.4\s*(?:→|->|-->)\s*0\.45",
          "the fused kernel replaced the 1.46 ms CUDA-graph path, not a 2.4 ms one; "
          "2.4 inflates the gain from 3.1x to an implied 5.3x", "1.46 -> 0.45"),
+    # --- the streaming block, superseded 2026-07-21 by the fused peakfind reduction (#41) ---
+    Rule("stream-5.58", r"(?<![\d.])5\.58\s*ms",
+         "the streaming driver was re-measured at steady state after the fused peakfind reduction; "
+         "5.58 ms/frame is the pre-#41 figure", "4.50 ms"),
+    Rule("stream-179", r"(?<![\d.])179\b(?=[^\n]{0,60}(?:frames?\s*/\s*s|f/s|fps))",
+         "179 f/s is the reciprocal of the retired 5.58 ms", "222"),
+    Rule("peakfind-2.38", r"(?<![\d.])2\.38\s*ms",
+         "peakfind in the streaming driver is 1.58 ms after #41; 2.38 is the pre-#41 figure", "1.58 ms"),
+    Rule("live-gap-20x", r"[~≈]?\s*20\s*(?:×|x|\\times)(?=[^\n]{0,40}(?:gap|short|hits))",
+         "the end-to-end gap to ~3500 hits/s is 3500/222 = ~16x, not ~20x, now that streaming is "
+         "4.50 ms/frame", "~16x"),
+    # --- the COLD-WARMUP stage block, superseded the same day it was written ---
+    # These four were published for a few hours between the under-warmed measurement and the warmed
+    # re-measure. They are listed because they reached three deliverables, not because they lasted.
+    Rule("cold-peakfind-1.58", r"(?<![\d.])1\.58\s*ms",
+         "1.58 ms came from a stage benchmark warmed only ONCE; properly warmed peakfind is 1.16 ms",
+         "1.16 ms"),
+    Rule("cold-predict-1.34", r"(?<![\d.])1\.34\s*ms",
+         "1.34 ms is the same cold-warmup artefact; properly warmed predict is 1.11 ms", "1.11 ms"),
+    Rule("cold-margin-1.18", r"(?<![\d.])1\.18\s*(?:×|x|\\times)",
+         "the peakfind-over-predict margin computed from cold numbers was 1.18x; warmed it is 1.05x, "
+         "which is a TIE within run-to-run noise -- the wording must change, not just the number",
+         "tied (1.05x)"),
+    Rule("cold-share-0.98", r"(?<![\d.])0\.98\s*ms",
+         "index+integrate is 0.85 ms warmed (0.54 + 0.31), not 0.98", "0.85 ms"),
     Rule("legacy-shots", r"\b892\b",
          "892 shots/s is the LEGACY FFT-volume micro-bench, not the current pipeline",
          "mark LEGACY, or use ~29 shots/s", exempt=("legacy",)),
@@ -269,7 +321,8 @@ def scan(path: Path, text: str) -> list[str]:
 def check_arithmetic() -> list[str]:
     """The facts table must be internally consistent. A half-applied edit fails here first."""
     F = FACTS
-    bad: list[str] = []
+    bad: list[str] = []       # hard failures: the table contradicts itself
+    warn: list[str] = []      # advisories: true of the measurement, not fixable by editing a file
 
     def close(label: str, got: float, want: float, tol: float = 0.03) -> None:
         if want == 0 or abs(got - want) / abs(want) > tol:
@@ -284,6 +337,15 @@ def check_arithmetic() -> list[str]:
           float(F["xgandalf_blind_ms"]) / float(F["blind_ms"]), tol=0.05)
     close("hits_per_s = rep_rate * hit_rate", float(F["hits_per_s"]),
           float(F["rep_rate_hz"]) * float(F["hit_rate"]))
+    close("fused_share = index_b40 + integrate", float(F["fused_share_ms"]),
+          float(F["index_b40_ms"]) + float(F["integrate_ms"]))
+    close("host_total = accumulate + h2d + misc", float(F["host_total_ms"]),
+          float(F["accumulate_ms"]) + float(F["h2d_ms"]) + float(F["misc_ms"]))
+    # The whole frame must add up. This is the check that would have caught the cold-warmup block:
+    # those stage numbers summed to MORE than the end-to-end wall they were supposed to decompose.
+    close("stream_ms = sum of all components", float(F["stream_ms"]),
+          sum(float(F[k]) for k in ("peakfind_ms", "predict_ms", "index_b40_ms", "integrate_ms",
+                                    "peaks_to_q_ms", "accumulate_ms", "h2d_ms", "misc_ms")))
     close("gpus_at_10pct = rep*hit*t_index", float(F["gpus_at_10pct"]),
           float(F["rep_rate_hz"]) * float(F["hit_rate"]) * float(F["fused_b120_ms"]) / 1000.0, tol=0.12)
     close("ffbidx_speedup = pipelined/fused (throughput:throughput)", float(F["ffbidx_speedup"]),
@@ -297,7 +359,34 @@ def check_arithmetic() -> list[str]:
     if float(F["fused_share_ms"]) >= float(F["stream_ms"]) / 2:
         bad.append("  FACTS: fused kernels are no longer a minority of stream_ms -- the 'peakfind is "
                    "the wall' framing needs rechecking")
-    return bad
+    # "peakfind is the LARGEST stage" is a framing no arithmetic was watching, and it is the one the
+    # deliverables lean on to argue for an FPGA front end. #41 cut peakfind 2.79 -> 1.58 while predict
+    # stayed at 1.34, so the margin is now 1.18x. If predict ever overtakes it, that argument inverts.
+    if float(F["predict_ms"]) >= float(F["peakfind_ms"]):
+        bad.append("  FACTS: predict is now >= peakfind -- 'peakfind is the largest single stage' is "
+                   "FALSE, and the FPGA-offload argument built on it must be rewritten, not renumbered")
+    elif float(F["peakfind_ms"]) < 1.25 * float(F["predict_ms"]):
+        # A WARNING, deliberately not a failure. No edit to any deliverable can make this condition
+        # go away -- it is a property of the measurement -- so failing on it would leave the checker
+        # permanently red, and a guard that cries wolf gets weakened or switched off, which is how
+        # the drift it exists to catch comes back (see the rule-writing traps above).
+        m = float(F["peakfind_ms"]) / float(F["predict_ms"])
+        warn.append(f"  FACTS: peakfind {F['peakfind_ms']} ms vs predict {F['predict_ms']} ms is {m:.2f}x -- "
+                    + ("a TIE within run-to-run noise. 'Peakfind is the largest stage' is technically "
+                       "true and practically meaningless; deliverables must say the two are tied, and "
+                       "an FPGA peakfind offload cannot be sold on peakfind's dominance alone"
+                       if m < 1.10 else
+                       "still the largest, but not comfortably; say the margin out loud"))
+    # The unattributed host bucket is not a stage, so it never makes 'peakfind is the largest STAGE'
+    # false -- but once it exceeds peakfind it is the bigger target, and a page arguing for an FPGA
+    # front end while a larger cost sits unexamined on the host is arguing the wrong lever.
+    if float(F["host_total_ms"]) > float(F["peakfind_ms"]):
+        warn.append(f"  FACTS: host overhead {F['host_total_ms']} ms/frame now EXCEEDS peakfind "
+                    f"{F['peakfind_ms']} ms ({100*float(F['host_total_ms'])/float(F['stream_ms']):.0f}% "
+                    f"of the frame). It is a bucket (H2D + merge accumulation + python), not a stage, so "
+                    f"it does not falsify 'largest stage' -- but it is the larger lever, and no "
+                    f"deliverable currently mentions it")
+    return bad, warn
 
 
 def main(argv: list[str]) -> int:
@@ -314,10 +403,13 @@ def main(argv: list[str]) -> int:
         if "--pdf" in argv:
             paths += PDF_TARGETS
 
-    fails = check_arithmetic()
+    fails, advisories = check_arithmetic()
     if fails:
         print("ARITHMETIC (the facts table contradicts itself):")
         print("\n".join(fails) + "\n")
+    if advisories:
+        print("ADVISORY (not a failure -- a framing the numbers no longer comfortably support):")
+        print("\n".join(advisories) + "\n")
 
     checked = skipped = 0
     for path in paths:

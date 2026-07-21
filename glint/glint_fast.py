@@ -20,13 +20,27 @@ _REFINERS = {"adapt": refine_vec_adapt, "cg": refine_vec_cg, "bb": refine_vec_bb
              "raar": refine_vec_raar, "so2d": refine_vec_so2d, "admm": refine_vec_admm}
 
 
+M3_FUSED = os.environ.get("M3_FUSED", "0") == "1"   # M3: one fused CUDA kernel instead of the torch loop
+
+
 def _refine(S0, Q, w, qmax):
     """M3 dispatch: grad (default GD+momentum) | cg | bb (Barzilai-Borwein) | lm (Levenberg-Marquardt)
-    | newton (damped 3x3). All flag-gated via REFINER; grad is the validated default."""
+    | newton (damped 3x3). All flag-gated via REFINER; grad is the validated default.
+
+    M3_FUSED=1 swaps the default grad path for glint.fused_m3's single kernel: 2.43x end-to-end on
+    the 120 cxidb frames at an unchanged blind rate (85/120), because it never materialises the ~10
+    (70400, P) intermediates the torch loop writes per step. Off by default because it is NOT
+    bit-exact -- sequential vs matmul reduction order moves 3/120 cells -- which is the same bar
+    KC_FP and ANNEAL_FP32 are held to. Only the grad path has a fused twin; cg/bb/lm/newton fall
+    through unchanged, as does any frame the kernel cannot take (no cupy, non-fp32, P > MAX_P)."""
     if REFINER == "newton":
         return refine_vec_newton(S0, Q, w, qmax, steps=NEWTON_STEPS, tol=TOL)
     if REFINER in _REFINERS:
         return _REFINERS[REFINER](S0, Q, w, qmax, steps=STEPS, tol=TOL)
+    if M3_FUSED:
+        from glint import fused_m3
+        if fused_m3.available(Q):
+            return fused_m3.refine_vec_fused(S0, Q, w, qmax, steps=STEPS, tol=TOL)
     return refine_vec(S0, Q, w, qmax, steps=STEPS, tol=TOL)
 from glint.lattice import cell_to_Ar
 from glint.multishot import same_lattice

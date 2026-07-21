@@ -91,6 +91,46 @@ def _pfv4_kernel():
     return _PFV4
 
 
+_REDUCE = None
+def _reduce_kernel():
+    """One pass over the label image, replacing nonzero + 5 bincount + scatter_max + 5 gathers.
+
+    The eager chain walked the same `rows` six times, each pass its own kernel, after compacting the
+    label image with nonzero() and gathering sub/var/seed/yy/xx through it. This does all of it in a
+    single pass: ~99% of pixels read their 4-byte label and leave, only the survivors do atomics.
+
+    Two things fall out of working per pixel rather than per compacted row. The centroid coordinates
+    are just idx/W and idx%W, so the two full-frame float64 mgrid arrays -- 134 MB EACH at 4096^2 --
+    are neither gathered nor allocated. And sub/var/seed are read at their natural index, so those
+    gathers disappear as well.
+
+    Measured bit-identical to the bincount chain (every find() field, exactly zero deviation) and
+    reproducible run to run, even though atomics fix no summation order. That is not luck: `sub` and
+    `var` are float32, hence exact in float64, and idx/W is a small integer, so every accumuland is
+    exact and each label's sum needs ~24 + log2(max npix) + the intensity dynamic range in bits, well
+    inside float64's 53. Order-independence follows from exactness. It would stop holding for a peak
+    whose partial sums span more than ~2^29 in magnitude, which max_pix=200 makes unreachable here."""
+    global _REDUCE
+    if _REDUCE is None:
+        import cupy
+        _REDUCE = cupy.RawKernel(r"""
+        extern "C" __global__ void pfv4_reduce(const int* lab, const float* sub, const float* var,
+            const unsigned char* seed, int H, int W,
+            double* mass, double* sumvar, double* cyn, double* cxn, int* npix, unsigned char* hasseed){
+          int idx = blockIdx.x*blockDim.x + threadIdx.x; if(idx >= H*W) return;
+          int L = lab[idx]; if(L == 0) return;        // the ~99% leave here, having read 4 bytes
+          int rr = L - 1;
+          double iv = (double)sub[idx];
+          atomicAdd(&mass[rr], iv);
+          atomicAdd(&sumvar[rr], (double)var[idx]);
+          atomicAdd(&cyn[rr], iv * (double)(idx / W));
+          atomicAdd(&cxn[rr], iv * (double)(idx % W));
+          atomicAdd(&npix[rr], 1);
+          if(seed[idx]) hasseed[rr] = 1;              // racing writers all store the same 1
+        }""", "pfv4_reduce")
+    return _REDUCE
+
+
 class PeakFinderV4:
     """Adaptive dual-threshold peak finder (psana psalgos family). No geometry/q -- only the image shape (+ mask).
 
@@ -114,7 +154,6 @@ class PeakFinderV4:
         self.dt = xp.float64 if dtype is None else dtype
         self.good = good; self._goodf = good.astype(self.dt)
         self.H, self.W = good.shape
-        self.yy, self.xx = (g.astype(xp.float64) for g in xp.mgrid[0:self.H, 0:self.W])
         self.r = int(window_radius)
         self.p = dict(thr_low=thr_low, thr_high=thr_high, son_min=son_min, min_sig=min_sig,
                       local_max_radius=int(local_max_radius), min_pix=min_pix, max_pix=max_pix)
@@ -122,11 +161,17 @@ class PeakFinderV4:
         if xp is not np and self.dt == xp.float32:
             npix = self.H * self.W
             self._pfv4 = _pfv4_kernel(); self._blk = 256; self._grid = (npix + 255) // 256
+            self._reduce = _reduce_kernel()
             self._goodf_flat = xp.ascontiguousarray(self._goodf.ravel())
             self._snr = xp.empty(npix, xp.float32); self._sub = xp.empty(npix, xp.float32)
             self._var = xp.empty(npix, xp.float32)
             self._grow = xp.empty(npix, xp.uint8); self._seed = xp.empty(npix, xp.uint8)
             self._fused_gpu = True
+        # Only the eager reduction gathers centroids through coordinate arrays; the fused kernel
+        # derives them from the pixel index. Two float64 frames is 268 MB at 4096^2, so do not
+        # allocate them where nothing reads them.
+        if not self._fused_gpu:
+            self.yy, self.xx = (g.astype(xp.float64) for g in xp.mgrid[0:self.H, 0:self.W])
 
     def _ring_bg(self, I):
         """Portable adaptive local mu/sigma from the border ring (box-filter differences), CPU/fp64 path."""
@@ -169,16 +214,29 @@ class PeakFinderV4:
             z = xp.zeros(0)
             return {"x": z, "y": z, "intensity": z, "snr": z, "npix": z.astype(xp.int64)}
         n = int(n)
-        lab = lbl.ravel(); pix = xp.nonzero(lab)[0]; rows = lab[pix] - 1
-        iv = sub.ravel()[pix]
-        mass = xp.bincount(rows, weights=iv, minlength=n)
-        sumvar = xp.bincount(rows, weights=var.ravel()[pix], minlength=n)
-        npix = xp.bincount(rows, minlength=n).astype(xp.float64)
-        cm = xp.clip(mass, 1e-12, None)
-        cy = xp.bincount(rows, weights=iv * self.yy.ravel()[pix], minlength=n) / cm
-        cx = xp.bincount(rows, weights=iv * self.xx.ravel()[pix], minlength=n) / cm
+        if self._fused_gpu:
+            mass = xp.zeros(n, xp.float64); sumvar = xp.zeros(n, xp.float64)
+            cyn = xp.zeros(n, xp.float64);  cxn = xp.zeros(n, xp.float64)
+            npix_i = xp.zeros(n, xp.int32); hs = xp.zeros(n, xp.uint8)
+            self._reduce((self._grid,), (self._blk,),
+                         (xp.ascontiguousarray(lbl.ravel(), dtype=xp.int32),
+                          sub.ravel(), var.ravel(), seed.ravel(), np.int32(H), np.int32(W),
+                          mass, sumvar, cyn, cxn, npix_i, hs))
+            npix = npix_i.astype(xp.float64)
+            cm = xp.clip(mass, 1e-12, None)
+            cy, cx = cyn / cm, cxn / cm
+            has_seed = hs
+        else:
+            lab = lbl.ravel(); pix = xp.nonzero(lab)[0]; rows = lab[pix] - 1
+            iv = sub.ravel()[pix]
+            mass = xp.bincount(rows, weights=iv, minlength=n)
+            sumvar = xp.bincount(rows, weights=var.ravel()[pix], minlength=n)
+            npix = xp.bincount(rows, minlength=n).astype(xp.float64)
+            cm = xp.clip(mass, 1e-12, None)
+            cy = xp.bincount(rows, weights=iv * self.yy.ravel()[pix], minlength=n) / cm
+            cx = xp.bincount(rows, weights=iv * self.xx.ravel()[pix], minlength=n) / cm
+            has_seed = _scatter_max(xp, rows, seed.ravel()[pix].astype(xp.float64), n)  # HIGH-thresh hysteresis
         son = mass / xp.sqrt(xp.clip(sumvar, 1e-12, None))          # integrated peak SNR
-        has_seed = _scatter_max(xp, rows, seed.ravel()[pix].astype(xp.float64), n)   # HIGH-threshold hysteresis
         sel = (has_seed > 0) & (npix >= p["min_pix"]) & (npix <= p["max_pix"]) & (son > p["son_min"])
         return {"x": cx[sel], "y": cy[sel], "intensity": mass[sel], "snr": son[sel],
                 "npix": npix[sel].astype(xp.int64)}

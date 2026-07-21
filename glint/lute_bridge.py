@@ -20,6 +20,8 @@ import re
 
 import numpy as np
 
+from glint.geom import _q_from_panels   # one geometry core, two panel schemas -- see geom.py
+
 HC_EV_A = 12398.419843320026     # h*c in eV*Angstrom -> lambda[A] = HC/E[eV]
 
 
@@ -76,28 +78,16 @@ def peaks_to_q(fs_arr, ss_arr, panels, clen_m, wavelength_A):
     via int(np.floor(x)). Callers are expected to filter, as stream_driver does with
     q[np.isfinite(q).all(1)]; a bad coordinate is dropped exactly like an off-panel peak.
     """
-    fs_arr = np.asarray(fs_arr, float)
-    ss_arr = np.asarray(ss_arr, float)
-    n = len(fs_arr)
-    r = np.full((n, 3), np.nan)
-    # Loop over PANELS (a handful) rather than peaks (hundreds to thousands): the per-peak Python
-    # loop this replaces cost ~4 ms for 458 peaks on a single-panel detector. `free` reproduces
-    # panel_of's "first panel that catches it" rule. Peaks on no panel stay NaN, as before.
-    fi = np.floor(fs_arr); si = np.floor(ss_arr)
-    free = np.ones(n, bool)
-    for p in panels:
-        m = (free & (fi >= p["min_fs"]) & (fi <= p["max_fs"])
-             & (si >= p["min_ss"]) & (si <= p["max_ss"]))
-        if not m.any():
-            continue
-        lf = fs_arr[m] - p["min_fs"]; ls = ss_arr[m] - p["min_ss"]
-        r[m, 0] = (p["cx"] + lf * p["fs"][0] + ls * p["ss"][0]) / p["res"]
-        r[m, 1] = (p["cy"] + lf * p["fs"][1] + ls * p["ss"][1]) / p["res"]
-        r[m, 2] = clen_m + p["coffset"]
-        free &= ~m
-    s_hat = r / np.linalg.norm(r, axis=1, keepdims=True)
-    z_hat = np.array([0.0, 0.0, 1.0])
-    return (s_hat - z_hat) / wavelength_A      # q in 1/A
+    # Geometry lives in glint.geom._q_from_panels, shared with geom.peaks_to_q -- the two used to
+    # carry independent copies and drifted (see that function). This wrapper only adapts the schema:
+    # panels are a LIST here (first match wins, as panel_of did), the basis vectors are 3-vectors,
+    # and z comes from the per-event clen rather than the .geom.
+    specs = [dict(lo_fs=p["min_fs"], hi_fs=p["max_fs"], lo_ss=p["min_ss"], hi_ss=p["max_ss"],
+                  off_fs=p["min_fs"], off_ss=p["min_ss"],
+                  fsx=p["fs"][0], fsy=p["fs"][1], ssx=p["ss"][0], ssy=p["ss"][1],
+                  cx=p["cx"], cy=p["cy"], res=p["res"], z=clen_m + p["coffset"])
+             for p in panels]
+    return _q_from_panels(fs_arr, ss_arr, specs, wavelength_A)
 
 
 def lambda_from_eV(eV):

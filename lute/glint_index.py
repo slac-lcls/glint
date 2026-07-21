@@ -66,9 +66,13 @@ class IndexGLINTParameters(ThirdPartyParameters):
     )
     top_peaks: Optional[PositiveInt] = Field(
         None,
-        description="ONLY with `images`: keep the N strongest peaks per frame (~100 is the measured "
-                    "sweet spot; weak peaks HURT the indexing rate). REJECTED at config time if set "
-                    "alongside `peaks`, because the CLI would not read it -- truncate the peak list "
+        description="ONLY with `images`: keep the N strongest peaks per frame. USE WITH CARE -- it "
+                    "truncates the frame itself, so the smaller list feeds scoring and refinement "
+                    "too, not just the candidate search. Measured on 120 real cxidb frames (median "
+                    "100 peaks): top_peaks 200 costs ~2 points of correct-lattice, 100 costs ~11, "
+                    "and 50 collapses the rate. Leave UNSET unless a finder is over-finding on "
+                    "background; it is a guard against that, not a free speedup. REJECTED at config "
+                    "time if set alongside `peaks`, because the CLI would not read it -- truncate "
                     "in FindPeaksSFX instead. Unset = keep all.",
         flag_type="--", rename_param="top-peaks",
     )

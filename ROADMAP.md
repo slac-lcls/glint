@@ -13,7 +13,7 @@ serial/rotation data. *Suggested* leads are in brackets — a proposal to react 
 ## 1. Validation & real data  *(suggested lead: Mona)*
 Run GLINT blind on real SFX datasets and judge output against established indexers.
 - End-to-end on a real dataset: cell + merge (CC\*/Rsplit) vs cctbx.xfel / DIALS / CrystFEL.
-- Extend `--fromfile` → CrystFEL-refine → `partialator` beyond ProK / lysozyme (≥2 more proteins),
+- Extend `--tofile` → CrystFEL-refine → `partialator` beyond ProK / lysozyme (≥2 more proteins),
   including the hexagonal `cxidb_62` (NERSC) as a second real protein.
 - Characterize where GLINT wins / ties / needs work across cell types and sparsity — a clean
   "when to reach for GLINT" table.

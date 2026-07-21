@@ -4,13 +4,13 @@ in the SFX DAG:  PeakFinderSFX -> [IndexGLINT] -> StreamFileConcatenator -> Part
 
 MERGEABILITY: the default GLINT stream is ORIENTATION-ONLY -- every reflection carries placeholder
 I=0/sigma=0. To merge you must pick one of `integrate: true` (GLINT predicts and box-integrates its
-own reflections, writing real I/sigma) or the `fromfile` -> indexamajig handoff. Feeding the default
+own reflections, writing real I/sigma) or the `tofile` -> indexamajig handoff. Feeding the default
 stream straight to partialator merges zeros.
 
 Why GLINT in LUTE: none of LUTE's bundled CrystFEL builds (0.10.2 default ... 0.12.0) are compiled
 with FFBIDX, so GPU fast-feedback-style indexing is simply unavailable via indexamajig. GLINT fills
 that gap -- GPU blind indexing + cross-frame consensus -- and emits the same CrystFEL `.stream` that
-ConcatenateStreamFiles / partialator already consume. For the best MERGE, set `fromfile` (GLINT hands
+ConcatenateStreamFiles / partialator already consume. For the best MERGE, set `tofile` (GLINT hands
 CrystFEL the refined-merge solution file).
 
 INSTALL (see lute/README.md): copy to `lute/io/models/glint_index.py`, add
@@ -19,7 +19,7 @@ INSTALL (see lute/README.md): copy to `lute/io/models/glint_index.py`, add
 """
 from typing import Any, Dict, Literal, Optional
 
-from pydantic import Field, PositiveFloat, PositiveInt, validator
+from pydantic import Field, PositiveFloat, PositiveInt, root_validator, validator
 
 from lute.io.models.base import ThirdPartyParameters
 
@@ -88,7 +88,7 @@ class IndexGLINTParameters(ThirdPartyParameters):
     )
     out: str = Field(
         "", description="Output .stream. Orientation-only (placeholder I/sigma) unless `integrate` is "
-                        "set or the `fromfile` handoff is used -- see the module docstring.",
+                        "set or the `tofile` handoff is used -- see the module docstring.",
         flag_type="--", rename_param="out", is_result=True,
     )
     cell: Optional[str] = Field(
@@ -108,14 +108,15 @@ class IndexGLINTParameters(ThirdPartyParameters):
     device: str = Field(
         "auto", description="auto (GPU if present) | cpu.", flag_type="--", rename_param="device",
     )
-    fromfile: Optional[str] = Field(
+    tofile: Optional[str] = Field(
         None,
-        description="Also emit a CrystFEL --indexing=file solution file (the refined-MERGE handoff): "
-                    "run `indexamajig --indexing=file --fromfile-input-file=<f> --tolerance=10,10,10,3`.",
-        flag_type="--", rename_param="fromfile",
+        description="WRITE a CrystFEL --indexing=file solution file (the refined-MERGE handoff): "
+                    "run `indexamajig --indexing=file --fromfile-input-file=<f> --tolerance=10,10,10,3`. "
+                    "Was `fromfile`, which is still accepted -- see the validator below.",
+        flag_type="--", rename_param="tofile",
     )
     lattice: str = Field(
-        "aP", description="Bravais lattice code for --fromfile (e.g. tPc tetragonal).",
+        "aP", description="Bravais lattice code for --tofile (e.g. tPc tetragonal).",
         flag_type="--", rename_param="lattice",
     )
     cascade: Optional[str] = Field(
@@ -124,11 +125,11 @@ class IndexGLINTParameters(ThirdPartyParameters):
     )
 
     # ---- integration: emit REAL I/sigma so the stream goes straight to partialator ----------------
-    # Without these the stream carries placeholder intensities and only the `fromfile` -> CrystFEL
+    # Without these the stream carries placeholder intensities and only the `tofile` -> CrystFEL
     # handoff yields a mergeable dataset. With `integrate` GLINT predicts and box-integrates its own
     # reflections (GPU-fused; the whole-frame float64 upcast that used to dominate is gone), so the DAG
     # can skip indexamajig entirely. TRADE-OFF: CrystFEL's prediction refinement imposes the lattice
-    # symmetry and still merges better -- prefer `fromfile` when merge quality is what matters, and
+    # symmetry and still merges better -- prefer `tofile` when merge quality is what matters, and
     # `integrate` when a CrystFEL-free GPU pipeline is what matters.
     integrate: bool = Field(
         False,
@@ -158,6 +159,22 @@ class IndexGLINTParameters(ThirdPartyParameters):
     # Validators run in field-definition order and see only EARLIER fields in `values`, so each of
     # these is declared after everything it inspects. They exist because the corresponding failures
     # are otherwise silent: a run that "succeeds" and hands the next task nothing usable.
+
+    @root_validator(pre=True)
+    def _accept_legacy_fromfile(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        """`fromfile` was renamed to `tofile`: GLINT WRITES that file, and the old name came from
+        CrystFEL's reader flag (--fromfile-input-file), so it read backwards from this side.
+
+        Runs pre=True so an existing config keeps working -- silently dropping an unknown `fromfile`
+        key would turn "best merge" configs into placeholder-intensity streams with no error, which
+        is exactly the failure mode nobody notices until partialator produces nothing."""
+        if "fromfile" in values:
+            legacy = values.pop("fromfile")
+            if values.get("tofile") not in (None, "") and legacy not in (None, ""):
+                raise ValueError("set `tofile` OR the deprecated `fromfile`, not both")
+            if legacy not in (None, ""):
+                values["tofile"] = legacy
+        return values
 
     @validator("images", always=True)
     def _one_source(cls, images: Optional[str], values: Dict[str, Any]) -> Optional[str]:

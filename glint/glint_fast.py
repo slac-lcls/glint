@@ -20,7 +20,7 @@ _REFINERS = {"adapt": refine_vec_adapt, "cg": refine_vec_cg, "bb": refine_vec_bb
              "raar": refine_vec_raar, "so2d": refine_vec_so2d, "admm": refine_vec_admm}
 
 
-M3_FUSED = os.environ.get("M3_FUSED", "0") == "1"   # M3: one fused CUDA kernel instead of the torch loop
+M3_FUSED = os.environ.get("M3_FUSED", "1") == "1"   # M3: one fused CUDA kernel instead of the torch loop (M3_FUSED=0 restores torch)
 M3_CAP = int(os.environ.get("M3_CAP", "0"))         # M3: cap peaks fed to the ASCENT only (0 = all)
 
 
@@ -43,12 +43,23 @@ def _refine(S0, Q, w, qmax):
     (82/78 vs 84/80 at cap 100) and lowest-|q| is worst (81/76), since dropping high-resolution
     shells costs the lever-arm the cell determination needs.
 
-    M3_FUSED=1 swaps the default grad path for glint.fused_m3's single kernel: 2.43x end-to-end on
-    the 120 cxidb frames at an unchanged blind rate (85/120), because it never materialises the ~10
-    (70400, P) intermediates the torch loop writes per step. Off by default because it is NOT
-    bit-exact -- sequential vs matmul reduction order moves 3/120 cells -- which is the same bar
-    KC_FP and ANNEAL_FP32 are held to. Only the grad path has a fused twin; cg/bb/lm/newton fall
-    through unchanged, as does any frame the kernel cannot take (no cupy, non-fp32, P > MAX_P)."""
+    M3_FUSED is ON by default: the grad path runs glint.fused_m3's single kernel, which never
+    materialises the ~10 (70400, P) intermediates the torch loop writes per step. 2.43x on the blind
+    front end and 1.32x end-to-end through the hybrid, at an unchanged rate (blind same_lattice
+    85/120, hybrid gate 93/120). M3_FUSED=0 restores the torch loop.
+
+    It is NOT bit-exact -- the per-start reduction is sequential in the kernel and a matmul in torch,
+    so summation order differs. Audited rather than assumed: 3/120 blind cells move (1/120 hybrid),
+    and every one is benign -- 2 were already failures under torch and stay failures, 1 is correct
+    under both and differs by 0.1 A on one axis. ZERO right->wrong or wrong->right swaps. Two fused
+    passes are 120/120 bit-identical, so it is deterministic.
+
+    Consequence of it being the default: runs are no longer bit-comparable against pre-#39 output.
+    Set M3_FUSED=0 to reproduce an older result exactly.
+
+    Only the grad path has a fused twin; cg/bb/lm/newton fall through unchanged, as does any frame
+    the kernel cannot take (no cupy, non-fp32, P > MAX_P), so CPU boxes and large-P dense clouds
+    silently keep the torch path."""
     if M3_CAP and int(Q.shape[0]) > M3_CAP:
         Q, w = Q[:M3_CAP], w[:M3_CAP]      # ascent only; qmax stays the FULL-frame value, so the
                                            # step schedule (step0 = 0.25/qmax) is unchanged

@@ -75,17 +75,20 @@ def main():
     ap.add_argument("--integrate", action="store_true",
                     help="native predict+integrate -> a stream with REAL I/sigma, self-contained (no CrystFEL). "
                          "With --images the frames are read straight from the stacked .cxi by event; with --peaks "
-                         "supply the per-frame image files via --image-dir. For the best (refined) merge use --fromfile")
+                         "supply the per-frame image files via --image-dir. For the best (refined) merge use --tofile")
     ap.add_argument("--image-dir", default=".", help="base directory for per-file frame images (--integrate with --peaks)")
     ap.add_argument("--int-dmin", type=float, default=2.0, help="--integrate resolution limit in A (default 2.0)")
     ap.add_argument("--int-tol", type=float, default=0.006,
                     help="--integrate Ewald excitation-error gate in 1/A (stills partiality window; default 0.006)")
-    ap.add_argument("--fromfile", metavar="SOL",
-                    help="also emit a CrystFEL --indexing=file solution file (the refined-merge handoff): "
+    ap.add_argument("--tofile", metavar="SOL",
+                    help="WRITE a CrystFEL --indexing=file solution file (the refined-merge handoff): "
                          "run 'indexamajig --indexing=file --fromfile-input-file=SOL --tolerance=10,10,10,3' "
                          "so CrystFEL refines+integrates the GLINT orientations (best merge)")
+    # Was --fromfile, which named the flag after CrystFEL's READER (--fromfile-input-file) even though
+    # GLINT is the WRITER -- so it read backwards from this side. Kept working, hidden from --help.
+    ap.add_argument("--fromfile", metavar="SOL", help=argparse.SUPPRESS)
     ap.add_argument("--lattice", default="aP",
-                    help="Bravais lattice code for --fromfile (e.g. tPc tetragonal, aP triclinic); default aP")
+                    help="Bravais lattice code for --tofile (e.g. tPc tetragonal, aP triclinic); default aP")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
     if (args.peaks or args.images) and not args.geom:
@@ -148,11 +151,15 @@ def main():
     _report(stats, args.out)
     if args.integrate:
         print(f"  integrated         : {nint} frames / {tot} reflections (real I/sigma) -> {args.out}")
-    if args.fromfile:
+    sol_path = args.tofile or args.fromfile
+    if sol_path:
+        if args.fromfile and not args.tofile:
+            print("  note: --fromfile is deprecated, use --tofile (GLINT WRITES this file; "
+                  "'fromfile' was named for CrystFEL, which reads it)", file=sys.stderr)
         from glint.predict import write_fromfile
-        nsol = write_fromfile(results, args.fromfile, args.lattice)
-        print(f"  fromfile solutions : {nsol} ({args.lattice}) -> {args.fromfile}"
-              f"  [indexamajig --indexing=file --fromfile-input-file={args.fromfile} --tolerance=10,10,10,3]")
+        nsol = write_fromfile(results, sol_path, args.lattice)
+        print(f"  solution file      : {nsol} ({args.lattice}) -> {sol_path}"
+              f"  [indexamajig --indexing=file --fromfile-input-file={sol_path} --tolerance=10,10,10,3]")
 
 
 if __name__ == "__main__":

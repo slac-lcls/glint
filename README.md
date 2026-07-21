@@ -33,7 +33,7 @@ glint --qframes frames.txt -o indexed.stream
 ```
 
 Options: `--cell "a b c al be ga"` (known cell, skip consensus) · `--nbest N` (multi-hypothesis
-consensus, default 3) · `--mode auto|sparse|dense` · `--integrate` (real I/σ) · `--fromfile` (hand
+consensus, default 3) · `--mode auto|sparse|dense` · `--integrate` (real I/σ) · `--tofile` (hand
 orientations to CrystFEL for the refined merge) · `--device cpu|auto` · `-N` (limit frames).
 
 ## Library

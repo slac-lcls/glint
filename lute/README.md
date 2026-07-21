@@ -14,12 +14,16 @@ rest of the DAG consumes.
 > placeholder `I=0.00 sigma(I)=0.00`. Choose one of:
 >   * `integrate: true` -- GLINT predicts and box-integrates its own reflections and writes real
 >     I/sigma, so the stream goes straight to `PartialatorMerger` with no CrystFEL step; or
->   * `fromfile:` -- hand the orientations to `indexamajig --indexing=file` (below). CrystFEL's
+>   * `tofile:` -- hand the orientations to `indexamajig --indexing=file` (below). CrystFEL's
 >     prediction refinement imposes the lattice symmetry, and this still gives the **better merge**.
 >
 > Feeding the default stream to partialator merges zeros.
 
-On sparse real data GLINT recovers ~1.5x more frames than xgandalf and, via the `fromfile` route,
+> **Renamed:** `tofile:` was `fromfile:`. GLINT *writes* that file; the old name came from CrystFEL's
+> reader flag (`--fromfile-input-file`) and so read backwards from the GLINT side. Existing configs
+> keep working — `fromfile:` is still accepted and maps to `tofile:` — but setting both is an error.
+
+On sparse real data GLINT recovers ~1.5x more frames than xgandalf and, via the `tofile` route,
 merges to a more complete / higher-signal dataset.
 
 ## Install
@@ -36,12 +40,12 @@ Copies `glint_index.py` -> `lute/io/models/`, exports it, and registers
         -W $(pwd)/glint_dag.yaml -c $(pwd)/glint_config.yaml --partition=ampere
 
 ## Best merge: hand CrystFEL the refined solution
-Set `fromfile:` (+ `lattice: tPc` for tetragonal) in the `IndexGLINT` config; GLINT emits a
+Set `tofile:` (+ `lattice: tPc` for tetragonal) in the `IndexGLINT` config; GLINT emits a
 `--indexing=file` solution, then:
     indexamajig --indexing=file --fromfile-input-file=glint.sol --tolerance=10,10,10,3 ...
 CrystFEL's refiner imposes the lattice symmetry -> best merge (validated: beats xgandalf on cxidb-17).
 
-`lattice:` applies **only** to the `--fromfile` solution file. The GLINT stream header always reports
+`lattice:` applies **only** to the `--tofile` solution file. The GLINT stream header always reports
 `lattice_type = triclinic / centering = P`, so set partialator's point group explicitly (`-y`) in the
 `PartialatorMerger` config rather than relying on the header.
 
@@ -56,9 +60,9 @@ straight into the stream -- no `indexamajig` step. Needs image data: with `peaks
     int_tol: 0.002    # the model's default; the CLI's 0.006 over-predicts (CC1/2 0.04 vs 0.28)
 
 The integration itself is cheap (the whole-frame float64 upcast that used to dominate it is gone, and
-the box sum is a fused GPU kernel). **Trade-off:** the `fromfile` route above still merges better,
+the box sum is a fused GPU kernel). **Trade-off:** the `tofile` route above still merges better,
 because CrystFEL's prediction refinement imposes the lattice symmetry. Use `integrate` when you want a
-GPU pipeline with no CrystFEL dependency; use `fromfile` when merge quality is what matters.
+GPU pipeline with no CrystFEL dependency; use `tofile` when merge quality is what matters.
 
 ## Self-contained front end: drop FindPeaksSFX
 Set `images` (raw `.cxi` or a `.list`) instead of `peaks` and GLINT peak-finds on the GPU itself, so

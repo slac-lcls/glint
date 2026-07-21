@@ -1,11 +1,15 @@
 """Probe 2: get per-pixel lab coords (x,y,z) from psana geometry + photon energy.
 These give exact q -- no distance calibration needed."""
-import sys
+import sys, os
 
 import numpy as np
 from psana import DataSource
 
-ds = DataSource(exp="mfx100848724", run=51)
+EXP = os.environ.get("GLINT_EXP")   # beamtime ID: proprietary, so not committed
+if not EXP:
+    sys.exit("set GLINT_EXP=<experiment id>; the ID is deliberately not in this file "
+             "(proprietary beamtime data -- see experiments/README_beamtime.md)")
+ds = DataSource(exp=EXP, run=int(os.environ.get("GLINT_RUN", "51")))
 myrun = next(ds.runs())
 det = myrun.Detector("jungfrau")
 

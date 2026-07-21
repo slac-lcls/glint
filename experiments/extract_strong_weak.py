@@ -1,4 +1,4 @@
-"""Stage A (psana2 env): dump REAL mfx100848724 run-51 frames as STRONG + WEAK
+"""Stage A (psana2 env): dump REAL MFX run-51 frames ($GLINT_EXP) as STRONG + WEAK
 reciprocal-q lists for the indexing-guided soft-completeness test on real data.
 
   strong = high-SNR peaks  (the normal peakfinder: son>=6, I>med+200)
@@ -28,7 +28,11 @@ S_SON, S_ABS = 6.0, 200.0
 W_SON, W_ABS = float(os.environ.get("W_SON", "3.0")), float(os.environ.get("W_ABS", "30.0"))
 CAP_S, CAP_W = 600, 1200
 
-ds = DataSource(exp="mfx100848724", run=51)
+EXP = os.environ.get("GLINT_EXP")   # beamtime ID: proprietary, so not committed
+if not EXP:
+    sys.exit("set GLINT_EXP=<experiment id>; the ID is deliberately not in this file "
+             "(proprietary beamtime data -- see experiments/README_beamtime.md)")
+ds = DataSource(exp=EXP, run=int(os.environ.get("GLINT_RUN", "51")))
 myrun = next(ds.runs())
 det = myrun.Detector("jungfrau")
 eb = myrun.Detector("ebeamh")

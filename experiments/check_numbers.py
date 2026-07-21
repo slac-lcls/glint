@@ -87,6 +87,9 @@ FACTS: dict[str, float | str] = {
 
 DEFAULT_TARGETS = [
     HOME / "git/papers/glint/glint.tex",
+    # source of truth for the Confluence "epixUHR 4M -- DRP per-event processing time" comment;
+    # the comment is produced by pasting this file through Insert > Markup > Markdown
+    HOME / "Desktop/epixuhr_drp_perevent_projections.md",
     HOME / "git/slides/glint/build_glint.py",
     HOME / "git/slides/glint/build_pitch.py",
     HOME / "git/slides/drp/build_drp.py",
@@ -143,7 +146,10 @@ OVERCLAIM = [
     Rule("live-merge", r"(?:stops? when the data are complete|live merge|real[- ]time merg)",
          "live completeness comes from the running merge accumulator: 179 f/s vs ~3500 needed, "
          "~20x short, and unmerged (#19)",
-         "scope the claim to INDEXING, or mark the driver as in review"),
+         "scope the claim to INDEXING, or mark the driver as in review",
+         # a sentence that DENIES the live merge is the caveat we want, not an overclaim
+         exempt=("not a live merge", "not (yet)", "not yet true", "how close",
+                 "20x short", "20× short", "still open", "in review")),
     Rule("steer-run", r"steer a run while the beam is on",
          "asserts a closed loop the measured pipeline does not close", "live hit rate / cell"),
     Rule("mhz-ready", r"ready for MHz[- ]rate",
@@ -171,6 +177,28 @@ AMBIGUOUS = [
          "add /hit and the batch size",
          needs=("/hit", "batch", "b=32", "b=120", "amortiz", "throughput", "steady")),
 ]
+
+
+# ---- file-level invariants: if the trigger appears, the caveat must appear too ----------------
+# Line-level rules cannot express "you may say this only if you also say that". The RTX case is
+# exactly that shape: quoting fp32 timings next to a card we have never run on is fine ONLY while
+# the page states outright that no number came from one.
+REQUIRED = [
+    ("RTX", "no number here was measured on an RTX Blackwell",
+     "this file argues an RTX Blackwell case from datasheet fp32/$, but every GLINT timing on it is "
+     "an A100 (or H100) measurement. Without the blanket disclaimer a reader attributes the fp32 "
+     "figures to a card we have never benchmarked -- which is exactly what happened once."),
+]
+
+
+def check_required(path: Path, text: str) -> list[str]:
+    out = []
+    low = text.lower()
+    for trigger, needed, why in REQUIRED:
+        if trigger.lower() in low and needed.lower() not in low:
+            out.append(f"  {path.name}  [REQUIRED] mentions {trigger!r} without {needed!r}\n"
+                       f"      why:  {why}\n")
+    return out
 
 
 def _normalize(text: str) -> str:
@@ -299,7 +327,7 @@ def main(argv: list[str]) -> int:
             skipped += 1
             continue
         checked += 1
-        found = scan(path, text)
+        found = scan(path, text) + check_required(path, text)
         if found:
             fails.extend(found)
             print(f"{path}:")

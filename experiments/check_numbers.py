@@ -121,6 +121,13 @@ DEFAULT_TARGETS = [
     HOME / "git/slides/glint/build_pitch.py",
     HOME / "git/slides/drp/build_drp.py",
     HOME / "git/slides/fftindex/build.py",
+    # The repo's own front door. These were NOT guarded until 2026-07-21, which is exactly how
+    # README.md kept claiming "~550x the throughput" (11542/21.3, the retired blind figure) long after
+    # the paper and the decks had been corrected to ~340x. The guard watched the deliverables we
+    # publish and missed the three files a new collaborator opens first.
+    HOME / "git/glint/README.md",
+    HOME / "git/glint/ROADMAP.md",
+    HOME / "git/glint/GLINT_REPORT.md",
 ]
 PDF_TARGETS = [
     HOME / "git/slides/glint/glint_summary.pdf",
@@ -155,6 +162,13 @@ RETIRED = [
          "21.3 ms was the M2/M4 milestone, superseded by 34 ms end-to-end", "34 ms"),
     Rule("fps-47", r"(?<![\d.])47\b(?=[^\n]{0,60}(?:frames?\s*/\s*s|f/s|shots?/s|throughput))",
          "47 f/s is the reciprocal of the old 21.3 ms; 34 ms gives 29 f/s", "29"),
+    # Caught by injecting it back into README after adding README to the targets: the guard read the
+    # file and said nothing, because no rule covered it. Adding a target without a matching rule is
+    # theatre -- it raises the "checked N files" count and catches nothing.
+    Rule("xgandalf-550", r"(?<![\d.])550\s*(?:×|x|\\times)",
+         "550x is 11542/21.3 -- the xgandalf ratio taken against the RETIRED 21.3 ms blind figure. "
+         "Against the current 34 ms it is ~340x. This one outlived its source by weeks in README.md",
+         "~340x"),
     Rule("speedup-160", r"(?<![\d.])160\s*(?:×|x|\\times)",
          "the scalar->GPU blind ratio follows 2342/34, not 2342/15", "~69x"),
     Rule("blind-rate-swap", r"GLINT[^\n]{0,40}\b71\s*\\?%",

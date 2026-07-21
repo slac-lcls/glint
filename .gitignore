@@ -14,3 +14,5 @@ experiments/xgandalf/ffbidx_driver
 # scratch run outputs
 *_out.txt
 qd_sweep.txt
+# macOS Finder metadata (recreated on any directory you browse)
+.DS_Store

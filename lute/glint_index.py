@@ -53,13 +53,15 @@ class IndexGLINTParameters(ThirdPartyParameters):
     geom: str = Field(
         "", description="CrystFEL .geom file.", flag_type="--", rename_param="geom",
     )
-    peakfinder: Optional[Literal["v4", "pf9", "stored"]] = Field(
-        None,
-        description="Peak finder for `images`: v4 | pf9 | stored. `stored` reuses the peakfinder8 / "
-                    "Cheetah peaks already written into the .cxi -- the efficient path when the peaks "
-                    "exist. (The CLI also accepts pf8, but GLINT has not vendored it: it needs a "
-                    "per-pixel q map + radial.py and exits at startup. Use `stored` instead.) "
-                    "Unset = GLINT default (v4).",
+    peakfinder: Literal["v4", "pf9", "stored"] = Field(
+        "stored",
+        description="Peak finder for `images`: v4 | pf9 | stored. Defaults to `stored`, which reuses "
+                    "the peakfinder8 / Cheetah peaks already written into the .cxi -- no re-finding, "
+                    "and it avoids v4 over-finding on water rings. This DELIBERATELY overrides the "
+                    "GLINT CLI default of v4: on a .cxi that already carries peaks, re-finding them "
+                    "is both slower and worse. Set `v4`/`pf9` explicitly to peak-find from scratch. "
+                    "(The CLI also accepts pf8, but GLINT has not vendored it: it needs a per-pixel "
+                    "q map + radial.py and exits at startup. Use `stored` instead.)",
         flag_type="--", rename_param="peakfinder",
     )
     top_peaks: Optional[PositiveInt] = Field(
@@ -73,6 +75,12 @@ class IndexGLINTParameters(ThirdPartyParameters):
     wavelength: Optional[PositiveFloat] = Field(
         None, description="Wavelength in A. Unset = read from the .geom / per-event data.",
         flag_type="--", rename_param="wavelength",
+    )
+    n: Optional[int] = Field(
+        None,
+        description="Limit to the first N frames (0/None = all) -- the CLI's -N. Mostly for smoke "
+                    "tests on a slice of a run before committing a full DAG.",
+        flag_type="-", rename_param="N",
     )
     out: str = Field(
         "", description="Output .stream. Orientation-only (placeholder I/sigma) unless `integrate` is "

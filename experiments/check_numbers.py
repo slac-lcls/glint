@@ -122,13 +122,13 @@ class Rule:
 
 # ---- 1. retired values -----------------------------------------------------------------------
 RETIRED = [
-    Rule("blind-15ms", r"\b15\s*ms\b",
+    Rule("blind-15ms", r"(?<![\d.])15\s*ms\b",
          "blind was corrected to 34 ms/frame; 15 ms is the pre-sweep value", "34 ms"),
-    Rule("blind-21ms", r"\b21(?:\.3)?\s*ms\b",
+    Rule("blind-21ms", r"(?<![\d.])21(?:\.3)?\s*ms\b",
          "21.3 ms was the M2/M4 milestone, superseded by 34 ms end-to-end", "34 ms"),
-    Rule("fps-47", r"\b47\b(?=[^\n]{0,60}(?:frames?\s*/\s*s|f/s|shots?/s|throughput))",
+    Rule("fps-47", r"(?<![\d.])47\b(?=[^\n]{0,60}(?:frames?\s*/\s*s|f/s|shots?/s|throughput))",
          "47 f/s is the reciprocal of the old 21.3 ms; 34 ms gives 29 f/s", "29"),
-    Rule("speedup-160", r"[~≈]?\s*160\s*(?:×|x|\\times)",
+    Rule("speedup-160", r"(?<![\d.])160\s*(?:×|x|\\times)",
          "the scalar->GPU blind ratio follows 2342/34, not 2342/15", "~69x"),
     Rule("blind-rate-swap", r"GLINT[^\n]{0,40}\b71\s*\\?%",
          "71% is XGANDALF's blind rate; GLINT-(1) blind is 76% (paper tab:summary). Attributing 71% "

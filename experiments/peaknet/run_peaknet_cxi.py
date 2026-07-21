@@ -1,4 +1,4 @@
-"""Run PeakNet-673M on real mfxl1038923-r0278 CXI frames and extract STRONG (above
+"""Run PeakNet-673M on real MFX CXI frames ($GLINT_PEAKNET_CXI) and extract STRONG (above
 threshold) + WEAK (sub-threshold p_peak) peaks -- the real-data weak-peak signal that
 is Cong's whole idea and the input to soft-completeness scoring.
 
@@ -16,7 +16,10 @@ import torch.nn.functional as F
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from build_peaknet import load_model, seg_forward
 
-CXI_DIR = "/sdf/data/lcls/ds/prj/prjcwang31/results/proj-stream-to-ml/peaknet-mfxl1038923-r0278-discard"
+CXI_DIR = os.environ.get("GLINT_PEAKNET_CXI")   # lives in a colleague's project area
+if not CXI_DIR:
+    sys.exit("set GLINT_PEAKNET_CXI=<dir of PeakNet CXI files>; the path names a beamtime\n"
+             "run and sits in someone else's project space, so it is not committed")
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 5
 GLOB = sys.argv[2] if len(sys.argv) > 2 else CXI_DIR + "/*.cxi"
 STRONG_CUT, WEAK_LO = 0.5, 0.10

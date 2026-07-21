@@ -13,14 +13,35 @@ work_dir: "/sdf/data/lcls/ds/prj/prjdat21/scratch/glint_sfx"
 IndexGLINT:
     geom: "{{ work_dir }}/detector.geom"        # CrystFEL .geom
     peaks: "{{ work_dir }}/peaks.stream"         # FindPeaksSFX peak-search stream
-    out: "{{ work_dir }}/glint.stream"
+    out: "{{ work_dir }}/glint.stream"           # required (it is the Task result the concatenator reads)
     cell: null                                    # blind cross-frame consensus; or "78.6 78.6 37.9 90 90 90"
     mode: "auto"                                  # auto | sparse | dense
     nbest: 3
     device: "auto"
-    # --- for the best MERGE, emit the refined-merge solution and add an indexamajig --indexing=file step: ---
+    #
+    # !! As written above the stream is ORIENTATION-ONLY: every reflection gets placeholder
+    # !! I=0.00 sigma(I)=0.00, so sending it straight to PartialatorMerger merges ZEROS.
+    # !! Enable exactly one of the two blocks below to get a real dataset.
+    #
+    # --- (a) BEST MERGE: emit the solution file and add an indexamajig --indexing=file step ---------
     # fromfile: "{{ work_dir }}/glint.sol"
     # lattice: "tPc"                              # tetragonal; then: indexamajig --indexing=file
     #                                              --fromfile-input-file=glint.sol --tolerance=10,10,10,3
+    #   (`lattice` applies ONLY to the .sol file -- the stream header always says triclinic/P, so set
+    #    partialator's point group explicitly with -y in the PartialatorMerger config.)
+    #
+    # --- (b) CRYSTFEL-FREE: GLINT integrates its own reflections -> real I/sigma in the stream ------
+    # integrate: true
+    # image_dir: "{{ work_dir }}/images"          # required with `peaks`; ignored with `images`
+    # int_dmin: 2.0
+    # int_tol: 0.002                              # model default; the CLI's 0.006 over-predicts
+    #                                              (CC1/2 0.04 vs 0.28 on real data)
+    #
+    # --- self-contained GPU front end: raw .cxi instead of a peak stream ---------------------------
+    #   Comment OUT `peaks` above if you use this -- `peaks` and `images` are mutually exclusive.
+    #   Then run glint_dag_images.yaml, which has no FindPeaksSFX node.
+    # images: "{{ work_dir }}/run.cxi"
+    # peakfinder: "stored"                        # v4 | pf9 | stored (reuse the .cxi's peakfinder8 peaks)
+    # top_peaks: 100                              # `images` only; ~100 strongest is the sweet spot
 
 # ... StreamFileConcatenator / PartialatorMerger / HKLManipulator: (copy from the standard example) ...

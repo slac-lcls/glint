@@ -38,6 +38,27 @@ import glint.replica_gpu_batch as rgb
 
 
 # ------------------------------------------------------------- orientation-invariant hkl grid ----
+# Fused predict gate: matmul(g@R) + Ewald/qmax test + atomic compaction, one kernel + one D2H
+# (replaces the ~6 cupy ops + full-Nhkl qg/qn2/exc intermediates). Survivors written unordered;
+# the caller argsorts by hkl index to restore grid order, so the result matches the eager path.
+_GATE_SRC = r"""
+extern "C" __global__ void predict_gate(const double* g, int nhkl, const double* R, double wave,
+                                         double qmax2, double tol, double* out, int* counter, int cap){
+  int i = blockIdx.x*blockDim.x + threadIdx.x; if (i >= nhkl) return;
+  double gx=g[3*i], gy=g[3*i+1], gz=g[3*i+2];
+  double qx=gx*R[0]+gy*R[3]+gz*R[6];
+  double qy=gx*R[1]+gy*R[4]+gz*R[7];
+  double qz=gx*R[2]+gy*R[5]+gz*R[8];
+  double qn2=qx*qx+qy*qy+qz*qz;
+  double exc=qz+0.5*wave*qn2;
+  if (qn2<=qmax2 && fabs(exc)<tol){
+    int p=atomicAdd(counter,1);
+    if (p<cap){ out[6*p]=(double)i; out[6*p+1]=qx; out[6*p+2]=qy; out[6*p+3]=qz; out[6*p+4]=qn2; out[6*p+5]=exc; }
+  }
+}"""
+_GATE_KERNEL = cp.RawKernel(_GATE_SRC, "predict_gate") if _HAVE_CP else None
+
+
 class HKLGrid:
     """The candidate hkl set, hoisted out of the per-frame path.
 
@@ -60,18 +81,26 @@ class HKLGrid:
         # projection then works on.
         self.gpu = bool(gpu) and _HAVE_CP
         self._gg = cp.asarray(self.g.astype(np.float64)) if self.gpu else None
+        if self.gpu:
+            self._ggr = cp.ascontiguousarray(self._gg.ravel())
+            self._gout = cp.empty((self.g.shape[0], 6), cp.float64)
+            self._gcnt = cp.zeros(1, cp.int32)
 
     def predict(self, M_or_R, panels, clen_m, wavelength_A, tol=0.006, is_recip=False):
         """Same result as predict_spots(..., dmin=self.dmin, tol=tol) with the grid reused."""
         R = np.asarray(M_or_R, float) if is_recip else recip_from_M(M_or_R)
         if self.gpu:
-            qg = self._gg @ cp.asarray(R)
-            qn2g = (qg * qg).sum(1)
-            excg = qg[:, 2] + 0.5 * wavelength_A * qn2g      # 0 on the Ewald sphere
-            sel = (qn2g <= self.qmax * self.qmax) & (cp.abs(excg) < tol)
-            idx_d = cp.where(sel)[0]                          # gather survivors -> ONE D2H (was 4)
-            C = cp.asnumpy(cp.concatenate([idx_d.astype(cp.float64)[:, None], qg[idx_d],
-                                           qn2g[idx_d][:, None], excg[idx_d][:, None]], axis=1))
+            # fused kernel: matmul + Ewald/qmax gate + compaction in one pass, then ONE D2H
+            nhkl = self.g.shape[0]; self._gcnt[0] = 0
+            Rf = cp.ascontiguousarray(cp.asarray(R).ravel())
+            tpb = 256; blocks = (nhkl + tpb - 1) // tpb
+            _GATE_KERNEL((blocks,), (tpb,),
+                         (self._ggr, np.int32(nhkl), Rf, np.float64(wavelength_A),
+                          np.float64(self.qmax * self.qmax), np.float64(tol),
+                          self._gout.ravel(), self._gcnt, np.int32(nhkl)))
+            n = int(self._gcnt[0])
+            C = cp.asnumpy(self._gout[:n])
+            C = C[np.argsort(C[:, 0], kind="stable")]         # restore hkl-grid order
             idx = C[:, 0].astype(np.int64)
             hkl = self.g[idx]
             q = C[:, 1:4]; qn2 = C[:, 4]; exc = C[:, 5]

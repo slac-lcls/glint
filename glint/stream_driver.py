@@ -69,9 +69,12 @@ class HKLGrid:
             qn2g = (qg * qg).sum(1)
             excg = qg[:, 2] + 0.5 * wavelength_A * qn2g      # 0 on the Ewald sphere
             sel = (qn2g <= self.qmax * self.qmax) & (cp.abs(excg) < tol)
-            idx = cp.asnumpy(cp.where(sel)[0])
+            idx_d = cp.where(sel)[0]                          # gather survivors -> ONE D2H (was 4)
+            C = cp.asnumpy(cp.concatenate([idx_d.astype(cp.float64)[:, None], qg[idx_d],
+                                           qn2g[idx_d][:, None], excg[idx_d][:, None]], axis=1))
+            idx = C[:, 0].astype(np.int64)
             hkl = self.g[idx]
-            q = cp.asnumpy(qg[sel]); qn2 = cp.asnumpy(qn2g[sel]); exc = cp.asnumpy(excg[sel])
+            q = C[:, 1:4]; qn2 = C[:, 4]; exc = C[:, 5]
         else:
             q = self.g @ R
             qn2 = np.einsum("ij,ij->i", q, q)

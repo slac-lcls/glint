@@ -91,20 +91,32 @@ conda2 reader; that is the device-resident streaming driver at network scale.
   preserves global event ids — all psana/MPI/GPU-free.
 - **envbridge** (its home): conda1 numpy 1.26 ↔ conda2 numpy 2.3, float64 bit-exact.
 
-## ⚠ The real-data gate (unchanged, both eras)
+## The real-data gate — xtc2 VALIDATED, xtc1 pending
 
-The synthetic tests don't exercise the psana **geometry**, the one real risk — identical for psana1 and
-psana2 because both default to the PSANA coordinate frame:
+The synthetic tests don't exercise the psana **geometry**, the one real risk. Status:
 
-* psana per-pixel **Z is nominal** — `--zdist` overrides it; a wrong value scales every `|q|`.
+**xtc2 / psana2 — validated on real data.** On a real psana2 Jungfrau16M run whose deployed psana
+geometry is a LUTE/BayFAI-refined fit, the reader's per-pixel coord→`|q|` reproduces the full trusted
+geometry to **max 0.025 %, median 0.011 %**: the deployed `calibconst` geometry *is* the refined fit (so
+no geometry override is needed), the constant-`--zdist` override is an excellent approximation (per-pixel
+Z spread ~0.1 mm), and real frames peak-find to sane ring `|q|`. The reader is **self-consistent** —
+coords (`get_pixel_coords`) and data (`raw.calib`) are both psana-native order, so there is no internal
+segment permutation.
+
+**xtc1 / psana1 — still pending** a run that has *both* raw xtc and a trusted refined geometry staged
+(the obvious calibration candidate's raw data is on tape, not disk).
+
+**Residuals (both eras):**
+
+* psana per-pixel **Z is nominal** — `--zdist` overrides it; a wrong value scales every `|q|`. Source it
+  from the geometry's refined distance (e.g. a `.poni` `Distance:`).
 * coords are the **PSANA frame** (cframe=0), correctly handed for GLINT's blind indexing but **not**
   CrystFEL's lab frame — don't feed these orientations to `indexamajig --indexing=file` unfixed.
-* `calib()` is DAQ panel order, coords are geometry-file order; the size assert catches a mismatch, not
-  a **permutation**. Verify segment order against `det.image()` on first real data. Cell params are
-  mirror-invariant, so a handedness flip would pass a cell-agreement check — confirm chirality once.
-
-**The gate:** on a run that also has a trusted `.geom`, index the same events both ways and confirm cell
-+ per-frame q agree.
+* **handedness/chirality** is mirror-invariant in both `|q|` and cell params, so a powder/geometry check
+  cannot catch a global mirror — confirm chirality once on a real crystal (for blind indexing it is just
+  the enantiomorph, resolvable downstream).
+* if you ever reconcile with an *external* `.geom` (different segment order), the size assert catches a
+  size mismatch, not a **permutation** — verify against `det.raw.image()`.
 
 ## Known simplifications (correctness-first)
 

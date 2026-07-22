@@ -35,9 +35,13 @@ def _wavelength_A(ebeam_det, evt):
 
 
 def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
-                          min_peaks=6, max_events=0):
+                          min_peaks=6, max_events=0, rank=0, nranks=1):
     """Peak-find a whole psana1 (LCLS-I) run in-process and return its q-frames -- same dict contract
-    as the psana2 reader: {qframes, events, n_events, n_sent, n_skipped_wl}."""
+    as the psana2 reader: {qframes, events, n_events, n_sent, n_skipped_wl}.
+
+    rank/nranks shard events round-robin (rank r owns event i iff i % nranks == r) for the MPI wrapper;
+    the default rank=0/nranks=1 owns everything, so single-process behaviour is unchanged. Events are
+    numbered by the global enumerate index, so shards are disjoint and the returned `events` are global."""
     if zdist <= 0:
         raise ValueError("zdist (sample-detector distance, m) is REQUIRED: psana per-pixel Z is nominal")
 
@@ -59,6 +63,8 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
     for i, evt in enumerate(ds.events()):
         if max_events and i >= max_events:
             break
+        if not xtc_core.event_in_shard(i, rank, nranks):
+            continue                         # not this rank's event -- skip before the expensive calib
         frame = detector.calib(evt)          # psana1: pedestal/gain/common-mode applied -> (nseg,H,W)
         if frame is None:
             continue

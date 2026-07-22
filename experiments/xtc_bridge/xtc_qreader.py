@@ -20,9 +20,14 @@ import xtc_core
 
 
 def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_det="ebeamh",
-                   min_peaks=6, max_events=0):
+                   min_peaks=6, max_events=0, rank=0, nranks=1):
     """Peak-find a whole psana2 run in conda2 and return its q-frames (see xtc_qreader_psana1 for the
-    identical psana1 return contract): dict of qframes / events / counts, all envbridge-sendable."""
+    identical psana1 return contract): dict of qframes / events / counts, all envbridge-sendable.
+
+    rank/nranks shard events round-robin for the MPI wrapper (each rank's conda1 process calls this over
+    its own bridge worker with its shard, so there is no MPI inside conda2). Default rank=0/nranks=1 owns
+    everything -- single-call behaviour unchanged; `events` are global enumerate indices, so shards are
+    disjoint and the partial streams merge by concatenation."""
     if zdist <= 0:
         raise ValueError("zdist (sample-detector distance, m) is REQUIRED: psana per-pixel Z is nominal")
 
@@ -69,6 +74,8 @@ def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_d
     for i, evt in enumerate(prun.events()):
         if max_events and i >= max_events:
             break
+        if not xtc_core.event_in_shard(i, rank, nranks):
+            continue                         # not this rank's event -- skip before the expensive calib
         frame = detector.raw.calib(evt)
         if frame is None:
             continue

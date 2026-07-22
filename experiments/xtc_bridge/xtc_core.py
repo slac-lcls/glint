@@ -14,6 +14,15 @@ import numpy as np
 HC_EV_A = 12398.419843320026
 
 
+def event_in_shard(i, rank, nranks):
+    """Round-robin event ownership for MPI sharding: rank r owns global event i iff i % nranks == r.
+    Round-robin (not contiguous blocks) load-balances when indexable frames cluster in time, and needs
+    no up-front event count -- each rank walks the smd stream and does the expensive calib + peak-find
+    only on its own events. The global index i is preserved into the .stream so per-rank chunks from
+    different ranks never collide, and the partial streams merge by a plain chunk concatenation."""
+    return nranks <= 1 or (i % nranks) == rank
+
+
 def load_peakfinder_v4():
     """Import glint/peakfinder_v4.py directly, bypassing the glint package __init__ (which would drag
     GLINT's numpy-1 modules into a numpy-2 worker). Self-contained: numpy/cupy, no torch, no glint."""

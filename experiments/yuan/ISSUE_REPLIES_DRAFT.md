@@ -82,3 +82,126 @@ Reproduce everything: `pytest test_cbxd_hough.py test_cbxd_arms.py` first (fast 
 `run_grid_arms.py` (resumable, checkpointed), `subsample_streaks_na028.py` +
 `subsample_streaks_multi_na.py` for the deconfound, `analyze_subsample_geometry_multi.py` for the
 geometry check, `plotting/plot_phase_diagram.py` for both figures.
+
+---
+
+# Draft reply — cross-frame consensus (issue #12), ready to post pending review
+
+TL;DR up front since this isn't the result the hypothesis predicted: **naive pooling doesn't
+replicate the SFX "pooling doubles the effect" result for CBXD, at full statistical power.** TAN
+has a small but real-looking exception, with a mechanism, below.
+
+## 1. Two mechanisms, both mirroring existing validated code, not invented from scratch
+
+**Data-level pooling** (`generate_dataset_multishot.py`, `run_multishot.py`): concatenate M
+independent shots of the *same* crystal (same true orientation, independent noise + spurious-point
+draws each shot -- modeling repeat exposures) into one bigger point cloud, run the existing
+single-shot accumulator (`cbxd_hough_gpu.hough_seed_index`, unchanged) on the pool. This is exact
+for the vote-count objective -- `score(R, concat(shots), tol) == sum(score(R, shot_m, tol))`,
+proven in `test_cbxd_multishot.py::test_multishot_pooling_exact` -- so "pool streaks within a shot"
+and "pool shots" are literally the same accumulator operation, just on a bigger point cloud.
+
+**Result-level consensus** (`cbxd_orientation_consensus.py`): mirrors `glint/multishot.py`'s
+`consensus_cell` directly -- solve each shot *independently* (own search, own points, no data
+shared), collect the M orientation hypotheses, group by rotational proximity (geodesic angle <
+`ang_tol_deg`, same greedy single-link-to-representative clustering as `_grp_reduced`), return the
+dominant cluster if it clears `min_support`. This is the actual mechanism behind the SFX result
+this issue is asking us to replicate, not a lookalike.
+
+Crystals throughout are the exact same 20 from `data/grid/orientations_na0.028.npz` deliverable 3
+already validated (`generate_dataset_multishot.py` reuses that pool directly, not a fresh draw --
+`test_cbxd_multishot.py::test_shot_zero_matches_grid_cell` checks shot 0 is byte-identical to the
+cached grid cell at every noise level).
+
+## 2. Headline: PTS + data-pooling is flat at every noise level, full N=20/n_coarse=5M
+
+Same candidate density deliverable 3's own headline numbers use (not the faster 1M we piloted
+with first -- see the methodology note in section 4). Noise in {2e-4, 5e-4, 1e-3, 2e-3} (the
+2e-4/5e-4/1e-3 range plus the 2e-3 WALLED point from the deliverable-3 grid), M in {1, 2, 4, 8},
+NA=0.028:
+
+| noise | M=1 | M=2 | M=4 | M=8 |
+|---|---|---|---|---|
+| 2e-4 (baseline) | 13/20, 74% mean | 15/20, 80% | 13/20, 73% | 15/20, 79% |
+| 5e-4 | 8/20, 54% mean | 8/20, 52% | 8/20, 52% | 7/20, 49% |
+| 1e-3 (transition) | 0/20, 40% mean | 1/20, 44% | 2/20, 41% | 0/20, 39% |
+| 2e-3 (walled) | 0/20, 38% mean | 0/20, 37% | 0/20, 34% | 0/20, 32% |
+
+Flat everywhere, no exceptions. The walled point stays walled at every M -- pooling doesn't retreat
+the boundary deliverable 3 mapped. Full data: `results_multishot.jsonl`.
+
+## 3. Result-level consensus: negative for the weak arm, inconclusive for the strong one
+
+Small test (8 crystals, noise=1e-3, M in {2,4,8}), comparing COM (arm 1, centroid-only -- no
+cross-streak pooling, deliberately the weak per-shot signal analogous to a single sparse SFX
+frame) and PTS, each alone vs. with consensus:
+
+| method | M | has consensus | success \| has answer | mean frac \| has answer |
+|---|---|---|---|---|
+| COM + consensus | 2 | 0/8 | -- | -- |
+| COM + consensus | 4 | 3/8 | 0/3 | 7% |
+| COM + consensus | 8 | 5/8 | 0/5 | 5% |
+| PTS + consensus | 2 | 2/8 | 1/2 | 67% |
+| PTS + consensus | 4 | 6/8 | 2/6 | 59% |
+| PTS + consensus | 8 | 8/8 | 0/8 | 41% |
+
+**COM + consensus is a clean negative.** Even when independent COM searches *do* cluster
+(support>=2), the cluster is on the wrong orientation (5-7% mean frac). Mechanistic reason: COM
+essentially never finds the true orientation as a viable candidate on its own at this noise (4-8%
+mean frac even at M=1, consistent with section 1's "COM never rises above ~10%" finding). SFX
+consensus works because a sparse frame's blind search *does* often land on the true cell as one of
+a few candidates (FFT peaks carry real structure even from few points); CBXD's COM analog doesn't
+have that property here, so there's nothing for consensus to lock onto.
+
+**PTS + consensus is inconclusive, not negative** -- we used a fixed `min_support=2` regardless of
+M, which is too weak a bar at large M (2-of-8 agreeing by accident is much easier than 2-of-2), so
+coverage climbed to 8/8 by M=8 while conditional accuracy *degraded* (67% -> 59% -> 41%). That's
+consistent with a threshold that needs to scale with M (majority-style, not a fixed constant), not
+with the mechanism itself failing. Not retested with a fixed threshold yet.
+
+## 4. TAN + data-pooling: a small-N hint of a real effect, with a mechanism
+
+Same data-pooling mechanism as section 2, arm 3 (TAN) instead of PTS. Small test only (4 crystals,
+noise=1e-3, not yet scaled to N=20):
+
+| | M=1 | M=2 | M=4 | M=8 |
+|---|---|---|---|---|
+| PTS (same 4 crystals) | 58% mean | 59% | 49% | 51% |
+| TAN | 61% mean | 49% | 60% | **62%** |
+
+TAN ends ~10 points above PTS at M=8 on these crystals, with a per-crystal story worth telling:
+one crystal (index 3 in the pool, 19 streaks/shot) has a genuine systematic rival orientation
+~152-157deg from truth that PTS's points-only vote count locks onto at *every* M -- its vote count
+scales in exact lockstep with the true orientation's as M grows (19->38->78->154, doubling right
+along with the pooled data), so pooling reinforces the ambiguity equally on both sides and can
+never break the tie. The true orientation's neighborhood never even reaches the points-only coarse
+top-10 at any M (stuck 44-48deg away). Adding the tangent bonus rescues it *immediately* -- already
+true at M=1, not something pooling is needed for -- pulling a candidate 1.15deg from truth into the
+top-10 at every M, because the rival orientation coincidentally satisfies the Bragg-plane residual
+test at many points but predicts the *wrong local arc curvature* there (tangent_bonus ~27 for the
+rival vs. ~109 for the true orientation). That's exactly the curvature-breaks-point-ambiguity
+mechanism issue #9 predicted TAN for.
+
+Caveat this needs before it's a real result: the win here looks like it's mostly from tangent
+information being available at all (present at M=1), not from pooling per se -- M's role may just
+be averaging the tangent estimate over more shots. Worth scaling to N=20/full noise ladder (like
+PTS got) before calling this a confirmed effect; held at N=4 for now.
+
+## 5. Bottom line
+
+Neither mechanism replicates the SFX pooling result cleanly for CBXD as-is. PTS + data-pooling is a
+confirmed flat/negative result at full power. Result-level consensus is a clean negative for the
+weak arm (COM) and inconclusive for the strong one (PTS, methodology bug). TAN + data-pooling has
+the most promising signal but at 1/5th the sample size of the PTS result, and the mechanism we can
+already see (crystal 3's case study) suggests the win is about *curvature information*, not
+*pooling*, per se -- M might be a red herring for TAN too, and the real lever might just be "use
+the tangent bonus." Next step, if this is worth chasing further: scale the TAN test to N=20 and
+check whether the crystal-3-style systematic-rival mechanism is common enough across the pool to
+explain the aggregate gap, or whether it's a lucky N=4 draw.
+
+Reproduce: `pytest test_cbxd_multishot.py` (pooling-exact + byte-identity golden checks) first,
+then `generate_dataset_multishot.py` (frozen dataset, reuses `data/grid/orientations_na0.028.npz`)
++ `run_multishot.py` (PTS, resumable/checkpointed) for section 2, `run_orientation_consensus_test.py`
+for section 3, `run_tan_pooling_test.py` for section 4. `diag_multishot_coarse.py` /
+`diag_ambiguity_scan.py` are the standalone diagnostics behind the systematic-rival-orientation
+finding.

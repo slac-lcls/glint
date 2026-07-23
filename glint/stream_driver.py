@@ -21,6 +21,7 @@ live "we have enough data, stop collecting" signal.
 Numbers reported are on an arbitrary common intensity scale (the batch path's global gmean is
 dropped as it cancels); this affects nothing that is reported, all of which are ratios.
 """
+import os
 import numpy as np
 
 try:
@@ -333,7 +334,13 @@ class StreamDriver:
 
         self.grid = HKLGrid(self.Mc, self.dmin, gpu=self.gpu)   # built once, reused every frame
         self.ops = laue_ops_4mmm()
-        self.acc = MergeAccumulator(snr_bins, self.ops)
+        # GLINT_DEVICE_MERGE=1 relocates the running scatter-add onto the GPU (deferred,
+        # order-faithful, bit-identical to the host merge). Host path stays the default for A/B.
+        if os.environ.get("GLINT_DEVICE_MERGE") == "1" and self.gpu:
+            from glint.device_merge import MergeAccumulatorDevice
+            self.acc = MergeAccumulatorDevice(snr_bins, self.ops)
+        else:
+            self.acc = MergeAccumulator(snr_bins, self.ops)
         self.n_theoretical = theoretical_unique(self.Mc, self.dmin, self.ops)
         self.n_pushed = self.n_indexed = self.n_integrated = 0
 

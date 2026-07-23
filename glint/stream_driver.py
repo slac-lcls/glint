@@ -197,19 +197,33 @@ class MergeAccumulator:
             z[:self.n_rows] = old[:self.n_rows]
             setattr(self, a, z)
 
-    def add_frame(self, hkl, I, sigma, frame_index):
-        """Fold one indexed+integrated frame in. hkl (n,3) int; I, sigma (n,) float."""
+    def add_frame(self, hkl, I, sigma, frame_index, values=None, weights=None):
+        """Fold one indexed+integrated frame in. hkl (n,3) int; I, sigma (n,) float.
+
+        Default (values=weights=None): per-frame 1/mean(I) scale + inverse-variance
+        weight -- the original behaviour, BIT-IDENTICAL. If ``values`` AND ``weights``
+        are supplied (the partiality path, ``glint.partiality.PartialityScaler``) they
+        are used as the merged value v and weight w directly (v = I/(G*p),
+        w = p^2/sigma^2); the I/sigma snr bucketing is unchanged."""
         I = np.asarray(I, float); sigma = np.maximum(np.asarray(sigma, float), 1e-3)
         good = np.isfinite(I) & np.isfinite(sigma)
+        _part = values is not None and weights is not None
+        if _part:
+            values = np.asarray(values, float); weights = np.asarray(weights, float)
+            good = good & np.isfinite(values) & np.isfinite(weights)
         I, sigma, hkl = I[good], sigma[good], np.asarray(hkl, int)[good]
         if I.size == 0:
             return
-        # per-frame scale to the frame mean; the batch path's global gmean cancels in every ratio
-        scale = 1.0
-        if I.size > 5 and I.mean() > 0:
-            scale = 1.0 / I.mean()
-        v = I * scale
-        w = 1.0 / sigma ** 2
+        if _part:
+            v = values[good]
+            w = weights[good]
+        else:
+            # per-frame scale to the frame mean; the batch path's global gmean cancels in every ratio
+            scale = 1.0
+            if I.size > 5 and I.mean() > 0:
+                scale = 1.0 / I.mean()
+            v = I * scale
+            w = 1.0 / sigma ** 2
         # bucket j holds measurements passing thr[j] but not thr[j+1], so summing j>=J reproduces
         # the batch selection `snr > thr[J]` EXACTLY. side="left" makes it strictly-greater, and
         # bucket -1 (snr <= thr[0], e.g. negative intensities) is DROPPED rather than folded into 0.
@@ -239,6 +253,19 @@ class MergeAccumulator:
         np.add.at(self.cnt, (rows, half, b), 1.0)
         self.n_meas += int(keep.sum())
         self.n_frames += 1
+
+    def merged_by_key(self, thr=0.0):
+        """Merged intensity per asu key (both half-sets and all snr buckets >= thr
+        combined). Returns {asu_key(int): I_merged(float)} -- used to score R_vs_truth
+        against a KNOWN I_full on the synthetic experiment."""
+        j = int(np.searchsorted(self.thr, thr, side="left"))
+        sw = self.sw[:self.n_rows, :, j:].sum((1, 2))
+        swv = self.swv[:self.n_rows, :, j:].sum((1, 2))
+        out = {}
+        for k, r in self._row.items():
+            if sw[r] > 0:
+                out[int(k)] = float(swv[r] / sw[r])
+        return out
 
     def stats(self, thr=0.0, n_theoretical=None):
         """Figures of merit from the running sums, at an I/sigma floor."""

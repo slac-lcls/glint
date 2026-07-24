@@ -25,9 +25,15 @@ def _load_frames(args):
         images = [{"image": os.path.basename(args.qframes), "event": i} for i in range(len(frames))]
     elif args.images:
         from glint.lute_bridge import frames_from_cxi
+        rf = None
+        if getattr(args, "ring_focus", False):
+            cv = " ".join(args.cell).split() if args.cell else []
+            if len(cv) < 6:
+                sys.exit("error: --ring-focus needs --cell \"a b c al be ga\"")
+            rf = ([float(v) for v in cv[:6]], args.ring_qlow)
         frames, images = frames_from_cxi(args.images, args.geom, wavelength_A=args.wavelength,
                                          n=args.N, min_peaks=args.min_peaks,
-                                         peakfinder=args.peakfinder, top_n=args.top_peaks)
+                                         peakfinder=args.peakfinder, top_n=args.top_peaks, ring_focus=rf)
     else:
         geom = parse_geom(args.geom)
         if geom["wavelength_A"] is None and args.wavelength is None:
@@ -63,6 +69,11 @@ def main():
                          "peakfinder8/Cheetah peaks (/entry_1/result_1, no redundant peak-find); 'pf8' TBD")
     ap.add_argument("--top-peaks", type=int, default=0,
                     help="with --images: keep only the N strongest peaks/frame (0=all; guards over-finding)")
+    ap.add_argument("--ring-focus", action="store_true",
+                    help="with --images + --cell: search only the cell's powder-ring annuli (low-order shells, "
+                         "|q|<=--ring-qlow) -- a known-cell scan / blank-veto throughput lever")
+    ap.add_argument("--ring-qlow", type=float, default=0.15,
+                    help="--ring-focus low-order shell cutoff in 1/A (default 0.15 ~ d>6.7 A)")
     ap.add_argument("--device", choices=("auto", "cpu"), default="auto")
     ap.add_argument("--nbest", type=int, default=3,
                     help="keep N-best cell hypotheses/frame for consensus (1 = top-1 only)")

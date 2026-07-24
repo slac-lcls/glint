@@ -41,6 +41,7 @@ from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canoni
                            _hkl_grid, project_q)
 from glint.peakfinder_v4 import PeakFinderV4
 from glint.running_consensus import RunningConsensus
+from glint.multishot import same_lattice
 import glint.replica_gpu_batch as rgb
 
 
@@ -270,7 +271,8 @@ class StreamDriver:
     def __init__(self, Mc, panels, clen_m, wavelength_A, shape, dtype=np.uint16, mask=None,
                  B=64, dmin=2.0, tol=0.002, half=3, gap=2, ring=3, min_peaks=6,
                  snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
-                 lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3):
+                 lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
+                 adaptive_relock=False, min_inliers=0):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -297,8 +299,22 @@ class StreamDriver:
         self._frame_no = 0
 
         self.ops = laue_ops_4mmm()                              # cell-independent (Laue group)
+        self.snr_bins = snr_bins
         self.acc = MergeAccumulator(snr_bins, self.ops)
         self.n_pushed = self.n_indexed = self.n_integrated = 0
+
+        # Adaptive re-lock (opt-in): keep a blind watchdog on the frames that miss every active cell,
+        # and add a new cell when one recurs there -- so a mid-run SAMPLE CHANGE (or a mixture) is
+        # detected and adapted to. Default off keeps the single-cell path bit-identical. NOTE: this
+        # handles a DISCRETE new cell; a continuous cell CREEP (thermal expansion of the same crystal)
+        # should be absorbed by widening `tol`/refining the active cell, NOT re-locked as a new one --
+        # the miss-gate `min_inliers` + fit window `tol` are that boundary.
+        self.adaptive_relock = bool(adaptive_relock)
+        self.min_inliers = int(min_inliers) if min_inliers else self.min_peaks
+        self.extra = []; self._watch = None; self.n_relock = 0
+        if self.adaptive_relock and not hasattr(self, "_blind_index"):
+            from glint.glint_fast import index_blind_nbest
+            self._blind_index = index_blind_nbest
 
         # Blind warm-up: with Mc=None the driver has no cell yet, so it indexes the first frames
         # blind (~26 ms/frame) one at a time, accumulating cross-frame consensus; when the running
@@ -379,36 +395,80 @@ class StreamDriver:
             self.flush()
 
     # ------------------------------------------------------------------ batch -------------------
+    def _inliers(self, q, M):
+        """# of q peaks near-integer in cell M (hkl = q @ M) -- the 'does this frame fit this cell' test."""
+        hf = np.asarray(q, float) @ M
+        return int((np.abs(hf - np.round(hf)).max(1) < 0.15).sum())
+
+    def _index_integrate(self, slots, Mc, grid, acc, gate):
+        """Index `slots` against Mc, integrate the fits into `acc`. With gate=True a frame with fewer than
+        min_inliers is a MISS (returned, not integrated) so it can be tried against another cell / the
+        watchdog. Returns the missed slots (empty when gate=False -- the single-cell path is unchanged)."""
+        qs = [self._q[i] for i in slots]
+        Ms = rgb.index_fused(qs, Mc, B=max(len(qs), 1))
+        missed = []
+        for i, M in zip(slots, Ms):
+            M = np.asarray(M, float) if M is not None else None
+            if M is None or abs(np.linalg.det(M)) < 1.0 or (gate and self._inliers(self._q[i], M) < self.min_inliers):
+                if gate:
+                    missed.append(i)
+                continue
+            self.n_indexed += 1
+            Mcan = _canonical_axes(M)                            # cross-frame consistent hkl setting
+            pred = grid.predict(Mcan, self.panels, self.clen_m, self.wavelength_A, tol=self.tol)
+            if len(pred) == 0:
+                continue
+            if self.gpu:
+                from glint.fused_integrate import integrate_fused
+                I, sig, _, _ = integrate_fused(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
+            else:
+                I, sig, _, _ = integrate_spots(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
+            hkl = np.stack([pred["h"], pred["k"], pred["l"]], 1)
+            keep = I != 0.0                                     # off-frame boxes integrate to exactly 0
+            if keep.any():
+                acc.add_frame(hkl[keep], I[keep], sig[keep], self._frame_no)
+                self.n_integrated += 1; self._frame_no += 1
+        return missed
+
+    def _all_cells(self):
+        return [self.Mc] + [e["Mc"] for e in self.extra]
+
+    def _watchdog(self, missed):
+        """Blind-index the frames that fit no active cell; add a new cell when one RECURS (sample change).
+        Aliases from ordinary failures scatter and never accumulate, so this does not thrash on junk --
+        the same specificity that refuses non-crystals."""
+        if self._watch is None:
+            self._watch = RunningConsensus(min_support=3, gap=2, adaptive=False)
+        for i in missed:
+            nb = self._blind_index(self._q[i], self.warmup_nbest)
+            self._watch.add_frame([c for c, _ in nb])
+        Mn = self._watch.verdict()[0]
+        if Mn is None:
+            return
+        Mn = _conventional_tetragonal(np.asarray(Mn, float))
+        if any(same_lattice(Mn, Mc) for Mc in self._all_cells()):
+            return
+        self.extra.append(dict(Mc=Mn, grid=HKLGrid(Mn, self.dmin, gpu=self.gpu),
+                               nth=theoretical_unique(Mn, self.dmin, self.ops),
+                               acc=MergeAccumulator(self.snr_bins, self.ops)))
+        self.n_relock += 1
+        self._watch = RunningConsensus(min_support=3, gap=2, adaptive=False)    # reset for the next change
+
     def flush(self):
         """Index the resident batch, integrate each frame against its still-resident pixels."""
         if self._blind or self._n == 0:                         # nothing to integrate without a cell
             return
         slots = [i for i in range(self._n) if self._q[i] is not None]
-        if slots:
-            qs = [self._q[i] for i in slots]
-            Ms = rgb.index_fused(qs, self.Mc, B=max(len(qs), 1))
-            for i, M in zip(slots, Ms):
-                if M is None or abs(np.linalg.det(np.asarray(M, float))) < 1.0:
-                    continue
-                self.n_indexed += 1
-                Mcan = _canonical_axes(np.asarray(M, float))   # cross-frame consistent hkl setting
-                pred = self.grid.predict(Mcan, self.panels, self.clen_m, self.wavelength_A,
-                                         tol=self.tol)
-                if len(pred) == 0:
-                    continue
-                if self.gpu:
-                    from glint.fused_integrate import integrate_fused
-                    I, sig, _, _ = integrate_fused(self._ring[i], pred,
-                                                   half=self.half, gap=self.gap, ring=self.ring_w)
-                else:
-                    I, sig, _, _ = integrate_spots(self._ring[i], pred,
-                                                   half=self.half, gap=self.gap, ring=self.ring_w)
-                hkl = np.stack([pred["h"], pred["k"], pred["l"]], 1)
-                keep = I != 0.0                               # off-frame boxes integrate to exactly 0
-                if keep.any():
-                    self.acc.add_frame(hkl[keep], I[keep], sig[keep], self._frame_no)
-                    self.n_integrated += 1
-                    self._frame_no += 1
+        if slots and not self.adaptive_relock:
+            self._index_integrate(slots, self.Mc, self.grid, self.acc, gate=False)   # single-cell path (unchanged)
+        elif slots:
+            remaining = self._index_integrate(slots, self.Mc, self.grid, self.acc, gate=True)
+            for e in self.extra:                                # try each additional active cell in turn
+                if not remaining:
+                    break
+                remaining = self._index_integrate(remaining, e["Mc"], e["grid"], e["acc"], gate=True)
+            if remaining:                                       # fit no active cell -> blind watchdog
+                self._watchdog(remaining)
         self._n = 0
         self._q = [None] * self.B
 
@@ -421,4 +481,8 @@ class StreamDriver:
         s.update(locked=True, locked_after=self.locked_after, consensus_support=self.consensus_support,
                  pushed=self.n_pushed, indexed=self.n_indexed, integrated=self.n_integrated,
                  theoretical_unique=self.n_theoretical)
+        if self.adaptive_relock:                                # adaptive: report the active cell set
+            s["n_cells"] = 1 + len(self.extra); s["n_relock"] = self.n_relock
+            s["extra_cells"] = [dict(axes=list(np.linalg.norm(e["Mc"], axis=0).round(1)),
+                                     **e["acc"].stats(thr=thr, n_theoretical=e["nth"])) for e in self.extra]
         return s

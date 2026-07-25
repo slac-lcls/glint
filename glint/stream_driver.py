@@ -333,7 +333,8 @@ class StreamDriver:
                  B=64, dmin=2.0, tol=0.002, half=3, gap=2, ring=3, min_peaks=6,
                  snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
-                 adaptive_relock=False, min_inliers=0, mad_z=4.0, warm_topk=16, warm_floor=1, double_hit=False):
+                 adaptive_relock=False, min_inliers=0, mad_z=4.0, warm_topk=16, warm_floor=1,
+                 double_hit=False, geom_refine=False, geom_refine_kw=None):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -361,6 +362,7 @@ class StreamDriver:
         # preallocated resident ring -- no per-frame device allocation
         self._ring = [xp.zeros(self.shape, self.dtype) for _ in range(self.B)]
         self._q = [None] * self.B
+        self._pk = [None] * self.B                              # observed (fs,ss) peaks per slot (geom refine)
         self._n = 0
         self._frame_no = 0
 
@@ -375,6 +377,17 @@ class StreamDriver:
         else:
             self.acc = MergeAccumulator(snr_bins, self.ops)
         self.n_pushed = self.n_indexed = self.n_integrated = 0
+
+        # Live geometry refinement (opt-in, DIAGNOSTIC-only): pool per-frame predicted-vs-observed
+        # residuals into a running (clen, beam-shift) correction, reported in stats()["geom_correction"].
+        # Default off keeps the integrate path bit-identical; feeding the correction BACK into indexing
+        # is the flagged next step. See glint.geom_refine.
+        self.geom_refine = bool(geom_refine)
+        self._grefiner = None
+        if self.geom_refine:
+            from glint.geom_refine import GeomRefiner
+            self._grefiner = GeomRefiner(self.panels, self.clen_m, self.wavelength_A,
+                                         **(geom_refine_kw or {}))
 
         # Adaptive re-lock (opt-in): keep a blind watchdog on the frames that miss every active cell,
         # and add a new cell when one recurs there -- so a mid-run SAMPLE CHANGE (or a mixture) is
@@ -507,6 +520,8 @@ class StreamDriver:
             if len(qq) >= self.min_peaks:
                 q = qq
         self._q[slot] = q
+        if self.geom_refine:
+            self._pk[slot] = np.stack([fs, ss], 1) if fs.size else None
         self._n += 1
         self.n_pushed += 1
         if self._n == self.B:
@@ -548,6 +563,8 @@ class StreamDriver:
             pred = grid.predict(Mcan, self.panels, self.clen_m, self.wavelength_A, tol=self.tol)
             if len(pred) == 0:
                 continue
+            if self._grefiner is not None and self._pk[i] is not None:
+                self._grefiner.add_frame(recip_from_M(Mcan), self._pk[i], pred)
             if self.gpu:
                 from glint.fused_integrate import integrate_fused
                 I, sig, _, _ = integrate_fused(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
@@ -601,6 +618,7 @@ class StreamDriver:
                 self._watchdog(remaining)
         self._n = 0
         self._q = [None] * self.B
+        self._pk = [None] * self.B
 
     def stats(self, thr=0.0):
         if self._blind:                                         # not yet locked -- warm-up in progress
@@ -618,4 +636,6 @@ class StreamDriver:
         if self.double_hit:
             s["n_double"] = self.n_double
             s["double_hit_rate"] = self.n_double / max(self.n_indexed, 1)
+        if self._grefiner is not None:
+            s["geom_correction"] = self._grefiner.correction()
         return s

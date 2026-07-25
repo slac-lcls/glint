@@ -43,6 +43,7 @@ from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canoni
 from glint.peakfinder_v4 import PeakFinderV4
 from glint.running_consensus import RunningConsensus
 from glint.multishot import same_lattice
+from glint.multilattice import deflate_peaks
 import glint.replica_gpu_batch as rgb
 
 
@@ -332,7 +333,7 @@ class StreamDriver:
                  B=64, dmin=2.0, tol=0.002, half=3, gap=2, ring=3, min_peaks=6,
                  snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
-                 adaptive_relock=False, min_inliers=0):
+                 adaptive_relock=False, min_inliers=0, mad_z=4.0, warm_topk=16, warm_floor=1, double_hit=False):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -341,6 +342,11 @@ class StreamDriver:
         self.B, self.dmin, self.tol = int(B), float(dmin), float(tol)
         self.half, self.gap, self.ring_w, self.min_peaks = half, gap, ring, int(min_peaks)
         self.warmup_nbest = int(warmup_nbest)
+        self.mad_z, self.warm_topk, self.warm_floor = float(mad_z), int(warm_topk), int(warm_floor)   # warmup_batch triage
+        self.double_hit = bool(double_hit); self.n_double = 0                                          # deflate-and-reindex 2nd lattice
+        if self.double_hit:
+            from glint.glint_fast import index_blind_nbest
+            self._dh_index = index_blind_nbest
 
         xp = cp if self.gpu else np
         if mask is None:
@@ -438,6 +444,51 @@ class StreamDriver:
         if Mc is not None:
             self._lock(Mc, sup, standardize=True)               # -> known-cell batched path from here
 
+    def warmup_batch(self, frames, fanout=None):
+        """Parallel, PEAK-triaged blind warm-up over a buffered startup stack (blind mode only).
+
+        Instead of grinding the warm-up frames one at a time (`_push_blind`), peak-find the whole
+        stack, rank events by Bragg-peak count, blind-index only the top `warm_topk` -- fanned across
+        workers via `fanout` (callable(list_q, nbest) -> list of N-best lists; default = serial
+        single-GPU loop) -- and pool their N-best into ONE consensus round. Locks the cell (fast
+        known-cell path) when consensus fires; returns True. Frames not picked are not consumed here;
+        push() them afterwards to integrate.
+
+        Triage is by the peak-finder's peak COUNT (spatial-background ring finder), not the temporal
+        MAD z-count: on a liquid jet the MAD score is dominated by shot-varying water/jet scatter
+        (calibrated on cxic0415 r0100 -- median ~87k z>4 px/event, no hit/blank separation), whereas
+        the ring finder's spatial background is jet-robust. MAD stays a background/compression
+        primitive (glint.warmup_batch.mad_triage). Peak-find is ~100x cheaper than a blind index, so
+        scoring every frame is effectively free.
+
+        `frames`: (B,H,W) host/device stack. See glint.warmup_batch for the CPU-testable core.
+        """
+        if not self._blind:
+            return True                                          # already locked -- nothing to warm up
+        from glint.warmup_batch import triage_order, warmup_consensus
+        xp = cp if self.gpu else np
+        counts, qmap = [], []
+        for fr in frames:                                        # cheap peak-find every frame
+            pk = self.finder.find(xp.asarray(fr)); fs, ss = pk["x"], pk["y"]
+            if self.gpu:
+                fs, ss = cp.asnumpy(fs), cp.asnumpy(ss)
+            q = None
+            if fs.size >= self.min_peaks:
+                q = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
+                q = q[np.isfinite(q).all(1)]
+                q = q if len(q) >= self.min_peaks else None
+            counts.append(len(q) if q is not None else 0)
+            qmap.append(q)
+        picks = triage_order(counts, self.warm_topk, self.warm_floor)   # rank by peak count; skip low-signal
+        qs = [qmap[k] for k in picks if qmap[k] is not None]
+        self.n_pushed += len(frames); self.n_warmup += len(qs)
+        Mc, sup = warmup_consensus(qs, self._blind_index, self._rc, self.warmup_nbest, fanout)
+        if Mc is not None:
+            self.locked_after = self.n_pushed
+            self._lock(Mc, sup, standardize=True)
+            return True
+        return False
+
     def push(self, frame):
         """Ingest one detector frame (host numpy or already-device array)."""
         if self._blind:
@@ -482,6 +533,18 @@ class StreamDriver:
                 continue
             self.n_indexed += 1
             Mcan = _canonical_axes(M)                            # cross-frame consistent hkl setting
+            if self.double_hit:                                 # deflate-and-reindex: a 2nd crystal in this shot?
+                resid = deflate_peaks(self._q[i], Mcan)
+                if len(resid) >= self.min_peaks:
+                    nb2 = self._dh_index(resid, 1)
+                    if nb2:
+                        M2 = np.asarray(nb2[0][0], float)
+                        # a 2nd crystal = the deflated residual re-indexes to a valid lattice with enough
+                        # inliers. NOT gated on a different CELL -- SFX double-hits are usually two crystals
+                        # of the SAME protein at different orientations. Deflation removed lattice-1's peaks,
+                        # so the residual-inlier test already rejects merely re-finding lattice 1.
+                        if abs(np.linalg.det(M2)) >= 1.0 and self._inliers(resid, M2) >= self.min_peaks:
+                            self.n_double += 1
             pred = grid.predict(Mcan, self.panels, self.clen_m, self.wavelength_A, tol=self.tol)
             if len(pred) == 0:
                 continue
@@ -552,4 +615,7 @@ class StreamDriver:
             s["n_cells"] = 1 + len(self.extra); s["n_relock"] = self.n_relock
             s["extra_cells"] = [dict(axes=list(np.linalg.norm(e["Mc"], axis=0).round(1)),
                                      **e["acc"].stats(thr=thr, n_theoretical=e["nth"])) for e in self.extra]
+        if self.double_hit:
+            s["n_double"] = self.n_double
+            s["double_hit_rate"] = self.n_double / max(self.n_indexed, 1)
         return s

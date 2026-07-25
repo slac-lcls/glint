@@ -539,8 +539,11 @@ class StreamDriver:
                     nb2 = self._dh_index(resid, 1)
                     if nb2:
                         M2 = np.asarray(nb2[0][0], float)
-                        if abs(np.linalg.det(M2)) >= 1.0 and self._inliers(resid, M2) >= self.min_peaks \
-                           and not same_lattice(M2, Mcan):
+                        # a 2nd crystal = the deflated residual re-indexes to a valid lattice with enough
+                        # inliers. NOT gated on a different CELL -- SFX double-hits are usually two crystals
+                        # of the SAME protein at different orientations. Deflation removed lattice-1's peaks,
+                        # so the residual-inlier test already rejects merely re-finding lattice 1.
+                        if abs(np.linalg.det(M2)) >= 1.0 and self._inliers(resid, M2) >= self.min_peaks:
                             self.n_double += 1
             pred = grid.predict(Mcan, self.panels, self.clen_m, self.wavelength_A, tol=self.tol)
             if len(pred) == 0:

@@ -19,6 +19,12 @@ def test_mad_triage_ranks():
     assert set(triage_order(score, topk=4, floor=1)) == set(sigframes), score.tolist()
 
 
+def test_peak_triage():
+    """The production triage: rank frames by peak COUNT, keep the richest above a floor (jet-robust)."""
+    counts = [3, 120, 8, 95, 0, 60]                             # peaks/frame from the ring finder
+    assert triage_order(counts, topk=3, floor=10) == [1, 3, 5]  # top-3 with >=10 peaks, richest first
+
+
 def _cell(rng):                                                 # a valid but random reciprocal basis
     q = rng.normal(size=4); q /= np.linalg.norm(q); w, x, y, z = q
     R = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
@@ -72,10 +78,11 @@ def test_fanout_matches_serial():
 
 
 if __name__ == "__main__":
+    tests = (test_mad_triage_ranks, test_peak_triage, test_warmup_locks_one_round, test_fanout_matches_serial)
     ok = 0
-    for t in (test_mad_triage_ranks, test_warmup_locks_one_round, test_fanout_matches_serial):
+    for t in tests:
         try:
             t(); ok += 1; print(f"PASS  {t.__name__}")
         except Exception as e:
             print(f"FAIL  {t.__name__}: {type(e).__name__}: {e}")
-    print(f"{ok}/3 passed")
+    print(f"{ok}/{len(tests)} passed")

@@ -76,3 +76,27 @@ def warmup_consensus(qs, blind_index, rc, nbest=3, fanout=None):
             rc.add_frame([c for c, _ in nb])
     Mc, sup, _ = rc.verdict()
     return (Mc, sup)
+
+
+def mpi_fanout(qs, nbest, blind_index):
+    """Reference multi-GPU fan-out: one MPI rank per GPU indexes a slice, then allgather the N-best.
+
+    Needs mpi4py and one visible GPU per rank (e.g. `srun --gpus-per-task=1`); not exercised by the
+    CPU tests. Wire it as the `fanout` of warmup_consensus:
+
+        from glint.glint_fast import index_blind_nbest
+        warmup_consensus(qs, index_blind_nbest, rc, nbest,
+                         fanout=lambda Q, k: mpi_fanout(Q, k, index_blind_nbest))
+
+    The blind indexes are independent, so this is a single scatter of the work + one allgather; the
+    only barrier is the consensus vote the caller runs on the reassembled result.
+    """
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+    rank, size = comm.Get_rank(), comm.Get_size()
+    mine = [blind_index(qs[j], nbest) for j in range(rank, len(qs), size)]   # this rank's GPU, its slice
+    gathered = comm.allgather(mine)
+    out = [None] * len(qs)
+    for r, chunk in enumerate(gathered):
+        out[r::size] = chunk                                                 # reassemble original order
+    return out

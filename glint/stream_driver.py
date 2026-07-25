@@ -332,7 +332,7 @@ class StreamDriver:
                  B=64, dmin=2.0, tol=0.002, half=3, gap=2, ring=3, min_peaks=6,
                  snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
-                 adaptive_relock=False, min_inliers=0):
+                 adaptive_relock=False, min_inliers=0, mad_z=4.0, warm_topk=16, warm_floor=1):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -341,6 +341,7 @@ class StreamDriver:
         self.B, self.dmin, self.tol = int(B), float(dmin), float(tol)
         self.half, self.gap, self.ring_w, self.min_peaks = half, gap, ring, int(min_peaks)
         self.warmup_nbest = int(warmup_nbest)
+        self.mad_z, self.warm_topk, self.warm_floor = float(mad_z), int(warm_topk), int(warm_floor)   # warmup_batch triage
 
         xp = cp if self.gpu else np
         if mask is None:
@@ -437,6 +438,42 @@ class StreamDriver:
         Mc, sup, _ = self._rc.verdict()
         if Mc is not None:
             self._lock(Mc, sup, standardize=True)               # -> known-cell batched path from here
+
+    def warmup_batch(self, frames, fanout=None):
+        """Parallel, MAD-triaged blind warm-up over a buffered startup stack (blind mode only).
+
+        Instead of grinding the warm-up frames one at a time (`_push_blind`), MAD-triage the whole
+        stack, blind-index only the most promising events -- fanned across workers via `fanout` (a
+        callable(list_q, nbest) -> list of N-best lists; default = serial single-GPU loop) -- and
+        pool their N-best into ONE consensus round. Locks the cell (and switches to the fast
+        known-cell path) when consensus fires; returns True on lock. The frames not picked are not
+        consumed here -- push() them afterwards to integrate through the known-cell path.
+
+        `frames`: (B,H,W) host/device stack. See glint.warmup_batch for the (CPU-testable) core.
+        """
+        if not self._blind:
+            return True                                          # already locked -- nothing to warm up
+        from glint.warmup_batch import mad_triage, triage_order, warmup_consensus
+        xp = cp if self.gpu else np
+        stack = xp.asarray(frames)
+        _, _, score = mad_triage(stack, z0=self.mad_z, xp=xp)
+        qs = []
+        for i in triage_order(score, self.warm_topk, self.warm_floor):
+            pk = self.finder.find(stack[i]); fs, ss = pk["x"], pk["y"]
+            if self.gpu:
+                fs, ss = cp.asnumpy(fs), cp.asnumpy(ss)
+            if fs.size >= self.min_peaks:
+                q = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
+                q = q[np.isfinite(q).all(1)]
+                if len(q) >= self.min_peaks:
+                    qs.append(q)
+        self.n_pushed += len(frames); self.n_warmup += len(qs)
+        Mc, sup = warmup_consensus(qs, self._blind_index, self._rc, self.warmup_nbest, fanout)
+        if Mc is not None:
+            self.locked_after = self.n_pushed
+            self._lock(Mc, sup, standardize=True)
+            return True
+        return False
 
     def push(self, frame):
         """Ingest one detector frame (host numpy or already-device array)."""

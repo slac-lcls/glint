@@ -97,8 +97,12 @@ FACTS: dict[str, float | str] = {
     "accumulate_ms":       0.51,    # running merge accumulation, on the host
     "h2d_ms":              0.19,    # 2.1 MB upload into the resident ring slot (1024^2 uint16)
     "misc_ms":             0.52,    # peaks D2H (0.02) + python loop and glue
-    # Host total = accumulate + h2d + misc = 1.22 (28% of the frame). Not a stage, so it does not
-    # unseat "largest stage" -- but it is bigger than peakfind, and no deliverable mentions it.
+    # Host total = accumulate + h2d + misc = 1.22 (28% of the frame). INVESTIGATED 2026-07-22 and it
+    # is NOT a throughput lever: the streaming wall is ~4.0 ms/frame (build kept OUT of the timing loop)
+    # and is GPU-compute-bound (predict 1.2 + peakfind 1.1 dominate). Batching the host glue (one
+    # readback + one peaks_to_q at flush) is bit-identical but recovers only ~1%. The earlier
+    # "~2.3 ms un-attributed machinery" was a benchmark artifact -- attribute_gap.py timed the one-time
+    # driver build inside its per-frame loop. Real lever = the predict/peakfind GPU stages.
     "host_total_ms":       1.22,
     # source / sizing ------------------------------------------------------------------------------
     "rep_rate_hz":         35000.0,
@@ -391,15 +395,10 @@ def check_arithmetic() -> list[str]:
                        "an FPGA peakfind offload cannot be sold on peakfind's dominance alone"
                        if m < 1.10 else
                        "still the largest, but not comfortably; say the margin out loud"))
-    # The unattributed host bucket is not a stage, so it never makes 'peakfind is the largest STAGE'
-    # false -- but once it exceeds peakfind it is the bigger target, and a page arguing for an FPGA
-    # front end while a larger cost sits unexamined on the host is arguing the wrong lever.
-    if float(F["host_total_ms"]) > float(F["peakfind_ms"]):
-        warn.append(f"  FACTS: host overhead {F['host_total_ms']} ms/frame now EXCEEDS peakfind "
-                    f"{F['peakfind_ms']} ms ({100*float(F['host_total_ms'])/float(F['stream_ms']):.0f}% "
-                    f"of the frame). It is a bucket (H2D + merge accumulation + python), not a stage, so "
-                    f"it does not falsify 'largest stage' -- but it is the larger lever, and no "
-                    f"deliverable currently mentions it")
+    # The host bucket exceeds peakfind, but INVESTIGATED 2026-07-22 it is NOT the throughput lever:
+    # batching it recovers ~1% and the streaming wall (~4.0 ms/frame) is GPU-compute-bound. No warning
+    # is raised for it -- the earlier nag rested on a benchmark artifact (build timed inside the loop).
+    # The real lever is predict/peakfind.
     return bad, warn
 
 

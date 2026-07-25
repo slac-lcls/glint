@@ -22,6 +22,7 @@ Credit: dual-threshold local-background peak finding -- M. Dubrovin (SLAC/LCLS),
 (github.com/lcls-psana/psalgos), ``peak_finder_v4r3`` / ``peaks_droplet``; local-window lineage shared with
 peakfinder9 (Gevorkov/CFEL). Authors of this GPU version: SLAC LCLS DRP team, with Claude (Anthropic).
 """
+import os
 import numpy as np
 
 __all__ = ["peakfinder_v4", "PeakFinderV4"]
@@ -131,6 +132,74 @@ def _reduce_kernel():
     return _REDUCE
 
 
+_CCL = None
+def _ccl_module():
+    """Sync-free 4-connectivity connected-components labeling (atomic union-find, Playne-Komura).
+
+    Replaces ndi.label(grow) + the int(n) per-frame D2H sync + the ``if n == 0`` host branch. Five
+    fixed-schedule kernels over grid=(HW+255)//256, blk=256 (data-independent launch => no host
+    readback of the component count anywhere on the hot path):
+
+      K1 init    : par[p] = p if grow[p] else -1                 (self-root; -1 = background)
+      K2 merge   : unite right (p+1) and down (p+W) ONLY         (4-CONN -- NO diagonal p+W+-1)
+      K3 flatten : par[p] = findr(par,p)                          (every fg pixel -> its root)
+      K4 claim   : root pixels take a DENSE id via one global atomicAdd(counter) -> lab[root]=1..K
+      K5 write   : lab[p] = grow[p] ? lab[par[p]] : 0            (0=bg, dense 1..K -> feeds pfv4_reduce)
+
+    Dense labels are 1..K int32 exactly (0=bg), so pfv4_reduce's rr=L-1 indexes the size-C reduce
+    arrays in range. Overflow (K > C) is flagged in overflow[0] and the pixel dropped (lab=0); the
+    flag is read ONCE at end of run, never per frame. Dense numbering is atomic-order nondeterministic
+    run-to-run -- CORRECT: the invariant is the PARTITION, not the numbering (the oracle sort neutralizes it)."""
+    global _CCL
+    if _CCL is None:
+        import cupy
+        _CCL = cupy.RawModule(code=r"""
+        extern "C" {
+
+        // read-only find: NO writes -> safe under concurrent merge. Terminates because union-by-min
+        // keeps every edge pointing to a strictly smaller id (par[non-root] < id), so p decreases each hop.
+        __device__ int ccl_find_ro(const int* par, int p){ while(par[p]!=p) p=par[p]; return p; }
+
+        __device__ void ccl_unite(int* par, int a, int b){    // textbook Komura union-by-min, read-only find
+          while(true){ a=ccl_find_ro(par,a); b=ccl_find_ro(par,b); if(a==b) return;
+            int hi=a>b?a:b, lo=a<b?a:b;
+            if(atomicCAS(&par[hi],hi,lo)==hi) return; } }      // attach larger root under smaller; spin on failure
+
+        __global__ void ccl_init(const unsigned char* grow, int* par, int N){
+          int p = blockIdx.x*blockDim.x + threadIdx.x; if(p>=N) return;
+          par[p] = grow[p] ? p : -1; }
+
+        __global__ void ccl_merge(const unsigned char* grow, int* par, int H, int W){
+          int p = blockIdx.x*blockDim.x + threadIdx.x; int N=H*W; if(p>=N || !grow[p]) return;
+          int y=p/W, x=p%W;
+          if(x+1<W && grow[p+1]) ccl_unite(par,p,p+1);         // right
+          if(y+1<H && grow[p+W]) ccl_unite(par,p,p+W); }       // down  (4-CONN: right+down only)
+
+        // flatten: read-only find, then write ONLY this pixel's own par[p]. Write targets are disjoint
+        // across threads (each writes par[p_orig]) => no clobbering. (A compressing find that writes
+        // par of OTHER pixels races here: a neighbour's path-halving overwrites this pixel's finalized
+        // root with a non-root intermediate, and flatten has no retry loop to repair it.)
+        __global__ void ccl_flatten(const unsigned char* grow, int* par, int N){
+          int p = blockIdx.x*blockDim.x + threadIdx.x; if(p>=N || !grow[p]) return;
+          par[p] = ccl_find_ro(par,p); }
+
+        __global__ void ccl_claim(const unsigned char* grow, const int* par, int* lab,
+            int* counter, int* overflow, int N, int C){
+          int p = blockIdx.x*blockDim.x + threadIdx.x; if(p>=N || !grow[p]) return;
+          if(par[p]==p){                                       // roots only
+            int d = atomicAdd(counter,1) + 1;                  // dense id 1..K
+            if(d > C){ atomicExch(overflow,1); lab[p]=0; }     // overflow: drop + flag (no per-frame read)
+            else lab[p]=d; } }                                 // stash dense id AT the root pixel
+
+        __global__ void ccl_write(const unsigned char* grow, const int* par, int* lab, int N){
+          int p = blockIdx.x*blockDim.x + threadIdx.x; if(p>=N) return;
+          lab[p] = grow[p] ? lab[par[p]] : 0; }                // 0=bg, dense 1..K -> pfv4_reduce unchanged
+
+        }
+        """, options=("--std=c++11",))
+    return _CCL
+
+
 class PeakFinderV4:
     """Adaptive dual-threshold peak finder (psana psalgos family). No geometry/q -- only the image shape (+ mask).
 
@@ -158,6 +227,10 @@ class PeakFinderV4:
         self.p = dict(thr_low=thr_low, thr_high=thr_high, son_min=son_min, min_sig=min_sig,
                       local_max_radius=int(local_max_radius), min_pix=min_pix, max_pix=max_pix)
         self._fused_gpu = False
+        # Stage-1 sync-free CCL: env selects the default path; find(..., _force_ccl=) overrides per call
+        # (mandatory for single-process A/B on the SAME finder + frame). C = fixed reduce capacity.
+        self._use_ccl = os.environ.get("GLINT_PF_CCL") == "1"
+        self._ccl_C = 65536
         if xp is not np and self.dt == xp.float32:
             npix = self.H * self.W
             self._pfv4 = _pfv4_kernel(); self._blk = 256; self._grid = (npix + 255) // 256
@@ -167,6 +240,17 @@ class PeakFinderV4:
             self._var = xp.empty(npix, xp.float32)
             self._grow = xp.empty(npix, xp.uint8); self._seed = xp.empty(npix, xp.uint8)
             self._fused_gpu = True
+            # CCL device state (all device-resident; nothing here is read back on the hot path)
+            mod = _ccl_module()
+            self._ccl_init = mod.get_function("ccl_init")
+            self._ccl_merge = mod.get_function("ccl_merge")
+            self._ccl_flatten = mod.get_function("ccl_flatten")
+            self._ccl_claim = mod.get_function("ccl_claim")
+            self._ccl_write = mod.get_function("ccl_write")
+            self._ccl_par = xp.empty(npix, xp.int32)
+            self._ccl_lab = xp.empty(npix, xp.int32)
+            self._ccl_counter = xp.zeros(1, xp.int32)
+            self._ccl_overflow = xp.zeros(1, xp.int32)   # reset once here; read once at end of run
         # Only the eager reduction gathers centroids through coordinate arrays; the fused kernel
         # derives them from the pixel index. Two float64 frames is 268 MB at 4096^2, so do not
         # allocate them where nothing reads them.
@@ -205,10 +289,38 @@ class PeakFinderV4:
         seed = valid & (snr > p["thr_high"]) & islm
         return snr, xp.clip(sub, 0.0, None), sig * sig, grow, seed
 
-    def find(self, image):
+    def find(self, image, _force_ccl=None):
         xp = self._xp; ndi = self._ndi; H, W = self.H, self.W; p = self.p
         I = image.astype(self.dt)
         snr, sub, var, grow, seed = self._stats(I)
+        use_ccl = self._use_ccl if _force_ccl is None else _force_ccl
+        if self._fused_gpu and use_ccl:
+            # --- Stage-1 SYNC-FREE PATH: GPU CCL at fixed capacity C, no host readback of the count ---
+            N = H * W; C = self._ccl_C
+            grow_flat = grow.ravel()                               # C-contiguous view of self._grow (no copy)
+            par = self._ccl_par; lab = self._ccl_lab
+            self._ccl_counter[...] = 0                             # device fill on compute stream (no host stall)
+            self._ccl_init((self._grid,), (self._blk,), (grow_flat, par, np.int32(N)))
+            self._ccl_merge((self._grid,), (self._blk,), (grow_flat, par, np.int32(H), np.int32(W)))
+            self._ccl_flatten((self._grid,), (self._blk,), (grow_flat, par, np.int32(N)))
+            self._ccl_claim((self._grid,), (self._blk,),
+                            (grow_flat, par, lab, self._ccl_counter, self._ccl_overflow,
+                             np.int32(N), np.int32(C)))
+            self._ccl_write((self._grid,), (self._blk,), (grow_flat, par, lab, np.int32(N)))
+            mass = xp.zeros(C, xp.float64); sumvar = xp.zeros(C, xp.float64)
+            cyn = xp.zeros(C, xp.float64);  cxn = xp.zeros(C, xp.float64)
+            npix_i = xp.zeros(C, xp.int32); hs = xp.zeros(C, xp.uint8)
+            self._reduce((self._grid,), (self._blk,),
+                         (lab, sub.ravel(), var.ravel(), seed.ravel(), np.int32(H), np.int32(W),
+                          mass, sumvar, cyn, cxn, npix_i, hs))            # lab already int32 -> no cast/copy
+            npix = npix_i.astype(xp.float64)
+            cm = xp.clip(mass, 1e-12, None)
+            cy, cx = cyn / cm, cxn / cm
+            has_seed = hs
+            son = mass / xp.sqrt(xp.clip(sumvar, 1e-12, None))
+            sel = (has_seed > 0) & (npix >= p["min_pix"]) & (npix <= p["max_pix"]) & (son > p["son_min"])
+            return {"x": cx[sel], "y": cy[sel], "intensity": mass[sel], "snr": son[sel],
+                    "npix": npix[sel].astype(xp.int64)}
         lbl, n = ndi.label(grow)                                    # connected regions above the LOW threshold
         if n == 0:
             z = xp.zeros(0)

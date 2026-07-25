@@ -27,6 +27,7 @@ live "we have enough data, stop collecting" signal.
 Numbers reported are on an arbitrary common intensity scale (the batch path's global gmean is
 dropped as it cancels); this affects nothing that is reported, all of which are ratios.
 """
+import os
 import numpy as np
 
 try:
@@ -46,6 +47,27 @@ import glint.replica_gpu_batch as rgb
 
 
 # ------------------------------------------------------------- orientation-invariant hkl grid ----
+# Fused predict gate: matmul(g@R) + Ewald/qmax test + atomic compaction, one kernel + one D2H
+# (replaces the ~6 cupy ops + full-Nhkl qg/qn2/exc intermediates). Survivors written unordered;
+# the caller argsorts by hkl index to restore grid order, so the result matches the eager path.
+_GATE_SRC = r"""
+extern "C" __global__ void predict_gate(const double* g, int nhkl, const double* R, double wave,
+                                         double qmax2, double tol, double* out, int* counter, int cap){
+  int i = blockIdx.x*blockDim.x + threadIdx.x; if (i >= nhkl) return;
+  double gx=g[3*i], gy=g[3*i+1], gz=g[3*i+2];
+  double qx=gx*R[0]+gy*R[3]+gz*R[6];
+  double qy=gx*R[1]+gy*R[4]+gz*R[7];
+  double qz=gx*R[2]+gy*R[5]+gz*R[8];
+  double qn2=qx*qx+qy*qy+qz*qz;
+  double exc=qz+0.5*wave*qn2;
+  if (qn2<=qmax2 && fabs(exc)<tol){
+    int p=atomicAdd(counter,1);
+    if (p<cap){ out[6*p]=(double)i; out[6*p+1]=qx; out[6*p+2]=qy; out[6*p+3]=qz; out[6*p+4]=qn2; out[6*p+5]=exc; }
+  }
+}"""
+_GATE_KERNEL = cp.RawKernel(_GATE_SRC, "predict_gate") if _HAVE_CP else None
+
+
 class HKLGrid:
     """The candidate hkl set, hoisted out of the per-frame path.
 
@@ -68,18 +90,29 @@ class HKLGrid:
         # projection then works on.
         self.gpu = bool(gpu) and _HAVE_CP
         self._gg = cp.asarray(self.g.astype(np.float64)) if self.gpu else None
+        if self.gpu:
+            self._ggr = cp.ascontiguousarray(self._gg.ravel())
+            self._gout = cp.empty((self.g.shape[0], 6), cp.float64)
+            self._gcnt = cp.zeros(1, cp.int32)
 
     def predict(self, M_or_R, panels, clen_m, wavelength_A, tol=0.006, is_recip=False):
         """Same result as predict_spots(..., dmin=self.dmin, tol=tol) with the grid reused."""
         R = np.asarray(M_or_R, float) if is_recip else recip_from_M(M_or_R)
         if self.gpu:
-            qg = self._gg @ cp.asarray(R)
-            qn2g = (qg * qg).sum(1)
-            excg = qg[:, 2] + 0.5 * wavelength_A * qn2g      # 0 on the Ewald sphere
-            sel = (qn2g <= self.qmax * self.qmax) & (cp.abs(excg) < tol)
-            idx = cp.asnumpy(cp.where(sel)[0])
+            # fused kernel: matmul + Ewald/qmax gate + compaction in one pass, then ONE D2H
+            nhkl = self.g.shape[0]; self._gcnt[0] = 0
+            Rf = cp.ascontiguousarray(cp.asarray(R).ravel())
+            tpb = 256; blocks = (nhkl + tpb - 1) // tpb
+            _GATE_KERNEL((blocks,), (tpb,),
+                         (self._ggr, np.int32(nhkl), Rf, np.float64(wavelength_A),
+                          np.float64(self.qmax * self.qmax), np.float64(tol),
+                          self._gout.ravel(), self._gcnt, np.int32(nhkl)))
+            n = int(self._gcnt[0])
+            C = cp.asnumpy(self._gout[:n])
+            C = C[np.argsort(C[:, 0], kind="stable")]         # restore hkl-grid order
+            idx = C[:, 0].astype(np.int64)
             hkl = self.g[idx]
-            q = cp.asnumpy(qg[sel]); qn2 = cp.asnumpy(qn2g[sel]); exc = cp.asnumpy(excg[sel])
+            q = C[:, 1:4]; qn2 = C[:, 4]; exc = C[:, 5]
         else:
             q = self.g @ R
             qn2 = np.einsum("ij,ij->i", q, q)
@@ -173,19 +206,33 @@ class MergeAccumulator:
             z[:self.n_rows] = old[:self.n_rows]
             setattr(self, a, z)
 
-    def add_frame(self, hkl, I, sigma, frame_index):
-        """Fold one indexed+integrated frame in. hkl (n,3) int; I, sigma (n,) float."""
+    def add_frame(self, hkl, I, sigma, frame_index, values=None, weights=None):
+        """Fold one indexed+integrated frame in. hkl (n,3) int; I, sigma (n,) float.
+
+        Default (values=weights=None): per-frame 1/mean(I) scale + inverse-variance
+        weight -- the original behaviour, BIT-IDENTICAL. If ``values`` AND ``weights``
+        are supplied (the partiality path, ``glint.partiality.PartialityScaler``) they
+        are used as the merged value v and weight w directly (v = I/(G*p),
+        w = p^2/sigma^2); the I/sigma snr bucketing is unchanged."""
         I = np.asarray(I, float); sigma = np.maximum(np.asarray(sigma, float), 1e-3)
         good = np.isfinite(I) & np.isfinite(sigma)
+        _part = values is not None and weights is not None
+        if _part:
+            values = np.asarray(values, float); weights = np.asarray(weights, float)
+            good = good & np.isfinite(values) & np.isfinite(weights)
         I, sigma, hkl = I[good], sigma[good], np.asarray(hkl, int)[good]
         if I.size == 0:
             return
-        # per-frame scale to the frame mean; the batch path's global gmean cancels in every ratio
-        scale = 1.0
-        if I.size > 5 and I.mean() > 0:
-            scale = 1.0 / I.mean()
-        v = I * scale
-        w = 1.0 / sigma ** 2
+        if _part:
+            v = values[good]
+            w = weights[good]
+        else:
+            # per-frame scale to the frame mean; the batch path's global gmean cancels in every ratio
+            scale = 1.0
+            if I.size > 5 and I.mean() > 0:
+                scale = 1.0 / I.mean()
+            v = I * scale
+            w = 1.0 / sigma ** 2
         # bucket j holds measurements passing thr[j] but not thr[j+1], so summing j>=J reproduces
         # the batch selection `snr > thr[J]` EXACTLY. side="left" makes it strictly-greater, and
         # bucket -1 (snr <= thr[0], e.g. negative intensities) is DROPPED rather than folded into 0.
@@ -215,6 +262,19 @@ class MergeAccumulator:
         np.add.at(self.cnt, (rows, half, b), 1.0)
         self.n_meas += int(keep.sum())
         self.n_frames += 1
+
+    def merged_by_key(self, thr=0.0):
+        """Merged intensity per asu key (both half-sets and all snr buckets >= thr
+        combined). Returns {asu_key(int): I_merged(float)} -- used to score R_vs_truth
+        against a KNOWN I_full on the synthetic experiment."""
+        j = int(np.searchsorted(self.thr, thr, side="left"))
+        sw = self.sw[:self.n_rows, :, j:].sum((1, 2))
+        swv = self.swv[:self.n_rows, :, j:].sum((1, 2))
+        out = {}
+        for k, r in self._row.items():
+            if sw[r] > 0:
+                out[int(k)] = float(swv[r] / sw[r])
+        return out
 
     def stats(self, thr=0.0, n_theoretical=None):
         """Figures of merit from the running sums, at an I/sigma floor."""
@@ -300,7 +360,14 @@ class StreamDriver:
 
         self.ops = laue_ops_4mmm()                              # cell-independent (Laue group)
         self.snr_bins = snr_bins
-        self.acc = MergeAccumulator(snr_bins, self.ops)
+        # GLINT_DEVICE_MERGE=1 relocates the running scatter-add onto the GPU (deferred,
+        # order-faithful, bit-identical to the host merge). Host path stays the default for A/B.
+        # (grid + n_theoretical are built by _lock / the blind-check below, once Mc is known.)
+        if os.environ.get("GLINT_DEVICE_MERGE") == "1" and self.gpu:
+            from glint.device_merge import MergeAccumulatorDevice
+            self.acc = MergeAccumulatorDevice(snr_bins, self.ops)
+        else:
+            self.acc = MergeAccumulator(snr_bins, self.ops)
         self.n_pushed = self.n_indexed = self.n_integrated = 0
 
         # Adaptive re-lock (opt-in): keep a blind watchdog on the frames that miss every active cell,

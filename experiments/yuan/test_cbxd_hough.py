@@ -3,8 +3,9 @@
 Correctness: score_batch / score_batch_gpu must agree exactly with cbxd_joint.score() -- they
 are meant to be the same objective, just batched over candidate orientations. Regression: the
 accumulator-seeded blind search must not be worse than the original seed_index on a frozen
-crystal (and in practice is much better -- see cbxd_hough_gpu.py's own benchmark for the full
-0/6 -> 5/6 comparison).
+crystal (and in practice is much better -- the canonical frozen-dataset number is 30/40 (75%)
+for this arm vs the original serial seed_index's 0/6 on a small smoke-test regime; see
+cbxd_hough_gpu.py's module docstring / PR #10 for the full four-arm comparison).
 
   python -m pytest test_cbxd_hough.py -v
 """
@@ -54,8 +55,8 @@ def test_score_batch_gpu_matches_scalar():
 @pytest.mark.skipif(not _HAVE_TORCH, reason="torch not installed")
 def test_hough_seed_index_beats_seed_index():
     """On a frozen crystal, the GPU-accumulator-seeded search must recover at least as much
-    of the true lattice as the original centroid-seeded seed_index (usually far more --
-    cbxd_hough_gpu.py's benchmark shows 0/6 -> 5/6 blind success at 5M candidates)."""
+    of the true lattice as the original centroid-seeded seed_index (usually far more -- the
+    canonical frozen-dataset number is 30/40 (75%), see cbxd_hough_gpu.py's module docstring)."""
     kobs, lab, cents = _sample_crystal(2)
 
     R_old = seed_index(kobs, cents, np.random.default_rng(2))

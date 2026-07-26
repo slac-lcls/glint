@@ -5,8 +5,21 @@ streaks, the arc-curvature analog of index_blind_fast's cosine sum."
 cbxd_batch_seed.py already proved the shape of this (batched-over-orientations, curvature-aware
 via the full arc not just centroids) on CPU/numpy, chunked over candidates only -- and showed
 that candidate DENSITY is the lever that matters (0/6 -> 4/6 blind success going 20k -> 200k
-candidates, at ~68s/crystal on CPU). This file is that same accumulator on the GPU (torch),
+candidates, at ~68s/crystal on CPU -- an early 6-crystal smoke test, superseded by the canonical
+frozen-dataset four-arm study below). This file is that same accumulator on the GPU (torch),
 so density can go another 1-2 orders of magnitude in the same wall-clock.
+
+Despite the name, this is still brute-force random SO(3) voting (rand_rot_batch draws n_coarse
+uniform candidates every call), not backprojection -- "arc-Hough accumulator" describes the vote
+tensor's shape, not the candidate-generation strategy.
+
+**Canonical numbers** (frozen dataset, `data/simulated_data*/`, 20 crystals x {1e-4, 2e-4} noise,
+5M candidates/crystal, A100 -- see `run_four_arms_full.py` / PR #10): this arm (PTS, points-only)
+scores 30/40 (75%), vs the original serial `cbxd_joint.seed_index` baseline's 0/6 on a small
+smoke-test regime at 20k candidates. TAN (+ tangent bonus, `cbxd_hough_tangent.py`) is the accuracy
+winner at 37/40 (92.5%); Cascade (PTS->TAN escalation, `cbxd_hough_cascade.py`) gets 35/40 (87.5%)
+for less compute than always-TAN. Any other success-count mentioned elsewhere in this file's
+history (or in test_cbxd_hough.py) is an earlier ad-hoc smoke test, not this headline.
 
 Memory shape: naively the accumulator is a dense (Nr, Np, Nn) vote tensor -- candidates x
 streak-points x lattice-nodes -- which is far too big to materialize even in float32 once Nr
@@ -99,6 +112,9 @@ def hough_seed_index(kobs, rng, n_coarse=1_000_000, tol_c=0.03, keep=10, **gpu_k
     counts = score_batch_gpu(Rs, kobs, tol_c, **gpu_kw)
     top = np.argsort(counts)[::-1][:keep]
     best_R, best_s = None, -1.0
+    # TODO batch-refine: this loop is still `keep` sequential scalar refine() calls -- fine while
+    # n_coarse dominates wall-clock, but it'll be the bottleneck once candidate density scales
+    # further (see PR #10 review).
     for i in top:
         R = refine(kobs, Rs[i], rng, iters=300)
         s = score(R, kobs, 0.0025)

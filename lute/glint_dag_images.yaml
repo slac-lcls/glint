@@ -1,0 +1,23 @@
+!LUTE_DAG
+# SFX pipeline with GLINT as a SELF-CONTAINED front end: no FindPeaksSFX node. GLINT reads the raw
+# detector .cxi (`images:` in the config), peak-finds it on the GPU, and indexes -- so the 73-core
+# CPU peak-finding stage of glint_dag.yaml disappears and the run starts on the GPU node.
+#
+# Use this DAG only with an IndexGLINT config that sets `images:` (and NOT `peaks:`); the two are
+# mutually exclusive and the task model rejects a config that sets both or neither.
+#
+# As with glint_dag.yaml, the default stream is ORIENTATION-ONLY (placeholder I/sigma). Set
+# `integrate: true` for a CrystFEL-free merge, or `fromfile:` plus an indexamajig --indexing=file
+# refine step for the better merge. See lute/README.md.
+task_name: "GLINTIndexer"
+slurm_params: "--account=lcls:default@ampere --partition=ampere --nodes=1 --ntasks-per-node=1 --gres=gpu:a100:1"
+next:
+- task_name: "StreamFileConcatenator"
+  slurm_params: "--account=lcls:prjdat21 --partition=milano --nodes=1 --ntasks-per-node=2"
+  next:
+  - task_name: "PartialatorMerger"
+    slurm_params: "--account=lcls:prjdat21 --partition=milano --nodes=1 --ntasks-per-node=73 --exclusive"
+    next:
+    - task_name: "HKLManipulator"
+      slurm_params: "--account=lcls:prjdat21 --partition=milano --nodes=1 --ntasks-per-node=8"
+      next: []

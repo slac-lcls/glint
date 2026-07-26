@@ -12,7 +12,9 @@ import numpy as np
 from scipy.ndimage import maximum_filter
 import h5py
 
-C = "/sdf/data/lcls/ds/mfx/mfx101629726/scratch/smarches/cxidb17/crystfel"
+C = os.environ.get("GLINT_CXIDB17")   # cxidb-17 is PUBLIC; only the scratch path is ours
+if not C:
+    sys.exit("set GLINT_CXIDB17=<dir with the cxidb-17 CrystFEL files>")
 GEOM = C + "/cspad_asm.geom"
 HC = 12398.42
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 120

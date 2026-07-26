@@ -17,8 +17,11 @@ experiments/bench_lute.py `inspect`.
 from __future__ import annotations
 
 import re
+import sys
 
 import numpy as np
+
+from glint.geom import _q_from_panels   # one geometry core, two panel schemas -- see geom.py
 
 HC_EV_A = 12398.419843320026     # h*c in eV*Angstrom -> lambda[A] = HC/E[eV]
 
@@ -70,22 +73,22 @@ def peaks_to_q(fs_arr, ss_arr, panels, clen_m, wavelength_A):
     """Detector peak (fs,ss) arrays -> (n,3) reciprocal vectors q [1/A].
 
     clen_m: detector distance [m] (per event). wavelength_A: [A].
+
+    Peaks that land on no panel come back as NaN rows, and so do NON-FINITE inputs (NaN/inf
+    fs or ss) -- they match no panel rather than raising, which the per-peak predecessor did
+    via int(np.floor(x)). Callers are expected to filter, as stream_driver does with
+    q[np.isfinite(q).all(1)]; a bad coordinate is dropped exactly like an off-panel peak.
     """
-    fs_arr = np.asarray(fs_arr, float)
-    ss_arr = np.asarray(ss_arr, float)
-    r = np.zeros((len(fs_arr), 3))
-    for k, (fs, ss) in enumerate(zip(fs_arr, ss_arr)):
-        i = panel_of(fs, ss, panels)
-        if i < 0:
-            r[k] = np.nan
-            continue
-        p = panels[i]
-        lf, ls = fs - p["min_fs"], ss - p["min_ss"]
-        xy = (np.array([p["cx"], p["cy"], 0.0]) + lf * p["fs"] + ls * p["ss"]) / p["res"]
-        r[k] = [xy[0], xy[1], clen_m + p["coffset"]]
-    s_hat = r / np.linalg.norm(r, axis=1, keepdims=True)
-    z_hat = np.array([0.0, 0.0, 1.0])
-    return (s_hat - z_hat) / wavelength_A      # q in 1/A
+    # Geometry lives in glint.geom._q_from_panels, shared with geom.peaks_to_q -- the two used to
+    # carry independent copies and drifted (see that function). This wrapper only adapts the schema:
+    # panels are a LIST here (first match wins, as panel_of did), the basis vectors are 3-vectors,
+    # and z comes from the per-event clen rather than the .geom.
+    specs = [dict(lo_fs=p["min_fs"], hi_fs=p["max_fs"], lo_ss=p["min_ss"], hi_ss=p["max_ss"],
+                  off_fs=p["min_fs"], off_ss=p["min_ss"],
+                  fsx=p["fs"][0], fsy=p["fs"][1], ssx=p["ss"][0], ssy=p["ss"][1],
+                  cx=p["cx"], cy=p["cy"], res=p["res"], z=clen_m + p["coffset"])
+             for p in panels]
+    return _q_from_panels(fs_arr, ss_arr, specs, wavelength_A)
 
 
 def lambda_from_eV(eV):
@@ -119,7 +122,7 @@ def _get_finder(name):
 
 
 def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, data_key=None,
-                    clen_scale=None, peakfinder="v4", top_n=0, **pf_kw):
+                    clen_scale=None, peakfinder="v4", top_n=0, ring_focus=None, **pf_kw):
     """Self-contained GLINT front end: read a .cxi and bridge detector peaks to reciprocal q-vectors -- no
     CrystFEL peak-search stream in between. Returns (frames [(N,3) q in 1/A], images [{image,event}]).
 
@@ -167,10 +170,38 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
     if peakfinder == "stored":                                     # reuse the .cxi's own peakfinder8/Cheetah peaks
         rl = glob.get("peak_list", "/entry_1/result_1")
         px, py, npk = f[rl + "/peakXPosRaw"], f[rl + "/peakYPosRaw"], f[rl + "/nPeaks"]
+        # top_n MUST work here too. It used to be applied only on the self-peak-find path below, so
+        # with peakfinder='stored' -- the LUTE default -- `top_peaks` was a silent no-op: the config
+        # validated and the peak list came through untruncated. Cheetah/peakfinder8 write the
+        # intensities alongside the positions, so rank by them and match what v4/pf9 mean by
+        # "strongest"; a flag must not change meaning when the peak SOURCE changes. Files without
+        # the dataset fall back to stored order rather than failing.
+        # Ranking needs intensities that actually VARY. experiments/cf_peaks.cxi carries
+        # peakTotalIntensity = 1000.0 for all 16545 peaks (std 0, one unique value) -- a placeholder
+        # some writers emit. Sorting a constant array yields an ARBITRARY subset unrelated to peak
+        # strength, so a present-but-degenerate dataset is worse than an absent one: it looks like a
+        # ranked selection and is not. Detect it and fall back to stored order.
+        ipath = rl + "/peakTotalIntensity"
+        pint = f[ipath] if (top_n and ipath in f) else None
+        if pint is not None:
+            probe = np.concatenate([np.asarray(pint[i, :int(npk[i])], float)
+                                    for i in range(min(len(npk), 32))]) if len(npk) else np.empty(0)
+            if probe.size == 0 or np.ptp(probe) == 0:
+                sys.stderr.write(
+                    f"glint: {ipath} is constant ({probe[0] if probe.size else 'empty'}) -- it carries "
+                    f"no ranking information, so top_n={top_n} falls back to stored peak order.\n")
+                pint = None
         nfr = min(n, px.shape[0]) if n else px.shape[0]
         for i in range(nfr):
             k = int(npk[i]); images.append({"image": cxi_path, "event": i})
-            frames.append(_q(px[i, :k], py[i, :k], i) if k >= min_peaks else np.empty((0, 3)))
+            x, y = np.asarray(px[i, :k], float), np.asarray(py[i, :k], float)
+            if top_n and k > top_n:
+                if pint is not None:
+                    keep = np.argsort(np.asarray(pint[i, :k], float))[::-1][:top_n]
+                else:
+                    keep = np.arange(top_n)
+                x, y = x[keep], y[keep]
+            frames.append(_q(x, y, i) if len(x) >= min_peaks else np.empty((0, 3)))
         return frames, images
 
     data = f[data_key]
@@ -181,6 +212,13 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
     if mask_key and mask_key in f:
         m = f[mask_key]; m = np.asarray(m[0] if m.ndim >= 3 else m)
         cmask = (m == int(str(glob.get("mask_good", "0")), 0))     # True = good pixel
+    if ring_focus is not None:                                     # KNOWN-CELL: search only the powder-ring annuli
+        cell6, qlow = ring_focus
+        c0 = _meta(clen_spec, f, 0, 0.1); sc = clen_scale if clen_scale is not None else (0.001 if abs(c0) > 10 else 1.0)
+        e0 = _meta(en_spec, f, 0, None); wl0 = wavelength_A or (lambda_from_eV(e0) if e0 else None)
+        from glint.ring_mask import ring_qmask
+        rmask = ring_qmask(panels, c0 * sc + coff, wl0, cell6, (data.shape[-2], data.shape[-1]), qlow=qlow)
+        cmask = rmask if cmask is None else (cmask & rmask)
     finder = _get_finder(peakfinder)
     for i in range(nfr):
         img = np.asarray(data[i] if data.ndim >= 3 else data, np.float32)

@@ -20,13 +20,57 @@ _REFINERS = {"adapt": refine_vec_adapt, "cg": refine_vec_cg, "bb": refine_vec_bb
              "raar": refine_vec_raar, "so2d": refine_vec_so2d, "admm": refine_vec_admm}
 
 
+M3_FUSED = os.environ.get("M3_FUSED", "1") == "1"   # M3: one fused CUDA kernel instead of the torch loop (M3_FUSED=0 restores torch)
+M3_CAP = int(os.environ.get("M3_CAP", "0"))         # M3: cap peaks fed to the ASCENT only (0 = all)
+
+
 def _refine(S0, Q, w, qmax):
     """M3 dispatch: grad (default GD+momentum) | cg | bb (Barzilai-Borwein) | lm (Levenberg-Marquardt)
-    | newton (damped 3x3). All flag-gated via REFINER; grad is the validated default."""
+    | newton (damped 3x3). All flag-gated via REFINER; grad is the validated default.
+
+    M3_CAP=N feeds the ascent at most N peaks while M2/M4/M5/M6 keep the FULL set. M3 is linear in
+    peak count, and the ascent only needs enough peaks to FIND a direction -- the scorer needs all of
+    them to JUDGE it. Measured on 120 cxidb frames: M3-only cap 100 holds 84/80 against an 85/79
+    baseline at ~1.29x, while truncating the frame outright (what `frames_from_cxi(top_n=)` does at
+    ingest) collapses to 71/66. Same peak budget, very different cost -- see #36.
+
+    Deliberately NOT wired to `top_peaks`. That flag exists to drop peaks a finder should not have
+    emitted (v4/pf9 over-finding on water rings), where removing the junk from scoring too is the
+    point. This one keeps every real peak and only cheapens the search. Two different jobs, so two
+    names rather than one flag that changes meaning with the peak source.
+
+    Selection is the frame's own order, which measured best: intensity ranking is NOT better
+    (82/78 vs 84/80 at cap 100) and lowest-|q| is worst (81/76), since dropping high-resolution
+    shells costs the lever-arm the cell determination needs.
+
+    M3_FUSED is ON by default: the grad path runs glint.fused_m3's single kernel, which never
+    materialises the ~10 (70400, P) intermediates the torch loop writes per step. 2.43x on the blind
+    front end and 1.32x end-to-end through the hybrid, at an unchanged rate (blind same_lattice
+    85/120, hybrid gate 93/120). M3_FUSED=0 restores the torch loop.
+
+    It is NOT bit-exact -- the per-start reduction is sequential in the kernel and a matmul in torch,
+    so summation order differs. Audited rather than assumed: 3/120 blind cells move (1/120 hybrid),
+    and every one is benign -- 2 were already failures under torch and stay failures, 1 is correct
+    under both and differs by 0.1 A on one axis. ZERO right->wrong or wrong->right swaps. Two fused
+    passes are 120/120 bit-identical, so it is deterministic.
+
+    Consequence of it being the default: runs are no longer bit-comparable against pre-#39 output.
+    Set M3_FUSED=0 to reproduce an older result exactly.
+
+    Only the grad path has a fused twin; cg/bb/lm/newton fall through unchanged, as does any frame
+    the kernel cannot take (no cupy, non-fp32, P > MAX_P), so CPU boxes and large-P dense clouds
+    silently keep the torch path."""
+    if M3_CAP and int(Q.shape[0]) > M3_CAP:
+        Q, w = Q[:M3_CAP], w[:M3_CAP]      # ascent only; qmax stays the FULL-frame value, so the
+                                           # step schedule (step0 = 0.25/qmax) is unchanged
     if REFINER == "newton":
         return refine_vec_newton(S0, Q, w, qmax, steps=NEWTON_STEPS, tol=TOL)
     if REFINER in _REFINERS:
         return _REFINERS[REFINER](S0, Q, w, qmax, steps=STEPS, tol=TOL)
+    if M3_FUSED:
+        from glint import fused_m3
+        if fused_m3.available(Q):
+            return fused_m3.refine_vec_fused(S0, Q, w, qmax, steps=STEPS, tol=TOL)
     return refine_vec(S0, Q, w, qmax, steps=STEPS, tol=TOL)
 from glint.lattice import cell_to_Ar
 from glint.multishot import same_lattice
@@ -34,7 +78,7 @@ from glint.multishot import same_lattice
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 NTOP = int(os.environ.get("NTOP", "30"))                    # ② candidate-pool size (M4 width)
 KEEP = int(os.environ.get("KEEP", "44"))                    # distinct_maxima retained
-STEPS = int(os.environ.get("STEPS", "80"))                  # M3 ascent steps (K-sweep: 8 ties 80 at 3.6x)
+STEPS = int(os.environ.get("STEPS", "8"))                   # M3 ascent steps. Default 8 = blind saturation (same_lattice 84/120, the ceiling; hybrid 117/120) and blind-SAFE; still 4x faster than the old 80 default (front-end 10.8 vs 83ms) at equal-or-better rate. STEPS=5 ties hybrid (118, rescue-buffered) + ~10% faster but blind-standalone drops to 77 -> not blind-safe. Sweep 2026-07-12: blind saturates >=8, 16-80 flat within +-3-frame noise.
 QDIST = os.environ.get("QDIST", "0") == "1"                  # D2: reciprocal-distance inlier (sigma-matched)
 QDTOL = float(os.environ.get("QDTOL", "0.004"))             # inlier radius in 1/A (q-space)
 DETREJ = os.environ.get("DETREJ", "0") == "1"               # D1: reject degenerate cell (OFF: regressed deflate)
@@ -49,6 +93,7 @@ NEWTON_STEPS = int(os.environ.get("NEWTON_STEPS", "4"))     # damped-Newton iter
 CLUSTER_MIN = int(os.environ.get("CLUSTER_MIN", "3000"))    # cluster-FFT only for genuinely DENSE (rotation) clouds; thin/moderate -> Fibonacci (fast+robust there; SFX <3000 unaffected)
 ANNEAL_FP32 = os.environ.get("ANNEAL_FP32", "0") == "1"     # M5 anneal/score dtype: fp64 (default, bit-matched scalar) | fp32 (faster; validate rate)
 ADT = torch.float32 if ANNEAL_FP32 else torch.float64
+ANNEAL_ITERS = int(os.environ.get("ANNEAL_ITERS", "3"))     # M5 anneal iterations. Default 3: 15->3 holds blind (85 vs 84 same_lattice, 78 gated) AND consensus (117/120), anneal stage 7.8->2.5ms (3.1x); the 15-iter default was over-provisioned. Set 15 for a GPU-native merge wanting a fully-refined cell.
 BIGCELL_RLPS = int(os.environ.get("BIGCELL_RLPS", "200000"))  # cluster-FFT: above this rlp count (large-volume/long-axis cell) enlarge the seed grid (adaptive fov)
 
 
@@ -152,7 +197,7 @@ def index_blind_fast(q, acc=None, starts=None):
     M0 = M0[(sc > 0) & (det >= 0.1 * sc)]
     if int(M0.shape[0]) == 0:
         return None
-    Mt = anneal_batch_t(M0, Qd)
+    Mt = anneal_batch_t(M0, Qd, max_iter=ANNEAL_ITERS)
     key, ni = score_batch_t(Mt, Qd)
     b = int(torch.argmax(key).item())
     best = Mt[b].cpu().numpy()
@@ -384,7 +429,7 @@ def index_blind_nbest(q, N=5):
     M0 = M0[(sc > 0) & (det >= 0.1 * sc)]
     if int(M0.shape[0]) == 0:
         return []
-    Mt = anneal_batch_t(M0, Qd)
+    Mt = anneal_batch_t(M0, Qd, max_iter=ANNEAL_ITERS)
     key, ni = score_batch_t(Mt, Qd)
     reps = distinct_cells_gpu(Mt, key)                        # GPU metric-dedup: reduce only DISTINCT cells
     if int(reps.numel()) == 0:

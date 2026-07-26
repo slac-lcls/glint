@@ -107,31 +107,86 @@ def read_crystfel_peaks(path):
 
 
 def _find_panel(fs, ss, panels):
+    """First panel containing the PIXEL that (fs,ss) lands in. CrystFEL's min_fs/max_fs are integer
+    pixel indices, so the test floors first: fs=511.7 lies in pixel 511, i.e. on a max_fs=511 panel.
+    Kept for callers that want the panel name; peaks_to_q uses the vectorised _q_from_panels."""
+    fi, si = np.floor(fs), np.floor(ss)
     for name, p in panels.items():
-        if (p.get("min_fs", -np.inf) <= fs <= p.get("max_fs", np.inf) and
-                p.get("min_ss", -np.inf) <= ss <= p.get("max_ss", np.inf)):
+        if (p.get("min_fs", -np.inf) <= fi <= p.get("max_fs", np.inf) and
+                p.get("min_ss", -np.inf) <= si <= p.get("max_ss", np.inf)):
             return name, p
     return None, None
 
 
+def _q_from_panels(fs_arr, ss_arr, specs, wavelength_A):
+    """Shared core behind BOTH public peaks_to_q entry points (this module's and lute_bridge's).
+
+    They exist because there are two panel schemas -- this module's dict-of-dicts from a .geom, and
+    lute_bridge's list-of-dicts with per-event clen -- not because the geometry differs. Keeping the
+    maths in one place is the point: the two used to carry independent copies and silently drifted
+    apart (geom's membership test omitted the floor, so it dropped every peak in the last fractional
+    pixel of each panel).
+
+    specs: list of dicts, one per panel, in priority order (first match wins), with
+      lo_fs/hi_fs/lo_ss/hi_ss  inclusive PIXEL bounds for the membership test (may be +-inf)
+      off_fs/off_ss            panel-local origin subtracted from (fs,ss)  -- NOT always the bound:
+                               a .geom panel may omit min_fs, in which case the bound is -inf but
+                               the offset is 0
+      fsx/fsy/ssx/ssy          panel basis vectors in lab pixel coords
+      cx/cy                    panel corner in lab pixel coords
+      res                      pixels per metre
+      z                        lab z of the panel [m] (clen + coffset)
+
+    Returns (n,3) q [1/A] with a NaN row wherever a peak matched no panel; callers choose whether to
+    keep those rows (positional correspondence) or drop them.
+    """
+    fs_arr = np.asarray(fs_arr, float)
+    ss_arr = np.asarray(ss_arr, float)
+    n = len(fs_arr)
+    r = np.full((n, 3), np.nan)
+    fi = np.floor(fs_arr); si = np.floor(ss_arr)      # fractional peak -> the pixel it lands in
+    free = np.ones(n, bool)                            # reproduces "first panel that catches it"
+    for p in specs:
+        m = (free & (fi >= p["lo_fs"]) & (fi <= p["hi_fs"])
+             & (si >= p["lo_ss"]) & (si <= p["hi_ss"]))
+        if not m.any():
+            continue
+        lf = fs_arr[m] - p["off_fs"]; ls = ss_arr[m] - p["off_ss"]
+        r[m, 0] = (p["cx"] + lf * p["fsx"] + ls * p["ssx"]) / p["res"]
+        r[m, 1] = (p["cy"] + lf * p["fsy"] + ls * p["ssy"]) / p["res"]
+        r[m, 2] = p["z"]
+        free &= ~m
+    s_hat = r / np.linalg.norm(r, axis=1, keepdims=True)
+    return (s_hat - np.array([0.0, 0.0, 1.0])) / wavelength_A
+
+
+def _specs_from_geom_panels(panels):
+    """.geom dict-of-dicts -> _q_from_panels specs. Bounds default to +-inf (a single-panel .geom
+    need not declare min_fs) while the panel-local origin defaults to 0 -- they are different
+    defaults for the same missing key, which is why the core takes them separately."""
+    return [dict(lo_fs=p.get("min_fs", -np.inf), hi_fs=p.get("max_fs", np.inf),
+                 lo_ss=p.get("min_ss", -np.inf), hi_ss=p.get("max_ss", np.inf),
+                 off_fs=p.get("min_fs", 0.0), off_ss=p.get("min_ss", 0.0),
+                 fsx=p["fsx"], fsy=p["fsy"], ssx=p["ssx"], ssy=p["ssy"],
+                 cx=p["corner_x"], cy=p["corner_y"], res=p["res"],
+                 z=p["clen"] + p["coffset"])
+            for p in panels.values()]
+
+
 def peaks_to_q(peaks, geom, wavelength_A=None):
-    """peaks: (N,2) [fs, ss] in data-array coords (single panel ok). Returns (N,3) q in 1/A.
-    Peaks outside every panel are dropped."""
+    """peaks: (N,2) [fs, ss] in data-array coords (single panel ok). Returns (M,3) q in 1/A.
+
+    Peaks outside every panel are DROPPED, so M <= N and rows do not correspond positionally to the
+    input. That is this entry point's contract; `lute_bridge.peaks_to_q` shares the same geometry
+    (via `_q_from_panels`) but keeps NaN rows instead, because its streaming caller needs the
+    correspondence. Pick by which contract you want, not by which import is closer to hand.
+    """
     peaks = np.asarray(peaks, float).reshape(-1, 2)
     panels = geom["panels"] if isinstance(geom, dict) and "panels" in geom else geom
     lam = wavelength_A or (geom.get("wavelength_A") if isinstance(geom, dict) else None)
     if lam is None:
         raise ValueError("no wavelength: pass wavelength_A or set photon_energy/wavelength in .geom")
-    out = []
-    for fs, ss in peaks:
-        name, p = _find_panel(fs, ss, panels)
-        if p is None:
-            continue
-        lfs = fs - p.get("min_fs", 0.0); lss = ss - p.get("min_ss", 0.0)
-        X = p["corner_x"] + lfs * p["fsx"] + lss * p["ssx"]
-        Y = p["corner_y"] + lfs * p["fsy"] + lss * p["ssy"]
-        res = p["res"]
-        R = np.array([X / res, Y / res, p["clen"] + p["coffset"]])
-        shat = R / np.linalg.norm(R)
-        out.append((shat - np.array([0.0, 0.0, 1.0])) / lam)
-    return np.array(out) if out else np.empty((0, 3))
+    if len(peaks) == 0:
+        return np.empty((0, 3))
+    q = _q_from_panels(peaks[:, 0], peaks[:, 1], _specs_from_geom_panels(panels), lam)
+    return q[np.isfinite(q).all(1)]

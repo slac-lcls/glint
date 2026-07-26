@@ -25,9 +25,15 @@ def _load_frames(args):
         images = [{"image": os.path.basename(args.qframes), "event": i} for i in range(len(frames))]
     elif args.images:
         from glint.lute_bridge import frames_from_cxi
+        rf = None
+        if getattr(args, "ring_focus", False):
+            cv = " ".join(args.cell).split() if args.cell else []
+            if len(cv) < 6:
+                sys.exit("error: --ring-focus needs --cell \"a b c al be ga\"")
+            rf = ([float(v) for v in cv[:6]], args.ring_qlow)
         frames, images = frames_from_cxi(args.images, args.geom, wavelength_A=args.wavelength,
                                          n=args.N, min_peaks=args.min_peaks,
-                                         peakfinder=args.peakfinder, top_n=args.top_peaks)
+                                         peakfinder=args.peakfinder, top_n=args.top_peaks, ring_focus=rf)
     else:
         geom = parse_geom(args.geom)
         if geom["wavelength_A"] is None and args.wavelength is None:
@@ -63,6 +69,11 @@ def main():
                          "peakfinder8/Cheetah peaks (/entry_1/result_1, no redundant peak-find); 'pf8' TBD")
     ap.add_argument("--top-peaks", type=int, default=0,
                     help="with --images: keep only the N strongest peaks/frame (0=all; guards over-finding)")
+    ap.add_argument("--ring-focus", action="store_true",
+                    help="with --images + --cell: search only the cell's powder-ring annuli (low-order shells, "
+                         "|q|<=--ring-qlow) -- a known-cell scan / blank-veto throughput lever")
+    ap.add_argument("--ring-qlow", type=float, default=0.15,
+                    help="--ring-focus low-order shell cutoff in 1/A (default 0.15 ~ d>6.7 A)")
     ap.add_argument("--device", choices=("auto", "cpu"), default="auto")
     ap.add_argument("--nbest", type=int, default=3,
                     help="keep N-best cell hypotheses/frame for consensus (1 = top-1 only)")
@@ -75,17 +86,20 @@ def main():
     ap.add_argument("--integrate", action="store_true",
                     help="native predict+integrate -> a stream with REAL I/sigma, self-contained (no CrystFEL). "
                          "With --images the frames are read straight from the stacked .cxi by event; with --peaks "
-                         "supply the per-frame image files via --image-dir. For the best (refined) merge use --fromfile")
+                         "supply the per-frame image files via --image-dir. For the best (refined) merge use --tofile")
     ap.add_argument("--image-dir", default=".", help="base directory for per-file frame images (--integrate with --peaks)")
     ap.add_argument("--int-dmin", type=float, default=2.0, help="--integrate resolution limit in A (default 2.0)")
     ap.add_argument("--int-tol", type=float, default=0.006,
                     help="--integrate Ewald excitation-error gate in 1/A (stills partiality window; default 0.006)")
-    ap.add_argument("--fromfile", metavar="SOL",
-                    help="also emit a CrystFEL --indexing=file solution file (the refined-merge handoff): "
+    ap.add_argument("--tofile", metavar="SOL",
+                    help="WRITE a CrystFEL --indexing=file solution file (the refined-merge handoff): "
                          "run 'indexamajig --indexing=file --fromfile-input-file=SOL --tolerance=10,10,10,3' "
                          "so CrystFEL refines+integrates the GLINT orientations (best merge)")
+    # Was --fromfile, which named the flag after CrystFEL's READER (--fromfile-input-file) even though
+    # GLINT is the WRITER -- so it read backwards from this side. Kept working, hidden from --help.
+    ap.add_argument("--fromfile", metavar="SOL", help=argparse.SUPPRESS)
     ap.add_argument("--lattice", default="aP",
-                    help="Bravais lattice code for --fromfile (e.g. tPc tetragonal, aP triclinic); default aP")
+                    help="Bravais lattice code for --tofile (e.g. tPc tetragonal, aP triclinic); default aP")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
     if (args.peaks or args.images) and not args.geom:
@@ -148,11 +162,15 @@ def main():
     _report(stats, args.out)
     if args.integrate:
         print(f"  integrated         : {nint} frames / {tot} reflections (real I/sigma) -> {args.out}")
-    if args.fromfile:
+    sol_path = args.tofile or args.fromfile
+    if sol_path:
+        if args.fromfile and not args.tofile:
+            print("  note: --fromfile is deprecated, use --tofile (GLINT WRITES this file; "
+                  "'fromfile' was named for CrystFEL, which reads it)", file=sys.stderr)
         from glint.predict import write_fromfile
-        nsol = write_fromfile(results, args.fromfile, args.lattice)
-        print(f"  fromfile solutions : {nsol} ({args.lattice}) -> {args.fromfile}"
-              f"  [indexamajig --indexing=file --fromfile-input-file={args.fromfile} --tolerance=10,10,10,3]")
+        nsol = write_fromfile(results, sol_path, args.lattice)
+        print(f"  solution file      : {nsol} ({args.lattice}) -> {sol_path}"
+              f"  [indexamajig --indexing=file --fromfile-input-file={sol_path} --tolerance=10,10,10,3]")
 
 
 if __name__ == "__main__":

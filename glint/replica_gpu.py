@@ -32,6 +32,27 @@ def _fib_halfsphere(D):
 DIRS = torch.as_tensor(_fib_halfsphere(CDIRS), dtype=torch.float64, device=DEV)
 TH = torch.as_tensor(np.linspace(0, PI, NANG, endpoint=False), dtype=torch.float64, device=DEV)
 CA, SA = torch.cos(TH), torch.sin(TH)
+# Full-turn twin of TH, at the SAME sample count (1 deg steps instead of 0.5) -- see _azimuth_grid.
+TH2 = torch.as_tensor(np.linspace(0, 2 * PI, NANG, endpoint=False), dtype=torch.float64, device=DEV)
+CA2, SA2 = torch.cos(TH2), torch.sin(TH2)
+AZ_TOL = float(os.environ.get("AZ_TOL", "1e-9"))          # |c01| below this counts as perpendicular
+
+
+def _azimuth_grid(c01):
+    """(cos, sin) samples for the axis1 azimuth sweep, given the anchor/axis1 unit-cosine c01.
+
+    axis1 is swept on the cone  a1(th) = L1*(c01*cn + s01*(cos th * u + sin th * v)).  The map
+    th -> th+pi sends a1 -> 2*c01*L1*cn - a1, which equals -a1 -- the SAME lattice vector, so a
+    HALF turn covers the cone -- only when c01 == 0.  For an oblique pair (c01 != 0) the -a1
+    partner lies on the supplementary cone  x.cn = -L1*c01,  which the sweep never visits, so a
+    half turn generates only half the cone and the true axis is missed for ~50% of orientations
+    (measured: 50% of orientations off by the full cone offset, 10 deg on triclinic / 20 deg on
+    rhombohedral-oblique -- far outside the annealer's basin).
+
+    So: half turn when perpendicular (bit-identical to the original, and the finer 0.5 deg step),
+    full turn otherwise.  Same sample count either way, so this is COST-NEUTRAL -- oblique cells
+    trade angular step (0.5 -> 1 deg) for the missing half, which the annealer absorbs."""
+    return (CA, SA) if abs(c01) < AZ_TOL else (CA2, SA2)
 
 
 def objective_t(V, Q):
@@ -216,8 +237,9 @@ def index_known_gpu_cell(q, Mc, topa=8):
     u = torch.cross(cn, tmp, dim=1); u = u / u.norm(dim=1, keepdim=True)
     v = torch.cross(cn, u, dim=1)
     s01 = float(np.sqrt(max(1.0 - c01 * c01, 0.0)))
+    ca, sa = _azimuth_grid(c01)                             # half turn iff perpendicular
     a1 = float(L[1]) * (c01 * cn[:, None, :] +
-                        s01 * (CA[None, :, None] * u[:, None, :] + SA[None, :, None] * v[:, None, :]))  # (NC,NANG,3)
+                        s01 * (ca[None, :, None] * u[:, None, :] + sa[None, :, None] * v[:, None, :]))  # (NC,NANG,3)
     a0 = C[:, None, :].expand(-1, NANG, -1)
     inl1, _ = objective_t(a1.reshape(-1, 3), Q); inl1 = inl1.reshape(len(C), NANG)
     ta = min(topa, NANG)

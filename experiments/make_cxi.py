@@ -33,6 +33,12 @@ X = np.zeros((N, maxp), np.float32); Y = np.zeros((N, maxp), np.float32)
 Iarr = np.zeros((N, maxp), np.float32); npk = np.zeros(N, np.int32)
 with open(outpref + "_qeff.txt", "w") as fq:                 # effective q (flipped, on-panel) for scoring/GLINT
     for i, (fs, ss, on) in enumerate(pk):
+        # peakTotalIntensity is a PLACEHOLDER, not a measurement. The input here is a q-vector file
+        # (frames_*.txt) which carries no intensities, so there is nothing to write -- 1000.0 is a
+        # constant filler that keeps the CXI schema complete for indexamajig. Anything that RANKS
+        # peaks by this field is sorting a constant and selecting an arbitrary subset; that mistake
+        # produced, and then invalidated, the "intensity ranking" result in PR #34. See the guard in
+        # lute_bridge.frames_from_cxi, which detects a non-varying array and falls back to peak order.
         X[i, :len(fs)] = fs; Y[i, :len(ss)] = ss; Iarr[i, :len(fs)] = 1000.0; npk[i] = len(fs)
         qe = frames[i][on]
         fq.write("FRAME %d %d\n" % (i, len(qe)))

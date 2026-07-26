@@ -101,6 +101,10 @@ def save_dataset(crystals, outdir=OUTDIR, na=NA):
 def load_dataset(noise, outdir=OUTDIR, n=N_CRY, m_max=M_MAX):
     tag = f"{noise:.0e}"
     d = os.path.join(outdir, f"noise_{tag}")
+    # Orientations are the committed grid selection (orientations_na0.028.npz); the per-shot npz are
+    # regenerable from them (per-crystal seed is deterministic) -- materialize all noise levels on demand.
+    if not os.path.exists(os.path.join(d, f"crystal_{0:03d}.npz")):
+        save_dataset(generate_crystals(n_cry=n), outdir=outdir)
     crystals = []
     for i in range(n):
         z = np.load(os.path.join(d, f"crystal_{i:03d}.npz"))

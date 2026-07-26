@@ -107,6 +107,10 @@ def generate_cell(na, noise, n_keep=N_KEEP):
 
 def load_cell(na, noise, n=N_KEEP):
     outdir = cell_dir(na, noise)
+    # The orientations (orientations_na*.npz) are the committed frozen selection; the per-cell npz are
+    # regenerable from them (generate_cell's per-crystal seed is deterministic), so materialize on demand.
+    if not os.path.exists(os.path.join(outdir, f"crystal_{0:03d}.npz")):
+        generate_cell(na, noise, n_keep=n)
     crystals = []
     for i in range(n):
         d = np.load(os.path.join(outdir, f"crystal_{i:03d}.npz"))

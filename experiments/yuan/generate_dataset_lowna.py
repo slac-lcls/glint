@@ -25,7 +25,7 @@ sys.path.insert(0, "..")
 from cbxd_joint import rand_rot, simulate
 
 from cbxd_sweep import set_NA
-from generate_dataset import select_stratified
+from generate_dataset import select_stratified, select_frozen, freeze_selection, load_frozen
 
 NA = 0.016
 NOISE = 2e-4
@@ -35,6 +35,9 @@ POOL_SIZE = 300                             # bigger pool: low NA means many cry
 N_KEEP = 20
 MIN_STREAKS = 3                             # need at least a few streaks for a search to mean anything
 OUTDIR = os.path.join(os.path.dirname(__file__), "data", "simulated_data_lowna")
+# Frozen selection (see generate_dataset.py): commit only these 20 orientations; regenerate the npz
+# on demand. RESULT-identical, not byte-identical across platforms.
+SELECTION = os.path.join(os.path.dirname(__file__), "data", "selection_simulated_data_lowna.npz")
 
 
 def generate_pool(pool_size=POOL_SIZE, noise=NOISE, seed=SEED):
@@ -60,7 +63,20 @@ def save_dataset(crystals, outdir=OUTDIR):
                  noise=NOISE, na=NA)
 
 
+def build_dataset():
+    """Reproduce the pinned selection if frozen (default), else mint+freeze a fresh deterministic one."""
+    pool = generate_pool()
+    frozen = load_frozen(SELECTION)
+    if frozen is not None:
+        return select_frozen(pool, frozen)
+    kept = select_stratified(pool, n_keep=N_KEEP)
+    freeze_selection(kept, SELECTION)
+    return kept
+
+
 def load_dataset(outdir=OUTDIR, n=N_KEEP):
+    if not os.path.exists(os.path.join(outdir, f"crystal_{0:03d}.npz")):
+        save_dataset(build_dataset(), outdir)            # regenerate from the frozen selection on demand
     crystals = []
     for i in range(n):
         d = np.load(os.path.join(outdir, f"crystal_{i:03d}.npz"))
@@ -70,9 +86,8 @@ def load_dataset(outdir=OUTDIR, n=N_KEEP):
 
 
 if __name__ == "__main__":
-    pool = generate_pool()
-    print(f"pool: {len(pool)} usable crystals (>= {MIN_STREAKS} streaks) out of {POOL_SIZE} drawn")
-    kept = select_stratified(pool, n_keep=N_KEEP)
+    kept = build_dataset()
+    print(f"kept {len(kept)} crystals (frozen selection reproduced or minted)")
     save_dataset(kept, outdir=OUTDIR)
     ns = sorted(c["n_streaks"] for c in kept)
     print(f"NA={NA}  kept={len(kept)}  noise={NOISE:.0e}  seed={SEED}")

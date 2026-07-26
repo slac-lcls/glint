@@ -14,3 +14,6 @@ experiments/xgandalf/ffbidx_driver
 # scratch run outputs
 *_out.txt
 qd_sweep.txt
+
+# CBXD datasets are regenerable from the committed selections/orientations (see experiments/yuan/generate_dataset*.py)
+experiments/yuan/data/**/crystal_*.npz

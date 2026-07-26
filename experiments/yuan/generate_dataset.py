@@ -32,6 +32,12 @@ SEED = 42
 POOL_SIZE = 200
 N_KEEP = 20
 OUTDIR = os.path.join(os.path.dirname(__file__), "data", "simulated_data")
+# Frozen selection: the ONLY committed part of the dataset (20 x 3x3 orientations, ~1.5 KB). The bulky
+# per-crystal npz (kobs/lab/cents) are regenerated on demand from these + the seeded pool, so data/ can be
+# gitignored. Reproduction is deterministic to float tolerance (~1e-10 << every point-match tol), i.e.
+# RESULT-identical, not byte-identical -- the rng draws are bit-stable, only cross-platform matrix
+# arithmetic differs sub-tolerance. This replaces the non-reproducible np.argsort tie-order selection.
+SELECTION = os.path.join(os.path.dirname(__file__), "data", "selection_simulated_data.npz")
 
 
 def generate_pool(pool_size=POOL_SIZE, noise=NOISE, seed=SEED):
@@ -49,16 +55,60 @@ def generate_pool(pool_size=POOL_SIZE, noise=NOISE, seed=SEED):
 def select_stratified(pool, n_keep=N_KEEP):
     """Keep n_keep crystals spread evenly across the observed #streaks range (by rank, i.e.
     evenly spaced quantiles of the sorted #streaks distribution) -- covers sparse-to-dense rather
-    than whatever a plain sequential run happens to contain."""
-    order = np.argsort([c["n_streaks"] for c in pool])
+    than whatever a plain sequential run happens to contain.
+
+    Deterministic: #streaks is a small integer with heavy ties, so the sort MUST be stable
+    (kind='stable') and break ties by pool index -- a plain np.argsort defaults to quicksort, whose
+    tie order is numpy-version/platform dependent, which is what made the frozen datasets
+    non-regenerable (a fresh run overlapped the committed set at only ~4/20). Used only to MINT a new
+    frozen selection; existing datasets are reproduced via select_frozen()."""
+    counts = np.asarray([c["n_streaks"] for c in pool])
+    order = np.lexsort((np.arange(len(pool)), counts))       # stable: primary=counts, secondary=index
     idx = np.linspace(0, len(order) - 1, n_keep).round().astype(int)
     idx = sorted(set(idx.tolist()))
     # pad if dedup dropped below n_keep (possible with ties at the edges)
-    remaining = [i for i in range(len(order)) if order[i] not in [order[j] for j in idx]]
+    chosen = {order[j] for j in idx}
+    remaining = [i for i in range(len(order)) if order[i] not in chosen]
     while len(idx) < n_keep and remaining:
         idx.append(remaining.pop(0))
     idx = sorted(idx[:n_keep])
     return [pool[order[i]] for i in idx]
+
+
+def select_frozen(pool, frozen_Rt, tol=1e-6):
+    """Reproduce a pinned selection by matching each frozen orientation to its pool member.
+    The pool is deterministic (seed=SEED), so this recovers the exact crystals the frozen set named --
+    RESULT-identical (matched to ~1e-10, far below every point-match tol), not necessarily byte-identical
+    across platforms. Order follows frozen_Rt (== the saved crystal_NNN order)."""
+    pool_Rt = np.stack([c["Rt"] for c in pool])
+    out = []
+    for Rt in frozen_Rt:
+        j = int(np.abs(pool_Rt - Rt).reshape(len(pool), -1).max(1).argmin())
+        assert np.abs(pool_Rt[j] - Rt).max() < tol, "frozen Rt not in pool -- SEED/pool_size/cbxd_joint changed"
+        out.append(pool[j])
+    return out
+
+
+def freeze_selection(crystals, path=SELECTION):
+    """Persist ONLY the chosen orientations (tiny) so the bulky per-crystal npz can be gitignored."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    np.savez(path, Rt=np.stack([c["Rt"] for c in crystals]))
+
+
+def load_frozen(path=SELECTION):
+    return np.load(path)["Rt"] if os.path.exists(path) else None
+
+
+def build_dataset():
+    """The canonical crystals. Reproduce the pinned selection if frozen (default), else mint a fresh
+    deterministic one and freeze it."""
+    pool = generate_pool()
+    frozen = load_frozen()
+    if frozen is not None:
+        return select_frozen(pool, frozen)
+    kept = select_stratified(pool)
+    freeze_selection(kept)
+    return kept
 
 
 def save_dataset(crystals, outdir=OUTDIR):
@@ -70,6 +120,9 @@ def save_dataset(crystals, outdir=OUTDIR):
 
 
 def load_dataset(outdir=OUTDIR, n=N_KEEP):
+    # regenerate transparently from the frozen selection if the (gitignored) npz aren't materialized yet
+    if not os.path.exists(os.path.join(outdir, f"crystal_{0:03d}.npz")):
+        save_dataset(build_dataset(), outdir)
     crystals = []
     for i in range(n):
         d = np.load(os.path.join(outdir, f"crystal_{i:03d}.npz"))
@@ -79,8 +132,7 @@ def load_dataset(outdir=OUTDIR, n=N_KEEP):
 
 
 if __name__ == "__main__":
-    pool = generate_pool()
-    kept = select_stratified(pool)
+    kept = build_dataset()          # reproduces the pinned selection (or mints+freezes one the first time)
     save_dataset(kept)
     ns = sorted(c["n_streaks"] for c in kept)
     print(f"pool={POOL_SIZE}  kept={len(kept)}  noise={NOISE:.0e}  seed={SEED}")

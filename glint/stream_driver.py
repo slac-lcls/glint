@@ -28,6 +28,7 @@ Numbers reported are on an arbitrary common intensity scale (the batch path's gl
 dropped as it cancels); this affects nothing that is reported, all of which are ratios.
 """
 import os
+from collections import deque
 import numpy as np
 
 try:
@@ -44,7 +45,10 @@ from glint.peakfinder_v4 import PeakFinderV4
 from glint.running_consensus import RunningConsensus
 from glint.multishot import same_lattice
 from glint.multilattice import deflate_peaks
-import glint.replica_gpu_batch as rgb
+try:
+    import glint.replica_gpu_batch as rgb                     # the q-only batch indexer (needs torch)
+except Exception:                                            # pragma: no cover - CPU-only unit env (no torch)
+    rgb = None                                               # batch/rescue indexers are injected as fakes there
 
 
 # ------------------------------------------------------------- orientation-invariant hkl grid ----
@@ -334,7 +338,8 @@ class StreamDriver:
                  snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
                  adaptive_relock=False, min_inliers=0, mad_z=4.0, warm_topk=16, warm_floor=1,
-                 double_hit=False, geom_refine=False, geom_refine_kw=None):
+                 double_hit=False, geom_refine=False, geom_refine_kw=None,
+                 rescue_buffer=0, fanout=None):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -399,8 +404,26 @@ class StreamDriver:
         self.min_inliers = int(min_inliers) if min_inliers else self.min_peaks
         self.extra = []; self._watch = None; self.n_relock = 0
         if self.adaptive_relock and not hasattr(self, "_blind_index"):
-            from glint.glint_fast import index_blind_nbest
-            self._blind_index = index_blind_nbest
+            try:
+                from glint.glint_fast import index_blind_nbest
+                self._blind_index = index_blind_nbest
+            except Exception:                                # pragma: no cover - CPU-only unit env (no torch)
+                self._blind_index = None                     # tests inject a fake _blind_index via the seam
+
+        # Miss-buffer retroactive rescue (opt-in, INDEX-ONLY). Frames that fit NO active cell are the
+        # "rose/unindexed" bars during a sample change; today they are dropped once the batch flushes.
+        # With rescue_buffer>0 (needs adaptive_relock) their q-vectors are buffered, and when the
+        # watchdog LOCKS a new cell they are re-indexed against it -- recovering the INDEXING rate of
+        # the pre-lock misses. q-only => tiny (no raw-pixel ring); integrate/merge rescue is a deferred
+        # later layer. `fanout` batches the watchdog's blind indexing across workers (default = serial
+        # single-GPU loop, BIT-IDENTICAL to today); opt-in glint.warmup_batch.mpi_fanout detects the
+        # change in ~one blind-frame-time. Both seams (`_fanout`, `_known_index`) let CPU tests inject
+        # fakes with no GPU, mirroring the `_blind_index` seam.
+        self.n_rescued = 0
+        self._missbuf = (deque(maxlen=int(rescue_buffer))
+                         if self.adaptive_relock and rescue_buffer > 0 else None)
+        self._known_index = rgb.index_fused if rgb is not None else None   # q-only batch indexer (test seam)
+        self._fanout = fanout or (lambda Q, k: [self._blind_index(q, k) for q in Q])
 
         # Blind warm-up: with Mc=None the driver has no cell yet, so it indexes the first frames
         # blind (~26 ms/frame) one at a time, accumulating cross-frame consensus; when the running
@@ -586,8 +609,11 @@ class StreamDriver:
         the same specificity that refuses non-crystals."""
         if self._watch is None:
             self._watch = RunningConsensus(min_support=3, gap=2, adaptive=False)
-        for i in missed:
-            nb = self._blind_index(self._q[i], self.warmup_nbest)
+        # Fan the independent blind indexes across workers, then pool their N-best into the running
+        # consensus. Default `_fanout` is the serial single-GPU loop, so the votes -- and the lock --
+        # are BIT-IDENTICAL to the old per-frame loop (RunningConsensus is a histogram; add_frame order
+        # does not change the verdict). Opt-in mpi_fanout distributes the frames across GPUs.
+        for nb in self._fanout([self._q[i] for i in missed], self.warmup_nbest):
             self._watch.add_frame([c for c, _ in nb])
         Mn = self._watch.verdict()[0]
         if Mn is None:
@@ -599,6 +625,18 @@ class StreamDriver:
                                nth=theoretical_unique(Mn, self.dmin, self.ops),
                                acc=MergeAccumulator(self.snr_bins, self.ops)))
         self.n_relock += 1
+        if self._missbuf:                                       # retroactive INDEX-ONLY rescue of buffered misses
+            # Re-index the buffered pre-lock misses against the newly locked cell Mn with the same
+            # q-only fast-path indexer the batch uses (rgb.index_fused: q in, [M or None] out, no
+            # pixels). Selection-misses (the recurring new cell) pass the same _inliers gate; blank/
+            # spurious "generation" misses are correctly refused. No pixels, no integrate -- that is
+            # the deferred merge-rescue layer.
+            qs = [q for _, q in self._missbuf]
+            Ms = self._known_index(qs, Mn, B=max(len(qs), 1))
+            self.n_rescued += sum(1 for q, M in zip(qs, Ms)
+                                  if M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
+                                  and self._inliers(q, M) >= self.min_inliers)
+            self._missbuf.clear()
         self._watch = RunningConsensus(min_support=3, gap=2, adaptive=False)    # reset for the next change
 
     def flush(self):
@@ -615,6 +653,8 @@ class StreamDriver:
                     break
                 remaining = self._index_integrate(remaining, e["Mc"], e["grid"], e["acc"], gate=True)
             if remaining:                                       # fit no active cell -> blind watchdog
+                if self._missbuf is not None:                   # buffer q-only for retroactive rescue on lock
+                    self._missbuf.extend((self.n_pushed, self._q[i].copy()) for i in remaining)
                 self._watchdog(remaining)
         self._n = 0
         self._q = [None] * self.B
@@ -631,6 +671,7 @@ class StreamDriver:
                  theoretical_unique=self.n_theoretical)
         if self.adaptive_relock:                                # adaptive: report the active cell set
             s["n_cells"] = 1 + len(self.extra); s["n_relock"] = self.n_relock
+            s["n_rescued"] = self.n_rescued                      # buffered pre-lock misses recovered on relock
             s["extra_cells"] = [dict(axes=list(np.linalg.norm(e["Mc"], axis=0).round(1)),
                                      **e["acc"].stats(thr=thr, n_theoretical=e["nth"])) for e in self.extra]
         if self.double_hit:

@@ -38,6 +38,10 @@ def generate_twin(noise=NOISE, outdir=OUTDIR):
 
 
 def load_dataset(outdir=OUTDIR, n=20):
+    # regenerate transparently if the (gitignored) npz aren't materialized yet -- same pattern
+    # as generate_dataset.py::load_dataset, which this twin dataset was missed by in #60.
+    if not os.path.exists(os.path.join(outdir, f"crystal_{0:03d}.npz")):
+        generate_twin(outdir=outdir)
     crystals = []
     for i in range(n):
         d = np.load(os.path.join(outdir, f"crystal_{i:03d}.npz"))

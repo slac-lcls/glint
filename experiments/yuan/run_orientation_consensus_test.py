@@ -42,7 +42,12 @@ M_VALUES = (2, 4, 8)
 # v2: min_support scales with M (majority_support) instead of the fixed constant 2 used in
 # the N=8 pilot (results_orientation_consensus.jsonl) -- separate log file, not resumed from
 # the pilot's stale fixed-threshold results (see issue #12 comment).
-LOG = os.path.join(os.path.dirname(__file__), "results_orientation_consensus_v2_majority.jsonl")
+# v3: consensus_orientation now groups modulo the cell's proper point-group symmetry (issue
+# #58 -- v2's raw geodesic-angle grouping fragmented physically-identical orientation copies
+# into up to 4 separate clusters, capping support at ~M/4 and preordaining majority_support to
+# never clear at M>=4). Separate log file again -- v2's numbers were computed with the
+# symmetry-blind grouping and are not valid to resume from.
+LOG = os.path.join(os.path.dirname(__file__), "results_orientation_consensus_v3_symmetric.jsonl")
 
 
 def frac_indexed(R, kobs, lab):

@@ -50,7 +50,8 @@ def streak_reprs_and_tangents(Rt, noise, rng):
     return np.array(reprs), np.array(tangents)
 
 
-def _tangent_bonus_chunk(Rc_np, reprs_t, tang_t, GB_t, tol, cos_tol, bonus, device):
+def _tangent_bonus_chunk(Rc_np, reprs_t, tang_t, GB_t, tol, cos_tol, bonus, device,
+                         require_tangent=True):
     Rc = torch.as_tensor(Rc_np, dtype=torch.float32, device=device)  # (C,3,3)
     G = torch.einsum('cij,jn->cni', Rc, GB_t)                # (C,Nn,3)
     Gn = G.norm(dim=2)                                        # (C,Nn)
@@ -59,6 +60,12 @@ def _tangent_bonus_chunk(Rc_np, reprs_t, tang_t, GB_t, tol, cos_tol, bonus, devi
     resid = (dot - (Gn / 2).unsqueeze(1)).abs()                # (C,Ns,Nn)
     best_resid, best_j = resid.min(dim=2)                      # (C,Ns)
     gate = best_resid < tol
+    if not require_tangent:
+        # issue #59 matched-control mode: count reprs points that clear the Bragg-plane
+        # residual gate WITHOUT also requiring tangent alignment -- isolates how much of the
+        # bonus is just from these being extra/cleaner/independently-drawn points (the same
+        # reprs TAN's tangent bonus uses), as opposed to curvature specifically.
+        return gate.float().sum(dim=1).cpu().numpy() * bonus
     Gbest = torch.gather(G, 1, best_j.unsqueeze(-1).expand(-1, -1, 3))   # (C,Ns,3)
     r = reprs_t.unsqueeze(0) - Gbest / 2.0
     Gbest_hat = Gbest / Gbest.norm(dim=2, keepdim=True)
@@ -70,10 +77,15 @@ def _tangent_bonus_chunk(Rc_np, reprs_t, tang_t, GB_t, tol, cos_tol, bonus, devi
 
 
 def tangent_bonus_batch_gpu(Rs, reprs, tangents, tol, tol_ang_deg=15.0, bonus=1.0,
-                            r_chunk=5000, device=DEVICE, min_chunk=64):
+                            r_chunk=5000, device=DEVICE, min_chunk=64, require_tangent=True):
     """GPU-batched cbxd_hough_tangent bonus over many candidate orientations. reprs/tangents:
     (Ns,3). Returns (Nr,) float array. Ns is small (a few dozen streaks) so, unlike
     score_batch_gpu, no node-axis chunking is needed -- (r_chunk, Ns, Nn) fits comfortably.
+
+    require_tangent=False drops the tangent-alignment gate (issue #59's matched control): the
+    returned count is >= the require_tangent=True count for the same reprs/candidates, since
+    dropping a gate can only admit more matches, never fewer. tangents is unused in that mode
+    and may be an empty/dummy array.
 
     On CUDA OOM (shared GPU, contention from other users' jobs), halves r_chunk for that span
     and retries rather than failing outright."""
@@ -81,7 +93,8 @@ def tangent_bonus_batch_gpu(Rs, reprs, tangents, tol, tol_ang_deg=15.0, bonus=1.
     if len(reprs) == 0:
         return np.zeros(Nr, dtype=np.float64)
     reprs_t = torch.as_tensor(reprs, dtype=torch.float32, device=device)     # (Ns,3)
-    tang_t = torch.as_tensor(tangents, dtype=torch.float32, device=device)   # (Ns,3)
+    tang_t = (torch.as_tensor(tangents, dtype=torch.float32, device=device) if require_tangent
+              else torch.zeros_like(reprs_t))
     GB_t = torch.as_tensor(_GB, dtype=torch.float32, device=device)          # (3,Nn)
     cos_tol = float(np.cos(np.radians(tol_ang_deg)))
     out = np.zeros(Nr, dtype=np.float64)
@@ -91,7 +104,7 @@ def tangent_bonus_batch_gpu(Rs, reprs, tangents, tol, tol_ang_deg=15.0, bonus=1.
         c = min(chunk, Nr - i0)
         try:
             out[i0:i0 + c] = _tangent_bonus_chunk(Rs[i0:i0 + c], reprs_t, tang_t, GB_t, tol,
-                                                  cos_tol, bonus, device)
+                                                  cos_tol, bonus, device, require_tangent)
             i0 += c
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
@@ -121,6 +134,29 @@ def hough_seed_index_tangent(kobs, reprs, tangents, rng, n_coarse=1_000_000, tol
     return best_R
 
 
+def hough_seed_index_points_matched(kobs, reprs, rng, n_coarse=1_000_000, tol_c=0.03,
+                                    tol_ang_deg=15.0, tbonus=1.0, keep=10, **gpu_kw):
+    """Issue #59 matched control: identical to hough_seed_index_tangent EXCEPT the bonus from
+    `reprs` drops the tangent-alignment requirement (require_tangent=False) -- so this arm gets
+    the exact same extra/cleaner/independently-noised fresh points TAN's tangent bonus is built
+    from, but scored on points alone. Comparing this against PTS_alone isolates the "extra data"
+    effect; comparing TAN against THIS (not against PTS_alone) isolates curvature specifically,
+    since both now see identical input data and only the tangent gate differs."""
+    Rs = rand_rot_batch(rng, n_coarse)
+    pt_counts = score_batch_gpu(Rs, kobs, tol_c, **gpu_kw)
+    pb = tangent_bonus_batch_gpu(Rs, reprs, None, tol_c, tol_ang_deg, tbonus,
+                                 require_tangent=False)
+    combined = pt_counts + pb
+    top = np.argsort(combined)[::-1][:keep]
+    best_R, best_s = None, -1.0
+    for i in top:
+        R = refine(kobs, Rs[i], rng, iters=300)
+        s = score(R, kobs, 0.0025)
+        if s > best_s:
+            best_s, best_R = s, R
+    return best_R
+
+
 def _golden_check(rng):
     """tangent_bonus_batch_gpu must agree with tangent_score_test.py's scalar tangent_bonus."""
     from tangent_score_test import tangent_bonus
@@ -132,6 +168,13 @@ def _golden_check(rng):
     ref = np.array([tangent_bonus(R, reprs, tangents, 0.03, 15.0, 1.0) for R in Rs])
     got = tangent_bonus_batch_gpu(Rs, reprs, tangents, 0.03, 15.0, 1.0, r_chunk=5)
     assert np.allclose(ref, got), f"tangent_bonus_batch_gpu mismatch: ref={ref} got={got}"
+
+    # issue #59 matched-control invariant: dropping the tangent gate (require_tangent=False)
+    # can only ADMIT more matches than requiring it, never fewer, for the identical reprs/Rs.
+    got_notan = tangent_bonus_batch_gpu(Rs, reprs, None, 0.03, 15.0, 1.0, r_chunk=5,
+                                        require_tangent=False)
+    assert np.all(got_notan >= got - 1e-6), (got_notan, got)
+
     print(f"golden check OK (device={DEVICE}): bonuses={got}")
 
 

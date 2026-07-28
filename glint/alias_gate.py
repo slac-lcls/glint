@@ -146,8 +146,12 @@ def tightness(M, Q, hkl_tol=0.15):
 class AliasGate:
     """Confirm (or reject) a consensus lock by the Occam-tightness test over the leader's derivative
     lattices. Default `adopt=False` REFUSES an ambiguous lock (returns None -> the driver keeps
-    accumulating votes, the conservative streaming choice); `adopt=True` instead swaps in the tighter
-    alias (the better single-frame explanation)."""
+    accumulating votes so cross-frame consensus can resolve the cell -- the conservative streaming
+    choice, and the one that matters: it reliably STOPS a super-cell alias from locking). `adopt=True`
+    instead swaps in the tightest derivative; that is the true cell on rich or multi-frame data, but a
+    SINGLE sparse frame can under-determine which derivative is correct (a smaller cell may explain the
+    observed peaks just as tightly -- see the pseudo-centering case in the tests), so adopt is best-
+    effort per-frame repair, not a guaranteed recovery. Prefer the default refuse in streaming."""
 
     __slots__ = ("max_index", "margin", "hkl_tol", "adopt", "last")
 

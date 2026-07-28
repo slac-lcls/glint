@@ -339,7 +339,8 @@ class StreamDriver:
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
                  adaptive_relock=False, min_inliers=0, mad_z=4.0, warm_topk=16, warm_floor=1,
                  double_hit=False, geom_refine=False, geom_refine_kw=None,
-                 rescue_buffer=0, fanout=None):
+                 rescue_buffer=0, fanout=None, alias_gate=None,
+                 lock_probe=False, probe_null=64, lock_min_z=None):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -424,6 +425,18 @@ class StreamDriver:
                          if self.adaptive_relock and rescue_buffer > 0 else None)
         self._known_index = rgb.index_fused if rgb is not None else None   # q-only batch indexer (test seam)
         self._fanout = fanout or (lambda Q, k: [self._blind_index(q, k) for q in Q])
+        # Opt-in lock-time alias gate (glint.alias_gate.AliasGate): a deterministic Occam-tightness
+        # confirmation over the leader's small-index derivative lattices, run on the observed q of the
+        # voting frames just before a relock commits. Default None => never runs => bit-identical.
+        self._alias_gate = alias_gate
+        # Opt-in lock-quality probe (glint.spurious_meter.null_margin): on each relock, measure how far
+        # the new cell's overlap sits above the random-orientation floor on its supporting frames -- a
+        # live "is this lock resting on real signal" z. lock_min_z (if set) refuses a too-weak lock.
+        # Default lock_probe=False => never runs => bit-identical.
+        self._lock_probe = bool(lock_probe)
+        self._probe_null = int(probe_null)
+        self._lock_min_z = lock_min_z
+        self.lock_z = None                               # z of the most recent relock (None until one fires)
 
         # Blind warm-up: with Mc=None the driver has no cell yet, so it indexes the first frames
         # blind (~26 ms/frame) one at a time, accumulating cross-frame consensus; when the running
@@ -619,11 +632,46 @@ class StreamDriver:
         if Mn is None:
             return
         Mn = _conventional_tetragonal(np.asarray(Mn, float))
+        if self._alias_gate is not None:
+            # Deterministic single-lock confirmation on the observed q of the frames that just voted.
+            # Returns the leader (confirmed), a tighter derivative lattice (adopt mode), or None (refuse
+            # -> do NOT reset self._watch, so the histogram keeps accumulating for a later, cleaner lock).
+            Qobs = [self._q[i] for i in missed if self._q[i] is not None]
+            if Qobs:
+                Mg = self._alias_gate.confirm(Mn, np.vstack(Qobs))
+                if Mg is None:
+                    return
+                Mn = _conventional_tetragonal(np.asarray(Mg, float))
         if any(same_lattice(Mn, Mc) for Mc in self._all_cells()):
             return
+        lock_z = None
+        if self._lock_probe and self._known_index is not None:
+            # "Does this lock rest on real signal?" -- index the just-voted frames against the new cell
+            # with the SAME q-only indexer the rescue/gate use (convention-safe: it returns a per-frame
+            # q @ M = hkl matrix, which is what _inliers/null_margin expect -- the stored voted cell is a
+            # reduced-cell reference, a different convention). Take the best-fitting supporting frame and
+            # score its overlap against the random-orientation floor (glint.spurious_meter.null_margin).
+            # Seeded by n_relock for a reproducible number. lock_min_z (if set) refuses a too-weak lock
+            # WITHOUT resetting self._watch, so votes keep accumulating for a cleaner later lock.
+            from glint.spurious_meter import null_margin
+            qs = [self._q[i] for i in missed if self._q[i] is not None]
+            Ms = self._known_index(qs, Mn, B=max(len(qs), 1)) if qs else []
+            best_q, best_M, best_ni = None, None, -1
+            for q, Mi in zip(qs, Ms):
+                if Mi is None:
+                    continue
+                ni = self._inliers(q, Mi)
+                if ni > best_ni:
+                    best_q, best_M, best_ni = q, Mi, ni
+            lock_z = (null_margin(best_q, best_M, n_null=self._probe_null,
+                                  rng=np.random.default_rng(self.n_relock))["z"]
+                      if best_M is not None and best_ni >= self.min_inliers else 0.0)
+            self.lock_z = lock_z
+            if self._lock_min_z is not None and lock_z < self._lock_min_z:
+                return
         self.extra.append(dict(Mc=Mn, grid=HKLGrid(Mn, self.dmin, gpu=self.gpu),
                                nth=theoretical_unique(Mn, self.dmin, self.ops),
-                               acc=MergeAccumulator(self.snr_bins, self.ops)))
+                               acc=MergeAccumulator(self.snr_bins, self.ops), lock_z=lock_z))
         self.n_relock += 1
         if self._missbuf:                                       # retroactive INDEX-ONLY rescue of buffered misses
             # Re-index the buffered pre-lock misses against the newly locked cell Mn with the same
@@ -672,6 +720,8 @@ class StreamDriver:
         if self.adaptive_relock:                                # adaptive: report the active cell set
             s["n_cells"] = 1 + len(self.extra); s["n_relock"] = self.n_relock
             s["n_rescued"] = self.n_rescued                      # buffered pre-lock misses recovered on relock
+            if self._lock_probe:
+                s["lock_z"] = self.lock_z                        # signal-strength z of the most recent relock
             s["extra_cells"] = [dict(axes=list(np.linalg.norm(e["Mc"], axis=0).round(1)),
                                      **e["acc"].stats(thr=thr, n_theoretical=e["nth"])) for e in self.extra]
         if self.double_hit:

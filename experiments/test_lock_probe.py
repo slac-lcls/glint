@@ -7,6 +7,8 @@ a lock whose z is below the bar. Run: `python experiments/test_lock_probe.py` or
 """
 import numpy as np
 from glint.stream_driver import StreamDriver
+from glint.multishot import same_lattice
+from glint.alias_gate import AliasGate
 
 
 def _rot(theta):
@@ -99,9 +101,55 @@ def test_default_off_no_probe():
     assert "lock_z" not in drv.stats()                        # not surfaced when the probe is off
 
 
+# ---------------------------------------------------------------- driver-level alias-gate wiring
+# q@M=hkl convention (M columns = real cell vectors): tetragonal so _conventional_tetragonal is stable.
+M_REAL = np.diag([60.0, 60.0, 80.0])
+M_ALIAS = M_REAL @ np.array([[1.0, 0, 0], [0, 1.0, 0], [0, 0, 2.0]])   # index-2 super-cell (c doubled)
+_MINV = np.linalg.inv(M_REAL)
+
+
+def _real_frame_q(rng, n=40):
+    """q of a real M_REAL frame (one orientation): q @ M_REAL = integer hkl, q @ M_ALIAS = hkl@H integer
+    too (super-cell keeps coverage) -- the exact case the gate must resolve to the tighter true cell."""
+    hkl = rng.integers(-5, 6, size=(n, 3)).astype(float)
+    hkl = hkl[np.abs(hkl).sum(1) > 0]
+    return hkl @ _MINV
+
+
+def _alias_driver(gate):
+    drv = StreamDriver(M_A, PANELS, 0.1, 1.3, (N, N), dtype=np.uint16, B=16,
+                       dmin=3.0, use_gpu=False, adaptive_relock=True, min_inliers=6, alias_gate=gate)
+    drv._fanout = lambda Q, k: [[(M_ALIAS.copy(), 1.0)] * 3 for _ in Q]   # consensus only ever sees the alias
+    return drv
+
+
+def test_alias_gate_off_locks_alias():
+    """No gate: the injected super-cell alias wins consensus and the driver locks it (the failure the gate
+    exists to prevent)."""
+    rng = np.random.default_rng(7)
+    drv = _alias_driver(None)
+    missed = _fill(drv, _real_frame_q, rng, k=5)
+    drv._watchdog(missed)
+    assert drv.n_relock == 1 and same_lattice(drv.extra[0]["Mc"], M_ALIAS), \
+        [np.linalg.norm(drv.extra[0]["Mc"], axis=0)]
+
+
+def test_alias_gate_adopt_recovers_true():
+    """adopt gate: even though consensus only ever saw the alias, the gate finds the true cell is the
+    tightest of the alias's derivatives on the best-fitting frame and adopts it -> locks TRUE, not alias."""
+    rng = np.random.default_rng(7)
+    drv = _alias_driver(AliasGate(adopt=True))
+    missed = _fill(drv, _real_frame_q, rng, k=5)
+    drv._watchdog(missed)
+    assert drv.n_relock == 1, drv.n_relock
+    assert same_lattice(drv.extra[0]["Mc"], M_REAL), np.linalg.norm(drv.extra[0]["Mc"], axis=0)
+    assert not same_lattice(drv.extra[0]["Mc"], M_ALIAS), "should have repaired away from the alias"
+
+
 if __name__ == "__main__":
     tests = (test_probe_records_high_z_on_real_lock, test_lock_min_z_refuses_weak_lock,
-             test_probe_annotate_only_does_not_block, test_default_off_no_probe)
+             test_probe_annotate_only_does_not_block, test_default_off_no_probe,
+             test_alias_gate_off_locks_alias, test_alias_gate_adopt_recovers_true)
     ok = 0
     for t in tests:
         try:

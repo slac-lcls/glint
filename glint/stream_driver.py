@@ -633,12 +633,22 @@ class StreamDriver:
             return
         Mn = _conventional_tetragonal(np.asarray(Mn, float))
         if self._alias_gate is not None:
-            # Deterministic single-lock confirmation on the observed q of the frames that just voted.
-            # Returns the leader (confirmed), a tighter derivative lattice (adopt mode), or None (refuse
-            # -> do NOT reset self._watch, so the histogram keeps accumulating for a later, cleaner lock).
-            Qobs = [self._q[i] for i in missed if self._q[i] is not None]
-            if Qobs:
-                Mg = self._alias_gate.confirm(Mn, np.vstack(Qobs))
+            # Deterministic single-lock confirmation. Score the gate on the ONE missed frame that best fits
+            # the voted cell -- the missed frames are at DIFFERENT orientations, so a pooled cloud has no
+            # common lattice fit and tightness would be noise; a single well-fitting frame is one
+            # orientation, which is what coverage/occupancy need. Returns the leader (confirmed), a tighter
+            # derivative lattice (adopt mode), or None (refuse -> do NOT reset self._watch, so the histogram
+            # keeps accumulating for a later, cleaner lock).
+            cand_q, best_ni = None, -1
+            for i in missed:
+                q = self._q[i]
+                if q is None:
+                    continue
+                ni = self._inliers(q, Mn)
+                if ni > best_ni:
+                    best_ni, cand_q = ni, q
+            if cand_q is not None:
+                Mg = self._alias_gate.confirm(Mn, cand_q)
                 if Mg is None:
                     return
                 Mn = _conventional_tetragonal(np.asarray(Mg, float))

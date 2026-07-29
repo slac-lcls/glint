@@ -6,7 +6,8 @@ When the streaming driver locks a new cell (on sample change), activate idle GPU
 
 1. **Blind re-index miss-buffer** — frames waiting on the old cell, now indexed against the new one
 2. **Gather outcast diagnostics** — spurious meter, vote distribution, alias gate scores on rejected frames
-3. **Pre-warm next sample** (optional) — speculatively blind-search for the predicted next crystal
+3. **Inject reference validations** (periodically) — ground-truth QA check on indexing paths (e.g., lysozyme)
+4. **Pre-warm next sample** (optional) — speculatively blind-search for the predicted next crystal
 
 ## Architecture
 
@@ -38,6 +39,47 @@ Streaming detector (N GPUs total)
 - 10% of time (new sample): GPU-1 at 1.46 ms/frame, GPUs 2..N doing blind rescue in parallel
 - **Total: one GPU saturated, rest idle or helping when needed** ✓
 
+## Reference Validation (Ground-Truth QA)
+
+Periodically inject a known reference crystal (e.g., lysozyme) to catch drift or degradation in real-time. This validates that all indexing paths agree on a known ground-truth.
+
+**What's checked:**
+
+```
+Reference frame (every N events):
+│
+├─ Blind path: should find reference cell (hit rate 95%+)
+│  └─ Flag if drop in hit rate → peakfinder issue or detector drift
+│
+├─ Known-cell path: should hit reference (100%)
+│  └─ Inlier count should be >100 (clean signal)
+│
+├─ Spurious meter: should score very high z (>3, ideally >5)
+│  └─ Flag if z drops → contamination or detector issue
+│
+└─ Consensus validation: all three paths should agree
+   └─ Flag if any path disagrees → system instability
+```
+
+**Output (per reference frame):**
+
+```python
+{
+    'frame_type': 'reference',
+    'blind': {'found': True, 'score': 0.95, 'matches_ref': True},
+    'known_cell': {'hit': True, 'inliers': 156},
+    'spurious': {'z': 5.7, 'wall': False, 'blank': False},
+    'validation': {'all_agree': True}
+}
+```
+
+**Dashboard metrics (accumulated):**
+
+- % validations where all paths agree (target: 100%)
+- Blind hit rate on reference (target: 95%+)
+- Spurious z-score distribution (target: median > 5)
+- Trend alert: if any metric degrades → flag operator
+
 ## API
 
 ### GPUPool
@@ -45,9 +87,16 @@ Streaming detector (N GPUs total)
 ```python
 from glint.gpu_pool import GPUPool, GPUPoolDiagnostics
 
-# Create pool (threaded, non-blocking)
+# Create pool with reference validation
 diag_queue = GPUPoolDiagnostics(max_history=1000)
-pool = GPUPool(n_gpus=4, use_threading=True, diagnostics_queue=diag_queue)
+reference_cell = cell_to_Ar(79, 79, 38, 90, 90, 90)  # lysozyme as QA check
+pool = GPUPool(
+    n_gpus=4,
+    use_threading=True,
+    diagnostics_queue=diag_queue,
+    reference_cell=reference_cell,
+    reference_every=100  # Inject every 100 frames
+)
 
 # On new-cell lock (in StreamDriver._watchdog or similar)
 pool.activate_on_new_cell(
@@ -66,11 +115,32 @@ while streaming:
         print(f"Collected {results['tasks_completed']} idle-GPU results")
         # Results also land in diag_queue for persistent telemetry
 
+# Periodically inject reference validation (non-blocking)
+while streaming:
+    if pool.should_inject_reference():
+        ref_task = pool.validate_reference(
+            q,  # frame's q-vectors
+            blind_indexer=lambda qs: [...],
+            known_indexer=lambda qs, Mc: [...],
+            spurious_meter=lambda q, M: null_margin(...),
+            same_lattice_fn=lambda M1, M2: [...]
+        )
+        # Task runs async; results land in diag_queue
+
+# Get QA summary (non-blocking)
+qa_stats = pool.reference_stats()
+print(f"Reference validation: {qa_stats['pass_rate']:.0%} pass ({qa_stats['count']} tests)")
+print(f"  Blind hit rate: {qa_stats['blind_hit_rate']:.0%}")
+print(f"  Known-cell hit rate: {qa_stats['known_cell_hit_rate']:.0%}")
+print(f"  Spurious z: median {qa_stats['spurious_z_median']:.1f}")
+
 # Drain diagnostics at end-of-run
 diagnostics = diag_queue.drain()  # list of {frame_id, task_type, result, timestamp}
 ```
 
 ## Integration into StreamDriver
+
+### Add GPU pool with reference validation
 
 In `glint/stream_driver.py`, add to `__init__`:
 
@@ -78,13 +148,47 @@ In `glint/stream_driver.py`, add to `__init__`:
 from glint.gpu_pool import GPUPool, GPUPoolDiagnostics
 
 class StreamDriver:
-    def __init__(self, ..., n_idle_gpus=0, ...):
+    def __init__(self, ..., n_idle_gpus=0, reference_cell=None, reference_every=100, ...):
         # ... existing init ...
         if n_idle_gpus > 0:
             self._diag_queue = GPUPoolDiagnostics()
-            self._gpu_pool = GPUPool(n_gpus=n_idle_gpus + 1, diagnostics_queue=self._diag_queue)
+            self._gpu_pool = GPUPool(
+                n_gpus=n_idle_gpus + 1,
+                diagnostics_queue=self._diag_queue,
+                reference_cell=reference_cell,  # e.g., cell_to_Ar(79, 79, 38, 90, 90, 90)
+                reference_every=reference_every  # inject every N frames
+            )
         else:
             self._gpu_pool = None
+```
+
+### Inject reference validations in main loop
+
+In the main loop (e.g., after `push()` and periodically):
+
+```python
+# Check if it's time to inject reference
+if self._gpu_pool and self._gpu_pool.should_inject_reference():
+    self._gpu_pool.validate_reference(
+        q,  # current frame
+        blind_indexer=lambda qs: [index_blind_nbest(q, self.warmup_nbest) for q in qs],
+        known_indexer=lambda qs, Mc: [self._known_index(q, Mc) for q in qs],
+        spurious_meter=lambda q, M: null_margin(q, M, n_null=256, K=70400, rng=self._rng),
+        same_lattice_fn=same_lattice
+    )
+```
+
+### Check QA stats periodically
+
+```python
+# Per-minute or per-1000-frames, log QA stats
+if self._gpu_pool and frame_count % 1000 == 0:
+    qa = self._gpu_pool.reference_stats()
+    logger.info(f"QA: {qa['pass_rate']:.0%} validation pass, "
+                f"blind {qa['blind_hit_rate']:.0%}, "
+                f"z={qa['spurious_z_median']:.1f}")
+    if qa['pass_rate'] < 0.9:
+        logger.warning("Reference validation pass rate dropped — check system health")
 ```
 
 In `_watchdog()` (where new-cell locks):

@@ -8,7 +8,7 @@ ingests exactly what a CrystFEL / LUTE peak search emits and writes a CrystFEL `
 drops into the existing CrystFEL-based merging flow (`partialator`).
 
 On one NVIDIA A100, over 120 sparse cxidb-17 lysozyme frames, GLINT indexes blind
-*above* xgandalf's rate (76% vs 71% at the same gate) at ~340× the throughput, and with cross-frame
+*above* xgandalf's rate (76% vs 71% at the same gate) at ~450× the throughput, and with cross-frame
 consensus indexes 97% of frames blind (≥10 reflections).
 
 **New here?** [`docs/onboarding.md`](docs/onboarding.md) has a short primer on *what crystallographic

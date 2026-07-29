@@ -49,8 +49,8 @@ HOME = Path.home()
 # merged, or "open" where it is not yet.
 FACTS: dict[str, float | str] = {
     # indexing -------------------------------------------------------------------------------------
-    "blind_ms":            34.0,    # blind, per frame, one A100
-    "blind_fps":           29.0,    # = 1000/blind_ms
+    "blind_ms":            25.7,    # blind pipeline GLINT-1 (hybrid_index), per frame, one A100; re-measured 2026-07-23 HEAD be55302, 3 reps; paper displays ~26
+    "blind_fps":           39.0,    # = 1000/blind_ms
     "known_perframe_ms":   16.5,    # per-frame known-cell rescue (replica_gpu.index_known_gpu_cell)
     "graph_ms":            1.46,    # batched + CUDA graph                                    (#14)
     "fused_b32_ms":        0.45,    # fused kernels, fp64, batch 32                           (#16)
@@ -110,7 +110,7 @@ FACTS: dict[str, float | str] = {
     "hits_per_s":          3500.0,  # = rep_rate_hz * hit_rate
     "gpus_at_10pct":       1.0,     # = rep_rate_hz * hit_rate * fused_b120_ms/1000
     "xgandalf_blind_ms":   11542.0,
-    "xgandalf_speedup":    340.0,   # = xgandalf_blind_ms / blind_ms
+    "xgandalf_speedup":    449.0,   # = xgandalf_blind_ms / blind_ms
     "ffbidx_latency_ms":   4.4,     # per single call -- a LATENCY
     "ffbidx_pipelined_ms": 3.1,     # persistent indexer -- the THROUGHPUT comparator
     "ffbidx_speedup":      12.0,    # = ffbidx_pipelined_ms / fused_b120_ms (throughput vs throughput)
@@ -161,20 +161,25 @@ class Rule:
 # ---- 1. retired values -----------------------------------------------------------------------
 RETIRED = [
     Rule("blind-15ms", r"(?<![\d.])15\s*ms\b",
-         "blind was corrected to 34 ms/frame; 15 ms is the pre-sweep value", "34 ms"),
+         "blind pipeline is 26 ms/frame (re-measured 2026-07-23); 15 ms is a stale pre-fusion value", "26 ms"),
     Rule("blind-21ms", r"(?<![\d.])21(?:\.3)?\s*ms\b",
-         "21.3 ms was the M2/M4 milestone, superseded by 34 ms end-to-end", "34 ms"),
+         "21 ms was a stale end-to-end epoch, superseded by the measured 26 ms", "26 ms"),
+    Rule("blind-34ms", r"(?<![\d.])34\s*ms\b",
+         "34 ms was the pre-fused-kernel blind pipeline; re-measured 26 ms/frame 2026-07-23 "
+         "(slides/README/GLINT_REPORT + PDFs swept the same day)", "26 ms"),
     Rule("fps-47", r"(?<![\d.])47\b(?=[^\n]{0,60}(?:frames?\s*/\s*s|f/s|shots?/s|throughput))",
-         "47 f/s is the reciprocal of the old 21.3 ms; 34 ms gives 29 f/s", "29"),
+         "47 f/s is a stale reciprocal; the measured 26 ms gives 39 f/s", "39"),
     # Caught by injecting it back into README after adding README to the targets: the guard read the
     # file and said nothing, because no rule covered it. Adding a target without a matching rule is
     # theatre -- it raises the "checked N files" count and catches nothing.
     Rule("xgandalf-550", r"(?<![\d.])550\s*(?:×|x|\\times)",
-         "550x is 11542/21.3 -- the xgandalf ratio taken against the RETIRED 21.3 ms blind figure. "
-         "Against the current 34 ms it is ~340x. This one outlived its source by weeks in README.md",
-         "~340x"),
+         "550x is 11542/21.3 -- the xgandalf ratio taken against a RETIRED blind figure. "
+         "Against the current 26 ms it is ~450x. This one outlived its source by weeks in README.md",
+         "~450x"),
+    Rule("xgandalf-340", r"(?<![\d.])340\s*(?:×|x|\\times)",
+         "340x was 11542/34 (the pre-fusion blind figure); against the measured 26 ms it is ~450x", "~450x"),
     Rule("speedup-160", r"(?<![\d.])160\s*(?:×|x|\\times)",
-         "the scalar->GPU blind ratio follows 2342/34, not 2342/15", "~69x"),
+         "the scalar->GPU blind ratio follows 2342/26, not 2342/15", "~90x"),
     Rule("blind-rate-swap", r"GLINT[^\n]{0,40}\b71\s*\\?%",
          "71% is XGANDALF's blind rate; GLINT-(1) blind is 76% (paper tab:summary). Attributing 71% "
          "to GLINT understates it and confuses two indexers measured at the same gate", "76%"),

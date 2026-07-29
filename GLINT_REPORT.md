@@ -20,7 +20,7 @@ axes, assemble + anneal cells, derive the unit cell across frames by consensus, 
 rescue blind failures with a GPU known-cell indexer.
 
 The contribution is a point on the speed/accuracy frontier that neither incumbent
-occupies: **blind, at xgandalf's accuracy, ~340× faster, and ~95% index-identical to
+occupies: **blind, at xgandalf's accuracy, ~450× faster, and ~95% index-identical to
 ffbidx when both solve.**
 
 | indexer | mode | indexing rate | ms/frame | frames/s |
@@ -59,7 +59,7 @@ known-cell rescue path *is* ffbidx (replicated, then GPU-batched).
 
 ## 3. Throughput: the engineering wins
 
-The blind pipeline went from **2342 ms/frame (scalar) → 34 ms/frame (~69×)**, all
+The blind pipeline went from **2342 ms/frame (scalar) → 26 ms/frame (~90×)**, all
 validated bit-equal or better in accuracy:
 
 | lever | before | after | speedup |

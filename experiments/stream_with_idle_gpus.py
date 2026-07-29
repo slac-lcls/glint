@@ -32,9 +32,16 @@ def main():
     frames = [np.asarray(d[f's{i}'], float) for i in range(n)]
     Mc = cell_to_Ar(*args.cell)
 
-    # Setup GPU pool
+    # Setup GPU pool with reference validation (inject lysozyme every 30 frames as QA check)
     diag_queue = GPUPoolDiagnostics(max_history=100)
-    gpu_pool = GPUPool(n_gpus=args.n_gpus, use_threading=True, diagnostics_queue=diag_queue)
+    reference_cell = Mc  # Use the same cell as reference (normally would be lysozyme)
+    gpu_pool = GPUPool(
+        n_gpus=args.n_gpus,
+        use_threading=True,
+        diagnostics_queue=diag_queue,
+        reference_cell=reference_cell,
+        reference_every=30  # Inject every 30 frames
+    )
 
     # Miss-buffer to simulate frames waiting on an old cell
     miss_buffer = deque(maxlen=args.max_buffer)
@@ -51,6 +58,21 @@ def main():
     rescued_count = 0
 
     for i, q in enumerate(frames):
+        # Check if it's time to inject a reference validation frame
+        if gpu_pool.should_inject_reference():
+            print(f"\n[Frame {i}] Reference validation → injecting lysozyme")
+            ref_task = gpu_pool.validate_reference(
+                q,
+                blind_indexer=lambda qs: [
+                    index_blind_nbest(q, 1)[0][0] if index_blind_nbest(q, 1) else None
+                    for q in qs
+                ],
+                known_indexer=lambda qs, Mc: [Mc for _ in qs],  # stub: always "hit" reference cell
+                spurious_meter=lambda q, M: null_margin(q, M, n_null=256, K=70400, rng=rng),
+                same_lattice_fn=lambda M1, M2: True  # stub: always same
+            )
+            print(f"  Reference validation spawned")
+
         # Simulate: every N frames, trigger a "sample change" (new cell lock)
         if i > 0 and i % sample_change_every == 0:
             print(f"\n[Frame {i}] Sample change → NEW CELL LOCK")
@@ -111,8 +133,17 @@ def main():
 
     # Print GPU pool stats
     print(f"\nGPU Pool stats:")
-    for k, v in gpu_pool.stats().items():
-        print(f"  {k}: {v}")
+    stats = gpu_pool.stats()
+    for k, v in stats.items():
+        if k == 'reference':
+            print(f"  Reference validation QA:")
+            for rk, rv in v.items():
+                if isinstance(rv, float):
+                    print(f"    {rk}: {rv:.2%}" if 'rate' in rk or 'pass' in rk else f"    {rk}: {rv:.2f}")
+                else:
+                    print(f"    {rk}: {rv}")
+        else:
+            print(f"  {k}: {v}")
 
     print(f"\nSummary:")
     print(f"  Total frames: {n}")

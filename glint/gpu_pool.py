@@ -47,6 +47,32 @@ except Exception:
     pass
 
 
+def _to_host(a):
+    """cupy array -> numpy; anything else passes through."""
+    return a.get() if hasattr(a, 'get') else a
+
+
+def _profile_corr(profile, baseline):
+    """Pearson correlation of two radial profiles over the bins both resolve.
+
+    Empty bins come back NaN from the integrator (zero denominator), so compare only
+    where both profiles are finite. A profile with no variance (flat, or too few live
+    bins) carries no geometry information -- report 0.0 rather than a NaN that would
+    silently compare as neither stable nor drifted.
+    """
+    profile = np.asarray(profile, dtype=float).ravel()
+    baseline = np.asarray(baseline, dtype=float).ravel()
+    if profile.shape != baseline.shape:
+        raise ValueError(f"profile shape {profile.shape} != baseline {baseline.shape}")
+    ok = np.isfinite(profile) & np.isfinite(baseline)
+    if ok.sum() < 3:
+        return 0.0
+    a, b = profile[ok], baseline[ok]
+    if a.std() == 0 or b.std() == 0:
+        return 0.0
+    return float(np.corrcoef(a, b)[0, 1])
+
+
 class GPUPoolDiagnostics:
     """Async results from idle-GPU diagnostic tasks."""
 
@@ -108,13 +134,16 @@ class GPUPool:
         # Geometry validation (fast radial integration if available)
         self._integrator = None
         self._reference_profile = None
+        self._geom_init_error = None
         if detector_geometry is not None and _drp_radial is not None:
             try:
                 # Assume geometry is either q_per_pixel array or has a q_per_pixel attribute
                 q_per_pixel = getattr(detector_geometry, 'q_per_pixel', detector_geometry)
                 self._integrator = _drp_radial(q_per_pixel, nbin=100)
             except Exception as e:
-                pass  # Geometry validation optional
+                # Record it: a geometry check the caller asked for and did not get is a
+                # configuration problem, not something to swallow.
+                self._geom_init_error = str(e)
 
     def should_inject_reference(self):
         """Check if it's time to inject a reference validation frame."""
@@ -124,12 +153,16 @@ class GPUPool:
                 self.frame_count % self.reference_every == 0)
 
     def validate_reference(self, q, blind_indexer=None, known_indexer=None,
-                          spurious_meter=None, same_lattice_fn=None):
+                          spurious_meter=None, same_lattice_fn=None, image=None):
         """
         Validate indexing paths against ground-truth reference frame.
 
         Args:
             q: reciprocal-space peak vectors (N×3)
+            image: the reference frame's raw detector image (H×W), for the geometry
+                   check. The radial profile is an image quantity -- the peak list
+                   alone cannot produce it -- so without this the geometry check is
+                   skipped.
             blind_indexer: function(qs) -> list[M or None] for blind search
             known_indexer: function(qs, Mc) -> list[M or None] for known-cell
             spurious_meter: function(q, M) -> dict with z, wall, blank
@@ -138,7 +171,10 @@ class GPUPool:
         Returns:
             dict with validation results or None if not time to validate
         """
-        if not self.reference_cell or not _HAVE_TORCH:
+        # `is None`, not truthiness: reference_cell is a 3x3 array and `not array` raises.
+        # No torch gate here -- each test below is already conditional on its callback, and
+        # the geometry check is pure numpy, so it must stay available on a CPU-only host.
+        if self.reference_cell is None:
             return None
 
         def task():
@@ -185,29 +221,33 @@ class GPUPool:
 
                 # Test 4: Geometry validation via fast radial integration
                 result['geometry'] = {}
-                if self._integrator is not None:
+                if self._geom_init_error is not None:
+                    result['geometry']['error'] = self._geom_init_error
+                    result['geometry']['stability'] = 'error'
+                elif self._integrator is not None and image is not None:
                     try:
-                        # Fast radial integration (cupy/CPU CSR matvec)
-                        I_q = self._integrator.integrate(q)
+                        # Fast radial integration (cupy/CPU CSR matvec). integrate()
+                        # returns (q_centres, I) -- we compare profiles, not the q axis.
+                        _, I_q = self._integrator.integrate(image)
+                        I_q = np.asarray(_to_host(I_q), dtype=float).ravel()
                         if self._reference_profile is None:
                             # Seed reference profile on first injection
-                            self._reference_profile = np.asarray(I_q)
+                            self._reference_profile = I_q
                             result['geometry']['profile_correlation'] = 1.0
                             result['geometry']['stability'] = 'seeded'
                         else:
-                            # Compare to reference: correlation as stability metric
-                            corr = float(np.corrcoef(
-                                np.asarray(I_q).ravel(),
-                                self._reference_profile.ravel()
-                            )[0, 1])
-                            result['geometry']['profile_correlation'] = corr
+                            result['geometry']['profile_correlation'] = _profile_corr(
+                                I_q, self._reference_profile)
+                            corr = result['geometry']['profile_correlation']
                             result['geometry']['stability'] = (
                                 'stable' if corr > 0.95 else
                                 'drift' if corr < 0.90 else
                                 'monitor'
                             )
                     except Exception as e:
+                        # A configured check that raised is a failure, not a silent skip.
                         result['geometry']['error'] = str(e)
+                        result['geometry']['stability'] = 'error'
 
                 # Overall validation
                 all_agree = (
@@ -218,7 +258,9 @@ class GPUPool:
                     result['spurious'].get('z', -1) > 3.0 and
                     not result['spurious'].get('wall', True) and
                     not result['spurious'].get('blank', True) and
-                    result['geometry'].get('stability') != 'drift'
+                    # 'drift' is the fault we are looking for; 'error' means the check
+                    # was configured but could not run, which must not read as healthy.
+                    result['geometry'].get('stability') not in ('drift', 'error')
                 )
                 result['validation'] = {'all_agree': all_agree}
 
@@ -382,6 +424,8 @@ class GPUPool:
                          if v.get('geometry', {}).get('stability') == 'stable')
         geom_drift = sum(1 for v in validations
                         if v.get('geometry', {}).get('stability') == 'drift')
+        geom_error = sum(1 for v in validations
+                        if v.get('geometry', {}).get('stability') == 'error')
 
         stats = {
             'count': len(validations),
@@ -402,6 +446,10 @@ class GPUPool:
                 'geometry_stable_count': geom_stable,
                 'geometry_drift_count': geom_drift,
             })
+        # Surface a broken check even when no correlation was ever produced -- otherwise
+        # a geometry check that never ran is indistinguishable from one that passed.
+        if geom_error:
+            stats['geometry_error_count'] = geom_error
 
         return stats
 

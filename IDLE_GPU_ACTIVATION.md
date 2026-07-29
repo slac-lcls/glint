@@ -49,15 +49,18 @@ Periodically inject a known reference crystal (e.g., lysozyme) to catch drift or
 Reference frame (every N events):
 │
 ├─ Blind path: should find reference cell (hit rate 95%+)
-│  └─ Flag if drop in hit rate → peakfinder issue or detector drift
+│  └─ Flag if drop in hit rate → peakfinder issue
 │
 ├─ Known-cell path: should hit reference (100%)
 │  └─ Inlier count should be >100 (clean signal)
 │
 ├─ Spurious meter: should score very high z (>3, ideally >5)
-│  └─ Flag if z drops → contamination or detector issue
+│  └─ Flag if z drops → contamination or signal issue
 │
-└─ Consensus validation: all three paths should agree
+├─ Geometry validation: radial profile correlation (via fast CUDA integration)
+│  └─ Profile correlation > 0.95 = stable; < 0.90 = drift signal
+│
+└─ Consensus validation: all four paths should agree
    └─ Flag if any path disagrees → system instability
 ```
 
@@ -69,6 +72,10 @@ Reference frame (every N events):
     'blind': {'found': True, 'score': 0.95, 'matches_ref': True},
     'known_cell': {'hit': True, 'inliers': 156},
     'spurious': {'z': 5.7, 'wall': False, 'blank': False},
+    'geometry': {
+        'profile_correlation': 0.987,
+        'stability': 'stable'  # 'stable' | 'drift' | 'monitor' | 'seeded'
+    },
     'validation': {'all_agree': True}
 }
 ```
@@ -78,7 +85,9 @@ Reference frame (every N events):
 - % validations where all paths agree (target: 100%)
 - Blind hit rate on reference (target: 95%+)
 - Spurious z-score distribution (target: median > 5)
-- Trend alert: if any metric degrades → flag operator
+- Geometry profile correlation (target: median > 0.95, min > 0.90)
+- Geometry drift count (target: 0; if > 0 → alert operator immediately)
+- Trend alert: if any metric degrades → flag operator for inspection
 
 ## API
 
@@ -87,15 +96,17 @@ Reference frame (every N events):
 ```python
 from glint.gpu_pool import GPUPool, GPUPoolDiagnostics
 
-# Create pool with reference validation
+# Create pool with reference validation + geometry monitoring
 diag_queue = GPUPoolDiagnostics(max_history=1000)
 reference_cell = cell_to_Ar(79, 79, 38, 90, 90, 90)  # lysozyme as QA check
+detector_geometry = detector.geometry  # or q_per_pixel array from your geometry
 pool = GPUPool(
     n_gpus=4,
     use_threading=True,
     diagnostics_queue=diag_queue,
     reference_cell=reference_cell,
-    reference_every=100  # Inject every 100 frames
+    reference_every=100,  # Inject every 100 frames
+    detector_geometry=detector_geometry  # For fast radial integration validation
 )
 
 # On new-cell lock (in StreamDriver._watchdog or similar)
@@ -133,6 +144,11 @@ print(f"Reference validation: {qa_stats['pass_rate']:.0%} pass ({qa_stats['count
 print(f"  Blind hit rate: {qa_stats['blind_hit_rate']:.0%}")
 print(f"  Known-cell hit rate: {qa_stats['known_cell_hit_rate']:.0%}")
 print(f"  Spurious z: median {qa_stats['spurious_z_median']:.1f}")
+if 'geometry_profile_correlation_median' in qa_stats:
+    print(f"  Geometry profile correlation: {qa_stats['geometry_profile_correlation_median']:.3f}")
+    print(f"    Stable: {qa_stats['geometry_stable_count']}, Drift: {qa_stats['geometry_drift_count']}")
+    if qa_stats['geometry_drift_count'] > 0:
+        print("    ⚠️  ALERT: Geometry drift detected!")
 
 # Drain diagnostics at end-of-run
 diagnostics = diag_queue.drain()  # list of {frame_id, task_type, result, timestamp}
@@ -148,7 +164,8 @@ In `glint/stream_driver.py`, add to `__init__`:
 from glint.gpu_pool import GPUPool, GPUPoolDiagnostics
 
 class StreamDriver:
-    def __init__(self, ..., n_idle_gpus=0, reference_cell=None, reference_every=100, ...):
+    def __init__(self, ..., n_idle_gpus=0, reference_cell=None, reference_every=100, 
+                 detector_geometry=None, ...):
         # ... existing init ...
         if n_idle_gpus > 0:
             self._diag_queue = GPUPoolDiagnostics()
@@ -156,7 +173,8 @@ class StreamDriver:
                 n_gpus=n_idle_gpus + 1,
                 diagnostics_queue=self._diag_queue,
                 reference_cell=reference_cell,  # e.g., cell_to_Ar(79, 79, 38, 90, 90, 90)
-                reference_every=reference_every  # inject every N frames
+                reference_every=reference_every,  # inject every N frames
+                detector_geometry=detector_geometry  # for geometry validation
             )
         else:
             self._gpu_pool = None

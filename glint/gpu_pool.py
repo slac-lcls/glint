@@ -9,6 +9,7 @@ Additionally, periodically inject ground-truth reference frames (e.g., lysozyme)
 - Validate blind/known-cell indexing paths
 - Detect system drift or degradation
 - Verify spurious-meter is working correctly
+- Monitor detector geometry stability via fast radial integration
 
 Non-blocking: results land asynchronously in a diagnostics queue.
 """
@@ -23,6 +24,27 @@ try:
     _HAVE_TORCH = True
 except Exception:
     _HAVE_TORCH = False
+
+try:
+    # Import fast radial integrator from drp-benchmarks if available
+    import sys
+    from pathlib import Path
+    _drp_radial = None
+    _drp_search_paths = [
+        Path.home() / 'git' / 'drp-benchmarks' / 'radial_integration',
+        '/sdf/group/lcls/ds/tools/drp-benchmarks/radial_integration',
+    ]
+    for path in _drp_search_paths:
+        if path.exists():
+            sys.path.insert(0, str(path.parent))
+            try:
+                from radial_integration.radial import RadialIntegrator
+                _drp_radial = RadialIntegrator
+                break
+            except ImportError:
+                pass
+except Exception:
+    pass
 
 
 class GPUPoolDiagnostics:
@@ -58,7 +80,7 @@ class GPUPool:
     """Manage idle GPUs for parallel tasks during streaming."""
 
     def __init__(self, n_gpus=None, use_threading=True, diagnostics_queue=None,
-                 reference_cell=None, reference_every=100):
+                 reference_cell=None, reference_every=100, detector_geometry=None):
         """
         Args:
             n_gpus: number of idle GPUs available (None = auto-detect or default to 1)
@@ -66,6 +88,8 @@ class GPUPool:
             diagnostics_queue: optional GPUPoolDiagnostics queue to collect results
             reference_cell: 3x3 matrix of reference cell (e.g., lysozyme) for ground-truth validation
             reference_every: inject reference validation every N frames (default 100)
+            detector_geometry: optional detector geometry (q_per_pixel array or geometry object)
+                               for fast radial integration validation
         """
         if n_gpus is None:
             n_gpus = 1  # Conservative default
@@ -80,6 +104,17 @@ class GPUPool:
         self.reference_every = reference_every
         self.frame_count = 0
         self.reference_validations = deque(maxlen=1000)
+
+        # Geometry validation (fast radial integration if available)
+        self._integrator = None
+        self._reference_profile = None
+        if detector_geometry is not None and _drp_radial is not None:
+            try:
+                # Assume geometry is either q_per_pixel array or has a q_per_pixel attribute
+                q_per_pixel = getattr(detector_geometry, 'q_per_pixel', detector_geometry)
+                self._integrator = _drp_radial(q_per_pixel, nbin=100)
+            except Exception as e:
+                pass  # Geometry validation optional
 
     def should_inject_reference(self):
         """Check if it's time to inject a reference validation frame."""
@@ -148,6 +183,32 @@ class GPUPool:
                     result['spurious']['wall'] = meter.get('wall', False)  # should be False
                     result['spurious']['blank'] = meter.get('blank', False)  # should be False
 
+                # Test 4: Geometry validation via fast radial integration
+                result['geometry'] = {}
+                if self._integrator is not None:
+                    try:
+                        # Fast radial integration (cupy/CPU CSR matvec)
+                        I_q = self._integrator.integrate(q)
+                        if self._reference_profile is None:
+                            # Seed reference profile on first injection
+                            self._reference_profile = np.asarray(I_q)
+                            result['geometry']['profile_correlation'] = 1.0
+                            result['geometry']['stability'] = 'seeded'
+                        else:
+                            # Compare to reference: correlation as stability metric
+                            corr = float(np.corrcoef(
+                                np.asarray(I_q).ravel(),
+                                self._reference_profile.ravel()
+                            )[0, 1])
+                            result['geometry']['profile_correlation'] = corr
+                            result['geometry']['stability'] = (
+                                'stable' if corr > 0.95 else
+                                'drift' if corr < 0.90 else
+                                'monitor'
+                            )
+                    except Exception as e:
+                        result['geometry']['error'] = str(e)
+
                 # Overall validation
                 all_agree = (
                     result['blind'].get('found', False) and
@@ -156,7 +217,8 @@ class GPUPool:
                     result['known_cell'].get('inliers', 0) > 50 and
                     result['spurious'].get('z', -1) > 3.0 and
                     not result['spurious'].get('wall', True) and
-                    not result['spurious'].get('blank', True)
+                    not result['spurious'].get('blank', True) and
+                    result['geometry'].get('stability') != 'drift'
                 )
                 result['validation'] = {'all_agree': all_agree}
 
@@ -313,7 +375,15 @@ class GPUPool:
         z_scores = [v.get('spurious', {}).get('z') for v in validations
                    if v.get('spurious', {}).get('z') is not None]
 
-        return {
+        # Geometry correlation metrics (if available)
+        geom_corrs = [v.get('geometry', {}).get('profile_correlation') for v in validations
+                     if v.get('geometry', {}).get('profile_correlation') is not None]
+        geom_stable = sum(1 for v in validations
+                         if v.get('geometry', {}).get('stability') == 'stable')
+        geom_drift = sum(1 for v in validations
+                        if v.get('geometry', {}).get('stability') == 'drift')
+
+        stats = {
             'count': len(validations),
             'all_pass': all_pass,
             'pass_rate': all_pass / len(validations) if validations else 0.0,
@@ -323,6 +393,17 @@ class GPUPool:
             'spurious_z_min': float(np.min(z_scores)) if z_scores else None,
             'spurious_z_max': float(np.max(z_scores)) if z_scores else None,
         }
+
+        # Add geometry metrics if available
+        if geom_corrs:
+            stats.update({
+                'geometry_profile_correlation_median': float(np.median(geom_corrs)),
+                'geometry_profile_correlation_min': float(np.min(geom_corrs)),
+                'geometry_stable_count': geom_stable,
+                'geometry_drift_count': geom_drift,
+            })
+
+        return stats
 
     def stats(self):
         """Summary of GPU pool state."""

@@ -59,6 +59,8 @@ Reference frame (every N events):
 │
 ├─ Geometry validation: radial profile correlation (via fast CUDA integration)
 │  └─ Profile correlation > 0.95 = stable; < 0.90 = drift signal
+│     Needs the raw frame image (`image=`) — a radial profile cannot be built
+│     from the peak list alone. Without it the check is skipped, not failed.
 │
 └─ Consensus validation: all four paths should agree
    └─ Flag if any path disagrees → system instability
@@ -74,7 +76,8 @@ Reference frame (every N events):
     'spurious': {'z': 5.7, 'wall': False, 'blank': False},
     'geometry': {
         'profile_correlation': 0.987,
-        'stability': 'stable'  # 'stable' | 'drift' | 'monitor' | 'seeded'
+        # 'error' = configured but could not run; fails all_agree (never silent)
+        'stability': 'stable'  # 'stable' | 'monitor' | 'drift' | 'seeded' | 'error'
     },
     'validation': {'all_agree': True}
 }
@@ -134,7 +137,8 @@ while streaming:
             blind_indexer=lambda qs: [...],
             known_indexer=lambda qs, Mc: [...],
             spurious_meter=lambda q, M: null_margin(...),
-            same_lattice_fn=lambda M1, M2: [...]
+            same_lattice_fn=lambda M1, M2: [...],
+            image=frame,  # raw (H, W) detector image -- REQUIRED for the geometry check
         )
         # Task runs async; results land in diag_queue
 

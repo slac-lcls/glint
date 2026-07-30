@@ -337,7 +337,7 @@ class StreamDriver:
                  B=64, dmin=2.0, tol=0.002, half=3, gap=2, ring=3, min_peaks=6,
                  snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
-                 adaptive_relock=False, min_inliers=0, mad_z=4.0, warm_topk=16, warm_floor=1,
+                 adaptive_relock=False, min_inliers=0, warm_topk=16, warm_floor=1,
                  double_hit=False, geom_refine=False, geom_refine_kw=None,
                  rescue_buffer=0, fanout=None, alias_gate=None,
                  lock_probe=False, probe_null=64, lock_min_z=None):
@@ -349,7 +349,7 @@ class StreamDriver:
         self.B, self.dmin, self.tol = int(B), float(dmin), float(tol)
         self.half, self.gap, self.ring_w, self.min_peaks = half, gap, ring, int(min_peaks)
         self.warmup_nbest = int(warmup_nbest)
-        self.mad_z, self.warm_topk, self.warm_floor = float(mad_z), int(warm_topk), int(warm_floor)   # warmup_batch triage
+        self.warm_topk, self.warm_floor = int(warm_topk), int(warm_floor)                              # warmup_batch triage
         self.double_hit = bool(double_hit); self.n_double = 0                                          # deflate-and-reindex 2nd lattice
         if self.double_hit:
             from glint.glint_fast import index_blind_nbest
@@ -503,12 +503,11 @@ class StreamDriver:
         known-cell path) when consensus fires; returns True. Frames not picked are not consumed here;
         push() them afterwards to integrate.
 
-        Triage is by the peak-finder's peak COUNT (spatial-background ring finder), not the temporal
+        Triage is by the peak-finder's peak COUNT (spatial-background ring finder), not a temporal
         MAD z-count: on a liquid jet the MAD score is dominated by shot-varying water/jet scatter
         (calibrated on cxic0415 r0100 -- median ~87k z>4 px/event, no hit/blank separation), whereas
-        the ring finder's spatial background is jet-robust. MAD stays a background/compression
-        primitive (glint.warmup_batch.mad_triage). Peak-find is ~100x cheaper than a blind index, so
-        scoring every frame is effectively free.
+        the ring finder's spatial background is jet-robust. Peak-find is ~100x cheaper than a blind
+        index, so scoring every frame is effectively free.
 
         `frames`: (B,H,W) host/device stack. See glint.warmup_batch for the CPU-testable core.
         """

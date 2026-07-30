@@ -20,6 +20,13 @@ TRIML, TRIMH, DELTA = 0.05, 0.30, 0.10
 CDIRS = int(os.environ.get("CDIRS", "16384"))
 NANG = int(os.environ.get("NANG", "360"))
 NC = int(os.environ.get("NC", "16"))
+# Greedy dedup radius (cos-angle) for the axis0 candidate pool (axis_candidates_t / c_candidates_t /
+# index_fused): candidates within this angle of an already-accepted (higher-scoring) direction are
+# excluded. At 0.985 (~10 deg) a spurious-boosted nearby impostor can claim the TRUE axis0's
+# neighborhood before the greedy scan reaches it, permanently excluding it -- RADIUS-based, so
+# widening NC never helps. 0.9995 (~1.8 deg): known-cell 494->600/600 at f=0.8 severe spurious load,
+# zero regressions across f=0.3-0.9 (recovers 47-106 frames/point).
+AXIS0_DEDUP_COS = float(os.environ.get("AXIS0_DEDUP_COS", "0.9995"))
 PI = np.pi
 
 
@@ -113,7 +120,7 @@ def c_candidates_t(Q):
     refc = ref.cpu().numpy(); out = []
     for j in order.tolist():
         d = refc[j] / LC
-        if all(abs(d @ (o / LC)) < 0.985 for o in out):
+        if all(abs(d @ (o / LC)) < AXIS0_DEDUP_COS for o in out):
             out.append(refc[j])
         if len(out) >= NC:
             break
@@ -196,7 +203,7 @@ def axis_candidates_t(Q, L0):
     refc = ref.cpu().numpy(); out = []
     for j in order.tolist():
         d = refc[j] / L0
-        if all(abs(d @ (o / L0)) < 0.985 for o in out):
+        if all(abs(d @ (o / L0)) < AXIS0_DEDUP_COS for o in out):
             out.append(refc[j])
         if len(out) >= NC:
             break

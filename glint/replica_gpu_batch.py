@@ -12,7 +12,7 @@ is uncapturable and forces a stream sync)."""
 import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("CDIRS", "16384")
 import numpy as np, torch
-from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, _axes_from_cell,
+from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, AXIS0_DEDUP_COS, _axes_from_cell,
                                _third_axis, _fib_halfsphere, _azimuth_grid)
 from glint.multishot import same_lattice
 
@@ -165,7 +165,8 @@ def _stage_compute(Q, m, P):
     for k in range(NC):
         idx = alive.int().argmax(1)
         chosen[:, k, :] = Vs[ar, idx]
-        dk = dirs2[ar, idx]; alive = alive & (torch.abs(torch.einsum('fpc,fc->fp', dirs2, dk)) < 0.985)
+        dk = dirs2[ar, idx]                                # dedup radius: see AXIS0_DEDUP_COS (replica_gpu.py)
+        alive = alive & (torch.abs(torch.einsum('fpc,fc->fp', dirs2, dk)) < AXIS0_DEDUP_COS)
     # --- orientation sweep per anchor ---
     C = chosen; cn = C / C.norm(dim=2, keepdim=True)
     tmp = torch.where(cn[..., :1].abs() < 0.9, _EX, _EY)

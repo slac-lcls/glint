@@ -1,22 +1,7 @@
-"""CPU tests for glint.warmup_batch (parallel MAD-triaged blind warm-up). No GPU, no driver.
+"""CPU tests for glint.warmup_batch (parallel peak-triaged blind warm-up). No GPU, no driver.
 Run: `python experiments/test_warmup_batch.py` or `pytest`."""
 import numpy as np
-from glint.warmup_batch import mad_triage, triage_order, warmup_consensus
-
-
-def test_mad_triage_ranks():
-    """Batched MAD scores signal-rich events far above blanks; triage_order picks exactly them."""
-    B, H, W = 12, 48, 48
-    rng = np.random.default_rng(0)
-    stack = (100 + rng.normal(0, 3, (B, H, W))).astype(np.float32)
-    sigframes = [2, 5, 7, 9]
-    for f in sigframes:                                          # 40 bright peaks at RANDOM pixels/event
-        ys, xs = rng.integers(0, H, 40), rng.integers(0, W, 40)
-        stack[f, ys, xs] += 100.0
-    _, _, score = mad_triage(stack, z0=4.0)
-    sig_scores, blank_scores = score[sigframes], np.delete(score, sigframes)
-    assert sig_scores.min() > blank_scores.max(), (score.tolist())   # clean separation
-    assert set(triage_order(score, topk=4, floor=1)) == set(sigframes), score.tolist()
+from glint.warmup_batch import triage_order, warmup_consensus
 
 
 def test_peak_triage():
@@ -78,7 +63,7 @@ def test_fanout_matches_serial():
 
 
 if __name__ == "__main__":
-    tests = (test_mad_triage_ranks, test_peak_triage, test_warmup_locks_one_round, test_fanout_matches_serial)
+    tests = (test_peak_triage, test_warmup_locks_one_round, test_fanout_matches_serial)
     ok = 0
     for t in tests:
         try:

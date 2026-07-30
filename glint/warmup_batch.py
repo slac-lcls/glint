@@ -1,49 +1,29 @@
-"""Parallel, MAD-triaged blind warm-up for the streaming driver.
+"""Parallel, peak-triaged blind warm-up for the streaming driver.
 
 The blind path is ~100x the known-cell path, and consensus needs a handful of frames to lock, so
 at a high source rate the SERIAL warm-up (one blind index at a time) stretches both the lock latency
 and the raw-frame buffer that piles up meanwhile. This module makes the warm-up
 
-  (1) PICKY  -- a batched MAD triage over the startup stack ranks events by signal, so blind compute
-                goes to the most indexable frames first (and blanks / water are skipped); and
+  (1) PICKY  -- ranking the startup stack by Bragg-peak COUNT sends blind compute to the most
+                indexable frames first (and skips blanks / water); and
   (2) PARALLEL -- the independent blind indexes fan across workers/GPUs and pool into ONE consensus
                 round, so lock latency is ~one blind-frame-time instead of n of them.
 
 The buffered frames not chosen for warm-up are not lost: after the cell locks they drain through the
 fast known-cell path, so triage sets only the ORDER of blind attempts, not which frames are kept.
 
-MAD (median-absolute-deviation) background is TEMPORAL -- the per-pixel median over the batch. This
-is clean for SFX because random orientations put Bragg peaks at different pixels every shot, so the
-median is a true common-background estimate and the peaks are the outliers. Scope it to warm-up
-triage; the per-frame ring peakfinder (spatial background, sub-pixel, real I/sigma) stays the
-integration front end -- temporal background breaks on shot-varying backgrounds and recurring peaks.
+Ranking by a TEMPORAL MAD z-count (per-pixel median over the batch) was tried and rejected: it
+separated hits from blanks on SIMULATED stacks, but on a liquid jet the score is swamped by
+shot-varying water/jet scatter (see StreamDriver.warmup_batch for the cxic0415 calibration). The ring
+peakfinder's spatial background is jet-robust and is the integration front end anyway, so its peak
+count is both cheaper and better separated. Should the temporal route ever be revisited, the deleted
+mad_triage() is in history: `git log -S'def mad_triage' -- glint/warmup_batch.py` (last on main in
+caa254e).
 
-Everything here is pure (numpy or cupy via the `xp` arg) and transport-agnostic (the multi-GPU
-fan-out is an injected callable), so it is unit-testable on CPU with no GPU and no driver.
+Everything here is pure numpy and transport-agnostic (the multi-GPU fan-out is an injected callable),
+so it is unit-testable on CPU with no GPU and no driver.
 """
 import numpy as np
-
-
-def mad_triage(stack, z0=4.0, xp=np):
-    """Batched MAD over a (B,H,W) stack -> (z, signal_mask, promise_score).
-
-    z = (I - per-pixel median) / per-pixel MAD   -- a temporal-background SNR, batched over B.
-    signal_mask = z > z0   (Holton's z-level; 4 is the reference default).
-    promise_score[i] = number of signal pixels in event i -- an orientation-agnostic estimate that
-    the event carries an indexable crystal (blanks / water score ~ the noise tail).
-    Returned score is always host numpy, even when xp is cupy.
-    """
-    stack = xp.asarray(stack)
-    if stack.ndim != 3:
-        raise ValueError("stack must be (B, H, W)")
-    med = xp.median(stack, axis=0, keepdims=True)                 # per-pixel temporal background
-    mad = xp.median(xp.abs(stack - med), axis=0, keepdims=True)   # per-pixel noise
-    mad = xp.where(mad > 0, mad, xp.asarray(1.0, stack.dtype if stack.dtype.kind == "f" else "float64"))
-    z = (stack - med) / mad
-    sig = z > z0
-    score = sig.reshape(stack.shape[0], -1).sum(axis=1)
-    score = score.get() if hasattr(score, "get") else np.asarray(score)
-    return z, sig, score.astype(np.int64)
 
 
 def triage_order(score, topk, floor=1):

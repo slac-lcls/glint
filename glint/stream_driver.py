@@ -340,7 +340,7 @@ class StreamDriver:
                  adaptive_relock=False, min_inliers=0, warm_topk=16, warm_floor=1,
                  double_hit=False, geom_refine=False, geom_refine_kw=None,
                  rescue_buffer=0, fanout=None, alias_gate=None,
-                 lock_probe=False, probe_null=64, lock_min_z=None):
+                 lock_probe=False, probe_null=64, lock_min_z=None, warmup_rescue=False):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -438,6 +438,24 @@ class StreamDriver:
         self._lock_min_z = lock_min_z
         self.lock_z = None                               # z of the most recent relock (None until one fires)
 
+        # Warm-up rescue (opt-in, INDEX-ONLY): _push_blind's per-frame q-vectors are ordinarily
+        # discarded after casting their consensus vote -- slot 0 is scratch, "the frame is not kept"
+        # (below). With warmup_rescue=True they're retained in a small list and, the instant the cell
+        # locks, re-indexed against it via the same q-only known-cell path _missbuf uses -- recovering
+        # the handful of frames (median ~6, per the paper) otherwise permanently sacrificed to
+        # discovery. No pixels were ever kept for these frames (slot 0 is overwritten every warm-up
+        # push), so this is index-only like _missbuf's rescue, not a full integration. Default off
+        # keeps warm-up bit-identical to before.
+        self.warmup_rescue = bool(warmup_rescue)
+        self._warmup_buf = [] if self.warmup_rescue else None
+        self.n_warmup_rescued = 0
+        # Watchdog individual rescue (bundled into adaptive_relock, no separate flag): _watchdog
+        # already blind-indexes every missed frame to pool votes toward NEW-cell detection -- that
+        # compute is spent regardless. Checking each frame's own N-best candidates against the
+        # ALREADY-active cell(s) first is nearly free on top of it, and rescues a same-cell miss
+        # immediately instead of only ever detecting a genuinely different cell (see _watchdog).
+        self.n_watchdog_rescued = 0
+
         # Blind warm-up: with Mc=None the driver has no cell yet, so it indexes the first frames
         # blind (~26 ms/frame) one at a time, accumulating cross-frame consensus; when the running
         # histogram LOCKS the cell it builds the hkl grid and drops into the batched known-cell path
@@ -469,6 +487,12 @@ class StreamDriver:
         self.grid = HKLGrid(self.Mc, self.dmin, gpu=self.gpu)   # built once, reused every frame
         self.n_theoretical = theoretical_unique(self.Mc, self.dmin, self.ops)
         self._blind = False
+        if self._warmup_buf:                                    # retroactive index-only rescue (see __init__)
+            qs, self._warmup_buf = self._warmup_buf, []
+            Ms = self._known_index(qs, self.Mc, B=max(len(qs), 1))
+            self.n_warmup_rescued += sum(1 for q, M in zip(qs, Ms)
+                                         if M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
+                                         and self._inliers(q, np.asarray(M, float)) >= self.min_inliers)
 
     # ------------------------------------------------------------------ ingest ------------------
     def _push_blind(self, frame):
@@ -489,6 +513,8 @@ class StreamDriver:
                 nb = self._blind_index(qq, self.warmup_nbest)   # N-best candidate cells for this frame
                 self._rc.add_frame([c for c, _ in nb])
                 self.n_warmup += 1
+                if self._warmup_buf is not None:
+                    self._warmup_buf.append(qq)                 # retained for post-lock rescue (see __init__)
         Mc, sup, _ = self._rc.verdict()
         if Mc is not None:
             self._lock(Mc, sup, standardize=True)               # -> known-cell batched path from here
@@ -530,6 +556,8 @@ class StreamDriver:
         picks = triage_order(counts, self.warm_topk, self.warm_floor)   # rank by peak count; skip low-signal
         qs = [qmap[k] for k in picks if qmap[k] is not None]
         self.n_pushed += len(frames); self.n_warmup += len(qs)
+        if self._warmup_buf is not None:
+            self._warmup_buf.extend(qs)                          # retained for post-lock rescue (see __init__)
         Mc, sup = warmup_consensus(qs, self._blind_index, self._rc, self.warmup_nbest, fanout)
         if Mc is not None:
             self.locked_after = self.n_pushed
@@ -568,6 +596,41 @@ class StreamDriver:
         hf = np.asarray(q, float) @ M
         return int((np.abs(hf - np.round(hf)).max(1) < 0.15).sum())
 
+    def _integrate_one(self, i, M, grid, acc):
+        """Canonicalize + predict + integrate slot i under an ALREADY-ACCEPTED matrix M into acc.
+        Split out of _index_integrate so _watchdog's individual rescue can integrate a validated
+        blind candidate directly, without re-registering it through known-cell (which could just
+        miss again for the same reason the frame was flagged in the first place)."""
+        self.n_indexed += 1
+        Mcan = _canonical_axes(M)                            # cross-frame consistent hkl setting
+        if self.double_hit:                                 # deflate-and-reindex: a 2nd crystal in this shot?
+            resid = deflate_peaks(self._q[i], Mcan)
+            if len(resid) >= self.min_peaks:
+                nb2 = self._dh_index(resid, 1)
+                if nb2:
+                    M2 = np.asarray(nb2[0][0], float)
+                    # a 2nd crystal = the deflated residual re-indexes to a valid lattice with enough
+                    # inliers. NOT gated on a different CELL -- SFX double-hits are usually two crystals
+                    # of the SAME protein at different orientations. Deflation removed lattice-1's peaks,
+                    # so the residual-inlier test already rejects merely re-finding lattice 1.
+                    if abs(np.linalg.det(M2)) >= 1.0 and self._inliers(resid, M2) >= self.min_peaks:
+                        self.n_double += 1
+        pred = grid.predict(Mcan, self.panels, self.clen_m, self.wavelength_A, tol=self.tol)
+        if len(pred) == 0:
+            return
+        if self._grefiner is not None and self._pk[i] is not None:
+            self._grefiner.add_frame(recip_from_M(Mcan), self._pk[i], pred)
+        if self.gpu:
+            from glint.fused_integrate import integrate_fused
+            I, sig, _, _ = integrate_fused(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
+        else:
+            I, sig, _, _ = integrate_spots(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
+        hkl = np.stack([pred["h"], pred["k"], pred["l"]], 1)
+        keep = I != 0.0                                     # off-frame boxes integrate to exactly 0
+        if keep.any():
+            acc.add_frame(hkl[keep], I[keep], sig[keep], self._frame_no)
+            self.n_integrated += 1; self._frame_no += 1
+
     def _index_integrate(self, slots, Mc, grid, acc, gate):
         """Index `slots` against Mc, integrate the fits into `acc`. With gate=True a frame with fewer than
         min_inliers is a MISS (returned, not integrated) so it can be tried against another cell / the
@@ -581,52 +644,54 @@ class StreamDriver:
                 if gate:
                     missed.append(i)
                 continue
-            self.n_indexed += 1
-            Mcan = _canonical_axes(M)                            # cross-frame consistent hkl setting
-            if self.double_hit:                                 # deflate-and-reindex: a 2nd crystal in this shot?
-                resid = deflate_peaks(self._q[i], Mcan)
-                if len(resid) >= self.min_peaks:
-                    nb2 = self._dh_index(resid, 1)
-                    if nb2:
-                        M2 = np.asarray(nb2[0][0], float)
-                        # a 2nd crystal = the deflated residual re-indexes to a valid lattice with enough
-                        # inliers. NOT gated on a different CELL -- SFX double-hits are usually two crystals
-                        # of the SAME protein at different orientations. Deflation removed lattice-1's peaks,
-                        # so the residual-inlier test already rejects merely re-finding lattice 1.
-                        if abs(np.linalg.det(M2)) >= 1.0 and self._inliers(resid, M2) >= self.min_peaks:
-                            self.n_double += 1
-            pred = grid.predict(Mcan, self.panels, self.clen_m, self.wavelength_A, tol=self.tol)
-            if len(pred) == 0:
-                continue
-            if self._grefiner is not None and self._pk[i] is not None:
-                self._grefiner.add_frame(recip_from_M(Mcan), self._pk[i], pred)
-            if self.gpu:
-                from glint.fused_integrate import integrate_fused
-                I, sig, _, _ = integrate_fused(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
-            else:
-                I, sig, _, _ = integrate_spots(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
-            hkl = np.stack([pred["h"], pred["k"], pred["l"]], 1)
-            keep = I != 0.0                                     # off-frame boxes integrate to exactly 0
-            if keep.any():
-                acc.add_frame(hkl[keep], I[keep], sig[keep], self._frame_no)
-                self.n_integrated += 1; self._frame_no += 1
+            self._integrate_one(i, M, grid, acc)
         return missed
 
     def _all_cells(self):
         return [self.Mc] + [e["Mc"] for e in self.extra]
 
     def _watchdog(self, missed):
-        """Blind-index the frames that fit no active cell; add a new cell when one RECURS (sample change).
-        Aliases from ordinary failures scatter and never accumulate, so this does not thrash on junk --
-        the same specificity that refuses non-crystals."""
+        """Blind-index the frames that fit no active cell. Each frame's OWN N-best candidates are
+        checked directly against every ALREADY-active cell first and integrated immediately if one
+        matches -- this fan-out is already blind-indexing every missed frame to pool votes toward
+        new-cell detection below, so checking each result against what we already know costs nothing
+        extra, and it rescues a same-cell miss right away instead of only ever detecting a genuinely
+        different cell. Uses the blind candidate directly (via _integrate_one) rather than
+        re-registering through known-cell, which could just miss again for the same reason the frame
+        was flagged. Only frames no active cell explains feed the pooled consensus below; a new cell
+        is added when one RECURS there (sample change). Aliases from ordinary failures scatter and
+        never accumulate, so this does not thrash on junk -- the same specificity that refuses
+        non-crystals."""
         if self._watch is None:
             self._watch = RunningConsensus(min_support=3, gap=2, adaptive=False)
-        # Fan the independent blind indexes across workers, then pool their N-best into the running
-        # consensus. Default `_fanout` is the serial single-GPU loop, so the votes -- and the lock --
-        # are BIT-IDENTICAL to the old per-frame loop (RunningConsensus is a histogram; add_frame order
-        # does not change the verdict). Opt-in mpi_fanout distributes the frames across GPUs.
-        for nb in self._fanout([self._q[i] for i in missed], self.warmup_nbest):
+        cells = self._all_cells()
+        still_missed = []
+        # Fan the independent blind indexes across workers (default `_fanout` is the serial
+        # single-GPU loop, so the votes -- and the lock -- are BIT-IDENTICAL to the old per-frame
+        # loop; RunningConsensus is a histogram, add_frame order does not change the verdict.
+        # Opt-in mpi_fanout distributes the frames across GPUs).
+        for i, nb in zip(missed, self._fanout([self._q[i] for i in missed], self.warmup_nbest)):
+            q = self._q[i]
+            rescued = False
+            for c, _ in nb:
+                c = np.asarray(c, float)
+                if abs(np.linalg.det(c)) < 1.0 or self._inliers(q, c) < self.min_inliers:
+                    continue
+                for k, Mk in enumerate(cells):
+                    if same_lattice(c, Mk):
+                        grid = self.grid if k == 0 else self.extra[k - 1]["grid"]
+                        acc = self.acc if k == 0 else self.extra[k - 1]["acc"]
+                        self._integrate_one(i, c, grid, acc)
+                        self.n_watchdog_rescued += 1
+                        rescued = True
+                        break
+                if rescued:
+                    break
+            if rescued:
+                continue
             self._watch.add_frame([c for c, _ in nb])
+            still_missed.append(i)
+        missed = still_missed
         Mn = self._watch.verdict()[0]
         if Mn is None:
             return
@@ -726,9 +791,12 @@ class StreamDriver:
         s.update(locked=True, locked_after=self.locked_after, consensus_support=self.consensus_support,
                  pushed=self.n_pushed, indexed=self.n_indexed, integrated=self.n_integrated,
                  theoretical_unique=self.n_theoretical)
+        if self.warmup_rescue:
+            s["n_warmup_rescued"] = self.n_warmup_rescued         # warm-up frames recovered the instant the cell locked
         if self.adaptive_relock:                                # adaptive: report the active cell set
             s["n_cells"] = 1 + len(self.extra); s["n_relock"] = self.n_relock
             s["n_rescued"] = self.n_rescued                      # buffered pre-lock misses recovered on relock
+            s["n_watchdog_rescued"] = self.n_watchdog_rescued    # same-cell misses the watchdog rescued individually
             if self._lock_probe:
                 s["lock_z"] = self.lock_z                        # signal-strength z of the most recent relock
             s["extra_cells"] = [dict(axes=list(np.linalg.norm(e["Mc"], axis=0).round(1)),

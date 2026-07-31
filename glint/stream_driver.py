@@ -340,7 +340,8 @@ class StreamDriver:
                  adaptive_relock=False, min_inliers=0, warm_topk=16, warm_floor=1,
                  double_hit=False, geom_refine=False, geom_refine_kw=None,
                  rescue_buffer=0, fanout=None, alias_gate=None,
-                 lock_probe=False, probe_null=64, lock_min_z=None, warmup_rescue=False):
+                 lock_probe=False, probe_null=64, lock_min_z=None, warmup_rescue=False,
+                 qc_frac_threshold=None):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -449,6 +450,18 @@ class StreamDriver:
         self.warmup_rescue = bool(warmup_rescue)
         self._warmup_buf = [] if self.warmup_rescue else None
         self.n_warmup_rescued = 0
+        # Per-frame confidence flag (opt-in, DIAGNOSTIC-only -- never affects what gets integrated).
+        # The live accept gate above (min_inliers, a raw count) is deliberately looser than the
+        # matched_frac>=25% bar used for the paper's offline comparison numbers: on a DRP time/
+        # bandwidth budget it's better to send a lower-completeness registration downstream than to
+        # drop it, AS LONG AS it's flagged so a later pass (refinement, QC, re-merge) can sort it out
+        # rather than silently trusting it at face value. With qc_frac_threshold set, every
+        # integrated frame's matched_frac is compared against it and, if below, recorded in
+        # self.low_conf_frames -- purely an annotation, computed from data already available at
+        # integrate time, at the cost of one division and one comparison per frame.
+        self.qc_frac_threshold = qc_frac_threshold
+        self.low_conf_frames = [] if qc_frac_threshold is not None else None
+        self.n_low_confidence = 0
         # Watchdog individual rescue (bundled into adaptive_relock, no separate flag): _watchdog
         # already blind-indexes every missed frame to pool votes toward NEW-cell detection -- that
         # compute is spent regardless. Checking each frame's own N-best candidates against the
@@ -628,6 +641,11 @@ class StreamDriver:
         hkl = np.stack([pred["h"], pred["k"], pred["l"]], 1)
         keep = I != 0.0                                     # off-frame boxes integrate to exactly 0
         if keep.any():
+            if self.qc_frac_threshold is not None:
+                frac = self._inliers(self._q[i], M) / len(self._q[i])
+                if frac < self.qc_frac_threshold:
+                    self.n_low_confidence += 1
+                    self.low_conf_frames.append((self._frame_no, frac))
             acc.add_frame(hkl[keep], I[keep], sig[keep], self._frame_no)
             self.n_integrated += 1; self._frame_no += 1
 
@@ -793,6 +811,9 @@ class StreamDriver:
                  theoretical_unique=self.n_theoretical)
         if self.warmup_rescue:
             s["n_warmup_rescued"] = self.n_warmup_rescued         # warm-up frames recovered the instant the cell locked
+        if self.qc_frac_threshold is not None:
+            s["n_low_confidence"] = self.n_low_confidence          # integrated but below qc_frac_threshold -- sent, flagged
+            s["low_conf_frac"] = self.n_low_confidence / max(self.n_integrated, 1)
         if self.adaptive_relock:                                # adaptive: report the active cell set
             s["n_cells"] = 1 + len(self.extra); s["n_relock"] = self.n_relock
             s["n_rescued"] = self.n_rescued                      # buffered pre-lock misses recovered on relock

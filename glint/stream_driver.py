@@ -337,7 +337,8 @@ class StreamDriver:
                  B=64, dmin=2.0, tol=0.002, half=3, gap=2, ring=3, min_peaks=6,
                  snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
-                 adaptive_relock=False, min_inliers=0, warm_topk=16, warm_floor=1,
+                 adaptive_relock=False, min_inliers=0, min_inlier_frac=0.10,
+                 warm_topk=16, warm_floor=1,
                  double_hit=False, geom_refine=False, geom_refine_kw=None,
                  rescue_buffer=0, fanout=None, alias_gate=None,
                  lock_probe=False, probe_null=64, lock_min_z=None, warmup_rescue=False,
@@ -433,6 +434,34 @@ class StreamDriver:
         # the miss-gate `min_inliers` + fit window `tol` are that boundary.
         self.adaptive_relock = bool(adaptive_relock)
         self.min_inliers = int(min_inliers) if min_inliers else self.min_peaks
+        # min_inliers alone is a COUNT, and a count cannot say "this frame fits this cell" when frames
+        # differ in peak count: chance agreement scales with the number of peaks. The fit test is a
+        # per-peak box of half-width tol=0.15 in each of h,k,l, so a random direction lands inside it
+        # with probability (2*0.15)^3 = 2.7%; at ~1340 peaks that is ~36 inliers expected from noise
+        # alone, and a WRONG cell was measured at a median 84 (6.2%) -- clearing any count gate, while
+        # a genuinely-fitting sparse frame with 60 peaks may total only ~40. A peak-rich wrong frame
+        # therefore outscores a peak-sparse right one. The FRACTION is what separates them: measured
+        # 0.647 for right-cell frames vs 0.062 for wrong-cell on the same data.
+        # Both bars now apply (see _fits), mirroring the research gate's own `frac >= 0.25 AND
+        # count >= 10` structure: the count keeps a 3-of-4-peak frame from passing on 75%, the
+        # fraction keeps a peak-rich impostor from passing on chance.
+        #
+        # DEFAULT 0.10 is a CHANCE-REJECTION FLOOR, not a quality bar -- it sits ~4x the 2.7% random
+        # rate and well under the 0.647 measured for genuinely-fitting frames, so it discriminates
+        # cells without judging completeness (that stays qc_frac_threshold's job, annotation-only,
+        # per the DRP call to send low-completeness registrations downstream WITH a flag rather than
+        # drop them). Measured on the real 120-frame cxidb set, gate isolated over the 115 post-lock
+        # frames (73 of which clear the strict research bar):
+        #     frac  0.00  0.02  0.05  0.10  0.15  0.20  0.25  0.35
+        #     accepted 114  114   114   114   110    97    73    55
+        #     good frames lost 0  0     0     0     0     0     0    18
+        # 0.10 accepts exactly what the old count gate did (114/115) while costing nothing, and
+        # everything up to 0.25 costs no research-gate frame -- 0.25 reproduces that gate's own 73
+        # exactly, as it must, since 0.25 is its fractional bar. Set 0.0 to restore the pure count
+        # gate. NOTE this gate only bites where _index_integrate runs with gate=True, i.e. the
+        # adaptive_relock path plus the rescue paths; with adaptive_relock=False there is no ingest
+        # gate at all and nothing here changes.
+        self.min_inlier_frac = float(min_inlier_frac)
         self.extra = []; self._watch = None; self.n_relock = 0
         if self.adaptive_relock and not hasattr(self, "_blind_index"):
             try:
@@ -480,7 +509,7 @@ class StreamDriver:
         self._warmup_buf = [] if self.warmup_rescue else None
         self.n_warmup_rescued = 0
         # Per-frame confidence flag (opt-in, DIAGNOSTIC-only -- never affects what gets integrated).
-        # The live accept gate above (min_inliers, a raw count) is deliberately looser than the
+        # The live accept gate above (_fits) is deliberately looser than the
         # matched_frac>=25% bar used for the paper's offline comparison numbers: on a DRP time/
         # bandwidth budget it's better to send a lower-completeness registration downstream than to
         # drop it, AS LONG AS it's flagged so a later pass (refinement, QC, re-merge) can sort it out
@@ -534,7 +563,7 @@ class StreamDriver:
             Ms = self._known_index(qs, self.Mc, B=max(len(qs), 1))
             self.n_warmup_rescued += sum(1 for q, M in zip(qs, Ms)
                                          if M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
-                                         and self._inliers(q, np.asarray(M, float)) >= self.min_inliers)
+                                         and self._fits(q, np.asarray(M, float)))
 
     # ------------------------------------------------------------------ ingest ------------------
     def _push_blind(self, frame):
@@ -639,6 +668,18 @@ class StreamDriver:
         hf = np.asarray(q, float) @ M
         return int((np.abs(hf - np.round(hf)).max(1) < 0.15).sum())
 
+    def _fits(self, q, M):
+        """THE live gate: does frame `q` fit cell `M` well enough to accept? Count AND fraction.
+
+        Single definition so the five places that ask this question -- the batch miss-gate, the
+        watchdog's candidate check, the lock-probe's frame pick, and the warm-up / miss-buffer
+        rescues -- cannot drift apart. See min_inlier_frac in __init__ for why a count alone is not a
+        sufficient test. With min_inlier_frac=0 this reduces exactly to the historical count gate."""
+        n = self._inliers(q, M)
+        if n < self.min_inliers:
+            return False
+        return not self.min_inlier_frac or n >= self.min_inlier_frac * len(q)
+
     def _integrate_one(self, i, M, grid, acc, cell_id=0):
         """Canonicalize + predict + integrate slot i under an ALREADY-ACCEPTED matrix M into acc.
         Split out of _index_integrate so _watchdog's individual rescue can integrate a validated
@@ -740,7 +781,7 @@ class StreamDriver:
         missed = []
         for i, M in zip(slots, Ms):
             M = np.asarray(M, float) if M is not None else None
-            if M is None or abs(np.linalg.det(M)) < 1.0 or (gate and self._inliers(self._q[i], M) < self.min_inliers):
+            if M is None or abs(np.linalg.det(M)) < 1.0 or (gate and not self._fits(self._q[i], M)):
                 if gate:
                     missed.append(i)
                 continue
@@ -775,7 +816,7 @@ class StreamDriver:
             rescued = False
             for c, _ in nb:
                 c = np.asarray(c, float)
-                if abs(np.linalg.det(c)) < 1.0 or self._inliers(q, c) < self.min_inliers:
+                if abs(np.linalg.det(c)) < 1.0 or not self._fits(q, c):
                     continue
                 for k, Mk in enumerate(cells):
                     if same_lattice(c, Mk):
@@ -830,16 +871,16 @@ class StreamDriver:
             from glint.spurious_meter import null_margin
             qs = [self._q[i] for i in missed if self._q[i] is not None]
             Ms = self._known_index(qs, Mn, B=max(len(qs), 1)) if qs else []
-            best_q, best_M, best_ni = None, None, -1
+            best_q, best_M, best_frac = None, None, -1.0
             for q, Mi in zip(qs, Ms):
                 if Mi is None:
                     continue
-                ni = self._inliers(q, Mi)
-                if ni > best_ni:
-                    best_q, best_M, best_ni = q, Mi, ni
+                frac = self._inliers(q, Mi) / max(len(q), 1)     # rank by FRACTION, not count, so the
+                if frac > best_frac:                             # probe frame is the best-FITTING one,
+                    best_q, best_M, best_frac = q, Mi, frac      # not merely the most peak-rich one
             lock_z = (null_margin(best_q, best_M, n_null=self._probe_null,
                                   rng=np.random.default_rng(self.n_relock))["z"]
-                      if best_M is not None and best_ni >= self.min_inliers else 0.0)
+                      if best_M is not None and self._fits(best_q, best_M) else 0.0)
             self.lock_z = lock_z
             if self._lock_min_z is not None and lock_z < self._lock_min_z:
                 return
@@ -857,7 +898,7 @@ class StreamDriver:
             Ms = self._known_index(qs, Mn, B=max(len(qs), 1))
             self.n_rescued += sum(1 for q, M in zip(qs, Ms)
                                   if M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
-                                  and self._inliers(q, M) >= self.min_inliers)
+                                  and self._fits(q, M))
             self._missbuf.clear()
         self._watch = RunningConsensus(min_support=3, gap=2, adaptive=False)    # reset for the next change
 

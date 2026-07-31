@@ -341,7 +341,8 @@ class StreamDriver:
                  double_hit=False, geom_refine=False, geom_refine_kw=None,
                  rescue_buffer=0, fanout=None, alias_gate=None,
                  lock_probe=False, probe_null=64, lock_min_z=None, warmup_rescue=False,
-                 qc_frac_threshold=None):
+                 qc_frac_threshold=None, stream_out=None, stream_geom_text=None,
+                 stream_image="glint.cxi", stream_symmetry=None):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -370,6 +371,7 @@ class StreamDriver:
         self._ring = [xp.zeros(self.shape, self.dtype) for _ in range(self.B)]
         self._q = [None] * self.B
         self._pk = [None] * self.B                              # observed (fs,ss) peaks per slot (geom refine)
+        self._idx = [0] * self.B                                # global arrival index per slot (stream provenance)
         self._n = 0
         self._frame_no = 0
 
@@ -395,6 +397,33 @@ class StreamDriver:
             from glint.geom_refine import GeomRefiner
             self._grefiner = GeomRefiner(self.panels, self.clen_m, self.wavelength_A,
                                          **(geom_refine_kw or {}))
+
+        # Offline-merge handoff (opt-in): append a CrystFEL .stream chunk per integrated frame, so the
+        # merge can happen LATER, off the DAQ, from a file -- rather than only as the in-process
+        # MergeAccumulator, which a downstream merger cannot see. Every chunk is stamped with the state
+        # that was in effect FOR THAT FRAME (geometry correction, which active cell, lock generation,
+        # per-frame completeness), because a run-level summary would tell an offline merger to apply a
+        # late-run correction to early-run data. Default None keeps the integrate path untouched.
+        self.stream_out = stream_out
+        self._writer = None
+        if stream_out is not None:
+            from glint.predict import StreamWriter
+            names = [p.get("name", f"p{k}") for k, p in enumerate(self.panels)]
+            self._writer = StreamWriter(
+                stream_out, geom_text=stream_geom_text, panel_name=names[0], panel_names=names,
+                photon_eV=(12398.419843320026 / self.wavelength_A), clen_m=self.clen_m)
+        self.stream_image = str(stream_image)
+        self.stream_symmetry = dict(stream_symmetry or {})
+        # GeomRefiner's (dfs, dss) is a shift in the panel's own DATA-ARRAY basis (added to the local
+        # fs/ss that project_q produced); CrystFEL's predict_refine/det_shift is a shift in LAB x/y, mm.
+        # project_q solves  res*X_xy - corner = [fs_xy ss_xy] @ [lf, ls]  (predict.py), so the lab-frame
+        # shift is dfs*fs_vec + dss*ss_vec, scaled by 1/res (m per px) and 1000 (m -> mm). Using the
+        # identity here instead would silently ROTATE the correction on any panel whose fs/ss are not
+        # +x/+y -- routine on CSPAD/Jungfrau/epix quadrants. `res` is pixels per metre.
+        p0 = self.panels[0]
+        mm_px = 1000.0 / float(p0["res"])
+        self._shift_basis = np.array([[p0["fs"][0], p0["ss"][0]],
+                                      [p0["fs"][1], p0["ss"][1]]], float) * mm_px
 
         # Adaptive re-lock (opt-in): keep a blind watchdog on the frames that miss every active cell,
         # and add a new cell when one recurs there -- so a mid-run SAMPLE CHANGE (or a mixture) is
@@ -596,6 +625,7 @@ class StreamDriver:
             if len(qq) >= self.min_peaks:
                 q = qq
         self._q[slot] = q
+        self._idx[slot] = self.n_pushed                      # arrival index, so a stream chunk names its frame
         if self.geom_refine:
             self._pk[slot] = np.stack([fs, ss], 1) if fs.size else None
         self._n += 1
@@ -609,11 +639,15 @@ class StreamDriver:
         hf = np.asarray(q, float) @ M
         return int((np.abs(hf - np.round(hf)).max(1) < 0.15).sum())
 
-    def _integrate_one(self, i, M, grid, acc):
+    def _integrate_one(self, i, M, grid, acc, cell_id=0):
         """Canonicalize + predict + integrate slot i under an ALREADY-ACCEPTED matrix M into acc.
         Split out of _index_integrate so _watchdog's individual rescue can integrate a validated
         blind candidate directly, without re-registering it through known-cell (which could just
-        miss again for the same reason the frame was flagged in the first place)."""
+        miss again for the same reason the frame was flagged in the first place).
+
+        cell_id identifies WHICH active cell accepted this frame (0 = the primary self.Mc, 1..n = the
+        adaptive-relock extras) -- recorded per chunk so an offline merger can separate the sub-runs
+        instead of silently co-merging two different crystals."""
         self.n_indexed += 1
         Mcan = _canonical_axes(M)                            # cross-frame consistent hkl setting
         if self.double_hit:                                 # deflate-and-reindex: a 2nd crystal in this shot?
@@ -635,24 +669,72 @@ class StreamDriver:
             self._grefiner.add_frame(recip_from_M(Mcan), self._pk[i], pred)
         if self.gpu:
             from glint.fused_integrate import integrate_fused
-            I, sig, _, _ = integrate_fused(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
+            I, sig, pkI, bg = integrate_fused(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
         else:
-            I, sig, _, _ = integrate_spots(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
+            I, sig, pkI, bg = integrate_spots(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
         hkl = np.stack([pred["h"], pred["k"], pred["l"]], 1)
         keep = I != 0.0                                     # off-frame boxes integrate to exactly 0
         if keep.any():
-            if self.qc_frac_threshold is not None:
+            frac = None
+            if self.qc_frac_threshold is not None or self._writer is not None:
                 frac = self._inliers(self._q[i], M) / len(self._q[i])
-                if frac < self.qc_frac_threshold:
+            low_conf = None
+            if self.qc_frac_threshold is not None:
+                low_conf = frac < self.qc_frac_threshold
+                if low_conf:
                     self.n_low_confidence += 1
                     self.low_conf_frames.append((self._frame_no, frac))
             acc.add_frame(hkl[keep], I[keep], sig[keep], self._frame_no)
+            if self._writer is not None:
+                self._writer.write(self._stream_record(i, Mcan, pred, I, sig, pkI, bg, keep,
+                                                       cell_id, frac, low_conf))
             self.n_integrated += 1; self._frame_no += 1
 
-    def _index_integrate(self, slots, Mc, grid, acc, gate):
+    def _stream_record(self, i, Mcan, pred, I, sig, pkI, bg, keep, cell_id, frac, low_conf):
+        """One .stream chunk's worth of this frame, stamped with the state IN EFFECT FOR IT.
+
+        Geometry semantics, deliberately: `clen_m` reports the distance actually USED to predict these
+        fs/ss (self.clen_m -- GeomRefiner is diagnostic-only and is never fed back, see its docstring),
+        so the chunk stays internally consistent. The refiner's running estimate is reported SEPARATELY
+        as the correction: det_shift (CrystFEL's own per-crystal field, converted px -> mm) and
+        glint/dclen_m. An offline merger therefore gets both what was assumed and what was measured,
+        and can apply the correction itself rather than having it silently baked in."""
+        dx = dy = 0.0
+        dclen = n_solves = None
+        if self._grefiner is not None:
+            c = self._grefiner.correction()                 # snapshot AFTER this frame was pooled
+            dx, dy = self._shift_basis @ np.array([c["dfs"], c["dss"]], float)
+            dclen, n_solves = c["dclen_m"], c["n_solves"]
+        return dict(image=self.stream_image, event=self._idx[i], M=Mcan,
+                    pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep],
+                    clen_m=self.clen_m, det_shift_mm=(dx, dy), dclen_m=dclen,
+                    geom_n_solves=n_solves, cell_id=cell_id, lock_generation=self.n_relock,
+                    matched_frac=frac, low_confidence=low_conf, frame_no=self._frame_no,
+                    **self.stream_symmetry)
+
+    def close(self):
+        """End the run: flush the resident batch, then finish the .stream (if any). Returns how many
+        chunks carried an indexed crystal, or None when no stream is being written.
+
+        flush() first because the last partial batch is still resident when a run ends -- closing
+        without it would silently drop those frames from BOTH the merge and the stream. Idempotent.
+        Nothing calls this automatically (there is no __del__), so a long-lived DAQ process must call
+        it, or use the driver as a context manager."""
+        self.flush()
+        return self._writer.close() if self._writer is not None else None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    def _index_integrate(self, slots, Mc, grid, acc, gate, cell_id=0):
         """Index `slots` against Mc, integrate the fits into `acc`. With gate=True a frame with fewer than
         min_inliers is a MISS (returned, not integrated) so it can be tried against another cell / the
-        watchdog. Returns the missed slots (empty when gate=False -- the single-cell path is unchanged)."""
+        watchdog. Returns the missed slots (empty when gate=False -- the single-cell path is unchanged).
+        cell_id just labels which active cell this is, for per-chunk stream provenance."""
         qs = [self._q[i] for i in slots]
         Ms = rgb.index_fused(qs, Mc, B=max(len(qs), 1))
         missed = []
@@ -662,7 +744,7 @@ class StreamDriver:
                 if gate:
                     missed.append(i)
                 continue
-            self._integrate_one(i, M, grid, acc)
+            self._integrate_one(i, M, grid, acc, cell_id=cell_id)
         return missed
 
     def _all_cells(self):
@@ -699,7 +781,7 @@ class StreamDriver:
                     if same_lattice(c, Mk):
                         grid = self.grid if k == 0 else self.extra[k - 1]["grid"]
                         acc = self.acc if k == 0 else self.extra[k - 1]["acc"]
-                        self._integrate_one(i, c, grid, acc)
+                        self._integrate_one(i, c, grid, acc, cell_id=k)
                         self.n_watchdog_rescued += 1
                         rescued = True
                         break
@@ -788,10 +870,11 @@ class StreamDriver:
             self._index_integrate(slots, self.Mc, self.grid, self.acc, gate=False)   # single-cell path (unchanged)
         elif slots:
             remaining = self._index_integrate(slots, self.Mc, self.grid, self.acc, gate=True)
-            for e in self.extra:                                # try each additional active cell in turn
+            for k, e in enumerate(self.extra, 1):               # try each additional active cell in turn
                 if not remaining:
                     break
-                remaining = self._index_integrate(remaining, e["Mc"], e["grid"], e["acc"], gate=True)
+                remaining = self._index_integrate(remaining, e["Mc"], e["grid"], e["acc"], gate=True,
+                                                  cell_id=k)
             if remaining:                                       # fit no active cell -> blind watchdog
                 if self._missbuf is not None:                   # buffer q-only for retroactive rescue on lock
                     self._missbuf.extend((self.n_pushed, self._q[i].copy()) for i in remaining)
@@ -799,6 +882,7 @@ class StreamDriver:
         self._n = 0
         self._q = [None] * self.B
         self._pk = [None] * self.B
+        self._idx = [0] * self.B
 
     def stats(self, thr=0.0):
         if self._blind:                                         # not yet locked -- warm-up in progress
@@ -814,6 +898,10 @@ class StreamDriver:
         if self.qc_frac_threshold is not None:
             s["n_low_confidence"] = self.n_low_confidence          # integrated but below qc_frac_threshold -- sent, flagged
             s["low_conf_frac"] = self.n_low_confidence / max(self.n_integrated, 1)
+        if self._writer is not None:                               # offline-merge handoff
+            s["stream_out"] = self.stream_out
+            s["stream_chunks"] = self._writer.n_chunks
+            s["stream_indexed"] = self._writer.n_indexed
         if self.adaptive_relock:                                # adaptive: report the active cell set
             s["n_cells"] = 1 + len(self.extra); s["n_relock"] = self.n_relock
             s["n_rescued"] = self.n_rescued                      # buffered pre-lock misses recovered on relock

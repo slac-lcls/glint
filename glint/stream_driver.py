@@ -64,8 +64,7 @@ _GATE_SRC = r"""
 extern "C" __global__ void predict_gate(const double* g, int nhkl,
                                          double R0, double R1, double R2, double R3, double R4,
                                          double R5, double R6, double R7, double R8, double wave,
-                                         double qmax2, double tol, double* out, int* counter, int cap,
-                                         double ax, double ay, double az, double kmin){
+                                         double qmax2, double tol, double* out, int* counter, int cap){
   int i = blockIdx.x*blockDim.x + threadIdx.x; if (i >= nhkl) return;
   double gx=g[3*i], gy=g[3*i+1], gz=g[3*i+2];
   double qx=gx*R0+gy*R3+gz*R6;
@@ -73,74 +72,81 @@ extern "C" __global__ void predict_gate(const double* g, int nhkl,
   double qz=gx*R2+gy*R5+gz*R8;
   double qn2=qx*qx+qy*qy+qz*qz;
   double exc=qz+0.5*wave*qn2;
-  // Panel-acceptance pre-filter (see _panel_cone): a reflection that lands on THIS node's panels has
-  // its scattered direction inside a cone, and on the Ewald sphere |wave*q + zhat| = 1 to O(tol), so
-  // that cone test collapses to ONE dot product against a half-space. CONSERVATIVE by construction --
-  // project_q downstream is still the exact arbiter, so the kept set is unchanged; this only stops
-  // off-panel reflections from reaching the (expensive, host-side) tail. kmin = -inf disables it.
-  if (qx*ax+qy*ay+qz*az < kmin) return;
   if (qn2<=qmax2 && fabs(exc)<tol){
     int p=atomicAdd(counter,1);
     if (p<cap){ out[6*p]=(double)i; out[6*p+1]=qx; out[6*p+2]=qy; out[6*p+3]=qz; out[6*p+4]=qn2; out[6*p+5]=exc; }
   }
 }"""
+
+# Gate WITH the detector projection fused in. The gate above emits every Ewald survivor anywhere in
+# reciprocal space; the host then ran project_q over all of them and discarded the ones that miss.
+# On a node owning a few ASICs of a ~25-panel detector that is most of them -- 195 survivors for 94
+# real on-panel reflections -- and project_q was 40% of predict.
+#
+# The thread already holds qx,qy,qz in registers and the panel geometry is frame-INVARIANT (uploaded
+# once), so projecting here costs ~20 flops in a kernel that is launch-bound, and buys three things
+# at once: project_q leaves the host entirely, the cull becomes EXACT rather than a conservative
+# cone, and every emitted row is on-panel so the host's boolean masking over eight struct fields
+# disappears. NOTE this is not the known-negative "on-device project_q", which was a SEPARATE kernel
+# and lost 3.5x to launch overhead; fusing into a kernel already running adds no launch.
+#
+# The arithmetic mirrors project_q's evaluation order (predict.py) so the results agree to ~1e-13.
+_GATE_PROJ_SRC = r"""
+extern "C" __global__ void gate_project(const double* g, int nhkl,
+    double R0,double R1,double R2,double R3,double R4,double R5,double R6,double R7,double R8,
+    double wave, double qmax2, double tol, const double* pg, int npan,
+    double* out, int* counter, int cap){
+  int i = blockIdx.x*blockDim.x + threadIdx.x; if (i >= nhkl) return;
+  double gx=g[3*i], gy=g[3*i+1], gz=g[3*i+2];
+  double qx=gx*R0+gy*R3+gz*R6, qy=gx*R1+gy*R4+gz*R7, qz=gx*R2+gy*R5+gz*R8;
+  double qn2=qx*qx+qy*qy+qz*qz;
+  double exc=qz+0.5*wave*qn2;
+  if (!(qn2<=qmax2 && fabs(exc)<tol)) return;
+  double sx=wave*qx, sy=wave*qy, sz=wave*qz+1.0;          // s_hat = wave*q + zhat, then normalise
+  double nrm=sqrt(sx*sx+sy*sy+sz*sz);
+  sx/=nrm; sy/=nrm; sz/=nrm;
+  if (!(sz > 1e-6)) return;                                // forward-scattered only
+  for (int p=0;p<npan;++p){                                // first panel that catches it wins
+    const double* P = pg + p*12;                           // Zp,res,inv(A)[4],cx,cy,min_fs,max_fs,min_ss,max_ss
+    double t = P[0]/sz;
+    double rx = P[1]*(sx*t) - P[6], ry = P[1]*(sy*t) - P[7];
+    double f = P[8] + (P[2]*rx + P[3]*ry);
+    double s = P[10] + (P[4]*rx + P[5]*ry);
+    if (f>=P[8] && f<=P[9] && s>=P[10] && s<=P[11]){
+      int k=atomicAdd(counter,1);
+      if (k<cap){ out[6*k]=(double)i; out[6*k+1]=f; out[6*k+2]=s;
+                  out[6*k+3]=(double)p; out[6*k+4]=exc; out[6*k+5]=1.0/sqrt(qn2); }
+      return;
+    }
+  }
+}"""
 _GATE_KERNEL = cp.RawKernel(_GATE_SRC, "predict_gate") if _HAVE_CP else None
+_GATE_PROJ_KERNEL = cp.RawKernel(_GATE_PROJ_SRC, "gate_project") if _HAVE_CP else None
 
 
-def _panel_cone(panels, clen_m, wavelength_A, tol, margin_rad=1e-3, nedge=64):
-    """A half-space on q that CONTAINS every reflection landing on `panels`. Returns (axis, kmin).
+def _panel_geom(panels, clen_m):
+    """Flatten panel geometry for the fused gate+project kernel: 12 doubles per panel, in the order
+    the kernel indexes them -- Zp, res, inv(A) as 4, corner (cx, cy), then the fs/ss bounds.
 
-    Why this exists. The Ewald+qmax gate is panel-INDEPENDENT: it yields every reflection in
-    diffracting condition anywhere in reciprocal space. But a DRP node owns a few ASICs out of ~25, so
-    most of those miss its detector -- measured 99 of 741 on a 6-ASIC panel, i.e. **87% of the host
-    tail (D2H, argsort, gather, project_q, struct assembly) is spent on reflections that are then
-    thrown away**. The gate itself is ~1% of predict, so the fix is not to make it cheaper but to make
-    it emit less.
-
-    The geometry. A reflection lands on the panel only if its scattered direction s_hat lies in the
-    cone subtended by that panel, s_hat.c >= cos(theta). With s_hat = (wave*q + zhat)/|wave*q + zhat|
-    and |wave*q + zhat|^2 = 1 + 2*wave*exc (exactly -- expand it), a reflection passing the Ewald gate
-    has |wave*q + zhat| within sqrt(1 +/- 2*wave*tol) of 1. So
-
-        on-panel  =>  wave*(q.c) + c_z  >=  cos(theta) * sqrt(1 - 2*wave*tol)
-                  =>  q.c >= [cos(theta)*sqrt(1 - 2*wave*tol) - c_z] / wave  =:  kmin
-
-    -- a LINEAR test, one dot product per hkl, in a kernel already dominated by launch latency. It is
-    a NECESSARY condition, never sufficient: the cone is built to contain the panel with a margin, and
-    project_q still decides on-panel exactly, so the returned set is unchanged.
-
-    The cone is fitted to the panel PERIMETER (nedge samples per edge, not just corners) so a panel
-    whose angular extent is not maximised at a corner cannot be clipped, plus `margin_rad`. Scattered
-    panels give a wide cone and little culling -- it degrades to a no-op rather than to a wrong answer.
+    Everything here is frame-INVARIANT, which is the whole point: project_q rebuilt `A`, its 2x2
+    inverse and the corner vector on EVERY call. Uploaded once, the kernel reads it from global memory
+    (a handful of doubles, broadcast across the block) and the host never touches it again.
+    Returns None when the geometry cannot be projected (a panel at or behind the sample).
     """
-    dirs = []
+    rows = []
     for p in panels:
         Zp = clen_m + p.get("coffset", 0.0)
         if Zp <= 0:
-            return None                                  # behind the sample: no forward-scatter cone
+            return None
         A = np.array([[p["fs"][0], p["ss"][0]], [p["fs"][1], p["ss"][1]]], float)
-        nf = float(p["max_fs"] - p["min_fs"]); ns = float(p["max_ss"] - p["min_ss"])
-        t = np.linspace(0.0, 1.0, int(nedge))
-        edge = np.concatenate([                          # perimeter: 4 edges, nedge samples each
-            np.stack([t * nf, np.zeros_like(t)], 1), np.stack([t * nf, np.full_like(t, ns)], 1),
-            np.stack([np.zeros_like(t), t * ns], 1), np.stack([np.full_like(t, nf), t * ns], 1)])
-        xy = (edge @ A.T + np.array([p["cx"], p["cy"]], float)) / float(p["res"])
-        X = np.concatenate([xy, np.full((len(xy), 1), Zp)], 1)
-        dirs.append(X / np.linalg.norm(X, axis=1, keepdims=True))
-    D = np.concatenate(dirs)
-    c = D.mean(0)
-    n = np.linalg.norm(c)
-    if n < 1e-12:
-        return None                                      # panels straddle the beam symmetrically
-    c = c / n
-    cos_theta = float(np.clip(D @ c, -1.0, 1.0).min())   # worst corner/edge sample
-    theta = float(np.arccos(cos_theta)) + float(margin_rad)
-    if theta >= 0.5 * np.pi:
-        return None                                      # cone covers the forward hemisphere: no win
-    lam = float(wavelength_A)
-    shrink = float(np.sqrt(max(1.0 - 2.0 * lam * float(tol), 0.0)))
-    kmin = (np.cos(theta) * shrink - c[2]) / lam
-    return c, float(kmin)
+        if abs(np.linalg.det(A)) < 1e-12:
+            return None                                   # degenerate fs/ss basis
+        Ai = np.linalg.inv(A)
+        rows.append([Zp, float(p["res"]), Ai[0, 0], Ai[0, 1], Ai[1, 0], Ai[1, 1],
+                     float(p["cx"]), float(p["cy"]),
+                     float(p["min_fs"]), float(p["max_fs"]),
+                     float(p["min_ss"]), float(p["max_ss"])])
+    return np.asarray(rows, float).ravel() if rows else None
 
 
 class HKLGrid:
@@ -157,7 +163,7 @@ class HKLGrid:
     """
 
     def __init__(self, Mc, dmin, margin=1.02, gpu=True,
-                 panels=None, clen_m=None, wavelength_A=None, cone_tol=0.006):
+                 panels=None, clen_m=None, wavelength_A=None):
         self.qmax = 1.0 / float(dmin)
         R = recip_from_M(np.asarray(Mc, float))
         self.g, _ = _hkl_grid(R, self.qmax * margin)
@@ -170,15 +176,17 @@ class HKLGrid:
             self._ggr = cp.ascontiguousarray(self._gg.ravel())
             self._gout = cp.empty((self.g.shape[0], 6), cp.float64)
             self._gcnt = cp.zeros(1, cp.int32)
-        # Panel-acceptance pre-filter, precomputed once (see _panel_cone). Built for THESE panels;
-        # predict() checks identity before using it and falls back to no culling otherwise, so a
-        # caller that passes different panels gets the correct answer rather than a silently clipped
-        # one. cone_tol must be >= the tol predict() is called with (a larger tol widens the shell and
-        # hence the cone); the default 0.006 covers predict_spots' default and the driver's 0.002.
-        self._cone_panels = panels
-        self._cone = None
-        if panels is not None and clen_m is not None and wavelength_A is not None:
-            self._cone = _panel_cone(panels, float(clen_m), float(wavelength_A), float(cone_tol))
+        # Fused gate+project geometry, uploaded once (see _panel_geom / _GATE_PROJ_SRC). predict()
+        # checks panel IDENTITY before using it, so a caller passing different panels falls back to
+        # the plain gate + host project_q rather than getting a silently wrong answer.
+        self._pan_panels = panels
+        self._pan_geom = None
+        self._npan = 0
+        if panels is not None and clen_m is not None and self.gpu:
+            pg = _panel_geom(panels, float(clen_m))
+            if pg is not None:
+                self._pan_geom = cp.asarray(pg)
+                self._npan = len(panels)
         # PINNED staging for the two device->host reads. Both move trivial amounts (4 B for the
         # counter, n*48 B for the payload) but cost 0.032 and 0.031 ms/frame through CuPy: `int(arr[0])`
         # builds a 0-d array and round-trips it through asnumpy, and cp.asnumpy allocates a fresh
@@ -210,17 +218,20 @@ class HKLGrid:
             cp.cuda.runtime.memsetAsync(self._gcnt.data.ptr, 0, 4, st.ptr)
             Rr = np.ascontiguousarray(R, np.float64).ravel()
             tpb = 256; blocks = (nhkl + tpb - 1) // tpb
-            # cone only when it was built for THESE panels; otherwise kmin=-inf = no culling
-            cone = self._cone if (self._cone is not None and panels is self._cone_panels) else None
-            ax, ay, az, kmin = (*cone[0], cone[1]) if cone is not None else (0.0, 0.0, 0.0, -1e300)
             f8 = np.float64
-            _GATE_KERNEL((blocks,), (tpb,),
-                         (self._ggr, np.int32(nhkl),
-                          f8(Rr[0]), f8(Rr[1]), f8(Rr[2]), f8(Rr[3]), f8(Rr[4]),
-                          f8(Rr[5]), f8(Rr[6]), f8(Rr[7]), f8(Rr[8]), f8(wavelength_A),
-                          f8(self.qmax * self.qmax), f8(tol),
-                          self._gout.ravel(), self._gcnt, np.int32(nhkl),
-                          f8(ax), f8(ay), f8(az), f8(kmin)))
+            # fused path only when the geometry was built for THESE panels
+            fused = self._pan_geom is not None and panels is self._pan_panels
+            args = (self._ggr, np.int32(nhkl),
+                    f8(Rr[0]), f8(Rr[1]), f8(Rr[2]), f8(Rr[3]), f8(Rr[4]),
+                    f8(Rr[5]), f8(Rr[6]), f8(Rr[7]), f8(Rr[8]), f8(wavelength_A),
+                    f8(self.qmax * self.qmax), f8(tol))
+            if fused:
+                _GATE_PROJ_KERNEL((blocks,), (tpb,), args + (
+                    self._pan_geom, np.int32(self._npan),
+                    self._gout.ravel(), self._gcnt, np.int32(nhkl)))
+            else:
+                _GATE_KERNEL((blocks,), (tpb,), args + (
+                    self._gout.ravel(), self._gcnt, np.int32(nhkl)))
             cp.cuda.runtime.memcpyAsync(self._pin_cnt.ctypes.data, self._gcnt.data.ptr, 4, D2H, st.ptr)
             st.synchronize()
             n = int(self._pin_cnt[0])
@@ -234,6 +245,17 @@ class HKLGrid:
             C = C[np.argsort(C[:, 0], kind="stable")]         # restore hkl-grid order
             idx = C[:, 0].astype(np.int64)
             hkl = self.g[idx]
+            if fused:
+                # every row is already on-panel and carries its own fs/ss/panel/res, so the host does
+                # no projection and no boolean masking -- just relabel the columns into the record.
+                out = np.zeros(n, dtype=[("h", int), ("k", int), ("l", int), ("fs", float),
+                                         ("ss", float), ("panel", int), ("exc", float),
+                                         ("res", float)])
+                out["h"], out["k"], out["l"] = hkl[:, 0], hkl[:, 1], hkl[:, 2]
+                out["fs"], out["ss"] = C[:, 1], C[:, 2]
+                out["panel"] = C[:, 3].astype(int)
+                out["exc"], out["res"] = C[:, 4], C[:, 5]
+                return out
             q = C[:, 1:4]; qn2 = C[:, 4]; exc = C[:, 5]
         else:
             q = self.g @ R
@@ -585,7 +607,7 @@ class StreamDriver:
         self.Mc = Mc
         self.grid = HKLGrid(self.Mc, self.dmin, gpu=self.gpu,   # built once, reused every frame
                             panels=self.panels, clen_m=self.clen_m, wavelength_A=self.wavelength_A,
-                            cone_tol=max(self.tol, 0.006))
+                            )
         self.n_theoretical = theoretical_unique(self.Mc, self.dmin, self.ops)
         self._blind = False
 
@@ -799,7 +821,7 @@ class StreamDriver:
                 return
         self.extra.append(dict(Mc=Mn, grid=HKLGrid(Mn, self.dmin, gpu=self.gpu, panels=self.panels,
                                                    clen_m=self.clen_m, wavelength_A=self.wavelength_A,
-                                                   cone_tol=max(self.tol, 0.006)),
+                                                   ),
                                nth=theoretical_unique(Mn, self.dmin, self.ops),
                                acc=MergeAccumulator(self.snr_bins, self.ops), lock_z=lock_z))
         self.n_relock += 1

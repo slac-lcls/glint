@@ -343,7 +343,7 @@ class StreamDriver:
                  rescue_buffer=0, fanout=None, alias_gate=None,
                  lock_probe=False, probe_null=64, lock_min_z=None, warmup_rescue=False,
                  qc_frac_threshold=None, stream_out=None, stream_geom_text=None,
-                 stream_image="glint.cxi", stream_symmetry=None):
+                 stream_image="glint.cxi", stream_symmetry=None, stream_peaks=None):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -373,6 +373,7 @@ class StreamDriver:
         self._q = [None] * self.B
         self._pk = [None] * self.B                              # observed (fs,ss) peaks per slot (geom refine)
         self._idx = [0] * self.B                                # global arrival index per slot (stream provenance)
+        self._pkq = [None] * self.B                             # observed peaks aligned with _q (stream_peaks)
         self._n = 0
         self._frame_no = 0
 
@@ -416,6 +417,20 @@ class StreamDriver:
                 photon_eV=(12398.419843320026 / self.wavelength_A), clen_m=self.clen_m)
         self.stream_image = str(stream_image)
         self.stream_symmetry = dict(stream_symmetry or {})
+        # Emit the OBSERVED peak list per chunk: None (off) | "flagged" | "all".
+        # Why it matters: a chunk otherwise carries only the PREDICTED reflections, computed under the
+        # orientation the driver chose -- so it cannot rescue a frame whose orientation WAS the
+        # problem. An offline pass can see from qc_frac_threshold WHICH frames to retry but has
+        # nothing to retry WITH. Shipping the peaks makes a flagged chunk self-contained for
+        # re-indexing, which is worth a measured 20 of 42 strict-gate failures on the cxidb set
+        # (14 recoverable by offline GLINT's blind/N-best/known-cell arsenal, 6 more by xgandalf or
+        # ffbidx). "flagged" is the cheap default choice: ~15 kB per flagged frame, and only the
+        # ~1-in-3 that are flagged; "all" makes every chunk a standalone CrystFEL record.
+        if stream_peaks not in (None, "flagged", "all"):
+            raise ValueError("stream_peaks must be None, 'flagged' or 'all'")
+        self.stream_peaks = stream_peaks
+        if stream_peaks == "flagged" and qc_frac_threshold is None:
+            raise ValueError("stream_peaks='flagged' needs qc_frac_threshold set to define 'flagged'")
         # GeomRefiner's (dfs, dss) is a shift in the panel's own DATA-ARRAY basis (added to the local
         # fs/ss that project_q produced); CrystFEL's predict_refine/det_shift is a shift in LAB x/y, mm.
         # project_q solves  res*X_xy - corner = [fs_xy ss_xy] @ [lf, ls]  (predict.py), so the lab-frame
@@ -647,14 +662,25 @@ class StreamDriver:
         self._ring[slot][...] = xp.asarray(frame)            # single H2D into the resident slot
         pk = self.finder.find(self._ring[slot])              # peak-find ON DEVICE, no readback of pixels
         fs = pk["x"]; ss = pk["y"]
+        pi = pk["intensity"] if self.stream_peaks else None
         if self.gpu:
             fs = cp.asnumpy(fs); ss = cp.asnumpy(ss)         # peaks are tiny; pixels stay put
+            if pi is not None:
+                pi = cp.asnumpy(pi)
         q = None
         if fs.size >= self.min_peaks:
             qq = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
-            qq = qq[np.isfinite(qq).all(1)]                  # peaks_to_q returns NaN rows off-panel
+            ok = np.isfinite(qq).all(1)                      # peaks_to_q returns NaN rows off-panel
+            qq = qq[ok]
             if len(qq) >= self.min_peaks:
                 q = qq
+                if self.stream_peaks:
+                    # keep the OBSERVED peaks, masked to exactly the rows q has, so a stream chunk can
+                    # carry fs/ss/(1/d)/I that line up. This is what makes a flagged frame RE-INDEXABLE
+                    # offline: predicted reflections are computed under the orientation the driver
+                    # chose, so they cannot rescue a frame whose orientation was the problem -- only
+                    # the observed peaks can.
+                    self._pkq[slot] = np.stack([fs[ok], ss[ok], pi[ok]], 1)
         self._q[slot] = q
         self._idx[slot] = self.n_pushed                      # arrival index, so a stream chunk names its frame
         if self.geom_refine:
@@ -748,12 +774,19 @@ class StreamDriver:
             c = self._grefiner.correction()                 # snapshot AFTER this frame was pooled
             dx, dy = self._shift_basis @ np.array([c["dfs"], c["dss"]], float)
             dclen, n_solves = c["dclen_m"], c["n_solves"]
-        return dict(image=self.stream_image, event=self._idx[i], M=Mcan,
-                    pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep],
-                    clen_m=self.clen_m, det_shift_mm=(dx, dy), dclen_m=dclen,
-                    geom_n_solves=n_solves, cell_id=cell_id, lock_generation=self.n_relock,
-                    matched_frac=frac, low_confidence=low_conf, frame_no=self._frame_no,
-                    **self.stream_symmetry)
+        rec = dict(image=self.stream_image, event=self._idx[i], M=Mcan,
+                   pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep],
+                   clen_m=self.clen_m, det_shift_mm=(dx, dy), dclen_m=dclen,
+                   geom_n_solves=n_solves, cell_id=cell_id, lock_generation=self.n_relock,
+                   matched_frac=frac, low_confidence=low_conf, frame_no=self._frame_no,
+                   **self.stream_symmetry)
+        # Observed peaks: always for "all", only for the flagged frames for "flagged". Paired with
+        # |q| so the chunk carries a real (1/d); these are the rows a downstream re-index would use.
+        if self.stream_peaks and self._pkq[i] is not None:
+            if self.stream_peaks == "all" or low_conf:
+                rec["peaks"] = self._pkq[i]
+                rec["peaks_invd"] = np.linalg.norm(self._q[i], axis=1)
+        return rec
 
     def close(self):
         """End the run: flush the resident batch, then finish the .stream (if any). Returns how many
@@ -940,6 +973,7 @@ class StreamDriver:
         self._q = [None] * self.B
         self._pk = [None] * self.B
         self._idx = [0] * self.B
+        self._pkq = [None] * self.B
 
     def stats(self, thr=0.0):
         if self._blind:                                         # not yet locked -- warm-up in progress

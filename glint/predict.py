@@ -196,8 +196,22 @@ def _write_chunk(f, serial, r, panel_name="p0", photon_eV=9392.7, clen_m=0.15, p
     f.write(f"photon_energy_eV = {photon_eV:.2f}\n")
     f.write("beam_divergence = 0.00e+00 rad\nbeam_bandwidth = 1.00e-08 %\n")
     f.write(f"average_camera_length = {float(r.get('clen_m', clen_m)):.6f} m\n")
-    f.write("num_peaks = 0\nnum_saturated_peaks = 0\n")
+    # OBSERVED peaks. Optional, but it is what makes a chunk re-indexable downstream: the reflection
+    # rows below are PREDICTED under the orientation the indexer chose, so they cannot rescue a frame
+    # whose orientation was itself the problem -- only the observed peaks can. r["peaks"] is (n,3) of
+    # fs, ss, intensity; r["peaks_invd"] the matching |q| in A^-1 (written as nm^-1, x10).
+    pks = r.get("peaks")
+    npk = 0 if pks is None else len(pks)
+    f.write(f"num_peaks = {npk}\nnum_saturated_peaks = 0\n")
     f.write("Peaks from peak search\n  fs/px   ss/px (1/d)/nm^-1   Intensity  Panel\n")
+    if npk:
+        invd = r.get("peaks_invd")
+        invd = np.zeros(npk) if invd is None else np.asarray(invd, float) * 10.0
+        pk_fs, pk_ss, pk_I = (np.asarray(pks, float)[:, j].tolist() for j in range(3))
+        il = invd.tolist()
+        prow = "%7.2f %7.2f %10.5f %10.2f %s\n"
+        f.write("".join([prow % (pk_fs[j], pk_ss[j], il[j], pk_I[j], panel_name)
+                         for j in range(npk)]))
     f.write("End of peak list\n")
     if valid:
         pred, I, sg = r.get("pred"), r.get("I"), r.get("sigma")

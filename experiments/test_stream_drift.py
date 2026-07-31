@@ -144,6 +144,30 @@ with tempfile.TemporaryDirectory() as d:
     check("numpy: np.int64 plain", "glint/cell_id = 2\n" in nt)
     check("numpy: np.float64", "glint/dclen_m = 0.00057\n" in nt)
 
+    # ---- (3d) OBSERVED PEAKS: what makes a flagged chunk re-indexable ----------------------------
+    # The reflection rows are PREDICTED under the orientation the indexer chose, so they cannot rescue
+    # a frame whose orientation was the problem. Only the observed peaks can, which is why a flagged
+    # chunk ships them.
+    pks = np.array([[100.5, 200.25, 1234.0], [300.0, 400.0, 55.5], [12.0, 13.0, 7.0]])
+    p_pk = os.path.join(d, "peaks.stream")
+    write_stream_integrated([dict(BASE, peaks=pks, peaks_invd=np.array([0.25, 0.4, 0.1]))],
+                            p_pk, clen_m=CLEN)
+    pt = open(p_pk).read()
+    prows = [l for l in pt.split("Peaks from peak search\n")[1].split("End of peak list")[0].split("\n")
+             if l.strip() and "fs/px" not in l]
+    check("peaks: num_peaks matches", "num_peaks = 3\n" in pt and len(prows) == 3, f"{len(prows)} rows")
+    f0 = prows[0].split()
+    check("peaks: fs/ss/I verbatim",
+          abs(float(f0[0]) - 100.5) < 1e-6 and abs(float(f0[1]) - 200.25) < 1e-6
+          and abs(float(f0[3]) - 1234.0) < 1e-6, prows[0].strip())
+    check("peaks: 1/d converted A^-1 -> nm^-1", abs(float(f0[2]) - 2.5) < 1e-6,
+          f"0.25 A^-1 should print as 2.5 nm^-1, got {f0[2]}")
+    check("peaks: absent -> num_peaks 0, empty block",
+          "num_peaks = 0\n" in old and len([l for l in
+              old.split("Peaks from peak search\n")[1].split("End of peak list")[0].split("\n")
+              if l.strip() and "fs/px" not in l]) == 0,
+          "a caller that ships no peaks must get the legacy block")
+
     # ---- (4) STRUCTURE: parses as a stream --------------------------------------------------------
     nb = new.count("----- Begin chunk -----"); ne = new.count("----- End chunk -----")
     check("chunk balance", nb == ne == 1, f"{nb} begin / {ne} end")

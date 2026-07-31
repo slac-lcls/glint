@@ -337,7 +337,7 @@ class StreamDriver:
                  B=64, dmin=2.0, tol=0.002, half=3, gap=2, ring=3, min_peaks=6,
                  snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
-                 adaptive_relock=False, min_inliers=0, min_inlier_frac=0.10,
+                 adaptive_relock=False, min_inliers=0, min_inlier_frac=0.15,
                  warm_topk=16, warm_floor=1,
                  double_hit=False, geom_refine=False, geom_refine_kw=None,
                  rescue_buffer=0, fanout=None, alias_gate=None,
@@ -387,6 +387,7 @@ class StreamDriver:
         else:
             self.acc = MergeAccumulator(snr_bins, self.ops)
         self.n_pushed = self.n_indexed = self.n_integrated = 0
+        self.n_gate_rejected = 0            # refused at ingest with no other cell to try (see _index_integrate)
 
         # Live geometry refinement (opt-in, DIAGNOSTIC-only): pool per-frame predicted-vs-observed
         # residuals into a running (clen, beam-shift) correction, reported in stats()["geom_correction"].
@@ -446,21 +447,22 @@ class StreamDriver:
         # count >= 10` structure: the count keeps a 3-of-4-peak frame from passing on 75%, the
         # fraction keeps a peak-rich impostor from passing on chance.
         #
-        # DEFAULT 0.10 is a CHANCE-REJECTION FLOOR, not a quality bar -- it sits ~4x the 2.7% random
-        # rate and well under the 0.647 measured for genuinely-fitting frames, so it discriminates
-        # cells without judging completeness (that stays qc_frac_threshold's job, annotation-only,
-        # per the DRP call to send low-completeness registrations downstream WITH a flag rather than
-        # drop them). Measured on the real 120-frame cxidb set, gate isolated over the 115 post-lock
-        # frames (73 of which clear the strict research bar):
-        #     frac  0.00  0.02  0.05  0.10  0.15  0.20  0.25  0.35
-        #     accepted 114  114   114   114   110    97    73    55
-        #     good frames lost 0  0     0     0     0     0     0    18
-        # 0.10 accepts exactly what the old count gate did (114/115) while costing nothing, and
-        # everything up to 0.25 costs no research-gate frame -- 0.25 reproduces that gate's own 73
-        # exactly, as it must, since 0.25 is its fractional bar. Set 0.0 to restore the pure count
-        # gate. NOTE this gate only bites where _index_integrate runs with gate=True, i.e. the
-        # adaptive_relock path plus the rescue paths; with adaptive_relock=False there is no ingest
-        # gate at all and nothing here changes.
+        # DEFAULT 0.15 is a CELL-DISCRIMINATION floor, not a completeness bar -- judging completeness
+        # stays qc_frac_threshold's annotation-only job, per the DRP call to send a low-completeness
+        # registration downstream WITH a flag rather than drop it. Chosen from two curves measured
+        # together: cost on the real 120-frame cxidb set (gate isolated over the 115 post-lock frames,
+        # 73 of which clear the strict research bar), and wrong-cell rejection on a synthetic run
+        # where the driver is locked to a cell the frames do not have:
+        #     frac              0.00  0.10  0.15  0.20  0.25  0.35
+        #     real: accepted     115   115   111    98    73    55
+        #     real: good lost      0     0     0     0     0    18
+        #     wrong-cell refused   0    10    16    16    16     -    (of 16)
+        # 0.15 is the knee: the smallest value tested that refuses EVERY wrong-cell frame, costing 4
+        # of 115 real frames, none of which clear the research bar. Below it discrimination is partial
+        # (0.10 refuses 10/16) because index_fused OPTIMISES the fit rather than returning a
+        # chance-level one, so a wrong-cell frame lands above the 2.7% random rate. Above it the cost
+        # climbs with no further benefit. Caveat: the wrong-cell column is n=16 on one synthetic pair,
+        # so read 0.15-vs-0.10 as indicative, not as a sharp threshold. Set 0.0 for the pure count gate.
         self.min_inlier_frac = float(min_inlier_frac)
         self.extra = []; self._watch = None; self.n_relock = 0
         if self.adaptive_relock and not hasattr(self, "_blind_index"):
@@ -772,18 +774,32 @@ class StreamDriver:
         return False
 
     def _index_integrate(self, slots, Mc, grid, acc, gate, cell_id=0):
-        """Index `slots` against Mc, integrate the fits into `acc`. With gate=True a frame with fewer than
-        min_inliers is a MISS (returned, not integrated) so it can be tried against another cell / the
-        watchdog. Returns the missed slots (empty when gate=False -- the single-cell path is unchanged).
+        """Index `slots` against Mc, integrate the fits into `acc`. Returns the missed slots.
+
+        `gate` says whether a rejected frame has SOMEWHERE ELSE TO GO -- with gate=True it is returned
+        so the caller can try it against another active cell or the watchdog; with gate=False there is
+        no second consumer, so it is dropped here and counted in n_gate_rejected.
+
+        The FIT TEST ITSELF now runs either way. It used to be tied to `gate`, which meant the
+        single-cell path (adaptive_relock=False, the default) applied NO ingest test at all: any
+        non-None result with |det| >= 1 was integrated, however badly it fitted. That let a frame whose
+        registration is statistically indistinguishable from noise contribute reflections to the merge.
+        Note this is a chance-rejection floor (see min_inlier_frac), NOT a completeness bar -- a real
+        but low-completeness registration still passes here and is flagged, not dropped, by
+        qc_frac_threshold, which is the DRP-side call: send it downstream WITH a warning rather than
+        silently discard it.
+
         cell_id just labels which active cell this is, for per-chunk stream provenance."""
         qs = [self._q[i] for i in slots]
         Ms = rgb.index_fused(qs, Mc, B=max(len(qs), 1))
         missed = []
         for i, M in zip(slots, Ms):
             M = np.asarray(M, float) if M is not None else None
-            if M is None or abs(np.linalg.det(M)) < 1.0 or (gate and not self._fits(self._q[i], M)):
+            if M is None or abs(np.linalg.det(M)) < 1.0 or not self._fits(self._q[i], M):
                 if gate:
-                    missed.append(i)
+                    missed.append(i)                    # another cell / the watchdog may still take it
+                else:
+                    self.n_gate_rejected += 1           # nowhere left to send it -- dropped, but counted
                 continue
             self._integrate_one(i, M, grid, acc, cell_id=cell_id)
         return missed
@@ -908,7 +924,7 @@ class StreamDriver:
             return
         slots = [i for i in range(self._n) if self._q[i] is not None]
         if slots and not self.adaptive_relock:
-            self._index_integrate(slots, self.Mc, self.grid, self.acc, gate=False)   # single-cell path (unchanged)
+            self._index_integrate(slots, self.Mc, self.grid, self.acc, gate=False)   # single cell: no fallback
         elif slots:
             remaining = self._index_integrate(slots, self.Mc, self.grid, self.acc, gate=True)
             for k, e in enumerate(self.extra, 1):               # try each additional active cell in turn
@@ -933,7 +949,11 @@ class StreamDriver:
         s = self.acc.stats(thr=thr, n_theoretical=self.n_theoretical)
         s.update(locked=True, locked_after=self.locked_after, consensus_support=self.consensus_support,
                  pushed=self.n_pushed, indexed=self.n_indexed, integrated=self.n_integrated,
-                 theoretical_unique=self.n_theoretical)
+                 theoretical_unique=self.n_theoretical,
+                 # frames the ingest gate refused outright. Reported unconditionally: dropping data
+                 # must never be silent, and a rising count is the signal that the cell has drifted
+                 # away from the sample (or that min_inlier_frac is set too high for this run).
+                 gate_rejected=self.n_gate_rejected)
         if self.warmup_rescue:
             s["n_warmup_rescued"] = self.n_warmup_rescued         # warm-up frames recovered the instant the cell locked
         if self.qc_frac_threshold is not None:

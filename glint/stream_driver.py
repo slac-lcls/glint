@@ -56,14 +56,21 @@ except Exception:                                            # pragma: no cover 
 # (replaces the ~6 cupy ops + full-Nhkl qg/qn2/exc intermediates). Survivors written unordered;
 # the caller argsorts by hkl index to restore grid order, so the result matches the eager path.
 _GATE_SRC = r"""
-extern "C" __global__ void predict_gate(const double* g, int nhkl, const double* R, double wave,
+// R arrives as nine SCALAR arguments, not a device pointer. It is 72 bytes, but shipping it as an
+// array cost 0.045 ms/frame (10.6% of predict) -- cp.asarray allocates a fresh device array every
+// call, then ascontiguousarray/ravel may allocate again, and a pageable source forces the driver to
+// stage through its own pinned buffer. As kernel arguments the values ride in constant memory and are
+// broadcast-read by every thread, which is also strictly better than the global load they replace.
+extern "C" __global__ void predict_gate(const double* g, int nhkl,
+                                         double R0, double R1, double R2, double R3, double R4,
+                                         double R5, double R6, double R7, double R8, double wave,
                                          double qmax2, double tol, double* out, int* counter, int cap,
                                          double ax, double ay, double az, double kmin){
   int i = blockIdx.x*blockDim.x + threadIdx.x; if (i >= nhkl) return;
   double gx=g[3*i], gy=g[3*i+1], gz=g[3*i+2];
-  double qx=gx*R[0]+gy*R[3]+gz*R[6];
-  double qy=gx*R[1]+gy*R[4]+gz*R[7];
-  double qz=gx*R[2]+gy*R[5]+gz*R[8];
+  double qx=gx*R0+gy*R3+gz*R6;
+  double qy=gx*R1+gy*R4+gz*R7;
+  double qz=gx*R2+gy*R5+gz*R8;
   double qn2=qx*qx+qy*qy+qz*qz;
   double exc=qz+0.5*wave*qn2;
   // Panel-acceptance pre-filter (see _panel_cone): a reflection that lands on THIS node's panels has
@@ -172,25 +179,58 @@ class HKLGrid:
         self._cone = None
         if panels is not None and clen_m is not None and wavelength_A is not None:
             self._cone = _panel_cone(panels, float(clen_m), float(wavelength_A), float(cone_tol))
+        # PINNED staging for the two device->host reads. Both move trivial amounts (4 B for the
+        # counter, n*48 B for the payload) but cost 0.032 and 0.031 ms/frame through CuPy: `int(arr[0])`
+        # builds a 0-d array and round-trips it through asnumpy, and cp.asnumpy allocates a fresh
+        # pageable host array which the driver must then stage. Raw memcpyAsync into preallocated
+        # PINNED memory skips all of that. The payload buffer grows to a high-water mark rather than
+        # being sized for the whole grid -- pinned memory is a scarce, global resource on a DAQ node,
+        # and after the panel cone the survivor count is a few hundred, not ~1e5.
+        self._pin = None
+        if self.gpu:
+            self._pin_cnt_mem = cp.cuda.alloc_pinned_memory(4)
+            self._pin_cnt = np.frombuffer(self._pin_cnt_mem, np.int32, 1)
+            self._grow_pin(4096)
+
+    def _grow_pin(self, nrows):
+        """(Re)allocate the pinned payload buffer to hold at least `nrows` survivors."""
+        nrows = min(int(nrows), int(self.g.shape[0]))
+        self._pin_mem = cp.cuda.alloc_pinned_memory(nrows * 6 * 8)
+        self._pin = np.frombuffer(self._pin_mem, np.float64, nrows * 6).reshape(nrows, 6)
 
     def predict(self, M_or_R, panels, clen_m, wavelength_A, tol=0.006, is_recip=False):
         """Same result as predict_spots(..., dmin=self.dmin, tol=tol) with the grid reused."""
         R = np.asarray(M_or_R, float) if is_recip else recip_from_M(M_or_R)
         if self.gpu:
             # fused kernel: matmul + Ewald/qmax gate + compaction in one pass, then ONE D2H
-            nhkl = self.g.shape[0]; self._gcnt[0] = 0
-            Rf = cp.ascontiguousarray(cp.asarray(R).ravel())
+            nhkl = self.g.shape[0]
+            st = cp.cuda.get_current_stream()
+            D2H = cp.cuda.runtime.memcpyDeviceToHost
+            # counter reset without a CuPy scalar assignment (which was 0.015 ms/frame of API)
+            cp.cuda.runtime.memsetAsync(self._gcnt.data.ptr, 0, 4, st.ptr)
+            Rr = np.ascontiguousarray(R, np.float64).ravel()
             tpb = 256; blocks = (nhkl + tpb - 1) // tpb
             # cone only when it was built for THESE panels; otherwise kmin=-inf = no culling
             cone = self._cone if (self._cone is not None and panels is self._cone_panels) else None
             ax, ay, az, kmin = (*cone[0], cone[1]) if cone is not None else (0.0, 0.0, 0.0, -1e300)
+            f8 = np.float64
             _GATE_KERNEL((blocks,), (tpb,),
-                         (self._ggr, np.int32(nhkl), Rf, np.float64(wavelength_A),
-                          np.float64(self.qmax * self.qmax), np.float64(tol),
+                         (self._ggr, np.int32(nhkl),
+                          f8(Rr[0]), f8(Rr[1]), f8(Rr[2]), f8(Rr[3]), f8(Rr[4]),
+                          f8(Rr[5]), f8(Rr[6]), f8(Rr[7]), f8(Rr[8]), f8(wavelength_A),
+                          f8(self.qmax * self.qmax), f8(tol),
                           self._gout.ravel(), self._gcnt, np.int32(nhkl),
-                          np.float64(ax), np.float64(ay), np.float64(az), np.float64(kmin)))
-            n = int(self._gcnt[0])
-            C = cp.asnumpy(self._gout[:n])
+                          f8(ax), f8(ay), f8(az), f8(kmin)))
+            cp.cuda.runtime.memcpyAsync(self._pin_cnt.ctypes.data, self._gcnt.data.ptr, 4, D2H, st.ptr)
+            st.synchronize()
+            n = int(self._pin_cnt[0])
+            if n > len(self._pin):
+                self._grow_pin(max(2 * len(self._pin), n))
+            if n:
+                cp.cuda.runtime.memcpyAsync(self._pin.ctypes.data, self._gout.data.ptr,
+                                            n * 6 * 8, D2H, st.ptr)
+                st.synchronize()
+            C = self._pin[:n].copy()          # copy out of the reused pinned buffer
             C = C[np.argsort(C[:, 0], kind="stable")]         # restore hkl-grid order
             idx = C[:, 0].astype(np.int64)
             hkl = self.g[idx]

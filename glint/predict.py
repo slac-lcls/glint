@@ -151,52 +151,170 @@ def _cell_line(M):
     return "\n".join(lines)
 
 
+def _fmt_scalar(v):
+    """Serialise a provenance value for a `key = value` stream line.
+
+    Must survive NUMPY scalars, which is what these values actually are in practice: `np.bool_` is NOT
+    a subclass of `bool` (so a plain isinstance(v, bool) test misses it and emits 'True'/'False'
+    instead of 1/0), and a comparison like `python_float < np.float64` returns exactly that type.
+    np.float64 IS a float subclass, but np.float32 is not, and formatting it as a plain value prints
+    its full binary expansion. Checked bool-first because np.bool_ is an integer-like otherwise."""
+    if isinstance(v, (bool, np.bool_)):
+        return str(int(v))
+    if isinstance(v, (float, np.floating)):
+        return f"{float(v):.6g}"
+    if isinstance(v, (int, np.integer)):
+        return str(int(v))
+    return str(v)
+
+
+def _write_chunk(f, serial, r, panel_name="p0", photon_eV=9392.7, clen_m=0.15, panel_names=None):
+    """Write ONE chunk of a CrystFEL .stream (format 2.3). Shared by the batch writer
+    (write_stream_integrated) and the incremental one (StreamWriter) so the two cannot drift apart.
+
+    PER-FRAME DRIFT / PROVENANCE. A streaming run's detector geometry and cell are not constants: the
+    live GeomRefiner keeps re-solving (clen, dfs, dss) as frames arrive, and an adaptive-relock driver
+    can switch cells mid-run. Since merging happens OFFLINE, the merger has to learn the state that was
+    in effect for EACH frame -- a run-level summary would apply a late-run correction to early-run data.
+    So every field below may be supplied per-result, and each falls back to the previous constant when
+    absent (so existing callers are byte-identical):
+      det_shift_mm  (x, y) mm  -> predict_refine/det_shift   [was hardcoded 0.000/0.000]
+      clen_m        m          -> average_camera_length      [was the run-level kwarg]
+      lattice_type/centering/unique_axis                     [were hardcoded triclinic/P/*]
+    GLINT-specific provenance that has no CrystFEL field is emitted under a ``glint/`` prefix, the same
+    convention CrystFEL uses for its own namespaced keys (``predict_refine/...``); readers skip
+    unrecognised ``key = value`` lines, so this stays parseable while a GLINT-aware merger can use it.
+    Returns True if the chunk carried an indexed crystal."""
+    M = r.get("M")
+    valid = M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
+    f.write("----- Begin chunk -----\n")
+    f.write(f"Image filename: {r.get('image', 'glint.cxi')}\n")
+    f.write(f"Event: //{r.get('event', 0)}\n")
+    f.write(f"Image serial number: {serial}\n")
+    f.write("hit = 1\n")
+    f.write(f"indexed_by = {'file' if valid else 'none'}\n")   # 'file' = externally-supplied orientation
+    f.write(f"photon_energy_eV = {photon_eV:.2f}\n")
+    f.write("beam_divergence = 0.00e+00 rad\nbeam_bandwidth = 1.00e-08 %\n")
+    f.write(f"average_camera_length = {float(r.get('clen_m', clen_m)):.6f} m\n")
+    f.write("num_peaks = 0\nnum_saturated_peaks = 0\n")
+    f.write("Peaks from peak search\n  fs/px   ss/px (1/d)/nm^-1   Intensity  Panel\n")
+    f.write("End of peak list\n")
+    if valid:
+        pred, I, sg = r.get("pred"), r.get("I"), r.get("sigma")
+        pk, bg = r.get("peak"), r.get("bg")
+        nref = len(pred) if pred is not None else 0
+        dres = float(pred["res"].min()) if pred is not None and nref else 2.0   # A
+        dx, dy = r.get("det_shift_mm", (0.0, 0.0))
+        f.write("--- Begin crystal\n" + _cell_line(M) + "\n")
+        f.write(f"lattice_type = {r.get('lattice_type', 'triclinic')}\n"
+                f"centering = {r.get('centering', 'P')}\n"
+                f"unique_axis = {r.get('unique_axis', '*')}\n")
+        f.write("profile_radius = 0.00200 nm^-1\n")
+        f.write(f"predict_refine/det_shift x = {float(dx):.3f} y = {float(dy):.3f} mm\n")
+        for key in ("cell_id", "lock_generation", "matched_frac", "low_confidence",
+                    "dclen_m", "geom_n_solves", "frame_no"):
+            if key in r and r[key] is not None:
+                f.write(f"glint/{key} = {_fmt_scalar(r[key])}\n")
+        f.write(f"diffraction_resolution_limit = {10.0/dres:.2f} nm^-1 or {dres:.2f} A\n")
+        f.write(f"num_reflections = {nref}\n")
+        f.write("num_saturated_reflections = 0\nnum_implausible_reflections = 0\n")
+        f.write("Reflections measured after indexing\n" + _RCOL)
+        if pred is not None and nref:
+            # predict_spots tags each reflection with the panel it landed on. With panel_names given,
+            # name each row by ITS OWN panel -- on a real multi-panel detector a single scalar name
+            # mislabels every reflection that is not on panel 0, and partialator keys per-panel
+            # geometry off that name. Falls back to the scalar when no map is supplied.
+            names = None
+            if panel_names is not None and "panel" in (pred.dtype.names or ()):
+                names = [panel_names[p] if 0 <= p < len(panel_names) else panel_name
+                         for p in pred["panel"].tolist()]
+            # Formatted via %-interpolation over .tolist() into ONE joined write, not an f-string plus
+            # f.write per reflection. This is on the live integrate path, so it is not free: measured
+            # 8.98 -> 2.60 ms for a dense 2212-reflection chunk (3.5x). At the driver's default
+            # tol=0.002 chunks are far smaller, but on a dense run this still costs milliseconds per
+            # frame against a ~0.26 ms/frame known-cell path -- if that matters, the next step is to
+            # hand formatting to a writer thread rather than to micro-optimise further.
+            h, k, l = pred["h"].tolist(), pred["k"].tolist(), pred["l"].tolist()
+            fsl, ssl = pred["fs"].tolist(), pred["ss"].tolist()
+            Il, sl = np.asarray(I).tolist(), np.asarray(sg).tolist()
+            pl, bl = np.asarray(pk).tolist(), np.asarray(bg).tolist()
+            row = "%4d %4d %4d %10.2f %10.2f %6.1f %10.2f %6.1f %6.1f %s\n"
+            f.write("".join([row % (h[j], k[j], l[j], Il[j], sl[j], pl[j], bl[j], fsl[j], ssl[j],
+                                    names[j] if names is not None else panel_name)
+                             for j in range(nref)]))
+        f.write("End of reflections\n--- End crystal\n")
+    f.write("----- End chunk -----\n")
+    return valid
+
+
 def write_stream_integrated(results, path, panel_name="p0", geom_text=None,
-                            photon_eV=9392.7, clen_m=0.15):
+                            photon_eV=9392.7, clen_m=0.15, panel_names=None):
     """results: list of {image,event,M, pred (structured), I, sigma, peak, bg}. Writes a CrystFEL
     .stream (format 2.3) with REAL integrated reflection rows, mergeable by partialator/process_hkl.
     Chunk layout mirrors CrystFEL's own writer (peak-list block + crystal metadata) -- the reader
-    rejects an under-specified chunk as 'incomplete'."""
+    rejects an under-specified chunk as 'incomplete'. Per-result drift/provenance fields are optional;
+    see _write_chunk."""
     n_idx = 0
     with open(path, "w") as f:
         f.write(_header(geom_text))
         for serial, r in enumerate(results, 1):
-            M = r.get("M")
-            valid = M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
-            f.write("----- Begin chunk -----\n")
-            f.write(f"Image filename: {r.get('image', 'glint.cxi')}\n")
-            f.write(f"Event: //{r.get('event', 0)}\n")
-            f.write(f"Image serial number: {serial}\n")
-            f.write("hit = 1\n")
-            f.write(f"indexed_by = {'file' if valid else 'none'}\n")   # 'file' = externally-supplied orientation
-            f.write(f"photon_energy_eV = {photon_eV:.2f}\n")
-            f.write("beam_divergence = 0.00e+00 rad\nbeam_bandwidth = 1.00e-08 %\n")
-            f.write(f"average_camera_length = {clen_m:.6f} m\n")
-            f.write("num_peaks = 0\nnum_saturated_peaks = 0\n")
-            f.write("Peaks from peak search\n  fs/px   ss/px (1/d)/nm^-1   Intensity  Panel\n")
-            f.write("End of peak list\n")
-            if valid:
-                n_idx += 1
-                pred, I, sg = r.get("pred"), r.get("I"), r.get("sigma")
-                pk, bg = r.get("peak"), r.get("bg")
-                nref = len(pred) if pred is not None else 0
-                dres = float(pred["res"].min()) if pred is not None and nref else 2.0   # A
-                f.write("--- Begin crystal\n" + _cell_line(M) + "\n")
-                f.write("lattice_type = triclinic\ncentering = P\nunique_axis = *\n")
-                f.write("profile_radius = 0.00200 nm^-1\n")
-                f.write("predict_refine/det_shift x = 0.000 y = 0.000 mm\n")
-                f.write(f"diffraction_resolution_limit = {10.0/dres:.2f} nm^-1 or {dres:.2f} A\n")
-                f.write(f"num_reflections = {nref}\n")
-                f.write("num_saturated_reflections = 0\nnum_implausible_reflections = 0\n")
-                f.write("Reflections measured after indexing\n" + _RCOL)
-                if pred is not None:
-                    for j in range(len(pred)):
-                        f.write(f"{pred['h'][j]:4d} {pred['k'][j]:4d} {pred['l'][j]:4d} "
-                                f"{I[j]:10.2f} {sg[j]:10.2f} {pk[j]:6.1f} {bg[j]:10.2f} "
-                                f"{pred['fs'][j]:6.1f} {pred['ss'][j]:6.1f} {panel_name}\n")
-                f.write("End of reflections\n--- End crystal\n")
-            f.write("----- End chunk -----\n")
+            n_idx += bool(_write_chunk(f, serial, r, panel_name, photon_eV, clen_m, panel_names))
     return n_idx
+
+
+class StreamWriter:
+    """Append-as-you-go CrystFEL .stream writer -- the offline-merge handoff for a LIVE run.
+
+    write_stream_integrated needs every result in memory at once, which a streaming driver cannot
+    supply: it sees each frame exactly once, integrates it, and drops the pixels. This writes the
+    header on open and one chunk per frame thereafter, so memory is O(1) in run length. Flushed every
+    ``flush_every`` chunks so a downstream/monitoring reader sees data before the run ends.
+
+    ON A KILLED RUN the file is NOT guaranteed to end at a chunk boundary: the underlying buffer
+    flushes when it fills, which is mid-chunk most of the time (measured 194/200 at the default
+    flush_every=32). Every individual f.write is one whole line, so the tail is a truncated chunk
+    rather than a truncated line -- a reader that tolerates an unterminated final chunk is fine, one
+    that requires the End-of-chunk marker is not. ``flush_every=1`` makes each chunk atomic at the
+    cost of a syscall per frame.
+
+        w = StreamWriter(path, geom_text=..., clen_m=..., photon_eV=...)
+        w.write(record)          # per frame; same dict shape write_stream_integrated takes
+        w.close()                # or use as a context manager
+    """
+
+    def __init__(self, path, geom_text=None, panel_name="p0", photon_eV=9392.7, clen_m=0.15,
+                 flush_every=32, panel_names=None):
+        self.path = str(path)
+        self.panel_name, self.photon_eV, self.clen_m = panel_name, float(photon_eV), float(clen_m)
+        self.panel_names = list(panel_names) if panel_names is not None else None
+        self.flush_every = int(flush_every)
+        self.n_chunks = 0
+        self.n_indexed = 0
+        self._f = open(self.path, "w")
+        self._f.write(_header(geom_text))
+
+    def write(self, r):
+        if self._f is None:
+            raise ValueError("StreamWriter is closed")
+        self.n_chunks += 1
+        if _write_chunk(self._f, self.n_chunks, r, self.panel_name, self.photon_eV, self.clen_m,
+                        self.panel_names):
+            self.n_indexed += 1
+        if self.flush_every and self.n_chunks % self.flush_every == 0:
+            self._f.flush()
+        return self.n_chunks
+
+    def close(self):
+        if self._f is not None:
+            self._f.flush(); self._f.close(); self._f = None
+        return self.n_indexed
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
 
 def _canonical_axes(M):

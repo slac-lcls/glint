@@ -116,21 +116,32 @@ FACTS: dict[str, float | str] = {
     # INDEX-ONLY. The q-vector dataset cannot exercise the integrate path (test_inlier_frac_gate.py),
     # so these are indexed counts, not integrated-and-merged ones.
     #
-    # The gap is structural, not noise: streaming commits its cell from ~5-6 warm-up frames, while the
-    # offline reference votes across all 120. warmup_rescue recovers the warm-up frames themselves
-    # (5/5) but not the consequences of the early lock.
-    "stream_rate_of120":     73,    # StreamDriver baseline. Corroborated at HEAD: the min_inlier_frac
-                                    # table in stream_driver.py (added by 6bfc6a9, after the gate
-                                    # changes) re-measures 73 clearing the bar, 0 good frames lost at
-                                    # the shipped 0.15 default                        (f61a4cf, open)
-    "stream_rate_rescue_of120": 78, # + warmup_rescue=True.  CAVEAT: measured at f61a4cf and NOT
-                                    # re-verified since 2c6a79c (fit-gate made fractional) and 6bfc6a9
-                                    # (ingest gate applied to the single-cell path) changed acceptance.
-                                    # The baseline 73 was re-measured after those; this was not. Re-run
-                                    # before quoting                                  (f61a4cf, open)
-    "offline_rate_of120":    91,    # offline consensus pipeline (known-hybrid at the same gate);
-                                    # independently corroborated by azimuth_validate.py's reconciliation
-                                    # block, which records known-hybrid 91 / blind-hybrid 93  (f61a4cf, open)
+    # WHAT CAUSES THE GAP -- measured, and it is NOT the early lock. f61a4cf guessed the cause was
+    # streaming committing its cell from ~5-6 warm-up frames while offline votes across all 120. #73
+    # cleared that: consensus, the lock and cell precision were each measured and none of them is it.
+    # The gap is ONE missing step. Offline runs blind + N-best on every frame before falling back to
+    # known-cell; streaming, once locked, runs known-cell ONLY. A blind retry on just the gate-failing
+    # frames recovers 10 of the 13-frame gap on real data (78 -> 88 of 120, 77% closed).
+    # That retry is NOT SHIPPED -- the driver has no retry path -- so 78 is the shipped number and 88
+    # is headroom, not a fact. Do not quote 88 as a GLINT streaming rate.
+    #
+    # warmup_rescue is a FIXED-cost fix, worth 5/N: 4 points here, 1.2 at 400 frames, negligible at DAQ
+    # rates, while the retry gap grows with N. DIALS-60 shows no gap at all (60/60 from warmup_rescue
+    # alone), so rich frames do not exercise this failure mode -- do not benchmark streaming on easy
+    # data and conclude there is nothing to fix.
+    #
+    # All three RE-MEASURED TOGETHER on real frames by experiments/gap_on_real.py, five arms in one
+    # run, AFTER the fit-gate (907c057) and single-cell ingest-gate (ae5f53b) changes:
+    #     cxidb_clean, 120 frames, dmin 1.65
+    #     offline 91 | stream 73 | +warmup 78 | +relock 78 | +retry 88
+    # The synthetic sweep (gap_at_scale.py, 2000 stills) put the retry at 98-100% closed; real frames
+    # say 77%. Quote 77 -- synthetic carries one clean lattice plus isotropic noise and is the ceiling.
+    "stream_rate_of120":     73,    # StreamDriver baseline, both rescue mechanisms off        (#73)
+    "stream_rate_rescue_of120": 78, # + warmup_rescue=True, recovering the 5 warm-up frames spent on
+                                    # discovery. adaptive_relock adds nothing on this set      (#73)
+    "offline_rate_of120":    91,    # offline pipeline: blind + N-best + known-cell rescue. Independently
+                                    # corroborated by azimuth_validate.py's reconciliation block, which
+                                    # records known-hybrid 91 / blind-hybrid 93                (#73)
     # source / sizing ------------------------------------------------------------------------------
     "rep_rate_hz":         35000.0,
     "hit_rate":            0.10,
@@ -416,6 +427,16 @@ def check_arithmetic() -> list[str]:
     if int(F["stream_rate_of120"]) > int(F["stream_rate_rescue_of120"]):
         bad.append("  FACTS: warmup_rescue now indexes FEWER frames than the baseline it rescues on top "
                    "of -- one of the two was re-measured without the other")
+    # sec:streaming prints the DERIVED percentages, not these counts, so a change here can strand the
+    # published sentence while both checks above stay green. The concrete case is the blind retry #73
+    # located: shipping it takes 78 -> 88, which is still under offline's 91 and still above the
+    # baseline, yet makes "61--65%" wrong. Pin the counts to what the paper actually prints.
+    for _k, _paper_pct in (("stream_rate_of120", 61), ("stream_rate_rescue_of120", 65),
+                           ("offline_rate_of120", 76)):
+        _got = round(100.0 * int(F[_k]) / 120.0)
+        if _got != _paper_pct:
+            bad.append(f"  FACTS: {_k} = {F[_k]}/120 is {_got}%, but sec:streaming prints {_paper_pct}% "
+                       f"-- fix the paper's '61--65% against 76% offline' sentence, not just this table")
     # the claim that motivates the whole live-merge caveat
     if float(F["stream_fps"]) >= float(F["hits_per_s"]):
         bad.append("  FACTS: stream_fps now meets hits_per_s -- the 'not a live merge' caveat in the "

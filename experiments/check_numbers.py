@@ -104,6 +104,33 @@ FACTS: dict[str, float | str] = {
     # "~2.3 ms un-attributed machinery" was a benchmark artifact -- attribute_gap.py timed the one-time
     # driver build inside its per-frame loop. Real lever = the predict/peakfind GPU stages.
     "host_total_ms":       1.22,
+    # streaming vs offline YIELD -- success fraction, NOT throughput -------------------------------
+    # The project's only real-data streaming-vs-offline head-to-head, promoted out of f61a4cf's commit
+    # body where it was the sole record. Same 120-frame real cxidb set, same strict research gate
+    # (same_lattice AND >=25% of spots AND >=10 refl) as the paper's tab:summary.
+    #
+    # Denominator is 120 pushed frames in ALL THREE, and the names say so on purpose: `indexing_rate`
+    # above is a (strict, loose) PAIR over 120, not a ratio, and reading it as 75/114=66% is the exact
+    # misreading these names exist to prevent.
+    #
+    # INDEX-ONLY. The q-vector dataset cannot exercise the integrate path (test_inlier_frac_gate.py),
+    # so these are indexed counts, not integrated-and-merged ones.
+    #
+    # The gap is structural, not noise: streaming commits its cell from ~5-6 warm-up frames, while the
+    # offline reference votes across all 120. warmup_rescue recovers the warm-up frames themselves
+    # (5/5) but not the consequences of the early lock.
+    "stream_rate_of120":     73,    # StreamDriver baseline. Corroborated at HEAD: the min_inlier_frac
+                                    # table in stream_driver.py (added by 6bfc6a9, after the gate
+                                    # changes) re-measures 73 clearing the bar, 0 good frames lost at
+                                    # the shipped 0.15 default                        (f61a4cf, open)
+    "stream_rate_rescue_of120": 78, # + warmup_rescue=True.  CAVEAT: measured at f61a4cf and NOT
+                                    # re-verified since 2c6a79c (fit-gate made fractional) and 6bfc6a9
+                                    # (ingest gate applied to the single-cell path) changed acceptance.
+                                    # The baseline 73 was re-measured after those; this was not. Re-run
+                                    # before quoting                                  (f61a4cf, open)
+    "offline_rate_of120":    91,    # offline consensus pipeline (known-hybrid at the same gate);
+                                    # independently corroborated by azimuth_validate.py's reconciliation
+                                    # block, which records known-hybrid 91 / blind-hybrid 93  (f61a4cf, open)
     # source / sizing ------------------------------------------------------------------------------
     "rep_rate_hz":         35000.0,
     "hit_rate":            0.10,
@@ -374,6 +401,21 @@ def check_arithmetic() -> list[str]:
     close("ffbidx_speedup = pipelined/fused (throughput:throughput)", float(F["ffbidx_speedup"]),
           float(F["ffbidx_pipelined_ms"]) / float(F["fused_b120_ms"]), tol=0.05)
 
+    # These three numbers ARE the paper's sec:streaming yield paragraph. sec:streaming used to claim
+    # streaming "indexes no fewer frames than the offline pipeline" because the rates were "properties
+    # of the consensus computation, which streaming preserves exactly"; the measured yields refuted it,
+    # and papers/glint f421e79 rewrote the passage to quote the gap outright -- "61--65% against 76%
+    # offline", "what streaming changes is latency and per-frame yield, not the cell". So the paper now
+    # DEPENDS on the gap rather than denying it: 73/120 = 61%, 78/120 = 65%, 91/120 = 76%. Closing the
+    # gap makes the published sentence wrong in the other direction, so revisit the text -- do not just
+    # renumber this table.
+    if int(F["stream_rate_rescue_of120"]) >= int(F["offline_rate_of120"]):
+        bad.append("  FACTS: streaming yield now meets offline -- sec:streaming's '61--65% against 76% "
+                   "offline' and its 'shortfall is completeness, not discovery' framing are now stale. "
+                   "Revisit that text rather than just editing these numbers")
+    if int(F["stream_rate_of120"]) > int(F["stream_rate_rescue_of120"]):
+        bad.append("  FACTS: warmup_rescue now indexes FEWER frames than the baseline it rescues on top "
+                   "of -- one of the two was re-measured without the other")
     # the claim that motivates the whole live-merge caveat
     if float(F["stream_fps"]) >= float(F["hits_per_s"]):
         bad.append("  FACTS: stream_fps now meets hits_per_s -- the 'not a live merge' caveat in the "

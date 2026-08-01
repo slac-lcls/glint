@@ -123,11 +123,14 @@ FACTS: dict[str, float | str] = {
                                     # table in stream_driver.py (added by 6bfc6a9, after the gate
                                     # changes) re-measures 73 clearing the bar, 0 good frames lost at
                                     # the shipped 0.15 default                        (f61a4cf, open)
-    "stream_rate_rescue_of120": 78, # + warmup_rescue=True.  CAVEAT: measured at f61a4cf and NOT
-                                    # re-verified since 2c6a79c (fit-gate made fractional) and 6bfc6a9
-                                    # (ingest gate applied to the single-cell path) changed acceptance.
-                                    # The baseline 73 was re-measured after those; this was not. Re-run
-                                    # before quoting                                  (f61a4cf, open)
+    "stream_rate_rescue_of120": 78, # + warmup_rescue=True.  RE-VERIFIED 2026-08-01 on merged main
+                                    # (A100, test_streamdriver_vs_offline.py, 5.6 s): all four arms
+                                    # re-run after 2c6a79c (fractional fit-gate) and 6bfc6a9 (ingest
+                                    # gate on the single-cell path) -- 91 offline / 73 baseline / 78
+                                    # warmup_rescue / 73 watchdog-only / 78 both, n_warmup_rescued=5.
+                                    # The earlier "re-run before quoting" caveat is discharged.
+                                    # Watchdog now fires once (n_watchdog_rescued=1, was 0) but the
+                                    # rescue does not clear the strict gate, so the rate is unmoved.
     "offline_rate_of120":    91,    # offline consensus pipeline (known-hybrid at the same gate);
                                     # independently corroborated by azimuth_validate.py's reconciliation
                                     # block, which records known-hybrid 91 / blind-hybrid 93  (f61a4cf, open)

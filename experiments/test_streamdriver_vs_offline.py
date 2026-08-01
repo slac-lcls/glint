@@ -69,11 +69,13 @@ def run_stream(frames, adaptive_relock, warmup_rescue, tag):
     slot_to_global = {}            # current batch's slot -> global frame idx
 
     orig_integrate_one = sd.StreamDriver._integrate_one
-    def patched_integrate_one(self, i, M, grid, acc):
+    def patched_integrate_one(self, i, M, grid, acc, *a, **kw):
+        # *a/**kw: the real signature grew cell_id in glint#67 -- stay agnostic to it so this
+        # instrumentation does not have to track every future argument.
         gi = slot_to_global.get(i)
         if gi is not None:
             postlock_capture[gi] = np.asarray(M, float).copy()
-        return orig_integrate_one(self, i, M, grid, acc)
+        return orig_integrate_one(self, i, M, grid, acc, *a, **kw)
     sd.StreamDriver._integrate_one = patched_integrate_one
 
     warmup_capture = []            # list of (q, M) attempted during a warm-up-buffer drain

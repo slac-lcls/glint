@@ -55,9 +55,14 @@ what closed, and for the levers that were tried and rejected. The live front is 
   only on the *sparse* path, where M1 is ~0 ms and cannot help. On the *dense* path M1 (the cluster-FFT)
   is **62% of the frame** — the whole dense bottleneck — and NUFFT was never evaluated there.
 - **Peakfinding is the current wall** (PR #41). Profiled at 4096², the reduction was 47% of `find()`
-  and is now a single fused pass (1.45–2.13×, bit-identical). But in the streaming driver peakfind and
-  spot `predict` are now **tied**, and host-side work (merge accumulation, H2D, python glue) is ~28% of
-  the frame — so the next levers are `predict` and the host tail, not peakfind.
+  and is now a single fused pass (1.45–2.13×, bit-identical). In the streaming driver it is the
+  **largest single stage by a wide margin**: 1.16 ms against `predict`'s 0.16 ms, a **7.3×** gap.
+  *This line previously said the two were "tied" and pointed the next lever at `predict`. That rested
+  on `predict_ms = 1.11`, which never reproduced — re-measured 2026-08-01, the pre-#68 code gives 0.42
+  and PR #68 (merged) takes it to 0.16.* Two things still qualify the lever: removing peakfind
+  **entirely** bounds out at **1.39×** (4.16 → 3.00 ms/frame), and 0.69 ms/frame of the wall is
+  currently un-attributed, so `stream_ms` itself wants re-measuring. `python experiments/check_numbers.py`
+  prints both as advisories.
 - **Device-resident streaming driver** (PR #19, merged): peakfind → index → integrate → running merge,
   pixels never leaving the GPU. The running accumulator reproduces the batch `merge_stats.py` math
   exactly at every I/σ floor. It is **not a live merge** — `--facts` carries the current gap.

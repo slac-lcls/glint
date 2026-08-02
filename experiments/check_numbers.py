@@ -60,8 +60,12 @@ FACTS: dict[str, float | str] = {
     "fused_fps":           3800.0,  # = 1000/fused_b120_ms
     "saturating_batch":    64,      # one block per frame; 108 SMs on an A100
     "indexing_rate":       "75/114",
-    "glint_blind_rate_pct":    76,  # GLINT-(1) blind, paper tab:summary
-    "xgandalf_blind_rate_pct": 71,  # xgandalf blind, same table and same gate -- DIFFERENT indexers
+    # Percentages are ROUNDED, not floored (changed 2026-08-02). tab:summary previously mixed the two:
+    # DIALS printed 27% for 32/120 = 26.67 (rounded) while GLINT-(1) printed 76% for 92/120 = 76.67
+    # (floored), so three "correct" values for one measurement were in circulation. Counts are now
+    # shown inline in the table, which makes the convention checkable instead of inferred.
+    "glint_blind_rate_pct":    77,  # GLINT-(1) blind, 92/120, paper tab:summary
+    "xgandalf_blind_rate_pct": 72,  # xgandalf blind, 86/120, same table and same gate -- DIFFERENT indexers
     # integration ----------------------------------------------------------------------------------
     "integ_before_ms":     585.0,   # 16 Mpix / 800 reflections, whole-frame float64 upcast
     "integ_after_ms":      7.6,     # upcast removed, bit-identical                           (#17)
@@ -83,27 +87,66 @@ FACTS: dict[str, float | str] = {
     # Same-protocol PRE-change arm: stream 5.49, peakfind 2.24, everything else unchanged. So the
     # honest figures are stream 5.49 -> 4.42 (1.24x) and peakfind 2.24 -> 1.16 (1.93x). Do NOT compare
     # against the #19 values (5.58 / 2.38 / 0.89), which came from a different protocol.
-    "stream_ms":           4.42,    # steady state per frame, B=40               (#41, open; was 5.58)
-    "stream_fps":          226.0,   # = 1000/stream_ms                           (#41, open; was 179)
-    "peakfind_ms":         1.16,    # largest stage, but only by 1.04x -- a TIE   (#41, open; was 2.38)
-    "predict_ms":          1.11,    # hoisted-grid spot prediction -- tied with peakfind
+    #
+    # PREDICT RE-MEASURED 2026-08-01 (A100-SXM4-40GB, ana-4.0.59-py3-minipytorch -- the only env on
+    # S3DF carrying both torch and cupy, so it is also the env the block above was measured in). Two
+    # arms in ONE allocation, 2 rounds each, alternating: `pre` = 5f72fd0 (main just before #68),
+    # `post` = 7858457 (main with #68). Same protocol as the block above -- driver built OUTSIDE the
+    # timer, driven to the locked post-lock steady state, then 5 warmups + 40 reps per stage.
+    #
+    # The harness is CALIBRATED against this table, not just self-consistent: four stages #68 cannot
+    # touch reproduce their entries here -- peakfind 1.19 (vs 1.16), integrate 0.33 (0.31), h2d 0.184
+    # (0.19), peaks_to_q 0.083 (0.08), all within 2-7% and identical across both arms. So a predict
+    # number from this harness is like-for-like with the rest of the block.
+    #
+    #     predict    pre-#68  0.420 / 0.422 min   ->   post-#68  0.157 / 0.156 min   (2.7x)
+    #
+    # 1.11 WAS WRONG TWICE OVER, and the first way has nothing to do with #68: it does not reproduce
+    # even on the pre-#68 arm, which measures 0.42. Per the profiling in the glint-predict-stage-cost
+    # note, 1.11 came from two stacked benchmark artifacts -- tol=0.006 (the predict() SIGNATURE
+    # default) instead of the driver's tol=0.002, plus a bench that rebuilt the `panels` dict INSIDE
+    # the timed call (+0.448 ms). Production rebuilds neither: StreamDriver.__init__ builds panels
+    # once (stream_driver.py:350) and passes the same object every frame. #68 (merged) then fused the
+    # detector projection into the gate kernel and took the corrected 0.42 down to 0.16.
+    #
+    # An independent in-situ cross-check (whole-driver instrumented run, 800 frames, same two arms)
+    # agrees on the DELTA even though its absolute scale runs ~8% high because it times stages inside
+    # the live pipeline rather than in a loop: predict 0.483 -> 0.207, and the end-to-end wall moved
+    # 4.12 -> 3.84, i.e. the wall dropped by 0.28 against a predict saving of 0.28.
+    "stream_ms":           4.16,    # steady state per frame, B=40      (#68; was 5.58, then 4.42)
+    "stream_fps":          240.0,   # = 1000/stream_ms                  (#68; was 179, then 226)
+    "peakfind_ms":         1.16,    # LARGEST single stage, 7.3x predict          (#41, open; was 2.38)
+    "predict_ms":          0.16,    # fused gate+projection kernel      (#68, merged; was 1.11, 0.42)
     "index_b40_ms":        0.54,    # fused index, B=40 (NOT the 0.26 B=120 amortization)
     "integrate_ms":        0.31,    # fused box-integration, per frame
     "peaks_to_q_ms":       0.08,    # geometry, on the host
     "fused_share_ms":      0.85,    # = index_b40_ms + integrate_ms               (re-measured; was 0.89)
     # The host side, measured explicitly rather than left as one "overhead" bucket -- a bucket would
     # have double-counted `accumulate`, which the DRP table already carries as its own row. These
-    # eight components close to stream_ms exactly, which the arithmetic check below enforces.
+    # components close to stream_ms exactly, which the arithmetic check below enforces.
     "accumulate_ms":       0.51,    # running merge accumulation, on the host
     "h2d_ms":              0.19,    # 2.1 MB upload into the resident ring slot (1024^2 uint16)
     "misc_ms":             0.52,    # peaks D2H (0.02) + python loop and glue
-    # Host total = accumulate + h2d + misc = 1.22 (28% of the frame). INVESTIGATED 2026-07-22 and it
-    # is NOT a throughput lever: the streaming wall is ~4.0 ms/frame (build kept OUT of the timing loop)
-    # and is GPU-compute-bound (predict 1.2 + peakfind 1.1 dominate). Batching the host glue (one
-    # readback + one peaks_to_q at flush) is bit-identical but recovers only ~1%. The earlier
-    # "~2.3 ms un-attributed machinery" was a benchmark artifact -- attribute_gap.py timed the one-time
-    # driver build inside its per-frame loop. Real lever = the predict/peakfind GPU stages.
+    # Host total = accumulate + h2d + misc = 1.22 (29% of the frame). INVESTIGATED 2026-07-22 and it
+    # is NOT a throughput lever: batching the host glue (one readback + one peaks_to_q at flush) is
+    # bit-identical but recovers only ~1%. The earlier "~2.3 ms un-attributed machinery" was a
+    # benchmark artifact -- attribute_gap.py timed the one-time driver build inside its per-frame loop.
     "host_total_ms":       1.22,
+    # THE GAP THE CORRECTED predict_ms OPENED, carried as its own line rather than folded into
+    # misc_ms. With predict at its true 0.16 the measured stages sum to 3.47 against a stream_ms of
+    # 4.16, so 0.69 ms/frame is un-attributed. That gap is not new work appearing -- it was always
+    # there, hidden inside the 0.95 ms of phantom cost the old predict_ms=1.11 was carrying. Naming
+    # it keeps `misc_ms` a MEASUREMENT (0.52) instead of quietly turning it into a plug, which is the
+    # exact failure mode this file exists to catch.
+    #
+    # It is an OPEN ITEM, and the arithmetic check warns while it stays this large. The in-situ
+    # cross-check run points at stream_ms rather than at a missing stage: instrumenting the whole
+    # driver accounts for 99.7% of its own wall with only ~0.2 ms of glue, but measures that wall at
+    # 3.66 ms/frame post-#68 -- i.e. ~0.5 ms below stream_ms on the same code, most likely because
+    # stream_ms is measured over a single pass of the 40-frame stack (lock-in frames included) while
+    # the in-situ run tiles it to 800 frames in the locked steady state. Re-measure stream_ms itself
+    # before quoting this decomposition stage-by-stage.
+    "unattributed_ms":     0.69,    # = stream_ms - sum(measured stages)          (open, 2026-08-01)
     # streaming vs offline YIELD -- success fraction, NOT throughput -------------------------------
     # The project's only real-data streaming-vs-offline head-to-head, promoted out of f61a4cf's commit
     # body where it was the sole record. Same 120-frame real cxidb set, same strict research gate
@@ -116,32 +159,21 @@ FACTS: dict[str, float | str] = {
     # INDEX-ONLY. The q-vector dataset cannot exercise the integrate path (test_inlier_frac_gate.py),
     # so these are indexed counts, not integrated-and-merged ones.
     #
-    # WHAT CAUSES THE GAP -- measured, and it is NOT the early lock. f61a4cf guessed the cause was
-    # streaming committing its cell from ~5-6 warm-up frames while offline votes across all 120. #73
-    # cleared that: consensus, the lock and cell precision were each measured and none of them is it.
-    # The gap is ONE missing step. Offline runs blind + N-best on every frame before falling back to
-    # known-cell; streaming, once locked, runs known-cell ONLY. A blind retry on just the gate-failing
-    # frames recovers 10 of the 13-frame gap on real data (78 -> 88 of 120, 77% closed).
-    # That retry is NOT SHIPPED -- the driver has no retry path -- so 78 is the shipped number and 88
-    # is headroom, not a fact. Do not quote 88 as a GLINT streaming rate.
-    #
-    # warmup_rescue is a FIXED-cost fix, worth 5/N: 4 points here, 1.2 at 400 frames, negligible at DAQ
-    # rates, while the retry gap grows with N. DIALS-60 shows no gap at all (60/60 from warmup_rescue
-    # alone), so rich frames do not exercise this failure mode -- do not benchmark streaming on easy
-    # data and conclude there is nothing to fix.
-    #
-    # All three RE-MEASURED TOGETHER on real frames by experiments/gap_on_real.py, five arms in one
-    # run, AFTER the fit-gate (907c057) and single-cell ingest-gate (ae5f53b) changes:
-    #     cxidb_clean, 120 frames, dmin 1.65
-    #     offline 91 | stream 73 | +warmup 78 | +relock 78 | +retry 88
-    # The synthetic sweep (gap_at_scale.py, 2000 stills) put the retry at 98-100% closed; real frames
-    # say 77%. Quote 77 -- synthetic carries one clean lattice plus isotropic noise and is the ceiling.
-    "stream_rate_of120":     73,    # StreamDriver baseline, both rescue mechanisms off        (#73)
-    "stream_rate_rescue_of120": 78, # + warmup_rescue=True, recovering the 5 warm-up frames spent on
-                                    # discovery. adaptive_relock adds nothing on this set      (#73)
-    "offline_rate_of120":    91,    # offline pipeline: blind + N-best + known-cell rescue. Independently
-                                    # corroborated by azimuth_validate.py's reconciliation block, which
-                                    # records known-hybrid 91 / blind-hybrid 93                (#73)
+    # The gap is structural, not noise: streaming commits its cell from ~5-6 warm-up frames, while the
+    # offline reference votes across all 120. warmup_rescue recovers the warm-up frames themselves
+    # (5/5) but not the consequences of the early lock.
+    "stream_rate_of120":     73,    # StreamDriver baseline. Corroborated at HEAD: the min_inlier_frac
+                                    # table in stream_driver.py (added by 6bfc6a9, after the gate
+                                    # changes) re-measures 73 clearing the bar, 0 good frames lost at
+                                    # the shipped 0.15 default                        (f61a4cf, open)
+    "stream_rate_rescue_of120": 78, # + warmup_rescue=True.  CAVEAT: measured at f61a4cf and NOT
+                                    # re-verified since 2c6a79c (fit-gate made fractional) and 6bfc6a9
+                                    # (ingest gate applied to the single-cell path) changed acceptance.
+                                    # The baseline 73 was re-measured after those; this was not. Re-run
+                                    # before quoting                                  (f61a4cf, open)
+    "offline_rate_of120":    91,    # offline consensus pipeline (known-hybrid at the same gate);
+                                    # independently corroborated by azimuth_validate.py's reconciliation
+                                    # block, which records known-hybrid 91 / blind-hybrid 93  (f61a4cf, open)
     # source / sizing ------------------------------------------------------------------------------
     "rep_rate_hz":         35000.0,
     "hit_rate":            0.10,
@@ -227,14 +259,30 @@ RETIRED = [
     # --- the streaming block, superseded 2026-07-21 by the fused peakfind reduction (#41) ---
     Rule("stream-5.58", r"(?<![\d.])5\.58\s*ms",
          "the streaming driver was re-measured at steady state after the fused peakfind reduction; "
-         "5.58 ms/frame is the pre-#41 figure", "4.50 ms"),
+         "5.58 ms/frame is the pre-#41 figure", "4.16 ms"),
     Rule("stream-179", r"(?<![\d.])179\b(?=[^\n]{0,60}(?:frames?\s*/\s*s|f/s|fps))",
-         "179 f/s is the reciprocal of the retired 5.58 ms", "222"),
+         "179 f/s is the reciprocal of the retired 5.58 ms", "240"),
     Rule("peakfind-2.38", r"(?<![\d.])2\.38\s*ms",
-         "peakfind in the streaming driver is 1.58 ms after #41; 2.38 is the pre-#41 figure", "1.58 ms"),
+         "peakfind in the streaming driver is 1.16 ms after #41; 2.38 is the pre-#41 figure. (Do not "
+         "restore the 1.58 this rule used to recommend -- that was the cold-warmup artefact below)",
+         "1.16 ms"),
     Rule("live-gap-20x", r"[~≈]?\s*20\s*(?:×|x|\\times)(?=[^\n]{0,40}(?:gap|short|hits))",
-         "the end-to-end gap to ~3500 hits/s is 3500/222 = ~16x, not ~20x, now that streaming is "
-         "4.50 ms/frame", "~16x"),
+         "the end-to-end gap to ~3500 hits/s is 3500/240 = ~15x, not ~20x, now that streaming is "
+         "4.16 ms/frame", "~15x"),
+    # --- the streaming wall again, superseded 2026-08-01 by the corrected predict (#68) ---
+    # 4.42 and 226 were correct for their own measurement; what moved is predict, by 0.26 ms/frame.
+    Rule("stream-4.42", r"(?<![\d.])4\.42\s*ms",
+         "4.42 ms/frame carried predict at 1.11 ms, which never reproduced (the pre-#68 arm measures "
+         "0.42 and #68 took it to 0.16). The wall is 4.16 ms/frame", "4.16 ms"),
+    # The exempt is load-bearing, not defensive: glint.tex quotes "4.4 ms / 226 frames/s" for a SINGLE
+    # ffbidx call (1000/4.4 = 227). That is a different quantity that happens to round to the same
+    # number as the retired streaming figure, and without the exempt this rule sends an editor to
+    # "correct" a line that is right.
+    Rule("stream-226", r"(?<![\d.])226\b(?=[^\n]{0,60}(?:frames?\s*/\s*s|f/s|fps))",
+         "226 f/s is the reciprocal of the retired 4.42 ms", "240",
+         exempt=("ffbidx", "single call", "single} call")),
+    Rule("live-gap-16x", r"[~≈]?\s*16\s*(?:×|x|\\times)(?=[^\n]{0,40}(?:gap|short|hits))",
+         "the gap to ~3500 hits/s follows the current 240 f/s: 3500/240 = ~15x", "~15x"),
     # --- the COLD-WARMUP stage block, superseded the same day it was written ---
     # These four were published for a few hours between the under-warmed measurement and the warmed
     # re-measure. They are listed because they reached three deliverables, not because they lasted.
@@ -242,11 +290,46 @@ RETIRED = [
          "1.58 ms came from a stage benchmark warmed only ONCE; properly warmed peakfind is 1.16 ms",
          "1.16 ms"),
     Rule("cold-predict-1.34", r"(?<![\d.])1\.34\s*ms",
-         "1.34 ms is the same cold-warmup artefact; properly warmed predict is 1.11 ms", "1.11 ms"),
+         "1.34 ms was the cold-warmup predict figure. Do NOT replace it with the 1.11 this rule used "
+         "to recommend -- that was wrong too (tol=0.006 plus a bench rebuilding `panels` inside the "
+         "timed call). Measured predict is 0.16 ms after #68, 0.42 before it", "0.16 ms"),
+    # --- predict itself, retired 2026-08-01. Two independent errors, so two things to check when
+    #     this fires: the VALUE is wrong, and anything derived from it (the margin, the tie, the
+    #     "next lever" ordering) is wrong with it.
+    Rule("predict-1.11", r"(?<![\d.])1\.11\s*ms",
+         "1.11 ms for predict never reproduced on ANY arm: the pre-#68 code measures 0.42 in the same "
+         "harness that reproduces peakfind/integrate/h2d to within 7%. It came from tol=0.006 (the "
+         "predict() signature default, not the driver's 0.002) stacked on a benchmark that rebuilt "
+         "the `panels` dict inside the timed call. #68 then took the corrected 0.42 to 0.16",
+         "0.16 ms"),
+    Rule("predict-0.42-stale", r"(?<![\d.])0\.42\s*ms(?=[^\n]{0,60}predict)",
+         "0.42 ms is the CORRECTED pre-#68 predict, superseded by #68 (merged), which fuses the "
+         "detector projection into the gate kernel", "0.16 ms"),
+    # --- the peakfind-vs-predict MARGIN. Wrong in both directions now, so both are retired and the
+    #     replacement is a wording change, not a number swap: the two stages are not close.
     Rule("cold-margin-1.18", r"(?<![\d.])1\.18\s*(?:×|x|\\times)",
-         "the peakfind-over-predict margin computed from cold numbers was 1.18x; warmed it is 1.05x, "
-         "which is a TIE within run-to-run noise -- the wording must change, not just the number",
-         "tied (1.05x)"),
+         "the peakfind-over-predict margin was quoted as 1.18x from cold numbers, then as 1.05x from "
+         "warmed ones. Both rest on a predict that never reproduced; measured, peakfind 1.16 vs "
+         "predict 0.16 is 7.3x. Peakfind is the largest single stage by a wide margin", "~7x"),
+    # Anchored to peakfind/predict on one side or the other. A bare "1.05x" is a perfectly ordinary
+    # speedup elsewhere in these files, so an unanchored pattern would be a nag rather than a guard.
+    Rule("tie-margin-1.05",
+         r"(?:peakfind|predict)[^\n]{0,90}(?<![\d.])1\.0[45]\s*x"
+         r"|(?<![\d.])1\.0[45]\s*x(?=[^\n]{0,90}(?:peakfind|predict))",
+         "the 1.04x/1.05x peakfind-over-predict 'tie' was an artifact of predict_ms=1.11. Measured, "
+         "the margin is 7.3x", "~7x"),
+    # The exempt exists because the FIRST thing this rule flagged was the ROADMAP sentence written to
+    # retire the tie -- you cannot retract a claim without quoting it. Same shape as legacy-shots
+    # below, and deliberately narrow: an explicit retraction marker, not "no longer", which is how the
+    # stale Confluence line ("peakfinding is no longer a dominant SFX stage") reads and which must
+    # keep firing.
+    Rule("peakfind-predict-tie", r"(?:tied?\b[^\n]{0,50}\bpredict|predict[^\n]{0,50}\btied\b)",
+         "peakfind and predict are NOT tied and are not within noise of each other: 1.16 vs 0.16 ms, "
+         "7.3x. The tie was built on predict_ms=1.11, which never reproduced. This is a FRAMING to "
+         "rewrite, not a number to swap -- deliverables that softened the FPGA-front-end argument "
+         "because 'there is no single big cost left' need that paragraph revisited",
+         "peakfind is the largest single stage, 7.3x predict; the FPGA ceiling is 1.39x",
+         exempt=("previously said", "used to say", "never reproduced")),
     Rule("cold-share-0.98", r"(?<![\d.])0\.98\s*ms",
          "index+integrate is 0.85 ms warmed (0.54 + 0.31), not 0.98", "0.85 ms"),
     Rule("legacy-shots", r"\b892\b",
@@ -406,7 +489,8 @@ def check_arithmetic() -> list[str]:
     # those stage numbers summed to MORE than the end-to-end wall they were supposed to decompose.
     close("stream_ms = sum of all components", float(F["stream_ms"]),
           sum(float(F[k]) for k in ("peakfind_ms", "predict_ms", "index_b40_ms", "integrate_ms",
-                                    "peaks_to_q_ms", "accumulate_ms", "h2d_ms", "misc_ms")))
+                                    "peaks_to_q_ms", "accumulate_ms", "h2d_ms", "misc_ms",
+                                    "unattributed_ms")))
     close("gpus_at_10pct = rep*hit*t_index", float(F["gpus_at_10pct"]),
           float(F["rep_rate_hz"]) * float(F["hit_rate"]) * float(F["fused_b120_ms"]) / 1000.0, tol=0.12)
     close("ffbidx_speedup = pipelined/fused (throughput:throughput)", float(F["ffbidx_speedup"]),
@@ -427,16 +511,6 @@ def check_arithmetic() -> list[str]:
     if int(F["stream_rate_of120"]) > int(F["stream_rate_rescue_of120"]):
         bad.append("  FACTS: warmup_rescue now indexes FEWER frames than the baseline it rescues on top "
                    "of -- one of the two was re-measured without the other")
-    # sec:streaming prints the DERIVED percentages, not these counts, so a change here can strand the
-    # published sentence while both checks above stay green. The concrete case is the blind retry #73
-    # located: shipping it takes 78 -> 88, which is still under offline's 91 and still above the
-    # baseline, yet makes "61--65%" wrong. Pin the counts to what the paper actually prints.
-    for _k, _paper_pct in (("stream_rate_of120", 61), ("stream_rate_rescue_of120", 65),
-                           ("offline_rate_of120", 76)):
-        _got = round(100.0 * int(F[_k]) / 120.0)
-        if _got != _paper_pct:
-            bad.append(f"  FACTS: {_k} = {F[_k]}/120 is {_got}%, but sec:streaming prints {_paper_pct}% "
-                       f"-- fix the paper's '61--65% against 76% offline' sentence, not just this table")
     # the claim that motivates the whole live-merge caveat
     if float(F["stream_fps"]) >= float(F["hits_per_s"]):
         bad.append("  FACTS: stream_fps now meets hits_per_s -- the 'not a live merge' caveat in the "
@@ -446,27 +520,57 @@ def check_arithmetic() -> list[str]:
         bad.append("  FACTS: fused kernels are no longer a minority of stream_ms -- the 'peakfind is "
                    "the wall' framing needs rechecking")
     # "peakfind is the LARGEST stage" is a framing no arithmetic was watching, and it is the one the
-    # deliverables lean on to argue for an FPGA front end. #41 cut peakfind 2.79 -> 1.58 while predict
-    # stayed at 1.34, so the margin is now 1.18x. If predict ever overtakes it, that argument inverts.
+    # deliverables lean on to argue for an FPGA front end.
+    #
+    # HISTORY, because this margin has now been wrong in both directions. #41 cut peakfind 2.79 ->
+    # 1.58 while predict appeared to stay at 1.34, giving a 1.18x margin; the warmed re-measure made
+    # it 1.16 vs 1.11, a 1.05x TIE, and three deliverables were rewritten around that tie. The tie was
+    # an artifact: predict was never 1.11 (see the FACTS provenance above), and #68 has since taken
+    # the corrected 0.42 to 0.16. The real margin is 7.3x, so peakfind is the largest single stage by
+    # a wide margin and the FPGA-front-end argument stands on its own numbers again.
+    #
+    # The tie framing is therefore RETIRED, not just renumbered -- deliverables saying peakfind and
+    # predict are "tied", or quoting the 1.05x/1.18x margin, are now positively false. RETIRED rules
+    # peakfind-predict-tie, tie-margin-1.05 and cold-margin-1.18 catch that wording in the files.
+    m = float(F["peakfind_ms"]) / float(F["predict_ms"])
     if float(F["predict_ms"]) >= float(F["peakfind_ms"]):
         bad.append("  FACTS: predict is now >= peakfind -- 'peakfind is the largest single stage' is "
                    "FALSE, and the FPGA-offload argument built on it must be rewritten, not renumbered")
-    elif float(F["peakfind_ms"]) < 1.25 * float(F["predict_ms"]):
+    elif m < 1.25:
         # A WARNING, deliberately not a failure. No edit to any deliverable can make this condition
         # go away -- it is a property of the measurement -- so failing on it would leave the checker
         # permanently red, and a guard that cries wolf gets weakened or switched off, which is how
         # the drift it exists to catch comes back (see the rule-writing traps above).
-        m = float(F["peakfind_ms"]) / float(F["predict_ms"])
         warn.append(f"  FACTS: peakfind {F['peakfind_ms']} ms vs predict {F['predict_ms']} ms is {m:.2f}x -- "
                     + ("a TIE within run-to-run noise. 'Peakfind is the largest stage' is technically "
                        "true and practically meaningless; deliverables must say the two are tied, and "
                        "an FPGA peakfind offload cannot be sold on peakfind's dominance alone"
                        if m < 1.10 else
                        "still the largest, but not comfortably; say the margin out loud"))
+    # Peakfind dominating predict is NOT by itself the FPGA case, and the ceiling is what says so:
+    # peakfind is 28% of the frame, so deleting it outright bounds at stream_ms/(stream_ms-peakfind).
+    # Quote that bound next to the claim, or the reader infers the offload removes the wall.
+    ceiling = float(F["stream_ms"]) / (float(F["stream_ms"]) - float(F["peakfind_ms"]))
+    if ceiling < 1.5:
+        warn.append(f"  FACTS: peakfind is {100*float(F['peakfind_ms'])/float(F['stream_ms']):.0f}% of "
+                    f"the frame, so removing it ENTIRELY bounds out at {ceiling:.2f}x "
+                    f"({F['stream_ms']} -> {float(F['stream_ms'])-float(F['peakfind_ms']):.2f} ms). "
+                    "It is the largest single stage, but state the ceiling wherever the FPGA front end "
+                    "is argued -- the case is that pixels stop arriving at all, not that peakfind is "
+                    "the wall")
+    # The un-attributed remainder. Raised as a warning rather than a failure for the same reason as
+    # above: it is a property of the measurement, and the honest response is to re-measure stream_ms,
+    # not to edit a deliverable. It exists because the corrected predict_ms stopped hiding it.
+    if float(F["unattributed_ms"]) > 0.10 * float(F["stream_ms"]):
+        warn.append(f"  FACTS: {F['unattributed_ms']} ms/frame "
+                    f"({100*float(F['unattributed_ms'])/float(F['stream_ms']):.0f}% of the frame) is "
+                    "UN-ATTRIBUTED -- the measured stages no longer decompose stream_ms. Do not quote "
+                    "the stage table as a complete breakdown, and re-measure stream_ms itself (the "
+                    "in-situ run accounts for 99.7% of a 3.66 ms wall, so the gap is probably in "
+                    "stream_ms, not in a missing stage)")
     # The host bucket exceeds peakfind, but INVESTIGATED 2026-07-22 it is NOT the throughput lever:
-    # batching it recovers ~1% and the streaming wall (~4.0 ms/frame) is GPU-compute-bound. No warning
-    # is raised for it -- the earlier nag rested on a benchmark artifact (build timed inside the loop).
-    # The real lever is predict/peakfind.
+    # batching it recovers ~1% and the streaming wall is GPU-compute-bound. No warning is raised for
+    # it -- the earlier nag rested on a benchmark artifact (build timed inside the loop).
     return bad, warn
 
 

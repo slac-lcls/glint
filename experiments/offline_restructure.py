@@ -90,7 +90,7 @@ def main():
                 for c, _s in index_blind_nbest(frames[i], 3):
                     if c is not None and strict_gate(np.asarray(c, float), frames[i], Mc):
                         rec += 1
-                    break
+                        break
             except Exception:
                 pass
         tB = time.time() - t0

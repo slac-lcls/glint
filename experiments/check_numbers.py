@@ -64,8 +64,14 @@ FACTS: dict[str, float | str] = {
     # DIALS printed 27% for 32/120 = 26.67 (rounded) while GLINT-(1) printed 76% for 92/120 = 76.67
     # (floored), so three "correct" values for one measurement were in circulation. Counts are now
     # shown inline in the table, which makes the convention checkable instead of inferred.
-    "glint_blind_rate_pct":    77,  # GLINT-(1) blind, 92/120, paper tab:summary
-    "xgandalf_blind_rate_pct": 72,  # xgandalf blind, 86/120, same table and same gate -- DIFFERENT indexers
+    # The COUNTS are the measurement; the percentages are DERIVED from them and checked below. Until
+    # 2026-08-02 the counts lived only in these trailing comments and both percentage keys were read by
+    # nothing, which is precisely how the pair drifted: 76/71 stayed written into the rule text below
+    # while the measurement moved to 77/72, and every run stayed green because no code connected them.
+    "glint1_strict_of120":         92,  # GLINT-(1), blind + cross-frame consensus, >=25%-of-spots bar
+    "glint_blind_rate_pct":        77,  # = round(100 * glint1_strict_of120 / 120)
+    "xgandalf_blind_strict_of120": 86,  # xgandalf blind, SAME bar, SAME peak list -- a different indexer
+    "xgandalf_blind_rate_pct":     72,  # = round(100 * xgandalf_blind_strict_of120 / 120)
     # integration ----------------------------------------------------------------------------------
     "integ_before_ms":     585.0,   # 16 Mpix / 800 reflections, whole-frame float64 upcast
     "integ_after_ms":      7.6,     # upcast removed, bit-identical                           (#17)
@@ -250,9 +256,26 @@ RETIRED = [
          "340x was 11542/34 (the pre-fusion blind figure); against the measured 26 ms it is ~450x", "~450x"),
     Rule("speedup-160", r"(?<![\d.])160\s*(?:×|x|\\times)",
          "the scalar->GPU blind ratio follows 2342/26, not 2342/15", "~90x"),
-    Rule("blind-rate-swap", r"GLINT[^\n]{0,40}\b71\s*\\?%",
-         "71% is XGANDALF's blind rate; GLINT-(1) blind is 76% (paper tab:summary). Attributing 71% "
-         "to GLINT understates it and confuses two indexers measured at the same gate", "76%"),
+    # Two traps here, both live for months. (1) The prose named 76%/71%, the values this pair was
+    # RETIRED FROM on 2026-08-02 (721d5cc) -- so had it ever fired it would have instructed writing the
+    # wrong number. It now derives from FACTS instead of hard-coding, so it cannot go stale again.
+    # (2) `[^\n]` could not span a line break, and _normalize() folds only spaces and tabs -- so in a
+    # hard-wrapped .tex every candidate site was saved by where the line happened to break. Use
+    # [\s\S] so wrapping is not a hiding place.
+    Rule("blind-rate-swap", r"GLINT[\s\S]{0,40}\b71\s*\\?%",
+         f"71% is xgandalf's RETIRED blind rate (now {FACTS['xgandalf_blind_rate_pct']}%, "
+         f"{FACTS['xgandalf_blind_strict_of120']}/120); GLINT-(1) blind is "
+         f"{FACTS['glint_blind_rate_pct']}% ({FACTS['glint1_strict_of120']}/120, paper tab:summary). "
+         "Attributing 71% to GLINT understates it and conflates two indexers measured at the same bar",
+         f"{FACTS['glint_blind_rate_pct']}%"),
+    # The retired pair as the DELIVERABLES actually phrase it -- "76%" headline beside "xgandalf 71%".
+    # Scoped to that adjacency on purpose: bare 76% and bare 71% are both still CORRECT elsewhere
+    # (91/120 offline, and the 85/120 lattice-bar front end), so an unscoped rule would cry wolf.
+    Rule("blind-pair-retired", r"xgandalf\s*(?:\\?geq\s*)?71\s*\\?%",
+         f"'xgandalf 71%' is the retired blind pair. Measured at the >=25% bar it is "
+         f"{FACTS['xgandalf_blind_rate_pct']}% ({FACTS['xgandalf_blind_strict_of120']}/120) against "
+         f"GLINT-(1)'s {FACTS['glint_blind_rate_pct']}% ({FACTS['glint1_strict_of120']}/120)",
+         f"xgandalf {FACTS['xgandalf_blind_rate_pct']}%"),
     Rule("fused-pred-2.4", r"2\.4\s*(?:→|->|-->)\s*0\.45",
          "the fused kernel replaced the 1.46 ms CUDA-graph path, not a 2.4 ms one; "
          "2.4 inflates the gain from 3.1x to an implied 5.3x", "1.46 -> 0.45"),
@@ -495,6 +518,28 @@ def check_arithmetic() -> list[str]:
           float(F["rep_rate_hz"]) * float(F["hit_rate"]) * float(F["fused_b120_ms"]) / 1000.0, tol=0.12)
     close("ffbidx_speedup = pipelined/fused (throughput:throughput)", float(F["ffbidx_speedup"]),
           float(F["ffbidx_pipelined_ms"]) / float(F["fused_b120_ms"]), tol=0.05)
+
+    # The blind pair, derived from its counts. Both percentage keys were DEAD -- defined and read
+    # nowhere -- across the whole period the pair drifted 76/71 -> 77/72, so the RETIRED rule below
+    # went on naming the superseded values with every run green. Deriving them is what makes that rule
+    # text falsifiable: edit a count without its percentage and this fails.
+    # EXACT, not close(). close() is 3% RELATIVE, which on an integer percentage is nearly two whole
+    # points -- 92 -> 95 frames moves the rate 77 -> 79 and would have slipped through silently. Rates
+    # are integers here; compare them as integers.
+    for _pct_key, _cnt_key in (("glint_blind_rate_pct", "glint1_strict_of120"),
+                               ("xgandalf_blind_rate_pct", "xgandalf_blind_strict_of120")):
+        _want = round(100.0 * int(F[_cnt_key]) / 120.0)
+        if int(F[_pct_key]) != _want:
+            bad.append(f"  FACTS: {_pct_key} = {F[_pct_key]}% but {_cnt_key} = {F[_cnt_key]}/120 rounds to "
+                       f"{_want}% -- a count and its percentage were edited apart")
+    # The ORDERING is the abstract's blind claim -- "indexes more frames blind than the strongest blind
+    # indexer we tested (77% versus 72%)". Note it holds only WITH consensus: the bare single-frame
+    # front ends run the other way (79 vs 86 at this bar), which sec:comparison now says outright. If
+    # this inverts, the abstract's headline is wrong, not just a numeral in this table.
+    if int(F["glint1_strict_of120"]) <= int(F["xgandalf_blind_strict_of120"]):
+        bad.append("  FACTS: GLINT-(1) no longer indexes more frames blind than xgandalf -- the abstract's "
+                   "'more frames blind than the strongest blind indexer we tested' claim is now FALSE, "
+                   "and sec:comparison's ordering with it. Rewrite the claim, do not renumber it")
 
     # These three numbers ARE the paper's sec:streaming yield paragraph. sec:streaming used to claim
     # streaming "indexes no fewer frames than the offline pipeline" because the rates were "properties

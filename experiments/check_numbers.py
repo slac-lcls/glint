@@ -176,20 +176,21 @@ FACTS: dict[str, float | str] = {
                                     # by min_inlier_frac count 0 (f61a4cf) vs 7 (HEAD) -- returns the
                                     # IDENTICAL 72 baseline / 77 rescue. The gate changes cost zero frames.
                                     #
-                                    # WHAT IS STILL OPEN, and it is a different question: on H200 the script
-                                    # reads 72/77 where f61a4cf's commit body recorded 73/78 ("baseline
-                                    # 73/120 (60.8%)"). One frame in each arm. Two candidates, NOT separable
-                                    # here: (a) A100 -> H200, (b) the original figures predate this script
-                                    # (test_streamdriver_vs_offline.py does NOT exist at f61a4cf -- verified
-                                    # by git cat-file), so 73/78 came from an ad-hoc measurement that may
-                                    # score differently. The ampere partition was fully drained/maint, so
-                                    # no A100 was reachable to settle it.
+                                    # RESOLVED on an A100 (Perlmutter nid001009, A100-SXM4-40GB, same
+                                    # commit 721d5cc, `gap_on_real.py`): 91 / 73 / 78 / 78 / 88, gap 13,
+                                    # closed 77% -- an EXACT match to these FACTS and to the paper's
+                                    # "61--65% (73--78 of 120)" and "closes 77%". It reproduced on a
+                                    # completely DIFFERENT software stack (cupy 14.1.1, numpy 2.1.2, torch
+                                    # 2.8.0) from the S3DF ana-4.0.58 env where the original was taken, so
+                                    # the stack is ruled out too. 73/78 is CORRECT. Do not "fix" it.
                                     #
-                                    # These stay at the A100 values because tab:summary's whole bench is
-                                    # "GLINT on one A100"; swapping in an H200 number for two rows would be
-                                    # the mixed-measurement defect this file exists to catch. 1 frame is
-                                    # also far inside the paper's own stated 3.9-point (4.6-frame) binomial
-                                    # SE. Re-measure on an A100 to close it.
+                                    # The H200's 72/77 is a real ARCHITECTURE sensitivity, and it is ONE
+                                    # FRAME: #33. Recovered sets are identical except that H200 adds 33
+                                    # (43 gate failures vs A100's 42) -- i.e. on A100 frame 33 clears the
+                                    # streaming gate directly, on H200 it lands just under and the blind
+                                    # retry takes it. Both architectures converge to 88 after retry, so
+                                    # only the PRE-retry arms move. Expect 72/77 when re-running on
+                                    # Hopper/Blackwell; that is not a regression.
                                     #
                                     # CORROBORATED UNCHANGED in the same run: offline 91 (exactly), and the
                                     # blind-retry arm 88 -- so the paper's 76% and 73% do not move; only the

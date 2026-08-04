@@ -56,15 +56,20 @@ level — each rank calls its own conda2 bridge worker with its shard, so there 
 ### Related: the online/streaming counterpart (LCLStreamer)
 
 This wrapper is the **file/batch** scale-out. The **online** counterpart is
-[LCLStreamer](https://confluence.slac.stanford.edu/spaces/~ajshack/pages/672473679/Jungfrau+GPU+Computing+with+LCLStreamer)
-(A. Shackelford): a psana2 **producer** (MPI on CPU nodes) reads raw `xtc`, serialises frames with a
-pickle-free `FastBinarySerializer`, and **pushes them over the network** (pynng push/pull) to a **GPU
-consumer** — decoupling psana2 from the GPU env *across nodes*, where envbridge decouples them *same-node,
-in-process*. Complementary, not competing: envbridge sends tiny **q** after an in-reader peak-find (low
-bandwidth, reader needs a GPU); LCLStreamer streams **raw frames** (~1.4 GB/s for Jungfrau) and the
-consumer does the compute. A streaming GLINT is the natural LCLStreamer **consumer** — raw frame →
-peak-find → index on one GPU — reusing its `Psana2DetectorInterface(raw.raw)` producer instead of our
-conda2 reader; that is the device-resident streaming driver at network scale.
+[LCLStreamer](https://github.com/lclstream/lclstreamer) (V. Mariani *et al.*, SLAC): a **producer**
+(MPI on CPU nodes) reads raw `xtc`, serialises batches with `HDF5BinarySerializer`, and **pushes them
+over the network** (ZeroMQ `PUSH`/`PULL`) to a **GPU consumer**. Note it covers **both eras** —
+`Psana1EventSource` and `Psana2EventSource` are first-class — so it is *not* a psana2-only tool. A
+[Jungfrau GPU writeup](https://confluence.slac.stanford.edu/spaces/~ajshack/pages/672473679/Jungfrau+GPU+Computing+with+LCLStreamer)
+(A. Shackelford) records ~1.4 GB/s for Jungfrau.
+
+**The difference from envbridge is the node boundary.** LCLStreamer decouples the reader from the GPU
+env *across nodes*; envbridge decouples them *within a single node*, in-process. Complementary, not
+competing: envbridge sends tiny **q** after an in-reader peak-find (low bandwidth, but the reader itself
+needs a GPU); LCLStreamer streams **raw frames** and the consumer does the compute. A streaming GLINT is
+the natural LCLStreamer **consumer** — raw frame → peak-find → index on one GPU — reusing its
+`Psana1DetectorInterface`/`Psana2DetectorInterface` producer instead of our conda2 reader; that is the
+device-resident streaming driver at network scale.
 
 ## Pieces
 

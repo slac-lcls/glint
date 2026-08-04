@@ -108,8 +108,18 @@ Z spread ~0.1 mm), and real frames peak-find to sane ring `|q|`. The reader is *
 coords (`get_pixel_coords`) and data (`raw.calib`) are both psana-native order, so there is no internal
 segment permutation.
 
-**xtc1 / psana1 — still pending** a run that has *both* raw xtc and a trusted refined geometry staged
-(the obvious calibration candidate's raw data is on tape, not disk).
+**xtc1 / psana1 — geometry validated on real data; the rate comparison is separate.** Such a run does
+exist: `mfx/mfxx49820` (Epix10ka2M, runs r0016–r0033 staged, ~2.7 TB) carries a btx-refined
+`results/btx/geom/r0016.geom` plus 148 CrystFEL streams and `sample2.cell`. On r0016, **blind**
+indexing through this reader recovered `[38.4 79.3 79.5] Å` — `sample2.cell` (79.327/79.461/38.406) —
+from raw xtc1. A wrong geometry cannot produce the right cell by accident, so the psana1 coords→|q|
+path is sound. The per-pixel |q| comparison the xtc2 leg reports is **not** reproducible here, because
+psana's deployed geometry is not the geometry the reference was built on (see `--calib-dir` below).
+
+Two things that run needed, both now flags: `--calib-dir` (psana resolves the later, ~16°-tilted
+`8-end.data`, while btx refined against `0-end.data` — a 7–15 mm transverse shift that `--zdist`
+cannot correct, since it only replaces Z), and `--wavelength` (`ebeamPhotonEnergy()` is ±inf on 100%
+of that run's events).
 
 **Residuals (both eras):**
 
@@ -130,3 +140,30 @@ segment permutation.
   overlaps read with index inside a rank is still future work.
 * Per-panel peak-find, one `PeakFinderV4` each. Peak centroids rounded to the nearest pixel for the
   coord lookup.
+
+## Tuning the peak finder (do not skip this on a new detector)
+
+`PeakFinderV4`'s **library** defaults are `min_pix=1, min_sig=0.0` — a single pixel over SNR 8 with no
+noise floor. On a real multi-panel detector that fires on blank frames, so *every* frame clears
+`--min-peaks` and the indexer is fed noise. Measured on mfxx49820 r0016 (300 events): library defaults
+pass **100%** of frames where CrystFEL's peakfinder8 calls **28.3%** hits.
+
+So this reader passes thresholds explicitly. Defaults (`xtc_core.PF_*`, overridable per run):
+
+| flag | default | |
+|---|---|---|
+| `--min-pix` | 3 | min connected pixels per peak |
+| `--son-min` | 15.0 | min integrated peak SNR |
+| `--thr-high` | 10.0 | seed SNR |
+| `--thr-low` | 5.0 | grow SNR |
+
+Those were calibrated on Epix10ka2M at MFX to reproduce peakfinder8: same hit count (85/85 of 300),
+94.1% frame-level overlap, and **all 55** of the frames peakfinder8 went on to index. Measured sweep:
+
+```
+default(min_pix=1)  300 (100.0%)   min_pix=2  202 (67.3%)   min_pix=3  95 (31.7%)
+min_pix=3,son_min=15,thr_high=10  85 (28.3%)  <-- peakfinder8 reference: 85 (28.3%)
+```
+
+They are a starting point, not a universal truth — one detector, one run. On a new detector, sweep
+against a known hit rate before trusting a rate that comes out of this reader.

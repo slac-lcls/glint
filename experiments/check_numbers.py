@@ -166,11 +166,35 @@ FACTS: dict[str, float | str] = {
                                     # table in stream_driver.py (added by 6bfc6a9, after the gate
                                     # changes) re-measures 73 clearing the bar, 0 good frames lost at
                                     # the shipped 0.15 default                        (f61a4cf, open)
-    "stream_rate_rescue_of120": 78, # + warmup_rescue=True.  CAVEAT: measured at f61a4cf and NOT
-                                    # re-verified since 2c6a79c (fit-gate made fractional) and 6bfc6a9
-                                    # (ingest gate applied to the single-cell path) changed acceptance.
-                                    # The baseline 73 was re-measured after those; this was not. Re-run
-                                    # before quoting                                  (f61a4cf, open)
+    "stream_rate_rescue_of120": 78, # + warmup_rescue=True.
+                                    #
+                                    # THE GATE-CHANGE CAVEAT IS DISCHARGED (re-run 2026-08-03, drp-gpu007
+                                    # H200 NVL, main @721d5cc, test_streamdriver_vs_offline.py). The worry
+                                    # was that 907c057 (fit-gate made fractional) and ae5f53b (ingest gate
+                                    # on the single-cell path) had moved acceptance under this arm. They
+                                    # did not: reverting ONLY glint/ to f61a4cf on the SAME box -- verified
+                                    # by min_inlier_frac count 0 (f61a4cf) vs 7 (HEAD) -- returns the
+                                    # IDENTICAL 72 baseline / 77 rescue. The gate changes cost zero frames.
+                                    #
+                                    # RESOLVED on an A100 (Perlmutter nid001009, A100-SXM4-40GB, same
+                                    # commit 721d5cc, `gap_on_real.py`): 91 / 73 / 78 / 78 / 88, gap 13,
+                                    # closed 77% -- an EXACT match to these FACTS and to the paper's
+                                    # "61--65% (73--78 of 120)" and "closes 77%". It reproduced on a
+                                    # completely DIFFERENT software stack (cupy 14.1.1, numpy 2.1.2, torch
+                                    # 2.8.0) from the S3DF ana-4.0.58 env where the original was taken, so
+                                    # the stack is ruled out too. 73/78 is CORRECT. Do not "fix" it.
+                                    #
+                                    # The H200's 72/77 is a real ARCHITECTURE sensitivity, and it is ONE
+                                    # FRAME: #33. Recovered sets are identical except that H200 adds 33
+                                    # (43 gate failures vs A100's 42) -- i.e. on A100 frame 33 clears the
+                                    # streaming gate directly, on H200 it lands just under and the blind
+                                    # retry takes it. Both architectures converge to 88 after retry, so
+                                    # only the PRE-retry arms move. Expect 72/77 when re-running on
+                                    # Hopper/Blackwell; that is not a regression.
+                                    #
+                                    # CORROBORATED UNCHANGED in the same run: offline 91 (exactly), and the
+                                    # blind-retry arm 88 -- so the paper's 76% and 73% do not move; only the
+                                    # live figure is in question.                (f61a4cf; H200 A/B, open)
     "offline_rate_of120":    91,    # offline consensus pipeline (known-hybrid at the same gate);
                                     # independently corroborated by azimuth_validate.py's reconciliation
                                     # block, which records known-hybrid 91 / blind-hybrid 93  (f61a4cf, open)
@@ -251,8 +275,8 @@ RETIRED = [
     Rule("speedup-160", r"(?<![\d.])160\s*(?:×|x|\\times)",
          "the scalar->GPU blind ratio follows 2342/26, not 2342/15", "~90x"),
     Rule("blind-rate-swap", r"GLINT[^\n]{0,40}\b71\s*\\?%",
-         "71% is XGANDALF's blind rate; GLINT-(1) blind is 76% (paper tab:summary). Attributing 71% "
-         "to GLINT understates it and confuses two indexers measured at the same gate", "76%"),
+         "71% is XGANDALF's blind rate; GLINT-(1) blind is 77% (92/120, paper tab:summary). Attributing "
+         "71% to GLINT understates it and confuses two indexers measured at the same gate", "77%"),
     Rule("fused-pred-2.4", r"2\.4\s*(?:→|->|-->)\s*0\.45",
          "the fused kernel replaced the 1.46 ms CUDA-graph path, not a 2.4 ms one; "
          "2.4 inflates the gain from 3.1x to an implied 5.3x", "1.46 -> 0.45"),
@@ -372,6 +396,19 @@ AMBIGUOUS = [
          "latency; without the batch it reads as latency next to ffbidx's 4.4 ms",
          "add /hit and the batch size",
          needs=("/hit", "batch", "b=32", "b=120", "amortiz", "throughput", "steady")),
+    # The RATIO evades the rule above. subms-no-batch keys on the literal "0.26 ms", so a sentence
+    # that states the same amortized figure as a ratio -- "registration costs ~100x less" -- carried
+    # the identical defect straight past the guard and into the abstract (papers/glint 25c8801..b0357c9).
+    # 100x IS 26 / 0.26, i.e. a per-image blind latency over a B=120 batched throughput. Unbatched, the
+    # per-frame ratio is 25.7 / 16.5 = 1.6x, and tab:summary's own unbatched known-cell row (32 ms) is
+    # SLOWER than the blind row (26 ms). So a bare "100x cheaper" overstates the per-frame case ~60x.
+    Rule("ratio-100x-no-batch", r"100\s*x\s*(?:less|cheaper|fewer|faster)",
+         "the ~100x discovery-vs-registration ratio is 26 ms per-image blind over 0.26 ms/frame "
+         "batched at B=120 -- a throughput ratio. Per frame unbatched it is 1.6x (25.7 vs 16.5 ms), "
+         "and the unbatched known-cell row is slower than the blind row. Without the batch qualifier "
+         "it reads as the cost of registering one frame",
+         "say '~100x less cost when batched', as sec:streaming does",
+         needs=("batch", "b=32", "b=120", "amortiz", "throughput", "steady"), window=400),
 ]
 
 

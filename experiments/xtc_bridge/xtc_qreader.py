@@ -20,7 +20,9 @@ import xtc_core
 
 
 def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_det="ebeamh",
-                   min_peaks=6, max_events=0, rank=0, nranks=1):
+                   min_peaks=6, max_events=0, rank=0, nranks=1,
+                   min_pix=xtc_core.PF_MIN_PIX, son_min=xtc_core.PF_SON_MIN,
+                   thr_high=xtc_core.PF_THR_HIGH, thr_low=xtc_core.PF_THR_LOW):
     """Peak-find a whole psana2 run in conda2 and return its q-frames (see xtc_qreader_psana1 for the
     identical psana1 return contract): dict of qframes / events / counts, all envbridge-sendable.
 
@@ -61,7 +63,9 @@ def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_d
             return wavelength
         try:
             eV = edet.raw.ebeamPhotonEnergy(evt)
-            if eV and float(eV) > 1000.0:
+            # isfinite is NOT optional: `eV > 1000.0` is True for +inf (seen on 100% of events in
+            # some runs), which would yield HC/inf = 0.0 and a divide-by-zero in frame_q.
+            if eV is not None and np.isfinite(eV) and float(eV) > 1000.0:
                 return xtc_core.HC_EV_A / float(eV)
         except Exception:
             pass
@@ -80,9 +84,11 @@ def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_d
         if frame is None:
             continue
         if X is None:
-            X, Y, Zc, kin, finders = xtc_core.prep_geometry(Xf, Yf, Zf, frame.shape, good_mask(frame.shape), zdist)
+            X, Y, Zc, kin, finders = xtc_core.prep_geometry(
+                Xf, Yf, Zf, frame.shape, good_mask(frame.shape), zdist,
+                min_pix=min_pix, son_min=son_min, thr_high=thr_high, thr_low=thr_low)
         lam = wl(evt)
-        if lam is None:
+        if not lam:                          # None, or 0.0 from a non-finite photon energy
             n_skipped_wl += 1
             continue
         n_events += 1

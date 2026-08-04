@@ -28,6 +28,9 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # xtc_core sits beside this file
+import xtc_core
+
 
 def build_parser():
     ap = argparse.ArgumentParser(description="GLINT from xtc (LCLS-I in-process / LCLS-II over envbridge)")
@@ -45,6 +48,23 @@ def build_parser():
                          "2 = LCLS-II xtc2, read in conda2 over envbridge. Default 1.")
     ap.add_argument("--reader-env", default="xpp_drp_gpu_311",
                     help="--psana 2 only: conda2 env with psana2 + cupy that does the peak-finding")
+    ap.add_argument("--calib-dir", default=None,
+                    help="psana calib-dir override (psana1 only). Use when psana would resolve a "
+                         "different geometry than the one a trusted refinement was built on; --zdist "
+                         "only replaces Z, so X/Y still come from whatever psana picks.")
+    pf = ap.add_argument_group(
+        "peak finder (PeakFinderV4)",
+        "Defaults are calibrated on Epix10ka2M at MFX to match CrystFEL peakfinder8's hit rate; "
+        "tune per detector. Too loose and blank frames become 'hits' -- PeakFinderV4's own library "
+        "defaults (min-pix 1, no noise floor) pass 100% of frames.")
+    pf.add_argument("--min-pix", type=int, default=xtc_core.PF_MIN_PIX,
+                    help=f"min connected pixels per peak (default {xtc_core.PF_MIN_PIX})")
+    pf.add_argument("--son-min", type=float, default=xtc_core.PF_SON_MIN,
+                    help=f"min integrated peak SNR (default {xtc_core.PF_SON_MIN})")
+    pf.add_argument("--thr-high", type=float, default=xtc_core.PF_THR_HIGH,
+                    help=f"seed SNR threshold (default {xtc_core.PF_THR_HIGH})")
+    pf.add_argument("--thr-low", type=float, default=xtc_core.PF_THR_LOW,
+                    help=f"grow SNR threshold (default {xtc_core.PF_THR_LOW})")
     ap.add_argument("--cell", nargs="+", metavar="V",
                     help='known cell "a b c al be ga" (skip consensus); omit for fully-blind')
     ap.add_argument("--nbest", type=int, default=3)
@@ -56,6 +76,8 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
     """Read + peak-find one event shard (rank of nranks; default the whole run) -> the reader's dict
     {qframes, events, n_events, n_sent, n_skipped_wl}. Dispatches xtc1 in-process vs xtc2 over the
     bridge; identical q-core either way."""
+    pf_kw = dict(min_pix=args.min_pix, son_min=args.son_min,
+                 thr_high=args.thr_high, thr_low=args.thr_low)
     if args.psana == "1":
         # LCLS-I: psana1 is in THIS env with torch -- read in-process, no bridge.
         import xtc_qreader_psana1
@@ -63,7 +85,7 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
             print(f"peak-finding {args.exp} run {args.run} in-process (psana1) ...", flush=True)
         return xtc_qreader_psana1.run_to_qframes_psana1(
             args.exp, args.run, args.det, args.zdist, args.wavelength,
-            args.min_peaks, args.max_events, rank, nranks)
+            args.min_peaks, args.max_events, rank, nranks, args.calib_dir, **pf_kw)
     # LCLS-II: psana2 cannot co-import with torch -- read in conda2 over the bridge.
     try:
         import envbridge
@@ -77,10 +99,13 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
     reader_env = envbridge.Env.conda(args.reader_env, stack="conda2", pythonpath=[bridge_dir])
     if verbose:
         print(f"peak-finding {args.exp} run {args.run} in conda2 env {args.reader_env} (psana2) ...", flush=True)
+    if args.calib_dir:
+        sys.exit("--calib-dir is psana1-only (psana2 takes geometry from calibconst, not a calib dir)")
     return envbridge.call(
         reader_env, "xtc_qreader:run_to_qframes",
         args.exp, args.run, args.det, args.zdist, args.wavelength, args.energy_det,
-        args.min_peaks, args.max_events, rank, nranks)
+        args.min_peaks, args.max_events, rank, nranks,
+        args.min_pix, args.son_min, args.thr_high, args.thr_low)
 
 
 def index_and_write(out, args, out_path, report=True):

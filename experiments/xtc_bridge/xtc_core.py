@@ -13,6 +13,19 @@ import numpy as np
 
 HC_EV_A = 12398.419843320026
 
+# Peak-finder thresholds. PeakFinderV4's own library defaults (min_pix=1, min_sig=0.0) accept a SINGLE
+# pixel clearing SNR 8 with no noise floor -- on a real multi-panel detector that fires on blank frames,
+# so every frame looks like a hit and the indexer is handed noise. Measured on mfxx49820 r0016
+# (Epix10ka2M, 5632x384): the library defaults pass 100% of frames at min_peaks=6, where CrystFEL's
+# peakfinder8 calls 28.3% hits. The values below reproduce peakfinder8 on that data -- same hit count
+# (85/85 of 300 events), 94.1% frame-level overlap, and ALL 55 of the frames peakfinder8 went on to
+# index. They are a sane starting point, NOT a universal truth: they were calibrated on one detector,
+# so tune per detector via glint_xtc.py's --min-pix / --son-min / --thr-high / --thr-low.
+PF_MIN_PIX = 3
+PF_SON_MIN = 15.0
+PF_THR_HIGH = 10.0
+PF_THR_LOW = 5.0
+
 
 def event_in_shard(i, rank, nranks):
     """Round-robin event ownership for MPI sharding: rank r owns global event i iff i % nranks == r.
@@ -33,7 +46,8 @@ def load_peakfinder_v4():
     return mod
 
 
-def prep_geometry(Xf, Yf, Zf, shape, good, zdist):
+def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min=PF_SON_MIN,
+                  thr_high=PF_THR_HIGH, thr_low=PF_THR_LOW):
     """From per-pixel lab coords (any layout of total size nseg*H*W) build what frame_q needs:
         X, Y : (nseg,H,W) transverse positions in METRES (psana coords are um)
         Zc   : the sample-detector distance, sign taken from psana's nominal Z, magnitude from zdist
@@ -41,6 +55,10 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist):
         kin  : incident-beam unit vector [0,0,sign(Zc)] (PSANA frame; see the readers' caveats)
         finders : one PeakFinderV4 per panel (per-panel bad-pixel masks; a single shared mask would be
                   wrong for a multi-panel detector, and zeroing bad pixels biases the ring background)
+
+    The peak-finder thresholds are passed EXPLICITLY rather than left at PeakFinderV4's library
+    defaults -- see the PF_* constants above for why that distinction decides whether blank frames
+    are counted as hits.
     """
     import cupy as cp
     PeakFinderV4 = load_peakfinder_v4().PeakFinderV4
@@ -54,7 +72,8 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist):
     Zc = np.sign(np.nanmean(Zf)) * zdist
     kin = np.array([0.0, 0.0, np.sign(Zc)])
     good = np.asarray(good, bool).reshape(nseg, H, W) if good is not None else np.ones((nseg, H, W), bool)
-    finders = [PeakFinderV4(cp.asarray(good[p]), dtype=cp.float32) for p in range(nseg)]
+    finders = [PeakFinderV4(cp.asarray(good[p]), dtype=cp.float32, min_pix=min_pix, son_min=son_min,
+                            thr_high=thr_high, thr_low=thr_low) for p in range(nseg)]
     return X, Y, Zc, kin, finders
 
 

@@ -142,15 +142,22 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
         # run's detector config object, in which case it drops that config silently: DetNames() still
         # lists the detector and evt.keys() still shows its data, but the configStore has no ConfigV*
         # and Detector() cannot be built. Measured on cxi/cxilu8823 r0226 (Jungfrau4M): absent under
-        # ana-4.0.58-py3-minipytorch, present under ana-4.0.59-py3-minipytorch -- same stack, one
-        # release up, same torch and cupy. Reading the error at face value sends you hunting for a
-        # typo in a name that is perfectly correct.
+        # ana-4.0.58-py3-minipytorch, present under ana-4.0.59-py3-minipytorch. Reading the error at
+        # face value sends you hunting for a typo in a name that is perfectly correct.
+        #
+        # The two envs do NOT carry the same torch -- 4.0.58 has 2.1.0, 4.0.59 has 1.11.0 -- and this
+        # message used to claim they did, which was the same wrong assertion that made 5d6c9e0 mark
+        # STATUS.md item 5 done. Switching to 4.0.59 is now safe because glint_index.py runs on
+        # torch 1.11 (see _first_index_per_group), but it is a torch DOWNGRADE and the message should
+        # say so rather than imply the envs are interchangeable.
         cs = ds.env().configStore()
         have = sorted({str(k.src()) for k in cs.keys() if "DetInfo" in str(k.src())})
         listed = [r for r in psana.DetNames("detectors") if det in str(r)]
         hint = (f"\n  '{det}' IS listed by DetNames but has NO config in the configStore -- this psana "
-                f"release cannot parse its ConfigV. Try a NEWER ana release (4.0.58 cannot read "
-                f"Jungfrau.ConfigV4; 4.0.59 can, with the same torch+cupy)."
+                f"release cannot parse its ConfigV. Use a NEWER ana release: 4.0.58 cannot read "
+                f"Jungfrau.ConfigV4, 4.0.59 can. Set GLINT_ANA_ENV=ana-4.0.59-py3-minipytorch. "
+                f"Note 4.0.59 is a torch DOWNGRADE (2.1.0 -> 1.11.0); GLINT supports 1.11, but "
+                f"anything else you import in that env has to as well."
                 if listed else
                 f"\n  '{det}' is not listed by DetNames either -- check the name.")
         raise KeyError(f"psana.Detector({det!r}) failed for {exp} run {run}.{hint}\n"

@@ -225,30 +225,68 @@ a caller believe it got the speedup, or worse believe the two paths agreed becau
 would have produced garbage there **without raising**. It demands 7 gain modes and a (352,384)
 panel. Jungfrau and epixHR need their own decode before they can use this.
 
-**5. The launcher's env cannot satisfy both psana and torch.** (Was marked done in `5d6c9e0`; that was wrong -- see below.) That release
-silently drops a detector whose `ConfigV` it cannot parse: the configStore has no entry, and
-`psana.Detector()` raises `KeyError: Source string not found in configStore`, which reads exactly
-like a mistyped detector name. Measured on `cxilu8823` r0226 (Jungfrau4M): `Jungfrau.ConfigV4` is
-absent under 4.0.58 and present under **4.0.59**, same stack, same torch 1.11 and cupy 13.0. The
-reader distinguishes the two causes in its error message.
+**~~5. The launcher's env cannot satisfy both psana and torch.~~ DONE -- GLINT now runs on torch 1.11,
+so BOTH envs work.** (Marked done once before in `5d6c9e0` on a false premise; this time it is
+measured. See the correction below, which is kept deliberately.)
 
-**The env fix does not exist.** Repinning to 4.0.59 looked right and was reverted: these are the
-only two ana envs carrying torch at all, and neither satisfies both halves.
+4.0.58 silently drops a detector whose `ConfigV` it cannot parse: the configStore has no entry and
+`psana.Detector()` raises `KeyError: Source string not found in configStore`, which reads exactly
+like a mistyped detector name. The reader turns that into a message naming the real cause.
 
 | env | torch | `Jungfrau.ConfigV4` |
 |---|---|---|
 | `ana-4.0.58-py3-minipytorch` | **2.1.0** | **cannot parse** |
 | `ana-4.0.59-py3-minipytorch` | 1.11.0 | parses |
 
-4.0.59 is a torch DOWNGRADE, and GLINT's M2 dedup calls `Tensor.scatter_reduce_`, added in torch
-1.12 -- so under 4.0.59 indexing dies with `AttributeError` before writing anything (S3DF job
-34274283). I asserted in `5d6c9e0` that the two envs carried the same torch 1.11.0; I had only
-measured 4.0.59 and assumed the other matched.
+These are the only two ana envs carrying torch at all, so the fix had to be to make GLINT run on
+1.11 rather than to find a better env. **Every torch API the `glint` package uses was probed against
+both envs** (jobs 34277932, 34278651) rather than inferred from the changelog, which mattered: the
+grep that found "files importing torch" missed those written `import numpy as np, torch`, so the
+package has EIGHT torch files, not three. Exactly two APIs were missing on 1.11:
 
-Default is back to 4.0.58, overridable with `GLINT_ANA_ENV`. It works on every detector whose
-ConfigV it can parse, which is all of them except the newest. For one it cannot see, the routes
-are a `scatter_reduce_` compatibility shim in `glint/glint_index.py`, or reading in 4.0.59 over
-**envbridge** and indexing in 4.0.58 -- exactly the split envbridge already performs for psana2.
+- `Tensor.scatter_reduce_(reduce="amin")` (torch 1.12+), at `glint_index.py` 431 and 456. Every
+  fallback is also dead on 1.11, measured: `torch.scatter_reduce` has a different signature taking
+  no `src`; `Tensor.scatter_(reduce=)` offers only add/multiply and multiply is unimplemented for
+  Long on CUDA; `Tensor.index_reduce_` does not exist. Replaced by
+  `glint_index.py::_first_index_per_group`.
+- `torch.backends.mps` -- the submodule does not exist at all before 1.12, and it was evaluated at
+  MODULE scope in `glint_index.py:31` **and `replica_gpu.py:16`**, which is on the rescue path.
+  Masked on a GPU node because `torch.cuda.is_available()` short-circuits ahead of it, so it would
+  have fired only on a CPU-only node. Both now `getattr`.
+
+Nothing else is missing: CUDA graph capture/replay, `torch.fft.*`, `linalg.pinv`/`det`,
+`meshgrid(indexing=)`, `combinations` and the whole nn/functional surface all work on 1.11.
+
+Verified three ways in one job (34278559):
+
+| run | env | result |
+|---|---|---|
+| **regression** mfxx49820 r0016 | 4.0.58 / torch 2.1 | stream sha **`728ce3c5bd6572a4`** -- byte-identical to its own pre-shim output |
+| **cxilu8823 r0226 Jungfrau** | 4.0.58 / torch 2.1 | refuses at `Detector()`, message names the ConfigV cause |
+| **cxilu8823 r0226 Jungfrau** | 4.0.59 / **torch 1.11** | **933 frames, 887/933 (95%) indexed, 933 chunks, 8m38s** |
+
+That last row is the whole point: it previously died with `AttributeError` before writing anything
+(job 34274283). The shim is exact rather than approximate, which the byte-identical regression is
+there to prove -- it sits under lattice-candidate dedup, where a wrong answer would not crash but
+would silently change which candidates survive.
+
+**What this does NOT establish.** The Jungfrau run's **consensus REFUSED** -- best cluster 5 vectors
+= 0.2% of 2659 pooled, under the `CONSENSUS_MIN_FRAC`/`MIN_LEAD` gate -- so the 95% is per-frame
+top-1 with no cross-frame validation and no rescue. That is the gate working as designed: this run
+was given `--zdist` from psana's `coords_z` and no `--geom`, and psana's deployed geometry is the
+unrefined starting geometry (see item 7). So item 5 proves the ENV and torch half. It does not yet
+show Jungfrau indexing is scientifically good, which needs a refined geometry and item 6's
+thresholds.
+
+Default stays 4.0.58 (newer torch, covers every detector whose ConfigV it can parse); for one it
+cannot see, set `GLINT_ANA_ENV=ana-4.0.59-py3-minipytorch`.
+
+The earlier failure is worth keeping visible: `5d6c9e0` asserted the two envs carried the same torch
+1.11.0 after measuring only 4.0.59 and assuming the other matched. The reader's own error message
+repeated that claim ("4.0.59 can, with the same torch+cupy") until this round.
+
+Still carrying the same latent `torch.backends.mps` line, but NOT on the LUTE path and so left
+alone: `experiments/paper_xg_gpu.py`, `experiments/bench_h2h.py`, `experiments/powder_ml/train.py`.
 
 **6. `PF8_MIN_SNR = 15` is detector-specific, and that is measured.** Same ladder on Jungfrau4M
 (`cxilu8823` r0226, 8x512x1024, 75 um), job 34224833, `thr_snr=5`/`min_pix=3`:

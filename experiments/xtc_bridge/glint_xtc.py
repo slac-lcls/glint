@@ -52,6 +52,13 @@ def build_parser():
                     help="psana calib-dir override (psana1 only). Use when psana would resolve a "
                          "different geometry than the one a trusted refinement was built on; --zdist "
                          "only replaces Z, so X/Y still come from whatever psana picks.")
+    ap.add_argument("--geom", default=None,
+                    help="CrystFEL .geom to take per-pixel X/Y from INSTEAD of psana (psana1 only). "
+                         "Use when the trusted geometry is a refinement that was never written back "
+                         "into psana: on mfxx49820 r0016 psana's deployed 0-end.data is the "
+                         "unrefined 2021 start, and against btx's refined r0016.geom it is off by a "
+                         "median 3.16% in |q|, signed per detector quadrant -- which no --zdist can "
+                         "absorb, and which is enough to stop blind indexing finding the true cell.")
     pf = ap.add_argument_group(
         "peak finder (PeakFinderV4)",
         "Defaults are calibrated on Epix10ka2M at MFX to match CrystFEL peakfinder8's hit rate; "
@@ -85,7 +92,7 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
             print(f"peak-finding {args.exp} run {args.run} in-process (psana1) ...", flush=True)
         return xtc_qreader_psana1.run_to_qframes_psana1(
             args.exp, args.run, args.det, args.zdist, args.wavelength,
-            args.min_peaks, args.max_events, rank, nranks, args.calib_dir, **pf_kw)
+            args.min_peaks, args.max_events, rank, nranks, args.calib_dir, args.geom, **pf_kw)
     # LCLS-II: psana2 cannot co-import with torch -- read in conda2 over the bridge.
     try:
         import envbridge
@@ -99,8 +106,8 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
     reader_env = envbridge.Env.conda(args.reader_env, stack="conda2", pythonpath=[bridge_dir])
     if verbose:
         print(f"peak-finding {args.exp} run {args.run} in conda2 env {args.reader_env} (psana2) ...", flush=True)
-    if args.calib_dir:
-        sys.exit("--calib-dir is psana1-only (psana2 takes geometry from calibconst, not a calib dir)")
+    if args.calib_dir or args.geom:
+        sys.exit("--calib-dir/--geom are psana1-only (psana2 takes geometry from calibconst)")
     return envbridge.call(
         reader_env, "xtc_qreader:run_to_qframes",
         args.exp, args.run, args.det, args.zdist, args.wavelength, args.energy_det,

@@ -39,7 +39,7 @@ def _wavelength_A(ebeam_det, evt):
 
 
 def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
-                          min_peaks=6, max_events=0, rank=0, nranks=1, calib_dir=None,
+                          min_peaks=6, max_events=0, rank=0, nranks=1, calib_dir=None, geom=None,
                           min_pix=xtc_core.PF_MIN_PIX, son_min=xtc_core.PF_SON_MIN,
                           thr_high=xtc_core.PF_THR_HIGH, thr_low=xtc_core.PF_THR_LOW):
     """Peak-find a whole psana1 (LCLS-I) run in-process and return its q-frames -- same dict contract
@@ -83,8 +83,15 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
         if frame is None:
             continue
         if X is None:
-            # psana1 per-pixel coords (um), default cframe=CFRAME_PSANA -- same frame as the psana2 path
-            Xf = detector.coords_x(evt); Yf = detector.coords_y(evt); Zf = detector.coords_z(evt)
+            if geom:
+                # psana's deployed calibration is often the UNREFINED starting geometry while the
+                # trusted refinement lives only in a .geom -- on mfxx49820 r0016 that is a per-
+                # QUADRANT |q| error of +-3-5% (median 3.16%) that no --zdist can absorb.
+                import geom_coords
+                Xf, Yf, Zf = geom_coords.coords_from_geom(geom, frame.shape, zdist)
+            else:
+                # psana1 per-pixel coords (um), default cframe=CFRAME_PSANA -- same frame as psana2
+                Xf = detector.coords_x(evt); Yf = detector.coords_y(evt); Zf = detector.coords_z(evt)
             try:
                 m = detector.mask(evt, status=True, calib=True, edges=False, central=False)
                 good = m.astype(bool) if m is not None else None   # psana1 mask: 1=good, 0=bad

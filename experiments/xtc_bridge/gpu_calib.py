@@ -66,27 +66,26 @@ def gain_layout(det, run):
     nranges = int(peds.shape[0])
     if nranges <= 1:
         return 0, 0, 1
-    # !! THIS INFERENCE IS WRONG AND IS KNOWN TO BE WRONG. It is left in place, loudly, because the
-    # measurement that condemns it is more useful than a deletion.
+    # THE VALUES COME FROM THE DAQ, not from the array's shape. psdaq/drpGpu on
+    # drp-srcf-gpu003 (tree lcls2_speckle) states them per detector class, and the whole
+    # LCLS area-detector family agrees:
+    #     AreaDetector.hh:24-25   rangeOffset 14, rangeBits 2   (Epix10ka, Jungfrau)
+    #     EpixUHRemu.hh:22-23     RangeOffset 14, RangeBits  2
+    # i.e. 14 data bits with the top 2 selecting the gain range -- 4 raw ranges.
     #
-    # On Epix10ka2M it yields range_offset=13, range_bits=3, nranges=7 -- and 7 is not a power of
-    # two. psana's 7 pedestal planes are GAIN MODES (a detector-level concept: high/medium/low x
-    # fixed/auto, plus a dark), not a 3-bit raw field. Reader.cu takes rangeOffset/rangeBits from the
-    # DAQ's per-detector configuration; they cannot be recovered from an array's shape.
+    # An earlier version of this function DERIVED the layout from the pedestal array's shape
+    # (range_offset = 16 - ceil(log2(nranges))), which on Epix10ka2M's 7 planes gives (13, 3).
+    # That is wrong: psana's 7 planes are gain MODES (high/medium/low x fixed/auto, plus dark),
+    # a detector-level concept, and 7 is not a power of two. Measured cost of that guess on
+    # mfxx49820 r0016 (job 34275323): 4050 ADU residual against det.calib, 145x the frame's own
+    # RMS, and a peak-set Jaccard of 35.7%. The arithmetic was 102x faster and the image wrong.
     #
-    # Measured cost of the guess, mfxx49820 r0016, 40 events (validate_gpu_calib.py, job 34275323):
-    # 4050 ADU RMS residual against det.calib -- 145x the frame's own RMS -- and a peak-set Jaccard
-    # of 35.7% (177 shared, 268 only on det.calib, 51 only here). The kernel runs in 1.40 ms against
-    # 142.84 ms, a 102x speedup, and produces the wrong image.
-    #
-    # A correct version needs the real (rangeOffset, rangeBits) for the detector, from the DAQ
-    # config or from psana's own gain-mode decode, plus a decision on common mode -- which the
-    # residual above cannot yet be separated from, since a wrong bit field and a missing common mode
-    # both show up as a large residual.
-    raise NotImplementedError(
-        f"cannot infer the gain-range bit layout from a {nranges}-plane pedestal array: psana's "
-        f"planes are gain MODES, not raw bit fields. Supply (range_offset, range_bits) explicitly "
-        f"from the detector's DAQ configuration -- see the note above and job 34275323.")
+    # NOTE the mismatch this leaves: 2 raw range bits index 4 ranges, but psana hands back 7
+    # pedestal planes. The raw range is NOT a direct index into psana's plane stack, so the
+    # caller clamps and validate_gpu_calib.py is what says whether the mapping is right on a
+    # given detector. Do not assume it.
+    RANGE_OFFSET, RANGE_BITS = 14, 2
+    return RANGE_OFFSET, RANGE_BITS, nranges
 
 
 class GpuCalibrator:
@@ -132,7 +131,12 @@ class GpuCalibrator:
         if self.nranges == 1:
             out = (r.astype(self.dt) - self._peds[0]) * self._gains[0]
             return out.reshape(self.shape)
+        # 2 raw range bits address 4 ranges; psana may hand back more planes (7 for Epix10ka).
+        # Clamp rather than index out of bounds -- and see the note in gain_layout: whether raw
+        # range k corresponds to psana plane k is exactly what validate_gpu_calib.py tests.
         rng = ((r >> np.uint16(self.range_offset)) & self._rmask).astype(cp.int32)
+        if self.nranges < (1 << self.range_bits):
+            rng = cp.minimum(rng, self.nranges - 1)
         data = (r & self._dmask).astype(self.dt)
         idx = rng[None, :]
         ped = cp.take_along_axis(self._peds, idx, axis=0)[0]

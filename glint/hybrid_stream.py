@@ -75,9 +75,17 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
         # Deterministic complement to the statistical gate above: the vote share cannot tell a cell
         # from its own index<=N super-cell, because a doubled axis collects exactly the same peaks --
         # they just sit on every OTHER node. AliasGate scores coverage*occupancy over the derivative
-        # lattices, so a super-cell is caught by its systematically absent nodes. The streaming driver
-        # has had this since the alias-gate work; the offline path never did. Opt-in: default None
+        # lattices, so a super-cell is caught by its systematically absent nodes. Opt-in: default None
         # leaves this path bit-identical.
+        #
+        # NB an earlier version of this comment said the streaming driver "has had this since the
+        # alias-gate work". That is WRONG and worth recording: stream_driver's `_alias_gate` is used
+        # only inside `_watchdog` (stream_driver.py:1030,1046), and `_watchdog`'s single call site
+        # (:1114) sits in the `elif slots:` arm of `if slots and not self.adaptive_relock`, with
+        # `adaptive_relock=False` the shipped default (:479). So the gate gets nowhere near the
+        # PRIMARY blind lock (`_push_blind` -> `_lock`) that sets self.Mc -- passing
+        # `alias_gate=AliasGate()` to a default StreamDriver is a silent no-op. Neither path was
+        # protected where it mattered; this call is the first place the gate guards a primary lock.
         if Mc is not None and alias_gate is not None:
             voters = [q for q, nb in zip(frames, NB)
                       if any(same_lattice(c, Mc) for c, _ in nb)]

@@ -18,7 +18,7 @@ os.environ.setdefault("STEPS", "8")
 import numpy as np
 from glint.glint_fast import index_blind_fast, index_blind_nbest, load
 from glint.replica_gpu import index_known_gpu_cell
-from glint.multishot import consensus_cell, same_lattice
+from glint.multishot import consensus_cell, group_medoid, same_lattice
 from glint.stream import write_stream
 
 
@@ -59,7 +59,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     top1 = [nb[0][0] if nb else None for nb in NB]
     n_blind = sum(1 for nb in NB if nb)
 
-    n_pool = 0
+    n_pool = n_refine = 0
     vote_idx = list(range(n))          # bound on BOTH branches; the known-cell path never votes
     if Mc_known is not None:
         Mc, support = np.asarray(Mc_known, float), -1
@@ -89,6 +89,22 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
         # runner-up as well. Both are no-ops on the small-N regime the benchmarks use.
         Mc, support = consensus_cell(pool, min_frac=CONSENSUS_MIN_FRAC, min_lead=CONSENSUS_MIN_LEAD)
         n_pool = len(pool)
+        # TRIAGE-THEN-REFINE. Deciding on 32 frames and REPORTING a cell derived from 32 frames are
+        # separate choices, and only the first needs to be small. Measured on mfxx49820 r0016 with
+        # the good geometry: the triaged vote's cell came out 37.9/79.6/81.0 against the full vote's
+        # 38.3/79.1/80.3 (truth 38.4/79.3/79.5) -- both same_lattice, but the triaged one demonstrably
+        # less accurate, because fewer members means less averaging.
+        #
+        # So: the DECISION stays triaged (that is the defence), then the cell is re-picked as the
+        # medoid of every hypothesis on EVERY frame that agrees with it. That is strictly more data
+        # for the same decision, and it cannot change which lattice was chosen -- `same_lattice` is
+        # the filter, so the medoid is by construction the same lattice as Mc.
+        if triage_topk and Mc is not None:
+            agree = [c for nb in NB for c, _ in nb if same_lattice(c, Mc)]
+            if len(agree) > support:                    # more agreeing cells than the vote itself saw
+                Mr = group_medoid(agree)
+                if Mr is not None and same_lattice(Mr, Mc):
+                    Mc, n_refine = Mr, len(agree)
         # Deterministic complement to the statistical gate above: the vote share cannot tell a cell
         # from its own index<=N super-cell, because a doubled axis collects exactly the same peaks --
         # they just sit on every OTHER node. AliasGate scores coverage*occupancy over the derivative
@@ -147,6 +163,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
              "n_resc": n_resc, "n_casc": n_casc, "n_idx": n_idx, "Mc": Mc,
              "n_pool": n_pool, "support_frac": (support / n_pool) if n_pool else None,
              "n_voters": len(vote_idx) if Mc_known is None else 0, "triage_topk": triage_topk,
+             "n_refine": n_refine,
              "consensus_refused": bool(Mc is None and n_pool)}
     return results, stats
 

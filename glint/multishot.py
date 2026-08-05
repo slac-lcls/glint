@@ -20,6 +20,7 @@ from scipy.spatial import cKDTree
 
 from .index import IndexResult, _triplets, detect_batch, refine, search_basis
 from .lattice import reduced_params
+from .running_consensus import consensus_accept
 from .peakfind import find_peaks_classical
 from .transform import fft_volume
 
@@ -337,37 +338,28 @@ def _grp_reduced(reps, RP, rtol, ctol, vtol):
     return ranked[0], (ranked[1][1] if len(ranked) > 1 else 0)
 
 
-def _accept(win, runner, n_pool, min_support, min_frac, min_lead):
-    """Should a consensus cluster of weight `win` out of `n_pool` hypotheses be trusted?
+def _accept(win, runner, n_pool, min_support, min_frac, min_lead, min_gap=0):
+    """Thin alias for running_consensus.consensus_accept -- see there for what each test means.
 
-    THREE tests, because an absolute count alone does not survive a change of pool size:
-      * min_support -- absolute floor (the original test, kept)
-      * min_frac    -- share of the POOL. The random-agreement floor grows with the number of
-                       hypotheses drawn (the spurious-floor / sqrt(N) result), so a fixed 3 that is
-                       reasonable at 120 frames x 3 n-best = 360 hypotheses is meaningless at 6300:
-                       a 23-cluster there is 0.4% of the pool and agrees by chance.
-      * min_lead    -- margin over the RUNNER-UP cluster. A winner that barely beats the second
-                       group is an ambiguous lock, however large it is in absolute terms.
-    Defaults (min_frac=0.0, min_lead=1.0) reproduce the original behaviour exactly: 0*n_pool floors
-    to min_support, and the winner always leads the runner-up by >= 1.0x by construction."""
-    if win < min_support:
-        return False
-    if min_frac > 0.0 and win < min_frac * n_pool:
-        return False
-    if min_lead > 1.0 and runner > 0 and win < min_lead * runner:
-        return False
-    return True
+    The rule deliberately lives in running_consensus (the lighter module, on the streaming hot path)
+    and is imported here rather than duplicated: the two consensus paths previously enforced
+    different SUBSETS of it and disagreed on the same data, which is the bug this indirection exists
+    to prevent recurring. Keep this a pass-through; do not add a test here without adding it there.
+    """
+    return consensus_accept(win, runner, n_pool, min_support, min_frac, min_lead, min_gap)
 
 
-def _consensus_exact(valid, min_support, rtol, ctol, vtol, min_frac=0.0, min_lead=1.0):
+def _consensus_exact(valid, min_support, rtol, ctol, vtol, min_frac=0.0, min_lead=1.0,
+                     min_gap=0):
     """One Buerger reduction per hypothesis, then greedy same_lattice grouping (reference / CONSENSUS_EXACT=1)."""
     RP = [(reduced_params(M), abs(np.linalg.det(M))) for M in valid]
     (ridx, cnt), runner = _grp_reduced(list(enumerate([1] * len(valid))), RP, rtol, ctol, vtol)
-    ok = _accept(cnt, runner, len(valid), min_support, min_frac, min_lead)
+    ok = _accept(cnt, runner, len(valid), min_support, min_frac, min_lead, min_gap)
     return (valid[ridx] if ok else None), cnt
 
 
-def _consensus_fast(valid, min_support, rtol, ctol, vtol, min_frac=0.0, min_lead=1.0, sig_tol=0.5):
+def _consensus_fast(valid, min_support, rtol, ctol, vtol, min_frac=0.0, min_lead=1.0,
+                    min_gap=0, sig_tol=0.5):
     """Bucket hypotheses by a cheap rotation/perm-invariant signature (sqrt-eig of the Gram G=M^T M, no
     Buerger), run ONE reduced_params per bucket, then group the bucket reps weighted by bucket count.
     ~10x fewer Buerger reductions; sig_tol keeps genuinely-distinct lattices in separate buckets."""
@@ -384,11 +376,39 @@ def _consensus_fast(valid, min_support, rtol, ctol, vtol, min_frac=0.0, min_lead
     reps = [tuple(buckets[k]) for k in order]                 # [(rep_index, count), ...]
     RP = {idx: (reduced_params(valid[idx]), abs(np.linalg.det(valid[idx]))) for idx, _ in reps}
     (ridx, cnt), runner = _grp_reduced(reps, RP, rtol, ctol, vtol)
-    ok = _accept(cnt, runner, len(valid), min_support, min_frac, min_lead)
+    ok = _accept(cnt, runner, len(valid), min_support, min_frac, min_lead, min_gap)
     return (valid[ridx] if ok else None), cnt
 
 
-def consensus_cell(Ms, min_support=3, rtol=0.05, ctol=0.06, vtol=0.10, min_frac=0.0, min_lead=1.0):
+def group_medoid(cells):
+    """The most TYPICAL cell of an already-same-lattice group, by reduced-param distance.
+
+    `_grp_reduced` returns whichever member happened to create the group -- an arbitrary choice that
+    is fine for deciding WHETHER a lattice won, and poor for deciding WHAT it is. This picks the
+    member closest to the group's median fingerprint instead.
+
+    It returns a REAL member rather than a synthesized average on purpose: `reduced_params` sorts
+    lengths and cosines INDEPENDENTLY, so the axis-to-angle pairing is destroyed and a cell cannot be
+    rebuilt from an averaged fingerprint without inventing a pairing. A medoid needs no such
+    reconstruction and carries a valid orientation.
+
+    Distance mixes a RELATIVE length term with an ABSOLUTE cosine term, mirroring how same_lattice
+    already compares the two (rtol on lengths, ctol on cosines), so the units are commensurate.
+    """
+    cells = [c for c in cells if c is not None]
+    if not cells:
+        return None
+    if len(cells) == 1:
+        return cells[0]
+    RP = [reduced_params(np.asarray(c, float)) for c in cells]
+    L = np.array([r[0] for r in RP]); C = np.array([r[1] for r in RP])
+    Lm, Cm = np.median(L, axis=0), np.median(C, axis=0)
+    d = (np.abs(L - Lm) / np.maximum(Lm, 1e-9)).max(1) + np.abs(C - Cm).max(1)
+    return cells[int(np.argmin(d))]
+
+
+def consensus_cell(Ms, min_support=3, rtol=0.05, ctol=0.06, vtol=0.10, min_frac=0.0,
+                   min_lead=1.0, min_gap=0):
     """Group recovered bases by shared lattice; return (representative M, support).
 
     min_frac / min_lead default to OFF (0.0 / 1.0), so every existing caller keeps its exact
@@ -404,8 +424,8 @@ def consensus_cell(Ms, min_support=3, rtol=0.05, ctol=0.06, vtol=0.10, min_frac=
     if not valid:
         return None, 0
     if os.environ.get("CONSENSUS_FAST", "0") == "1" and len(valid) > 8:
-        return _consensus_fast(valid, min_support, rtol, ctol, vtol, min_frac, min_lead)
-    return _consensus_exact(valid, min_support, rtol, ctol, vtol, min_frac, min_lead)
+        return _consensus_fast(valid, min_support, rtol, ctol, vtol, min_frac, min_lead, min_gap)
+    return _consensus_exact(valid, min_support, rtol, ctol, vtol, min_frac, min_lead, min_gap)
 
 
 def index_known(g, qmax, M_ref, tol_frac=0.02, topk=15, min_inlier_frac=0.5):

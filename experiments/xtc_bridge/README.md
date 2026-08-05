@@ -108,13 +108,52 @@ Z spread ~0.1 mm), and real frames peak-find to sane ring `|q|`. The reader is *
 coords (`get_pixel_coords`) and data (`raw.calib`) are both psana-native order, so there is no internal
 segment permutation.
 
-**xtc1 / psana1 — geometry validated on real data; the rate comparison is separate.** Such a run does
-exist: `mfx/mfxx49820` (Epix10ka2M, runs r0016–r0033 staged, ~2.7 TB) carries a btx-refined
-`results/btx/geom/r0016.geom` plus 148 CrystFEL streams and `sample2.cell`. On r0016, **blind**
-indexing through this reader recovered `[38.4 79.3 79.5] Å` — `sample2.cell` (79.327/79.461/38.406) —
-from raw xtc1. A wrong geometry cannot produce the right cell by accident, so the psana1 coords→|q|
-path is sound. The per-pixel |q| comparison the xtc2 leg reports is **not** reproducible here, because
-psana's deployed geometry is not the geometry the reference was built on (see `--calib-dir` below).
+**xtc1 / psana1 — VALIDATED, and the lesson is that psana's geometry may be the UNREFINED one.**
+On `mfx/mfxx49820` r0016 (Epix10ka2M, 6000 events, 2228 frames with peaks), fully **blind** — no
+`--cell`:
+
+| geometry | blind consensus cell (Å) | support |
+|---|---|---|
+| psana `0-end.data` | 76.3 / 80.3 / 89.2 — **wrong**, doubled *c* | 23 |
+| **`--geom` btx `r0016.geom`** | **38.3 / 79.1 / 80.3 — correct** | **832** |
+| truth (`sample2.cell`) | 38.4 / 79.3 / 79.5 | |
+
+−0.26 / −0.25 / +1.01 % per axis, +0.49 % volume, `same_lattice` true. Nothing in the indexer changed
+between those runs — only where X and Y came from. psana's deployed `0-end.data` is the unrefined
+2021 starting calibration; btx's refinement exists **only** as a CrystFEL `.geom`, and against it
+psana is off by a median 3.16 % in |q|, signed per detector quadrant (±3–5 %), which no `--zdist` can
+absorb. **So on any experiment whose geometry was refined downstream, pass `--geom`.**
+
+<details><summary>superseded: the same run before <code>--geom</code> existed</summary>
+
+A suitable
+run does exist (the old "raw data is on tape" note was wrong): `mfx/mfxx49820` (Epix10ka2M,
+r0016–r0033 staged, ~2.7 TB) carries a btx-refined `results/btx/geom/r0016.geom`, 148 CrystFEL
+streams and `sample2.cell` (79.327 / 79.461 / 38.406 Å). Measured on r0016, first 6000 psana events,
+fully **blind** (no `--cell`):
+
+| | GLINT | btx |
+|---|---|---|
+| frames passing peak-find | 2228 | 2249 |
+| of the frames btx indexed, peak-found | 97.9% | — |
+| on frames btx never called a hit, "indexed" | **1.5%** | — |
+| **blind consensus cell (Å)** | **76.4 / 80.3 / 89.3** | **38.4 / 79.3 / 79.5** |
+
+So **hit-finding now agrees with peakfinder8** (2228 vs 2249; spurious down from 100% to 1.5% once
+the thresholds below were passed), **but blind indexing picks the wrong lattice.** The short axis
+comes out at 76.4 Å ≈ 2 × 38.406 — a doubled *c* — while *b* is right to 1.3%, so the overall scale
+(hence `--zdist`) is close and this is not a gross distance error. The consensus locked with support
+of only **23 of 2228** frames, and the general-rescue path then propagated that wrong cell to 2098
+frames, reporting a meaningless "95% indexed". **Do not quote a rate from this reader until the blind
+cell is right** — a high rate against a wrong cell is the failure mode, not a result.
+
+Known-cell mode (`--cell`) does index this data, but that is circular for validating geometry and
+cannot stand in for the blind check.
+
+</details>
+
+The per-pixel |q| comparison the xtc2 leg reports is separately **not** reproducible here, because
+psana's deployed geometry is not the one the reference was built on (see `--calib-dir` below).
 
 Two things that run needed, both now flags: `--calib-dir` (psana resolves the later, ~16°-tilted
 `8-end.data`, while btx refined against `0-end.data` — a 7–15 mm transverse shift that `--zdist`

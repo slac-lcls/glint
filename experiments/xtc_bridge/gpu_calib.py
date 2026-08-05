@@ -28,128 +28,130 @@ The gain-range decode is the part you cannot skip. Epix10ka2M and Jungfrau encod
 the raw value's high bits, and the pedestal/gain arrays are indexed BY that range -- get it wrong and
 the calibration is wrong exactly on the bright pixels peak-finding depends on.
 
-STATE, 2026-08-05: FAST, AND STILL NOT USABLE. Two runs of validate_gpu_calib.py on
-mfxx49820 r0016, 40 events:
+STATE, 2026-08-05: THE DECODE IS SOLVED; COMMON MODE IS THE WHOLE REMAINDER. Three runs of
+validate_gpu_calib.py, mfxx49820 r0016, 40 events, identical apart from how the gain mode is
+resolved:
 
-                              job 34275323        job 34275620
-                              layout GUESSED      layout from the DAQ
-    det.calib (CPU)           142.84 ms           142.33 ms
-    this kernel                 1.40 ms  (102x)     1.37 ms  (104x)
-    per-pixel RMS residual     4050 ADU            4035 ADU     (145x the frame's own RMS)
-    peak-set Jaccard           35.7%               55.5%
-      shared / only-CPU / only-here   177/268/51        282/163/63
+                          guessed (13,3)   DAQ (14,2)    psana decode
+                          job 34275323     job 34275620  job 34275959
+    det.calib (CPU)        142.84 ms        142.33 ms     144.12 ms
+    this kernel              1.40 ms          1.37 ms       1.11 ms   (130x)
+    per-pixel residual      4050 ADU         4035 ADU      1431 ADU
+    peak-set Jaccard          35.7%            55.5%         58.6%
+      shared/onlyCPU/onlyGPU  177/268/51      282/163/63    287/158/45
 
-Fixing the bit layout to the DAQ's real (14, 2) moved the PEAK AGREEMENT a long way -- 105 more
-peaks recovered, 105 fewer missed -- and left the RESIDUAL essentially unchanged. That pattern
-is diagnostic: a wrong-but-smooth per-pixel offset destroys absolute values while
-PeakFinderV4's LOCAL ANNULUS background absorbs much of it, so the peak sets agree better than
-the images do.
+Following psana cut the residual 2.8x and made the kernel FASTER -- a `where` plus an FMA beats
+the per-pixel gather the range-index version needed. The Jaccard moved 3 points.
 
-The remaining suspect is the range->plane MAPPING, not common mode. Two raw range bits address
-4 ranges; psana returns 7 pedestal planes for Epix10ka, because its planes are gain MODES
-(high/medium/low x fixed/auto, plus dark) chosen partly by the detector's CONFIGURATION and not
-by the raw bits alone. `raw range k -> psana plane k` is therefore an assumption, and this
-module clamps rather than honouring it.
+That is the diagnosis. With the gain mode correct, what remains is a per-ASIC offset, which is
+precisely what common mode removes, and it explains the 158 still-missing peaks mechanically:
+an un-subtracted ASIC pedestal lifts the local background, PeakFinderV4's annulus SNR falls,
+and weak peaks in those ASICs drop below threshold. Before the decode was fixed a wrong bit
+field and a missing common mode were indistinguishable; they are now separated.
 
-Getting further means following psana's own gain-mode decode for the detector rather than
-approximating it. Until then the fast path must not be wired into the reader: it is ~100x on
-98% of the event and it loses a third of the real peaks.
+COMMON MODE IS THEREFORE NOT OPTIONAL on this detector, and implementing it is the remaining
+work for item 4. psana applies it per ASIC/bank as a median with outlier rejection (see
+Detector/UtilsCommonMode.py and the detector's `common_mode` parameters); a GPU version is a
+segmented median, not a reduction that maps to `where`. Until it exists this module must not be
+wired into the reader: 130x on 98% of the event while losing a third of the real peaks is not a
+speedup anyone can use.
 """
 from __future__ import annotations
 
 import numpy as np
 
 
-def gain_layout(det, run):
-    """Infer (range_offset, range_bits, nranges) for a psana1 detector from its pedestal array.
+def gain_mode_planes(det, run):
+    """Per-pixel (pedestal, gain) planes for data-bit-14 CLEAR and SET, using psana's own decode.
 
-    psana stores pedestals as (nranges, nseg, H, W) for a gain-switching detector and (nseg, H, W)
-    for one without. The bit layout is a property of the ASIC: Epix10ka packs 14 data bits and uses
-    the top 2 for the range; Jungfrau packs 14 and uses 2. Returned rather than hard-coded so a
-    detector with a different split fails loudly here instead of silently mis-calibrating.
+    Epix10ka's gain range is NOT the raw high bits alone. psana's Detector/UtilsEpix10ka.py
+    `gain_maps_epix10ka_any` builds a per-pixel control word from the DETECTOR CONFIGURATION
+    (test/mask/gain/ga bits and trbit, all run-constant) and then ORs in ONE bit from the data --
+    bit 14, shifted down to bit 5 -- before classifying into the 7 modes:
+
+        FH_H 0   FM_M 1   FL_L 2   AHL_H 3   AML_M 4   AHL_L 5   AML_L 6
+
+    That is why a 2-bit raw field cannot address 7 planes, and why the earlier `raw range k ->
+    psana plane k` clamp lost a third of the peaks: for an auto-gain pixel the mode depends on the
+    configuration, not on the raw value.
+
+    Since the config half is constant for a run and the data half is a single bit, the whole decode
+    reduces to TWO precomputed plane sets. This calls psana's function twice -- once with synthetic
+    all-zero data, once with every pixel's bit 14 set -- so the classification is psana's, not a
+    reimplementation of it, and then folds pedestal and gain into those two cases. Per event the GPU
+    then does one select and one fused multiply-add.
     """
-    peds = det.pedestals(run)
-    if peds is None:
-        raise ValueError("no pedestals for this detector/run -- cannot calibrate on the GPU")
-    peds = np.asarray(peds)
-    if peds.ndim == 3:                       # no gain switching: one pedestal plane
-        return 0, 0, 1
-    nranges = int(peds.shape[0])
-    if nranges <= 1:
-        return 0, 0, 1
-    # THE VALUES COME FROM THE DAQ, not from the array's shape. psdaq/drpGpu on
-    # drp-srcf-gpu003 (tree lcls2_speckle) states them per detector class, and the whole
-    # LCLS area-detector family agrees:
-    #     AreaDetector.hh:24-25   rangeOffset 14, rangeBits 2   (Epix10ka, Jungfrau)
-    #     EpixUHRemu.hh:22-23     RangeOffset 14, RangeBits  2
-    # i.e. 14 data bits with the top 2 selecting the gain range -- 4 raw ranges.
-    #
-    # An earlier version of this function DERIVED the layout from the pedestal array's shape
-    # (range_offset = 16 - ceil(log2(nranges))), which on Epix10ka2M's 7 planes gives (13, 3).
-    # That is wrong: psana's 7 planes are gain MODES (high/medium/low x fixed/auto, plus dark),
-    # a detector-level concept, and 7 is not a power of two. Measured cost of that guess on
-    # mfxx49820 r0016 (job 34275323): 4050 ADU residual against det.calib, 145x the frame's own
-    # RMS, and a peak-set Jaccard of 35.7%. The arithmetic was 102x faster and the image wrong.
-    #
-    # NOTE the mismatch this leaves: 2 raw range bits index 4 ranges, but psana hands back 7
-    # pedestal planes. The raw range is NOT a direct index into psana's plane stack, so the
-    # caller clamps and validate_gpu_calib.py is what says whether the mapping is right on a
-    # given detector. Do not assume it.
-    RANGE_OFFSET, RANGE_BITS = 14, 2
-    return RANGE_OFFSET, RANGE_BITS, nranges
+    from Detector.UtilsEpix10ka import gain_maps_epix10ka_any, B14
+
+    peds = np.asarray(det.pedestals(run), dtype=np.float32)
+    if peds is None or peds.ndim != 4:
+        raise NotImplementedError(
+            "gain-mode decode is implemented for the Epix10ka family (4-D pedestals, "
+            f"got shape {None if peds is None else peds.shape})")
+    nmodes = peds.shape[0]
+    gains = det.gain(run)
+    gains = (np.ones_like(peds) if gains is None else np.asarray(gains, dtype=np.float32))
+    if gains.shape != peds.shape:
+        gains = np.broadcast_to(gains.reshape((1,) + gains.shape[-3:]), peds.shape)
+
+    shape = peds.shape[1:]
+    zero = np.zeros(shape, dtype=np.uint16)
+    ones = np.full(shape, B14, dtype=np.uint16)
+
+    out = []
+    for data in (zero, ones):                      # bit 14 clear, then set
+        maps = gain_maps_epix10ka_any(det, data)
+        if maps is None:
+            raise NotImplementedError("gain_maps_epix10ka_any returned None -- no config for this "
+                                      "detector; the GPU path cannot mirror det.calib without it")
+        idx = np.zeros(shape, dtype=np.int8)
+        covered = np.zeros(shape, dtype=bool)
+        for k, m in enumerate(maps[:nmodes]):
+            idx[m] = k
+            covered |= m
+        if not covered.all():                      # a pixel in no mode would silently take plane 0
+            raise ValueError(f"{(~covered).sum()} pixels fall in no gain mode -- refusing to "
+                             "calibrate them as mode 0")
+        out.append((np.take_along_axis(peds, idx[None].astype(np.intp), 0)[0],
+                    np.take_along_axis(gains, idx[None].astype(np.intp), 0)[0]))
+    return out[0], out[1], shape
 
 
 class GpuCalibrator:
-    """Holds the pedestal/gain planes on the device and calibrates raw frames in place.
+    """Pedestal + gain on the device: one select and one FMA per pixel per event.
 
-    The arrays are uploaded ONCE. That is most of the point: they are (nranges, npix) floats -- for
-    Epix10ka2M with 7 ranges that is 60 MB -- and re-sending them per event would cost more than the
+    Setup resolves the gain mode with psana's own decode (see `gain_mode_planes`) into two
+    per-pixel plane pairs -- bit 14 clear and bit 14 set -- and uploads them ONCE. Four float
+    planes for Epix10ka2M is 34 MB; re-deriving them per event would cost more than the
     calibration saves.
+
+    STILL NOT COMMON MODE. det.calib also subtracts a data-dependent per-ASIC/row median, which
+    this does not do and Reader.cu has no equivalent of. validate_gpu_calib.py is what says
+    whether that matters on a given detector; the number to read there is the peak-set Jaccard.
     """
+
+    DATA_MASK = np.uint16((1 << 14) - 1)      # 14 data bits; bit 14 is the gain bit (B14)
+    B14 = np.uint16(1 << 14)
 
     def __init__(self, det, run, dtype=None):
         import cupy as cp
         self.cp = cp
         self.dt = dtype or cp.float32
-        self.range_offset, self.range_bits, self.nranges = gain_layout(det, run)
-
-        peds = np.asarray(det.pedestals(run), dtype=np.float32)
-        gains = det.gain(run)
-        gains = (np.ones_like(peds) if gains is None
-                 else np.asarray(gains, dtype=np.float32))
-        if peds.ndim == 3:                                   # promote to a 1-range stack
-            peds = peds[None]; gains = gains[None]
-        if gains.shape != peds.shape:                        # a scalar or per-pixel gain, no ranges
-            gains = np.broadcast_to(gains.reshape((1,) + gains.shape[-3:]), peds.shape)
-        self.shape = peds.shape[1:]                          # (nseg, H, W)
-        self.npix = int(np.prod(self.shape))
-        self._peds = cp.asarray(peds.reshape(self.nranges, self.npix), self.dt)
-        self._gains = cp.asarray(gains.reshape(self.nranges, self.npix), self.dt)
-        self._rmask = np.uint16((1 << self.range_bits) - 1) if self.range_bits else np.uint16(0)
-        self._dmask = (np.uint16((1 << self.range_offset) - 1) if self.range_offset
-                       else np.uint16(0xFFFF))
+        (p0, g0), (p1, g1), shape = gain_mode_planes(det, run)
+        self.shape = shape
+        self._p0 = cp.asarray(p0.reshape(-1), self.dt)
+        self._g0 = cp.asarray(g0.reshape(-1), self.dt)
+        self._p1 = cp.asarray(p1.reshape(-1), self.dt)
+        self._g1 = cp.asarray(g1.reshape(-1), self.dt)
 
     def __call__(self, raw):
-        """raw: (nseg,H,W) uint16 (host or device) -> calibrated float on the device, same shape.
-
-        Mirrors Reader.cu:285 exactly. `take_along_axis` is the gather the C kernel expresses as
-        `&pedArray[range * nElements]` -- same indexing, expressed once for the whole frame.
-        """
+        """raw: (nseg,H,W) uint16 -> calibrated float on the device, same shape."""
         cp = self.cp
         r = cp.asarray(raw).reshape(-1)
         if r.dtype != cp.uint16:
             r = r.astype(cp.uint16)
-        if self.nranges == 1:
-            out = (r.astype(self.dt) - self._peds[0]) * self._gains[0]
-            return out.reshape(self.shape)
-        # 2 raw range bits address 4 ranges; psana may hand back more planes (7 for Epix10ka).
-        # Clamp rather than index out of bounds -- and see the note in gain_layout: whether raw
-        # range k corresponds to psana plane k is exactly what validate_gpu_calib.py tests.
-        rng = ((r >> np.uint16(self.range_offset)) & self._rmask).astype(cp.int32)
-        if self.nranges < (1 << self.range_bits):
-            rng = cp.minimum(rng, self.nranges - 1)
-        data = (r & self._dmask).astype(self.dt)
-        idx = rng[None, :]
-        ped = cp.take_along_axis(self._peds, idx, axis=0)[0]
-        gn = cp.take_along_axis(self._gains, idx, axis=0)[0]
+        hi = (r & self.B14) != 0                                  # the one per-event bit
+        data = (r & self.DATA_MASK).astype(self.dt)
+        ped = cp.where(hi, self._p1, self._p0)
+        gn = cp.where(hi, self._g1, self._g0)
         return ((data - ped) * gn).reshape(self.shape)

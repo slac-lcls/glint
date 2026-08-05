@@ -35,8 +35,8 @@ import cupy as cp
 import gpu_calib, xtc_core
 
 gc = gpu_calib.GpuCalibrator(det, RUN)
-print(f"gain layout: range_offset={gc.range_offset} range_bits={gc.range_bits} "
-      f"nranges={gc.nranges}  shape={gc.shape}")
+print(f"decode: psana gain modes via gain_maps_epix10ka_any, two precomputed plane pairs "
+      f"(data bit 14 clear/set)  shape={gc.shape}")
 
 pf = xtc_core.load_peakfinder_v4().PeakFinderV4
 finders = None

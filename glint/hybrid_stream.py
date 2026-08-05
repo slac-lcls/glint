@@ -39,7 +39,8 @@ def _hkl(q, M):
     return r[inl].astype(int), q[inl], int(inl.sum())
 
 
-def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, cascade=None):
+def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, cascade=None,
+                 alias_gate=None):
     """Fully-blind hybrid. (1) N-BEST blind-index every frame (top-`nbest` distinct cells, not just
     argmax). (2) consensus over the POOLED N-best hypotheses (aliases scatter, truth clusters ->
     sturdier cell). (3) per frame pick the highest-scored N-best cell consistent with the consensus
@@ -71,6 +72,17 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
         # runner-up as well. Both are no-ops on the small-N regime the benchmarks use.
         Mc, support = consensus_cell(pool, min_frac=CONSENSUS_MIN_FRAC, min_lead=CONSENSUS_MIN_LEAD)
         n_pool = len(pool)
+        # Deterministic complement to the statistical gate above: the vote share cannot tell a cell
+        # from its own index<=N super-cell, because a doubled axis collects exactly the same peaks --
+        # they just sit on every OTHER node. AliasGate scores coverage*occupancy over the derivative
+        # lattices, so a super-cell is caught by its systematically absent nodes. The streaming driver
+        # has had this since the alias-gate work; the offline path never did. Opt-in: default None
+        # leaves this path bit-identical.
+        if Mc is not None and alias_gate is not None:
+            voters = [q for q, nb in zip(frames, NB)
+                      if any(same_lattice(c, Mc) for c, _ in nb)]
+            if voters:
+                Mc = alias_gate.confirm(Mc, np.vstack(voters))   # may return a tighter alias, or None
 
     results = []; n_idx = n_resc = n_nb = 0
     for q, nb, t1, meta in zip(frames, NB, top1, images):

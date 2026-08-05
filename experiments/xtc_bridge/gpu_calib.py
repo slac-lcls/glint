@@ -28,21 +28,32 @@ The gain-range decode is the part you cannot skip. Epix10ka2M and Jungfrau encod
 the raw value's high bits, and the pedestal/gain arrays are indexed BY that range -- get it wrong and
 the calibration is wrong exactly on the bright pixels peak-finding depends on.
 
-STATE, 2026-08-05: THE KERNEL IS FAST AND THE LAYOUT IS UNSOLVED. Measured on mfxx49820 r0016,
-40 events (validate_gpu_calib.py, S3DF job 34275323):
+STATE, 2026-08-05: FAST, AND STILL NOT USABLE. Two runs of validate_gpu_calib.py on
+mfxx49820 r0016, 40 events:
 
-    psana det.calib (CPU)   142.84 ms
-    this kernel               1.40 ms      102x
+                              job 34275323        job 34275620
+                              layout GUESSED      layout from the DAQ
+    det.calib (CPU)           142.84 ms           142.33 ms
+    this kernel                 1.40 ms  (102x)     1.37 ms  (104x)
+    per-pixel RMS residual     4050 ADU            4035 ADU     (145x the frame's own RMS)
+    peak-set Jaccard           35.7%               55.5%
+      shared / only-CPU / only-here   177/268/51        282/163/63
 
-    per-pixel RMS residual    4050 ADU     145x the frame's own RMS
-    peak-set Jaccard          35.7%        177 shared / 268 only det.calib / 51 only here
+Fixing the bit layout to the DAQ's real (14, 2) moved the PEAK AGREEMENT a long way -- 105 more
+peaks recovered, 105 fewer missed -- and left the RESIDUAL essentially unchanged. That pattern
+is diagnostic: a wrong-but-smooth per-pixel offset destroys absolute values while
+PeakFinderV4's LOCAL ANNULUS background absorbs much of it, so the peak sets agree better than
+the images do.
 
-So the arithmetic is worth ~100x and the image is currently wrong. `gain_layout()` therefore
-raises rather than returning a guess: it inferred range_offset=13, range_bits=3 from a 7-plane
-pedestal array, and 7 is not a power of two -- psana's planes are gain MODES, not a raw bit
-field, and Reader.cu gets rangeOffset/rangeBits from the DAQ's per-detector config. Supply them
-explicitly to use this. Note the residual cannot yet separate a wrong bit field from a missing
-common mode; both look the same from here, and the layout has to be fixed first.
+The remaining suspect is the range->plane MAPPING, not common mode. Two raw range bits address
+4 ranges; psana returns 7 pedestal planes for Epix10ka, because its planes are gain MODES
+(high/medium/low x fixed/auto, plus dark) chosen partly by the detector's CONFIGURATION and not
+by the raw bits alone. `raw range k -> psana plane k` is therefore an assumption, and this
+module clamps rather than honouring it.
+
+Getting further means following psana's own gain-mode decode for the detector rather than
+approximating it. Until then the fast path must not be wired into the reader: it is ~100x on
+98% of the event and it loses a third of the real peaks.
 """
 from __future__ import annotations
 

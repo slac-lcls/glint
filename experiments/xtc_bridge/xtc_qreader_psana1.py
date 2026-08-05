@@ -64,7 +64,27 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
         psana.setOption("psana.calib-dir", str(calib_dir))
 
     ds = psana.DataSource(f"exp={exp}:run={int(run)}")
-    detector = psana.Detector(det)
+    try:
+        detector = psana.Detector(det)
+    except KeyError as e:
+        # psana raises "Source string not found in configStore" for TWO different causes, and its
+        # message only describes one of them. The second is that this psana release cannot PARSE the
+        # run's detector config object, in which case it drops that config silently: DetNames() still
+        # lists the detector and evt.keys() still shows its data, but the configStore has no ConfigV*
+        # and Detector() cannot be built. Measured on cxi/cxilu8823 r0226 (Jungfrau4M): absent under
+        # ana-4.0.58-py3-minipytorch, present under ana-4.0.59-py3-minipytorch -- same stack, one
+        # release up, same torch and cupy. Reading the error at face value sends you hunting for a
+        # typo in a name that is perfectly correct.
+        cs = ds.env().configStore()
+        have = sorted({str(k.src()) for k in cs.keys() if "DetInfo" in str(k.src())})
+        listed = [r for r in psana.DetNames("detectors") if det in str(r)]
+        hint = (f"\n  '{det}' IS listed by DetNames but has NO config in the configStore -- this psana "
+                f"release cannot parse its ConfigV. Try a NEWER ana release (4.0.58 cannot read "
+                f"Jungfrau.ConfigV4; 4.0.59 can, with the same torch+cupy)."
+                if listed else
+                f"\n  '{det}' is not listed by DetNames either -- check the name.")
+        raise KeyError(f"psana.Detector({det!r}) failed for {exp} run {run}.{hint}\n"
+                       f"  configStore detectors: {have}\n  original: {e}") from e
     ebeam = None
     if not wavelength:
         try:

@@ -26,6 +26,17 @@ PF_SON_MIN = 15.0
 PF_THR_HIGH = 10.0
 PF_THR_LOW = 5.0
 
+# peakfinder8's brightness cut, deliberately NOT derived from any v4 threshold -- see the mapping
+# note in prep_geometry. v4 accepts on a CONJUNCTION (seed above thr_high, and a local max, and
+# integrated SNR >= son_min, and min_pix); pf8 has no integrated-SNR term, so its one brightness cut
+# has to be STRICTER than v4's seed threshold to stand in for the missing one, not equal to it.
+# Measured, mfxx49820 r0016, 6000 events, thr_snr=5 and min_pix=3 throughout:
+#     min_snr 15  ->  2237 frames, 100.0% of btx's indexed frames,  2.0% pickup on btx's non-hits
+#     min_snr 10  ->  5025 frames, 100.0% of btx's indexed frames, 74.0% pickup  <- a pass-through
+# 5 units of min_snr swing the hit rate from 37% to 84% of all events, which is exactly why this is
+# its own constant: tuning --son-min for v4 must not silently drag pf8 across that cliff.
+PF8_MIN_SNR = 15.0
+
 
 def event_in_shard(i, rank, nranks):
     """Round-robin event ownership for MPI sharding: rank r owns global event i iff i % nranks == r.
@@ -138,7 +149,8 @@ class _StackedFinder:
 
 
 def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min=PF_SON_MIN,
-                  thr_high=PF_THR_HIGH, thr_low=PF_THR_LOW, peakfinder="v4", lam=None):
+                  thr_high=PF_THR_HIGH, thr_low=PF_THR_LOW, pf8_min_snr=PF8_MIN_SNR,
+                  peakfinder="v4", lam=None):
     """From per-pixel lab coords (any layout of total size nseg*H*W) build what frame_q needs:
         X, Y : (nseg,H,W) transverse positions in METRES (psana coords are um)
         Zc   : the sample-detector distance, sign taken from psana's nominal Z, magnitude from zdist
@@ -174,17 +186,23 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min
         PeakFinder8 = load_peakfinder8().PeakFinder8
         # THRESHOLD MAPPING -- the two finders do not spend the same numbers the same way, and the
         # similar parameter NAMES are a trap. v4 labels components on `grow = snr > thr_low`, keeps
-        # those containing a `seed = snr > thr_high` LOCAL MAX, then cuts on son_min, the INTEGRATED
-        # SNR sum(I-bg)/sqrt(sum sigma^2). pf8 labels on `cand = snr > thr_snr` and cuts min_snr
-        # against the per-peak MAX PIXEL SNR; it has no integrated-SNR cut at all. So:
-        #     thr_snr <- thr_low     which pixels form a component
-        #     min_snr <- thr_high    the component must contain one bright pixel (v4's seed)
-        #     son_min -> NO analogue; do not route it into min_snr
-        # Passing thr_snr=thr_high with min_snr=son_min, as this did until 2026-08-05, stiffens both
-        # cuts at once (extent 10 vs 5, brightness 15 vs 10) and min_pix compounds it, since pf8 then
-        # counts only pixels above 10 where v4 counts above 5. Measured on mfxx49820 r0016 over 6000
-        # events that cost pf8 22 peaks/frame against v4's 35, and 95.8% of btx's indexed frames
-        # against v4's 99.9% -- a mis-mapping that reads exactly like a finder deficit.
+        # those containing a `seed = snr > thr_high` LOCAL MAX, and then requires son_min, the
+        # INTEGRATED SNR sum(I-bg)/sqrt(sum sigma^2). pf8 labels on `cand = snr > thr_snr` and keeps
+        # on the per-peak MAX PIXEL SNR; it has no integrated-SNR term at all.
+        #
+        # thr_snr <- thr_low is a true correspondence: both decide WHICH PIXELS FORM A COMPONENT.
+        # Until 2026-08-05 this passed thr_snr=thr_high, labelling at 10 where v4 labels at 5, with
+        # min_pix compounding it (pf8 then counted only pixels above 10 where v4 counts above 5).
+        # Cost, mfxx49820 r0016 / 6000 events: 22 peaks/frame against v4's 35, and 95.8% of btx's
+        # indexed frames against v4's 99.9% -- which reads exactly like a radial-shell-vs-annulus
+        # finder deficit and is not one. At thr_snr=5 pf8 reaches 100.0%.
+        #
+        # min_snr has NO true correspondence, and the tempting one is wrong. It looks like v4's
+        # thr_high -- both are "the component must hold one bright pixel" -- but v4 accepts on a
+        # CONJUNCTION whose strongest term, son_min, pf8 cannot express. Deleting that term and
+        # setting min_snr=thr_high=10 was measured at 5025 of 6000 events called hits, 74% pickup on
+        # btx's non-hits: a pass-through, far worse than the 15 it replaced. pf8's brightness cut has
+        # to STAND IN for the missing integrated cut, so it is its own constant, PF8_MIN_SNR.
         qmap = pixel_q(X, Y, Zc, kin, float(lam))               # (nseg,H,W) in 1/A
         gmask = good if good is not None else np.ones(shape, bool)
         if peakfinder == "pf8-panel":
@@ -193,7 +211,7 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min
             # radial shell -- for a latency-bound consumer that is the right trade.
             finders = _PanelFinders([
                 PeakFinder8(cp.asarray(qmap[p]), mask=cp.asarray(gmask[p]), dtype=cp.float32,
-                            min_pix=min_pix, min_snr=thr_high, thr_snr=thr_low)
+                            min_pix=min_pix, min_snr=pf8_min_snr, thr_snr=thr_low)
                 for p in range(nseg)])
         else:
             # OFFLINE default: ONE finder over the whole detector, seams masked. See _StackedFinder.
@@ -208,7 +226,7 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min
             gs &= ~bad; qs[bad] = 0.0
             finders = _StackedFinder(
                 PeakFinder8(cp.asarray(qs), mask=cp.asarray(gs), dtype=cp.float32,
-                            min_pix=min_pix, min_snr=thr_high, thr_snr=thr_low),
+                            min_pix=min_pix, min_snr=pf8_min_snr, thr_snr=thr_low),
                 nseg, H, pitch)
     else:
         finders = _PanelFinders([

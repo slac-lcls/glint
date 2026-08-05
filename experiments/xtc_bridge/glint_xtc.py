@@ -80,11 +80,15 @@ def build_parser():
                     help=f"min integrated peak SNR, V4 ONLY -- pf8 has no integrated-SNR cut "
                          f"(default {xtc_core.PF_SON_MIN})")
     pf.add_argument("--thr-high", type=float, default=xtc_core.PF_THR_HIGH,
-                    help=f"seed SNR: v4 seed threshold, pf8 min peak-max SNR "
+                    help=f"seed SNR, V4 ONLY -- pf8's brightness cut is --pf8-min-snr "
                          f"(default {xtc_core.PF_THR_HIGH})")
     pf.add_argument("--thr-low", type=float, default=xtc_core.PF_THR_LOW,
                     help=f"component-extent SNR: v4 grow threshold, pf8 thr_snr "
                          f"(default {xtc_core.PF_THR_LOW})")
+    pf.add_argument("--pf8-min-snr", type=float, default=xtc_core.PF8_MIN_SNR,
+                    help=f"pf8 ONLY: min per-peak max-pixel SNR. Not tied to --thr-high; it stands "
+                         f"in for the integrated-SNR cut pf8 lacks, and is sharp -- 10 turns this "
+                         f"into a pass-through (default {xtc_core.PF8_MIN_SNR})")
     ap.add_argument("--cell", nargs="+", metavar="V",
                     help='known cell "a b c al be ga" (skip consensus); omit for fully-blind')
     ap.add_argument("--nbest", type=int, default=3)
@@ -96,7 +100,7 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
     """Read + peak-find one event shard (rank of nranks; default the whole run) -> the reader's dict
     {qframes, events, n_events, n_sent, n_skipped_wl}. Dispatches xtc1 in-process vs xtc2 over the
     bridge; identical q-core either way."""
-    pf_kw = dict(min_pix=args.min_pix, son_min=args.son_min,
+    pf_kw = dict(min_pix=args.min_pix, son_min=args.son_min, pf8_min_snr=args.pf8_min_snr,
                  thr_high=args.thr_high, thr_low=args.thr_low, peakfinder=args.peakfinder)
     if args.psana == "1":
         # LCLS-I: psana1 is in THIS env with torch -- read in-process, no bridge.
@@ -125,7 +129,7 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
         reader_env, "xtc_qreader:run_to_qframes",
         args.exp, args.run, args.det, args.zdist, args.wavelength, args.energy_det,
         args.min_peaks, args.max_events, rank, nranks, args.peakfinder,
-        args.min_pix, args.son_min, args.thr_high, args.thr_low)
+        args.min_pix, args.son_min, args.thr_high, args.thr_low, args.pf8_min_snr)
 
 
 def index_and_write(out, args, out_path, report=True):

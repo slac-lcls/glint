@@ -17,7 +17,12 @@ This reconstructs the uncached path so both sides come from the same run.
             repeated.
 
 Input is experiments/nbest_120.npz, the recorded 120-frame x top-3 pool (360 hypotheses) that the
-published barrier was measured on -- tracked in the repo, so this needs no GPU and no re-indexing.
+published barrier was measured on. No GPU and no re-indexing needed -- but NOTE that file is
+UNTRACKED (`git status` shows `?? experiments/nbest_120.npz`), so a fresh clone cannot run this. It
+is the third input behind a published number found this way in one day, after prok_q.npz (NERSC
+scratch only) and the DAQ reducer sources (untracked in drp-benchmarks, DropletReducer since deleted
+locally). Committing it is 33 KB and would make this script reproducible by anyone.
+
 Both sides are warmed before timing: cold-vs-warm on this codebase is ~3.9x and would swamp the
 comparison.
 

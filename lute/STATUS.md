@@ -93,15 +93,20 @@ so symmetry has to be supplied downstream. And the reflection rows carry the pla
 
 ## The seven things that stand between this and production
 
+**Progress: 2 of 7 done.** Struck-through items are closed, with the commit that closed
+them and how it was verified. The rest are open and unchanged.
+
 **1. The LUTE task model has no test.** `experiments/xtc_bridge/` has `test_core.py`,
 `test_mpi_smoke.py`, `test_shard.py`; nothing references `IndexGLINT` or `glint_index`. There is no
 CI in this repo at all. The launcher's flag whitelist, the `_one_source` exclusivity validator, and
 the per-source `peakfinder` validation are all untested code paths.
 
-**2. `--pf8-min-snr` cannot reach the program.** It exists in `glint_xtc.py`'s argparse and is a real
+**2. ~~`--pf8-min-snr` cannot reach the program.~~ DONE (`7867d88`).** It exists in `glint_xtc.py`'s argparse and is a real
 tuning knob (see #6), but it is missing from `XTC_FLAGS` in `glint_launch.sh` and has no field in
-`IndexGLINTParameters`. A user who sets it gets it reported as dropped. Two-line fix, listed here
-because it is exactly the class of gap that only running the entry point reveals.
+`IndexGLINTParameters`. A user who sets it gets it reported as dropped. Fixed by adding all five threshold
+fields to `IndexGLINTParameters` and completing the launcher whitelist, so the whole peak-finder
+group is now settable from LUTE rather than just this one flag. It was exactly the class of gap
+that only running the entry point reveals.
 
 **3. The emitted `.stream` is not mergeable.** `glint/stream.py:51` writes every reflection row as
 `h k l 0.00 0.00 0.00 0.00 0.0 0.0 p0` — only the Miller indices are real; `I`, `sigma(I)`, `peak`,
@@ -125,12 +130,14 @@ in the raw value's high bits; `Reader.cu` uses `rangeOffset`/`rangeBits` and ind
 `&gainArray[range*nElements]`) and **common mode** (a data-dependent per-ASIC median subtraction that
 `det.calib` does and `Reader.cu` does not). Dropping common mode changes the hit set.
 
-**5. The launcher pins `ana-4.0.58-py3-minipytorch`, which cannot see some detectors.** That release
+**5. ~~The launcher pins `ana-4.0.58-py3-minipytorch`, which cannot see some detectors.~~ DONE (`5d6c9e0`).** That release
 silently drops a detector whose `ConfigV` it cannot parse: the configStore has no entry, and
 `psana.Detector()` raises `KeyError: Source string not found in configStore`, which reads exactly
 like a mistyped detector name. Measured on `cxilu8823` r0226 (Jungfrau4M): `Jungfrau.ConfigV4` is
 absent under 4.0.58 and present under **4.0.59**, same stack, same torch 1.11 and cupy 13.0. The
-reader now distinguishes the two causes in its error message; the launcher still pins 4.0.58.
+reader distinguishes the two causes in its error message, and the launcher now pins **4.0.59**,
+overridable with `GLINT_ANA_ENV`. Verified rather than assumed: the end-to-end run under 4.0.59
+(S3DF job 34272799) reproduces the 4.0.58 result exactly -- 54 chunks, 50 indexed.
 
 **6. `PF8_MIN_SNR = 15` is detector-specific, and that is measured.** Same ladder on Jungfrau4M
 (`cxilu8823` r0226, 8x512x1024, 75 um), job 34224833, `thr_snr=5`/`min_pix=3`:

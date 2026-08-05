@@ -22,12 +22,25 @@ from glint.multishot import consensus_cell, same_lattice
 from glint.stream import write_stream
 
 
+# Consensus acceptance, on top of consensus_cell's absolute min_support=3. Env-overridable so a run
+# can be re-scored without an edit; set MIN_FRAC=0 / MIN_LEAD=1 to reproduce pre-gate behaviour.
+#   MIN_FRAC -- the winning cluster must be >= this share of the POOLED hypotheses (n_frames*nbest).
+#               2% is ~7 of the 360 hypotheses in the 120-frame benchmark (a no-op there, where the
+#               true cluster runs to the hundreds) but ~126 of 6300 on a multi-thousand-frame run,
+#               which is what a chance 23-cluster needs to clear and cannot.
+#   MIN_LEAD -- the winner must beat the RUNNER-UP cluster by this factor; a near-tie is an
+#               ambiguous lock no matter how big it is.
+CONSENSUS_MIN_FRAC = float(os.environ.get("GLINT_CONSENSUS_MIN_FRAC", "0.02"))
+CONSENSUS_MIN_LEAD = float(os.environ.get("GLINT_CONSENSUS_MIN_LEAD", "1.5"))
+
+
 def _hkl(q, M):
     H = q @ M; r = np.rint(H); inl = np.abs(H - r).max(1) < 0.15
     return r[inl].astype(int), q[inl], int(inl.sum())
 
 
-def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, cascade=None):
+def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, cascade=None,
+                 alias_gate=None):
     """Fully-blind hybrid. (1) N-BEST blind-index every frame (top-`nbest` distinct cells, not just
     argmax). (2) consensus over the POOLED N-best hypotheses (aliases scatter, truth clusters ->
     sturdier cell). (3) per frame pick the highest-scored N-best cell consistent with the consensus
@@ -46,10 +59,38 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     top1 = [nb[0][0] if nb else None for nb in NB]
     n_blind = sum(1 for nb in NB if nb)
 
+    n_pool = 0
     if Mc_known is not None:
         Mc, support = np.asarray(Mc_known, float), -1
     else:                                                        # consensus over the POOLED hypotheses
-        Mc, support = consensus_cell([c for nb in NB for c, _ in nb])
+        pool = [c for nb in NB for c, _ in nb]
+        # A bare min_support=3 is an ABSOLUTE floor, and this pool is not a fixed size: it is
+        # n_frames x nbest. At 120 frames that is 360 hypotheses; at 2200 it is ~6300, where a
+        # 23-cluster (0.4% of the pool) clears 3 by chance and every downstream frame then gets
+        # rescued onto that wrong cell -- observed on mfxx49820 r0016, which reported "95% indexed"
+        # against a doubled-c lattice. Gate on the SHARE of the pool and on the margin over the
+        # runner-up as well. Both are no-ops on the small-N regime the benchmarks use.
+        Mc, support = consensus_cell(pool, min_frac=CONSENSUS_MIN_FRAC, min_lead=CONSENSUS_MIN_LEAD)
+        n_pool = len(pool)
+        # Deterministic complement to the statistical gate above: the vote share cannot tell a cell
+        # from its own index<=N super-cell, because a doubled axis collects exactly the same peaks --
+        # they just sit on every OTHER node. AliasGate scores coverage*occupancy over the derivative
+        # lattices, so a super-cell is caught by its systematically absent nodes. Opt-in: default None
+        # leaves this path bit-identical.
+        #
+        # NB an earlier version of this comment said the streaming driver "has had this since the
+        # alias-gate work". That is WRONG and worth recording: stream_driver's `_alias_gate` is used
+        # only inside `_watchdog` (stream_driver.py:1030,1046), and `_watchdog`'s single call site
+        # (:1114) sits in the `elif slots:` arm of `if slots and not self.adaptive_relock`, with
+        # `adaptive_relock=False` the shipped default (:479). So the gate gets nowhere near the
+        # PRIMARY blind lock (`_push_blind` -> `_lock`) that sets self.Mc -- passing
+        # `alias_gate=AliasGate()` to a default StreamDriver is a silent no-op. Neither path was
+        # protected where it mattered; this call is the first place the gate guards a primary lock.
+        if Mc is not None and alias_gate is not None:
+            voters = [q for q, nb in zip(frames, NB)
+                      if any(same_lattice(c, Mc) for c, _ in nb)]
+            if voters:
+                Mc = alias_gate.confirm(Mc, np.vstack(voters))   # may return a tighter alias, or None
 
     results = []; n_idx = n_resc = n_nb = 0
     for q, nb, t1, meta in zip(frames, NB, top1, images):
@@ -84,7 +125,9 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
                     n_idx += 1; n_casc += 1
     edges = np.round(np.sort(np.linalg.norm(Mc, axis=0)), 1) if Mc is not None else None
     stats = {"n": n, "n_blind": n_blind, "support": support, "edges": edges, "n_nbest": n_nb,
-             "n_resc": n_resc, "n_casc": n_casc, "n_idx": n_idx, "Mc": Mc}
+             "n_resc": n_resc, "n_casc": n_casc, "n_idx": n_idx, "Mc": Mc,
+             "n_pool": n_pool, "support_frac": (support / n_pool) if n_pool else None,
+             "consensus_refused": bool(Mc is None and n_pool)}
     return results, stats
 
 
@@ -119,7 +162,15 @@ def _report(stats, out):
         return
     print(f"=== GLINT hybrid (blind+consensus+general-rescue), N={stats['n']} ===")
     print(f"  blind indexed      : {stats['n_blind']}/{stats['n']} ({100*stats['n_blind']//n}%)")
-    print(f"  consensus cell     : {stats['edges']} A  support {stats['support']}")
+    frac = stats.get("support_frac")
+    share = f" = {100*frac:.1f}% of {stats['n_pool']} pooled" if frac is not None else ""
+    if stats.get("consensus_refused"):
+        # Loud on purpose: this is the run reporting that it does NOT have a cell, and every
+        # subsequent frame fell back to its own top-1 rather than being rescued onto a shared one.
+        print(f"  consensus REFUSED  : best cluster {stats['support']}{share} -- below the "
+              f"min_frac/min_lead gate; per-frame top-1 fallback, NO rescue")
+    else:
+        print(f"  consensus cell     : {stats['edges']} A  support {stats['support']}{share}")
     if stats.get("n_nbest"):
         print(f"  N-best recovered   : {stats['n_nbest']} (consensus-consistent non-top-1 hypothesis)")
     print(f"  rescued failures   : {stats['n_resc']}")

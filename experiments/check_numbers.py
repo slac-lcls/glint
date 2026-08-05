@@ -146,6 +146,30 @@ FACTS: dict[str, float | str] = {
     # stream_ms is measured over a single pass of the 40-frame stack (lock-in frames included) while
     # the in-situ run tiles it to 800 frames in the locked steady state. Re-measure stream_ms itself
     # before quoting this decomposition stage-by-stage.
+    # RE-MEASURED 2026-08-04, and the suspicion above is CONFIRMED: the gap is in stream_ms, not in a
+    # missing stage. Harness: experiments/remeasure_stream_ms.py (A100 sdfampere032/035, main
+    # @ f82d0a7, same glint_sim 40x1024 stack, B=40, tol=0.002).
+    #
+    #     COLD, single pass of 40     13.665 ms/frame   <- setup dominates; NOT a steady state
+    #     COLD, tiled x20 = 800        3.579
+    #     WARMED, single pass of 40    3.496
+    #     WARMED, tiled x20 = 800      3.494            <- steady state (a 2nd run gave 3.662)
+    #
+    # So the warmed steady-state wall is 3.49-3.66, i.e. 12-16% BELOW the 4.16 recorded here. Against
+    # a 3.5-3.66 wall the stage table's 3.47 leaves 0.03-0.19 ms (1-5%) un-attributed instead of 0.69
+    # (17%) -- the warning below would not fire. Cold-vs-warm also shows why this is easy to get
+    # wrong: one-time cost (graph capture, JIT, grid build) is 3.9x the steady state when amortised
+    # over a single 40-frame pass, so any re-measure MUST warm up first.
+    #
+    # The min-vs-mean protocol difference was ALSO checked and is NOT the explanation: timing the
+    # same stages as means inside the live loop rather than as tmin minima costs only 1.18x overall
+    # (peakfind 1.05, integrate 1.04, predict 1.35, index 1.45).
+    #
+    # DELIBERATELY NOT ACTED ON. stream_ms stays 4.16 and unattributed_ms stays 0.69. Correcting the
+    # wall moves several numbers in GLINT's FAVOUR -- stream_fps 240->286, peakfind share 28%->33%,
+    # the gap to ~3500 hits/s 15x->12x, the FPGA ceiling 1.39x->1.50x -- which is exactly when to be
+    # slowest, and the provenance of 4.16 (which GPU, which protocol) is not recoverable from the
+    # code. Confirm on the hardware the original used, then swap both values together.
     "unattributed_ms":     0.69,    # = stream_ms - sum(measured stages)          (open, 2026-08-01)
     # streaming vs offline YIELD -- success fraction, NOT throughput -------------------------------
     # The project's only real-data streaming-vs-offline head-to-head, promoted out of f61a4cf's commit
@@ -602,9 +626,10 @@ def check_arithmetic() -> list[str]:
         warn.append(f"  FACTS: {F['unattributed_ms']} ms/frame "
                     f"({100*float(F['unattributed_ms'])/float(F['stream_ms']):.0f}% of the frame) is "
                     "UN-ATTRIBUTED -- the measured stages no longer decompose stream_ms. Do not quote "
-                    "the stage table as a complete breakdown, and re-measure stream_ms itself (the "
-                    "in-situ run accounts for 99.7% of a 3.66 ms wall, so the gap is probably in "
-                    "stream_ms, not in a missing stage)")
+                    "the stage table as a complete breakdown. RE-MEASURED 2026-08-04 "
+                    "(experiments/remeasure_stream_ms.py, A100): the warmed steady-state wall is "
+                    "3.49-3.66 ms, not 4.16, which would leave only 1-5% un-attributed. Held at 4.16 "
+                    "pending a confirmation run on the original hardware -- see the FACTS comment.")
     # The host bucket exceeds peakfind, but INVESTIGATED 2026-07-22 it is NOT the throughput lever:
     # batching it recovers ~1% and the streaming wall is GPU-compute-bound. No warning is raised for
     # it -- the earlier nag rested on a benchmark artifact (build timed inside the loop).

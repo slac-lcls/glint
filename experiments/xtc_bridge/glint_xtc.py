@@ -29,6 +29,12 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # xtc_core sits beside this file
+# ...and the repo root, so `import glint` works however this file is invoked. `python
+# experiments/xtc_bridge/glint_xtc.py` puts THIS file's directory on sys.path, not the working
+# directory, so glint_launch.sh's `cd` to the repo root does NOT make the package importable:
+# the read and peak-find stages run fine (they only need xtc_core, which sits here) and the run
+# then dies at the first `import glint` inside index_and_write, after all the expensive work.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import xtc_core
 
 

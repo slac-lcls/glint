@@ -132,6 +132,49 @@ class IndexGLINTParameters(ThirdPartyParameters):
                     "is meaningless on xtc (no stored peak list to reuse).",
         flag_type="--", rename_param="peakfinder",
     )
+    min_pix: Optional[PositiveInt] = Field(
+        None,
+        description="Peak-finder threshold, `exp` (raw xtc) route. Min connected pixels per peak. "
+                    "UNSET keeps the reader's default (3). NOTE the pixel COUNT is taken at "
+                    "different SNR by the two finders -- v4 counts pixels above --thr-low, pf8 above "
+                    "--pf8-min-snr's companion --thr-low -- so the same number is a stiffer cut for "
+                    "whichever finder labels at the higher threshold.",
+        flag_type="--", rename_param="min-pix",
+    )
+    son_min: Optional[float] = Field(
+        None,
+        description="Peak-finder threshold, `exp` route. V4 ONLY: min INTEGRATED peak SNR, "
+                    "sum(I-bg)/sqrt(sum sigma^2). pf8 has no integrated-SNR term and ignores this "
+                    "entirely -- do not expect it to affect a pf8 run. Default 15.",
+        flag_type="--", rename_param="son-min",
+    )
+    thr_high: Optional[float] = Field(
+        None,
+        description="Peak-finder threshold, `exp` route. V4 ONLY: the seed threshold -- a component "
+                    "is kept if it contains a local max above this. Default 10. pf8's brightness cut "
+                    "is --pf8-min-snr, deliberately NOT this.",
+        flag_type="--", rename_param="thr-high",
+    )
+    thr_low: Optional[float] = Field(
+        None,
+        description="Peak-finder threshold, `exp` route. The COMPONENT-EXTENT cut, and the one knob "
+                    "both finders share: v4's grow threshold and pf8's thr_snr. Default 5. Raising it "
+                    "shrinks every peak's footprint, which also makes --min-pix bite harder.",
+        flag_type="--", rename_param="thr-low",
+    )
+    pf8_min_snr: Optional[float] = Field(
+        None,
+        description="Peak-finder threshold, `exp` route, PF8 ONLY: min per-peak MAX-PIXEL SNR. "
+                    "Default 15. This is NOT derived from --thr-high and must not be set equal to it: "
+                    "v4 accepts on a conjunction whose strongest term is the integrated SNR, which "
+                    "pf8 cannot express, so pf8's single brightness cut has to stand in for it. "
+                    "MEASURED, mfxx49820 r0016 / 6000 events: 15 selects 37% of events and finds "
+                    "100% of the reference's indexed frames; 10 selects 84% and is a pass-through. "
+                    "AND IT IS DETECTOR-SPECIFIC: the same ladder on Jungfrau4M (cxilu8823 r0226) "
+                    "puts the knee roughly 2x higher, where 15 selects 96% of events. Calibrate on "
+                    "new hardware before trusting the default.",
+        flag_type="--", rename_param="pf8-min-snr",
+    )
     top_peaks: Optional[PositiveInt] = Field(
         None,
         description="ONLY with `images`: keep the N strongest peaks per frame. USE WITH CARE -- it "

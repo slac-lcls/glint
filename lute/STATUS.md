@@ -5,8 +5,8 @@ the code, not in a chat log or one person's head. Every number below has a named
 without one is marked as an assumption.
 
 **Bottom line: not production-ready.** The raw-xtc route runs and produces a correct cell on real
-data, but it is ~150 ms/event with 98% of that in CPU calibration, its output stream carries
-placeholder intensities, and the LUTE task model has no test.
+data and, with `--integrate`, a stream partialator can merge. It is still ~150 ms/event with
+98% of that in CPU calibration, and no ana env satisfies both its psana and its torch needs.
 
 ---
 
@@ -93,7 +93,7 @@ so symmetry has to be supplied downstream. And the reflection rows carry the pla
 
 ## The seven things that stand between this and production
 
-**Progress: 2 of 7 done**, item 1 partially (tests yes, CI no); item 5 was marked done and reverted. Struck-through items are closed,
+**Progress: 3 of 7 done**, item 1 partially (tests yes, CI no); item 5 was marked done and reverted. Struck-through items are closed,
 with the commit that closed them and how it was verified. The rest are open and unchanged.
 
 **1. ~~The LUTE task model has no test.~~ TESTS DONE (`bdbe67b`), CI STILL OPEN.**
@@ -122,16 +122,32 @@ fields to `IndexGLINTParameters` and completing the launcher whitelist, so the w
 group is now settable from LUTE rather than just this one flag. It was exactly the class of gap
 that only running the entry point reveals.
 
-**3. The emitted `.stream` is not mergeable.** `glint/stream.py:51` writes every reflection row as
+**3. ~~The emitted `.stream` is not mergeable.~~ DONE (`bfb8a0e`), verified on real data.** `glint/stream.py:51` writes every reflection row as
 `h k l 0.00 0.00 0.00 0.00 0.0 0.0 p0` — only the Miller indices are real; `I`, `sigma(I)`, `peak`,
 `background` and the `fs/ss` detector positions are placeholders. What the stream genuinely carries
 is the cell and the per-frame orientation. `partialator`/`process_hkl` need real intensities, so
 downstream must re-predict and integrate from the orientation.
 
-GLINT *has* integration — `integrate_spots` (`glint/predict.py:91`), wired into
-`glint/stream_driver.py:884`, where it produces real `I, sig, peak, bg`. It is on the streaming
-driver, not this route. **Closing this gap is what turns the plug-in from a demo into something a
-LUTE user can merge from.**
+`--integrate` now adds a SECOND PASS: `frames_for_events()` re-reads the run and calls
+`det.calib` **only on the events pass 1 indexed**, then predicts each frame's reflections from
+its recovered orientation and box-integrates. Cost is about `n_events*0.94ms +
+n_indexed*145.8ms` rather than a second full pass, because calibration is the entire cost of an
+event and skipped events cost only the stream walk.
+
+Verified on real data, S3DF job 34274599 (mfxx49820 r0016, 200 events, `--int-dmin 2.5`):
+50 integrated chunks with real `I`, `sigma(I)`, `peak`, `background` and real `fs/ss` — every
+one of which was `0.00` before.
+
+**Requires `--geom`, and says so rather than guessing.** Prediction projects q onto named
+CrystFEL panels (corner, fs/ss basis, res, coffset); psana per-pixel coordinates are positions,
+not a tiling, and do not define that model. `glint.lute_bridge.parse_geom` already emits the
+panel dicts `predict.project_q` wants, and the `(nseg,H,W)` frame reshapes to the `(nseg*H, W)`
+slab a `.geom` addresses, so no new geometry code was needed.
+
+Two things to expect in the output. **Negative `I` is normal** — `I = signal - nbox*bg`, so a
+predicted reflection with nothing there integrates to noise about zero; partialator handles it.
+And GLINT imposes no symmetry, so the stream says `lattice_type = triclinic`: the sample's
+symmetry still has to be supplied downstream.
 
 **4. ~150 ms/event, 98% of it CPU calibration.** A 100k-frame run is ~4 h on one core. The DAQ
 already solves this: `psdaq/drpGpu/Reader.cu` (on drp-srcf-gpu003, tree `lcls2_speckle`) uploads raw

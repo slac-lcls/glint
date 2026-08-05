@@ -64,6 +64,13 @@ def build_parser():
         "Defaults are calibrated on Epix10ka2M at MFX to match CrystFEL peakfinder8's hit rate; "
         "tune per detector. Too loose and blank frames become 'hits' -- PeakFinderV4's own library "
         "defaults (min-pix 1, no noise floor) pass 100% of frames.")
+    pf.add_argument("--peakfinder", choices=("v4", "pf8"), default="v4",
+                    help="v4 = local-annulus finder (default, no geometry needed). pf8 = the vendored "
+                         "peakfinder8, which estimates the background in RADIAL shells and so is the "
+                         "closer match to what PeakFinderSFX/CrystFEL run upstream -- use it when the "
+                         "xtc route's hit set has to line up with a peakfinder8 reference. Needs a "
+                         "wavelength before the first frame, so pass --wavelength on runs whose "
+                         "per-event photon energy is unreliable. Per-panel (see xtc_core).")
     pf.add_argument("--min-pix", type=int, default=xtc_core.PF_MIN_PIX,
                     help=f"min connected pixels per peak (default {xtc_core.PF_MIN_PIX})")
     pf.add_argument("--son-min", type=float, default=xtc_core.PF_SON_MIN,
@@ -84,7 +91,7 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
     {qframes, events, n_events, n_sent, n_skipped_wl}. Dispatches xtc1 in-process vs xtc2 over the
     bridge; identical q-core either way."""
     pf_kw = dict(min_pix=args.min_pix, son_min=args.son_min,
-                 thr_high=args.thr_high, thr_low=args.thr_low)
+                 thr_high=args.thr_high, thr_low=args.thr_low, peakfinder=args.peakfinder)
     if args.psana == "1":
         # LCLS-I: psana1 is in THIS env with torch -- read in-process, no bridge.
         import xtc_qreader_psana1
@@ -111,7 +118,7 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
     return envbridge.call(
         reader_env, "xtc_qreader:run_to_qframes",
         args.exp, args.run, args.det, args.zdist, args.wavelength, args.energy_det,
-        args.min_peaks, args.max_events, rank, nranks,
+        args.min_peaks, args.max_events, rank, nranks, args.peakfinder,
         args.min_pix, args.son_min, args.thr_high, args.thr_low)
 
 

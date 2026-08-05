@@ -59,8 +59,9 @@ class IndexGLINTParameters(ThirdPartyParameters):
     # NOTE ON PEAK-FINDING, because this source changes who does it. With `peaks` the peaks come from
     # peakfinder8 upstream; with `images` you can set `peakfinder: stored` and REUSE the .cxi's own
     # peakfinder8/Cheetah peaks. Raw xtc carries no stored peak list, so GLINT must find its own
-    # (PeakFinderV4). This is the ONE route where GLINT's finder stands in for peakfinder8 rather
-    # than deferring to it -- so validate a new detector here before trusting a rate.
+    # itself. `peakfinder: pf8` (vendored) is the closest match to what runs upstream; `v4` is the
+    # default and is faster. Either way this is the one route where GLINT finds its own peaks, so
+    # validate a new detector here before trusting a rate.
     exp: Optional[str] = Field(
         None,
         description="ALTERNATIVE to `peaks`/`images`: LCLS experiment id, read straight from xtc. "
@@ -108,15 +109,23 @@ class IndexGLINTParameters(ThirdPartyParameters):
                     "absorb -- and it was enough to make blind indexing return a wrong doubled-c cell.",
         flag_type="--", rename_param="geom",
     )
-    peakfinder: Literal["v4", "pf9", "stored"] = Field(
-        "stored",
-        description="Peak finder for `images`: v4 | pf9 | stored. Defaults to `stored`, which reuses "
+    peakfinder: Optional[Literal["v4", "pf9", "pf8", "stored"]] = Field(
+        None,
+        description="Peak finder. UNSET resolves PER SOURCE -- `stored` on `images`, `v4` on `exp` -- "
+                    "and the resolved value is passed explicitly, never left to a downstream default. "
+                    "On `images`, `stored` reuses "
                     "the peakfinder8 / Cheetah peaks already written into the .cxi -- no re-finding, "
                     "and it avoids v4 over-finding on water rings. This DELIBERATELY overrides the "
                     "GLINT CLI default of v4: on a .cxi that already carries peaks, re-finding them "
                     "is both slower and worse. Set `v4`/`pf9` explicitly to peak-find from scratch. "
-                    "(The CLI also accepts pf8, but GLINT has not vendored it: it needs a per-pixel "
-                    "q map + radial.py and exits at startup. Use `stored` instead.)",
+                    "\n\nVALID VALUES DEPEND ON THE SOURCE. With `images` (.cxi): v4 | pf9 | stored. "
+                    "With `exp` (raw xtc): v4 | pf8 -- and pf8 is the one to reach for when the xtc "
+                    "route's hit set has to line up with a peakfinder8 reference, since it estimates "
+                    "the background in RADIAL shells the way PeakFinderSFX/CrystFEL do, rather than in "
+                    "a local annulus. It is now vendored (glint/peakfinder8.py + glint/radial.py); the "
+                    "raw-xtc reader builds the per-pixel q map it needs from --zdist and the "
+                    "wavelength. NOT valid on the `images` route (no q map there yet), and `stored` "
+                    "is meaningless on xtc (no stored peak list to reuse).",
         flag_type="--", rename_param="peakfinder",
     )
     top_peaks: Optional[PositiveInt] = Field(
@@ -259,6 +268,29 @@ class IndexGLINTParameters(ThirdPartyParameters):
         if values.get("exp") and v in (None, ""):
             raise ValueError(f"`{field.name}` is required with `exp` (the raw xtc source)")
         return v
+
+    @validator("peakfinder", always=True)
+    def _peakfinder_for_source(cls, pf: str, values: Dict[str, Any]) -> str:
+        """The valid finders differ per source, so reject the combinations the launcher would mangle.
+
+        `stored` reuses a .cxi's own peakfinder8/Cheetah peak list, which raw xtc does not have.
+        `pf8` needs the per-pixel q map only the xtc reader builds. `pf9` is .cxi-only for the same
+        reason. Left as one field with a per-source check rather than two fields, so a config moving
+        between sources fails loudly instead of silently picking a different finder."""
+        if values.get("exp"):
+            if pf is None:
+                return "v4"                     # raw xtc: no stored list, and pf9 is .cxi-only
+            if pf not in ("v4", "pf8"):
+                raise ValueError(f"`peakfinder: {pf}` is not available on the `exp` (raw xtc) source "
+                                 "-- use v4 (local annulus) or pf8 (radial shells, the peakfinder8 "
+                                 "match). `stored` needs a .cxi peak list; `pf9` needs the .cxi path.")
+        elif pf is None:
+            return "stored"                     # .cxi: reuse its own peakfinder8 peaks (see above)
+        elif pf == "pf8":
+            raise ValueError("`peakfinder: pf8` is only wired on the `exp` (raw xtc) source, which "
+                             "builds the per-pixel q map it needs. On `images` use `stored` to reuse "
+                             "the .cxi's own peakfinder8 peaks.")
+        return pf
 
     @validator("det", "psana", "calib_dir", always=True)
     def _xtc_only(cls, v: Any, values: Dict[str, Any], field: Any) -> Any:

@@ -40,6 +40,7 @@ def _wavelength_A(ebeam_det, evt):
 
 def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
                           min_peaks=6, max_events=0, rank=0, nranks=1, calib_dir=None, geom=None,
+                          peakfinder="v4",
                           min_pix=xtc_core.PF_MIN_PIX, son_min=xtc_core.PF_SON_MIN,
                           thr_high=xtc_core.PF_THR_HIGH, thr_low=xtc_core.PF_THR_LOW):
     """Peak-find a whole psana1 (LCLS-I) run in-process and return its q-frames -- same dict contract
@@ -82,6 +83,14 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
         frame = detector.calib(evt)          # psana1: pedestal/gain/common-mode applied -> (nseg,H,W)
         if frame is None:
             continue
+        # WAVELENGTH FIRST, then geometry. peakfinder8 bins the background in RADIAL shells, so its
+        # per-pixel q map is q(lambda) and must exist before the first find() -- the old order built
+        # the geometry before lambda was known. Reordering also means a frame skipped for a missing
+        # wavelength no longer triggers the one-time geometry build.
+        lam = wavelength or _wavelength_A(ebeam, evt)
+        if not lam:                          # None, or 0.0 from a non-finite photon energy
+            n_skipped_wl += 1
+            continue
         if X is None:
             if geom:
                 # psana's deployed calibration is often the UNREFINED starting geometry while the
@@ -99,11 +108,8 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
                 good = None
             X, Y, Zc, kin, finders = xtc_core.prep_geometry(
                 Xf, Yf, Zf, frame.shape, good, zdist,
-                min_pix=min_pix, son_min=son_min, thr_high=thr_high, thr_low=thr_low)
-        lam = wavelength or _wavelength_A(ebeam, evt)
-        if not lam:                          # None, or 0.0 from a non-finite photon energy
-            n_skipped_wl += 1
-            continue
+                min_pix=min_pix, son_min=son_min, thr_high=thr_high, thr_low=thr_low,
+                peakfinder=peakfinder, lam=lam)
         n_events += 1
         q = xtc_core.frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks)
         if len(q):

@@ -20,7 +20,7 @@ import xtc_core
 
 
 def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_det="ebeamh",
-                   min_peaks=6, max_events=0, rank=0, nranks=1,
+                   min_peaks=6, max_events=0, rank=0, nranks=1, peakfinder="v4",
                    min_pix=xtc_core.PF_MIN_PIX, son_min=xtc_core.PF_SON_MIN,
                    thr_high=xtc_core.PF_THR_HIGH, thr_low=xtc_core.PF_THR_LOW):
     """Peak-find a whole psana2 run in conda2 and return its q-frames (see xtc_qreader_psana1 for the
@@ -83,14 +83,17 @@ def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_d
         frame = detector.raw.calib(evt)
         if frame is None:
             continue
-        if X is None:
-            X, Y, Zc, kin, finders = xtc_core.prep_geometry(
-                Xf, Yf, Zf, frame.shape, good_mask(frame.shape), zdist,
-                min_pix=min_pix, son_min=son_min, thr_high=thr_high, thr_low=thr_low)
+        # wavelength FIRST: peakfinder8's per-pixel q map is q(lambda), so it must exist before the
+        # geometry is built. Mirrors the psana1 reader exactly.
         lam = wl(evt)
         if not lam:                          # None, or 0.0 from a non-finite photon energy
             n_skipped_wl += 1
             continue
+        if X is None:
+            X, Y, Zc, kin, finders = xtc_core.prep_geometry(
+                Xf, Yf, Zf, frame.shape, good_mask(frame.shape), zdist,
+                min_pix=min_pix, son_min=son_min, thr_high=thr_high, thr_low=thr_low,
+                peakfinder=peakfinder, lam=lam)
         n_events += 1
         q = xtc_core.frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks)
         if len(q):

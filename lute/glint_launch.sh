@@ -16,7 +16,11 @@
 # rejected by argparse rather than silently ignored.
 set -o pipefail
 source /sdf/group/lcls/ds/ana/sw/conda1/manage/bin/psconda.sh >/dev/null 2>&1
-conda activate ana-4.0.58-py3-minipytorch >/dev/null 2>&1
+# 4.0.59, not 4.0.58: 4.0.58 cannot parse some detectors' ConfigV and drops them from the
+# configStore silently, so psana.Detector() raises a KeyError that reads like a bad detector
+# name (measured on cxilu8823 r0226, Jungfrau4M). 4.0.59 is the same stack one release up --
+# same torch 1.11.0, same cupy 13.0.0 -- and parses it. Override with GLINT_ANA_ENV.
+conda activate "${GLINT_ANA_ENV:-ana-4.0.59-py3-minipytorch}" >/dev/null 2>&1
 cd "$(dirname "$0")/.." || exit 1                       # repo root (so `glint` imports)
 
 for a in "$@"; do                                       # does this invocation name the xtc source?

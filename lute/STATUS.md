@@ -302,13 +302,53 @@ Both detectors show the same shape — a flat region then a knee — but Jungfra
 higher. The shipped 15 selects 37% of events on one detector and 96% on the other. Calibrate per
 detector before using pf8 on new hardware; v4 (the default) is unaffected.
 
-**7. Geometry provenance is load-bearing and silent when wrong.** On `mfxx49820` psana's deployed
-geometry is the unrefined 2021 starting calibration; blind indexing locked a wrong doubled-*c* cell
-at support 23/6294 and reported success. Supplying btx's refined `.geom` took support to 832 and the
-recovered cell to `[38.3 79.1 80.3]` against a truth of `[38.4 79.3 79.5]`. `--geom` and
-`--calib-dir` are therefore not optional conveniences on this route. The consensus gate merged in
-glint#83 (pool share 2%, runner-up margin 1.5x) is what now refuses that 23/6294 lock — treat it as
-load-bearing rather than tunable.
+**~~7. Geometry provenance is load-bearing and silent when wrong.~~ NO LONGER SILENT.** On
+`mfxx49820` psana's deployed geometry is the unrefined 2021 starting calibration; blind indexing
+locked a wrong doubled-*c* cell at support 23/6294 and reported success. Supplying btx's refined
+`.geom` took support to 832 and the recovered cell to `[38.3 79.1 80.3]` against a truth of
+`[38.4 79.3 79.5]`. `--geom` and `--calib-dir` are not optional conveniences on this route. The
+consensus gate from glint#83 (pool share 2%, runner-up margin 1.5x) refuses that 23/6294 lock —
+load-bearing, not tunable.
+
+`experiments/xtc_bridge/geom_provenance.py` now runs at reader startup and reports one of three
+states. It **warns, never raises** — but it never says nothing:
+
+| state | meaning |
+|---|---|
+| `CORROBORATED` | a `.geom` was supplied and agrees with psana |
+| `DISAGREE` | a `.geom` was supplied and does not — with the disagreement characterised |
+| `UNVERIFIED` | no `.geom`; nothing corroborates psana. **Says so.** This was previously indistinguishable from success |
+
+**The discriminator, and the one that had to be discarded.** Two geometries differ in two ways and
+only one matters: a global scale/distance term (benign — `--zdist` sets the distance) or a per-panel
+shape term (tilts/offsets, which `--zdist` cannot touch, and which stops blind indexing converging).
+The obvious test — "does one global scale explain it?" — **does not work**, and the test suite pins
+that: on a synthetic per-quadrant error a global scale still explains 54%, so keying on it would
+wave the real failure through as a distance problem. What separates them is **inter-panel
+dispersion** relative to the error, measured on geometries where the answer is known:
+
+| synthetic case | scale explains | dispersion/median |
+|---|---|---|
+| pure distance +3% | 91.6% | **0.07** |
+| per-quadrant ±2% | 54.2% | **1.01** |
+| per-panel shifts | 18.1% | **0.91** |
+
+An order of magnitude apart, so the 0.3 cut is the middle of a gap rather than a tuned number.
+
+Verified on the real known-bad case (job 34280747, 1,946,419 pixels, psana `0-end.data` vs btx
+`r0016.geom`): median 1.586%, **inter-panel dispersion 1.811%, ratio 1.14, signs 8 positive / 8
+negative**, and a global scale would explain **0.0%** — `DISAGREE`, naming SHAPE. The same run with
+no `.geom` returns `UNVERIFIED`, and psana-against-itself returns `CORROBORATED` at exactly 0.000%,
+so the check does not cry wolf on a good geometry.
+
+It also names the path failures psana accepts **silently**, each of which makes `--calib-dir` a
+no-op while looking fine: a nonexistent path (psana falls back to the default), a path with no
+geometry files for that detector source, no deployed range covering the run, and a relative path the
+launcher's `cd` will re-resolve. And it flags when `--zdist` matches psana's own nominal `coords_z`
+to within 1%, because then nothing independent constrains the scale and a global |q| error rides
+along invisibly — which is exactly the `cxilu8823` r0226 situation.
+
+`test_geom_provenance.py` covers all of it on synthetic coordinates: no psana, no cupy, no GPU.
 
 ---
 

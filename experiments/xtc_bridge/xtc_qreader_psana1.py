@@ -196,15 +196,28 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
             n_skipped_wl += 1
             continue
         if X is None:
+            # psana's own coords are read either way -- they are what GLINT uses when --geom is
+            # absent, and the thing --geom is checked AGAINST when it is present. Two calls, once.
+            Xp = detector.coords_x(evt); Yp = detector.coords_y(evt); Zp = detector.coords_z(evt)
             if geom:
                 # psana's deployed calibration is often the UNREFINED starting geometry while the
                 # trusted refinement lives only in a .geom -- on mfxx49820 r0016 that is a per-
-                # QUADRANT |q| error of +-3-5% (median 3.16%) that no --zdist can absorb.
+                # QUADRANT |q| error of +-2-4% that no --zdist can absorb (it explains 0.2% of it).
                 import geom_coords
                 Xf, Yf, Zf = geom_coords.coords_from_geom(geom, frame.shape, zdist)
             else:
                 # psana1 per-pixel coords (um), default cframe=CFRAME_PSANA -- same frame as psana2
-                Xf = detector.coords_x(evt); Yf = detector.coords_y(evt); Zf = detector.coords_z(evt)
+                Xf, Yf, Zf = Xp, Yp, Zp
+            # STATUS.md item 7: say which geometry this is and whether anything corroborates it.
+            # Warns, never raises -- see geom_provenance.report.
+            try:
+                import geom_provenance
+                geom_provenance.report(det, run, calib_dir=calib_dir, geom=geom,
+                                       coords_psana=(Xp, Yp, Zp),
+                                       coords_geom=((Xf, Yf, Zf) if geom else None),
+                                       shape=tuple(frame.shape), zdist=zdist)
+            except Exception as e:                    # provenance must never break a run
+                print(f"geometry provenance check skipped ({type(e).__name__}: {e})", flush=True)
             try:
                 m = detector.mask(evt, status=True, calib=True, edges=False, central=False)
                 good = m.astype(bool) if m is not None else None   # psana1 mask: 1=good, 0=bad

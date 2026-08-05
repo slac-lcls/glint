@@ -25,10 +25,10 @@ struck through as they close:
 | 4 | ~~150 ms/event, 98% of it CPU calibration~~ | **done** -- `--gpu-calib`, byte-identical stream, 4.1x end to end |
 | 5 | ~~no ana env satisfies both psana and torch~~ | **done** -- GLINT runs on torch 1.11, so both do |
 | 6 | `PF8_MIN_SNR = 15` is detector-specific | **open** |
-| 7 | geometry provenance is load-bearing and silent when wrong | **open** |
+| 7 | ~~geometry provenance is silent when wrong~~ | **done** -- startup check, three states, never silent |
 
-The two open ones are both about *trusting the answer* rather than producing one, and item 7 is the
-one to read before running on a new experiment.
+The one still open is item 6: `PF8_MIN_SNR` is detector-specific and needs calibrating per
+detector before `peakfinder: pf8` is used on new hardware. It does not affect the default `v4`.
 
 > **The default stream is ORIENTATION-ONLY and is NOT mergeable.** Every reflection carries
 > placeholder `I=0.00 sigma(I)=0.00`. Choose one of:

@@ -27,6 +27,22 @@ without running that first.
 The gain-range decode is the part you cannot skip. Epix10ka2M and Jungfrau encode the gain range in
 the raw value's high bits, and the pedestal/gain arrays are indexed BY that range -- get it wrong and
 the calibration is wrong exactly on the bright pixels peak-finding depends on.
+
+STATE, 2026-08-05: THE KERNEL IS FAST AND THE LAYOUT IS UNSOLVED. Measured on mfxx49820 r0016,
+40 events (validate_gpu_calib.py, S3DF job 34275323):
+
+    psana det.calib (CPU)   142.84 ms
+    this kernel               1.40 ms      102x
+
+    per-pixel RMS residual    4050 ADU     145x the frame's own RMS
+    peak-set Jaccard          35.7%        177 shared / 268 only det.calib / 51 only here
+
+So the arithmetic is worth ~100x and the image is currently wrong. `gain_layout()` therefore
+raises rather than returning a guess: it inferred range_offset=13, range_bits=3 from a 7-plane
+pedestal array, and 7 is not a power of two -- psana's planes are gain MODES, not a raw bit
+field, and Reader.cu gets rangeOffset/rangeBits from the DAQ's per-detector config. Supply them
+explicitly to use this. Note the residual cannot yet separate a wrong bit field from a missing
+common mode; both look the same from here, and the layout has to be fixed first.
 """
 from __future__ import annotations
 
@@ -50,9 +66,27 @@ def gain_layout(det, run):
     nranges = int(peds.shape[0])
     if nranges <= 1:
         return 0, 0, 1
-    range_bits = int(np.ceil(np.log2(nranges)))
-    range_offset = 16 - range_bits           # psana packs data in the LOW bits, range in the high
-    return range_offset, range_bits, nranges
+    # !! THIS INFERENCE IS WRONG AND IS KNOWN TO BE WRONG. It is left in place, loudly, because the
+    # measurement that condemns it is more useful than a deletion.
+    #
+    # On Epix10ka2M it yields range_offset=13, range_bits=3, nranges=7 -- and 7 is not a power of
+    # two. psana's 7 pedestal planes are GAIN MODES (a detector-level concept: high/medium/low x
+    # fixed/auto, plus a dark), not a 3-bit raw field. Reader.cu takes rangeOffset/rangeBits from the
+    # DAQ's per-detector configuration; they cannot be recovered from an array's shape.
+    #
+    # Measured cost of the guess, mfxx49820 r0016, 40 events (validate_gpu_calib.py, job 34275323):
+    # 4050 ADU RMS residual against det.calib -- 145x the frame's own RMS -- and a peak-set Jaccard
+    # of 35.7% (177 shared, 268 only on det.calib, 51 only here). The kernel runs in 1.40 ms against
+    # 142.84 ms, a 102x speedup, and produces the wrong image.
+    #
+    # A correct version needs the real (rangeOffset, rangeBits) for the detector, from the DAQ
+    # config or from psana's own gain-mode decode, plus a decision on common mode -- which the
+    # residual above cannot yet be separated from, since a wrong bit field and a missing common mode
+    # both show up as a large residual.
+    raise NotImplementedError(
+        f"cannot infer the gain-range bit layout from a {nranges}-plane pedestal array: psana's "
+        f"planes are gain MODES, not raw bit fields. Supply (range_offset, range_bits) explicitly "
+        f"from the detector's DAQ configuration -- see the note above and job 34275323.")
 
 
 class GpuCalibrator:

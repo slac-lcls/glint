@@ -73,6 +73,70 @@ def pixel_q(X, Y, Zc, kin, lam):
     return np.linalg.norm((s - kin) / lam, axis=-1)
 
 
+class _PanelFinders:
+    """One finder per panel -- the arrangement PeakFinderV4 has always used here.
+
+    Correct by construction across seams (each panel is labelled on its own), and the only sane
+    choice for a LATENCY-bound consumer: panels can be found independently as they arrive."""
+
+    def __init__(self, finders):
+        self.finders = finders
+
+    def find_all(self, frame):
+        """-> (seg, ss, fs) integer arrays of peak positions in panel-local coordinates."""
+        import cupy as cp
+        segs, ys, xs = [], [], []
+        for p, f in enumerate(self.finders):
+            pk = f.find(cp.asarray(frame[p], cp.float32))
+            x = cp.asnumpy(pk["x"]); y = cp.asnumpy(pk["y"])
+            if x.size:
+                segs.append(np.full(x.size, p)); xs.append(x); ys.append(y)
+        if not xs:
+            return None
+        return np.concatenate(segs), np.concatenate(ys), np.concatenate(xs)
+
+
+class _StackedFinder:
+    """ONE peakfinder8 over the whole detector, with the panel seams masked out.
+
+    This is the arrangement peakfinder8 actually wants, and the reason it exists: its background is
+    estimated in RADIAL SHELLS, so a shell must see every pixel at that |q| across the WHOLE
+    detector. Per-panel, a 16-panel detector estimates each shell from ~1/16 the pixels -- which
+    throws away the one property that distinguishes pf8 from v4's local annulus.
+
+    Stacking is already correct for the shells (the radial operator bins by q VALUE, not by spatial
+    position). The only hazard is `ndimage.label`, which would happily connect a component across the
+    boundary between two panels that are not physically adjacent. So the panels are laid out with a
+    ONE-ROW GAP between them and that gap is masked bad:
+
+        rows [p*pitch, p*pitch+H)  = panel p          pitch = H + 1
+        row   p*pitch+H            = separator, good=False
+
+    peakfinder8 zeroes snr wherever `good` is false (`snr = where(self.good, ..., 0.0)`) and takes
+    `cand = snr > thr`, so a masked row can never join a component -- it is an impassable barrier to
+    labelling. A synthetic gap row is used rather than masking a real detector row so that no actual
+    pixels are sacrificed; the cost is nseg extra rows of buffer."""
+
+    def __init__(self, finder, nseg, H, pitch):
+        self.finder = finder
+        self.nseg, self.H, self.pitch = nseg, H, pitch
+        self._buf = None
+
+    def find_all(self, frame):
+        import cupy as cp
+        if self._buf is None:                       # preallocate once; refilled per frame
+            self._buf = cp.zeros((self.nseg * self.pitch, frame.shape[-1]), cp.float32)
+        for p in range(self.nseg):                  # separator rows stay 0 and are masked anyway
+            self._buf[p * self.pitch:p * self.pitch + self.H] = cp.asarray(frame[p], cp.float32)
+        pk = self.finder.find(self._buf)
+        x = cp.asnumpy(pk["x"]); y = cp.asnumpy(pk["y"])
+        if not x.size:
+            return None
+        seg = (y // self.pitch).astype(int)
+        ss = y - seg * self.pitch                   # < H: separators are masked, so never a peak
+        return seg, ss, x
+
+
 def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min=PF_SON_MIN,
                   thr_high=PF_THR_HIGH, thr_low=PF_THR_LOW, peakfinder="v4", lam=None):
     """From per-pixel lab coords (any layout of total size nseg*H*W) build what frame_q needs:
@@ -99,45 +163,61 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min
     Zc = np.sign(np.nanmean(Zf)) * zdist
     kin = np.array([0.0, 0.0, np.sign(Zc)])
     good = np.asarray(good, bool).reshape(nseg, H, W) if good is not None else np.ones((nseg, H, W), bool)
-    if peakfinder == "pf8":
-        # PER-PANEL, matching the v4 arrangement above, because ndimage.label works on a 2-D array:
-        # stacking the panels would let a peak straddle a panel seam and merge two crystals' spots.
-        # The COST of that choice is that each panel's radial shells are estimated from its own pixels
-        # only -- on a 16-panel detector that is ~1/16 the statistics per shell of a whole-detector
-        # peakfinder8. It is the honest per-panel analogue, not a bit-match to CrystFEL's. Measure
-        # before quoting a rate from it.
+    gmask_v4 = good
+    if peakfinder in ("pf8", "pf8-panel"):
+        # peakfinder8: RADIAL-shell background, the closer match to what CrystFEL/PeakFinderSFX run.
+        # Needs a per-pixel q map, which is why this was unavailable until radial.py was vendored.
         if lam is None:
-            raise ValueError("peakfinder='pf8' needs the wavelength (per-pixel q is q(lambda)); pass "
-                             "lam=, or use --wavelength so the reader has one before geometry setup")
+            raise ValueError("peakfinder=%r needs the wavelength (per-pixel q is q(lambda)); pass "
+                             "lam=, or use --wavelength so the reader has one before geometry setup"
+                             % peakfinder)
         PeakFinder8 = load_peakfinder8().PeakFinder8
         qmap = pixel_q(X, Y, Zc, kin, float(lam))               # (nseg,H,W) in 1/A
-        finders = [PeakFinder8(cp.asarray(qmap[p]), mask=cp.asarray(good[p]), dtype=cp.float32,
-                               min_pix=min_pix, min_snr=son_min, thr_snr=thr_high)
-                   for p in range(nseg)]
+        gmask = good if good is not None else np.ones(shape, bool)
+        if peakfinder == "pf8-panel":
+            # STREAMING choice: independent per-panel finders, so panels can be processed as they
+            # arrive and nothing waits for a whole detector. Accepts ~1/nseg the statistics per
+            # radial shell -- for a latency-bound consumer that is the right trade.
+            finders = _PanelFinders([
+                PeakFinder8(cp.asarray(qmap[p]), mask=cp.asarray(gmask[p]), dtype=cp.float32,
+                            min_pix=min_pix, min_snr=son_min, thr_snr=thr_high)
+                for p in range(nseg)])
+        else:
+            # OFFLINE default: ONE finder over the whole detector, seams masked. See _StackedFinder.
+            pitch = H + 1
+            qs = np.zeros((nseg * pitch, W)); gs = np.zeros((nseg * pitch, W), bool)
+            for p in range(nseg):
+                qs[p * pitch:p * pitch + H] = qmap[p]
+                gs[p * pitch:p * pitch + H] = gmask[p]           # separator row left good=False
+            # NaN q (panel-gap pixels) would poison the radial binning; mask them and give them a
+            # finite q so RadialIntegrator's bin edges are not NaN-driven.
+            bad = ~np.isfinite(qs)
+            gs &= ~bad; qs[bad] = 0.0
+            finders = _StackedFinder(
+                PeakFinder8(cp.asarray(qs), mask=cp.asarray(gs), dtype=cp.float32,
+                            min_pix=min_pix, min_snr=son_min, thr_snr=thr_high),
+                nseg, H, pitch)
     else:
-        finders = [PeakFinderV4(cp.asarray(good[p]), dtype=cp.float32, min_pix=min_pix, son_min=son_min,
-                                thr_high=thr_high, thr_low=thr_low) for p in range(nseg)]
+        finders = _PanelFinders([
+            PeakFinderV4(cp.asarray(gmask_v4[p]), dtype=cp.float32, min_pix=min_pix, son_min=son_min,
+                         thr_high=thr_high, thr_low=thr_low) for p in range(nseg)])
     return X, Y, Zc, kin, finders
 
 
 def frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks):
     """One calibrated (nseg,H,W) frame -> its reciprocal q-vectors (M,3) in 1/A, or an empty (0,3).
-    Per-panel GPU peak-find; peak centroid rounded to the nearest pixel for the coord lookup; NaN
-    rows (panel-gap pixels have NaN coords) dropped. Returns [] shape (0,3) if under min_peaks."""
-    import cupy as cp
-    nseg = len(finders)
+
+    `finders` is a _PanelFinders or a _StackedFinder; both expose find_all(frame) -> (seg, ss, fs) in
+    panel-local coordinates, so the geometry lookup below is identical either way. Peak centroids are
+    rounded to the nearest pixel for that lookup; NaN rows (panel-gap pixels have NaN coords) are
+    dropped. Returns shape (0,3) if under min_peaks."""
     _, H, W = X.shape
-    segs, ys, xs = [], [], []
-    for p in range(nseg):
-        pk = finders[p].find(cp.asarray(frame[p], cp.float32))
-        x = cp.asnumpy(pk["x"]); y = cp.asnumpy(pk["y"])
-        if x.size:
-            segs.append(np.full(x.size, p)); xs.append(x); ys.append(y)
-    if not xs:
+    found = finders.find_all(frame)
+    if found is None:
         return np.empty((0, 3))
-    seg = np.concatenate(segs)
-    fs = np.rint(np.concatenate(xs)).astype(int)
-    ss = np.rint(np.concatenate(ys)).astype(int)
+    seg, ss_f, fs_f = found
+    fs = np.rint(fs_f).astype(int)
+    ss = np.rint(ss_f).astype(int)
     np.clip(fs, 0, W - 1, out=fs); np.clip(ss, 0, H - 1, out=ss)
     r = np.stack([X[seg, ss, fs], Y[seg, ss, fs], np.full(seg.size, Zc)], axis=1)
     s = r / np.linalg.norm(r, axis=1, keepdims=True)

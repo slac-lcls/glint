@@ -64,13 +64,16 @@ def build_parser():
         "Defaults are calibrated on Epix10ka2M at MFX to match CrystFEL peakfinder8's hit rate; "
         "tune per detector. Too loose and blank frames become 'hits' -- PeakFinderV4's own library "
         "defaults (min-pix 1, no noise floor) pass 100% of frames.")
-    pf.add_argument("--peakfinder", choices=("v4", "pf8"), default="v4",
-                    help="v4 = local-annulus finder (default, no geometry needed). pf8 = the vendored "
-                         "peakfinder8, which estimates the background in RADIAL shells and so is the "
-                         "closer match to what PeakFinderSFX/CrystFEL run upstream -- use it when the "
-                         "xtc route's hit set has to line up with a peakfinder8 reference. Needs a "
-                         "wavelength before the first frame, so pass --wavelength on runs whose "
-                         "per-event photon energy is unreliable. Per-panel (see xtc_core).")
+    pf.add_argument("--peakfinder", choices=("v4", "pf8", "pf8-panel"), default="v4",
+                    help="v4 = local-annulus finder (default; needs no geometry). pf8 = the vendored "
+                         "peakfinder8 over the WHOLE detector, seams masked -- radial-shell background, "
+                         "the closer match to what PeakFinderSFX/CrystFEL run upstream, and the one to "
+                         "use OFF-LINE when the xtc hit set must line up with a peakfinder8 reference. "
+                         "pf8-panel = the same finder per panel: ~1/nseg the statistics per radial "
+                         "shell, but panels are independent, which is what a latency-bound STREAMING "
+                         "consumer wants. Both need a wavelength before the first frame (per-pixel q "
+                         "is q(lambda)), so pass --wavelength when per-event photon energy is "
+                         "unreliable.")
     pf.add_argument("--min-pix", type=int, default=xtc_core.PF_MIN_PIX,
                     help=f"min connected pixels per peak (default {xtc_core.PF_MIN_PIX})")
     pf.add_argument("--son-min", type=float, default=xtc_core.PF_SON_MIN,

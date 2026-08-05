@@ -109,7 +109,7 @@ class IndexGLINTParameters(ThirdPartyParameters):
                     "absorb -- and it was enough to make blind indexing return a wrong doubled-c cell.",
         flag_type="--", rename_param="geom",
     )
-    peakfinder: Optional[Literal["v4", "pf9", "pf8", "stored"]] = Field(
+    peakfinder: Optional[Literal["v4", "pf9", "pf8", "pf8-panel", "stored"]] = Field(
         None,
         description="Peak finder. UNSET resolves PER SOURCE -- `stored` on `images`, `v4` on `exp` -- "
                     "and the resolved value is passed explicitly, never left to a downstream default. "
@@ -119,7 +119,11 @@ class IndexGLINTParameters(ThirdPartyParameters):
                     "GLINT CLI default of v4: on a .cxi that already carries peaks, re-finding them "
                     "is both slower and worse. Set `v4`/`pf9` explicitly to peak-find from scratch. "
                     "\n\nVALID VALUES DEPEND ON THE SOURCE. With `images` (.cxi): v4 | pf9 | stored. "
-                    "With `exp` (raw xtc): v4 | pf8 -- and pf8 is the one to reach for when the xtc "
+                    "With `exp` (raw xtc): v4 | pf8 | pf8-panel -- pf8 runs the finder over the WHOLE "
+                    "detector with the panel seams masked, which is what its radial-shell background "
+                    "needs and the right choice for OFFLINE/LUTE batch; pf8-panel keeps the panels "
+                    "independent for a latency-bound streaming consumer, at ~1/nseg the statistics "
+                    "per shell. pf8 is the one to reach for when the xtc "
                     "route's hit set has to line up with a peakfinder8 reference, since it estimates "
                     "the background in RADIAL shells the way PeakFinderSFX/CrystFEL do, rather than in "
                     "a local annulus. It is now vendored (glint/peakfinder8.py + glint/radial.py); the "
@@ -280,14 +284,16 @@ class IndexGLINTParameters(ThirdPartyParameters):
         if values.get("exp"):
             if pf is None:
                 return "v4"                     # raw xtc: no stored list, and pf9 is .cxi-only
-            if pf not in ("v4", "pf8"):
+            if pf not in ("v4", "pf8", "pf8-panel"):
                 raise ValueError(f"`peakfinder: {pf}` is not available on the `exp` (raw xtc) source "
-                                 "-- use v4 (local annulus) or pf8 (radial shells, the peakfinder8 "
-                                 "match). `stored` needs a .cxi peak list; `pf9` needs the .cxi path.")
+                                 "-- use v4 (local annulus), pf8 (whole-detector radial shells, the "
+                                 "peakfinder8 match, preferred OFFLINE) or pf8-panel (per-panel, for "
+                                 "a latency-bound streaming consumer). `stored` needs a .cxi peak "
+                                 "list; `pf9` needs the .cxi path.")
         elif pf is None:
             return "stored"                     # .cxi: reuse its own peakfinder8 peaks (see above)
-        elif pf == "pf8":
-            raise ValueError("`peakfinder: pf8` is only wired on the `exp` (raw xtc) source, which "
+        elif pf in ("pf8", "pf8-panel"):
+            raise ValueError(f"`peakfinder: {pf}` is only wired on the `exp` (raw xtc) source, which "
                              "builds the per-pixel q map it needs. On `images` use `stored` to reuse "
                              "the .cxi's own peakfinder8 peaks.")
         return pf

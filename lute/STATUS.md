@@ -149,16 +149,58 @@ predicted reflection with nothing there integrates to noise about zero; partiala
 And GLINT imposes no symmetry, so the stream says `lattice_type = triclinic`: the sample's
 symmetry still has to be supplied downstream.
 
-**4. ~150 ms/event, 98% of it CPU calibration.** A 100k-frame run is ~4 h on one core. The DAQ
-already solves this: `psdaq/drpGpu/Reader.cu` (on drp-srcf-gpu003, tree `lcls2_speckle`) uploads raw
-`uint16` and applies `calib[i] = (float(data) - peds[i]) * gains[i]` on the GPU, with per-pixel
-pedestal/gain arrays resident on the device. psana exposes the same inputs (`det.raw`,
-`det.pedestals(run)`, `det.gain(run)`). A port is worth ~40x on this route.
+**~~4. ~150 ms/event, 98% of it CPU calibration.~~ DONE, and it is exact.** `experiments/xtc_bridge/gpu_calib.py`
+reproduces `det.calib` on the device **bit for bit** on mfxx49820 r0016 (Epix10ka2M, 40 events, job
+34277115): 0.000 ADU residual, and the same PeakFinderV4 run on both images returns **the identical
+445 peaks — 0 only-CPU, 0 only-GPU, Jaccard 100.0%**.
 
-Two things such a port must not drop: the **gain-range decode** (Epix10ka2M/Jungfrau encode the range
-in the raw value's high bits; `Reader.cu` uses `rangeOffset`/`rangeBits` and indexes
-`&gainArray[range*nElements]`) and **common mode** (a data-dependent per-ASIC median subtraction that
-`det.calib` does and `Reader.cu` does not). Dropping common mode changes the hit set.
+| path | median ms | speedup |
+|---|---|---|
+| `det.calib` (CPU) | 141.32 | |
+| GPU, full (ped + common mode + gain + mask) | 3.82 | **37x** |
+| GPU, no common mode (ped + gain + mask) | 0.73 | **193x** |
+
+Getting there took correcting the plan above, which was written from `Reader.cu` and was wrong in
+two places. Both were found by reading psana's own `Detector/UtilsEpix10ka.py` and
+`Detector/UtilsCommonMode.py`, after SLAC's Confluence notes on
+[det.calib algorithms](https://confluence.slac.stanford.edu/spaces/PSDM/pages/349284620/Method+det.calib+algorithms)
+and [common mode algorithms](https://confluence.slac.stanford.edu/spaces/PSDM/pages/165089547/Common+mode+correction+algorithms)
+pointed at them:
+
+- **`* gains[i]` is wrong for this detector family.** `det.gain()` holds gain in **ADU/keV** for
+  epix10ka and Jungfrau, and psana builds `gfac = divide_protected(ones, gain)` and multiplies by
+  *that* — it DIVIDES. Only CSPAD and epix100a hold a keV/ADU factor that is multiplied, which is
+  what `Reader.cu` does. Multiplying here is wrong by gain squared.
+- **`det.calib` ends with `* det.mask_total`.** Not in `Reader.cu`, not previously here.
+
+The **gain-range decode** warning above stands and was already handled: the mode is not the raw high
+bits, it is per-pixel detector configuration OR'd with data bit 14, so it collapses to two
+precomputed plane sets from psana's own `gain_maps_epix10ka_any`.
+
+The **common mode** warning does NOT stand as written, on two counts. It is not per-ASIC: groups are
+bounded by the **bank** — panel (352,384) splits at row 176 into two ASIC rows, each into 8 banks of
+(176,48) — and it is a masked median over H/M-gain pixels only, applied banks→rows→cols per the
+`mode` bitmask. It is implemented and verified bit-exact against a transcription of psana's routines
+over modes 2/1/4/3/7 (`experiments/xtc_bridge/test_gpu_calib_cm.py`, numpy-only, no GPU needed).
+
+And on this run it does **nothing at all** — for psana as much as for us (job 34277169). The run's
+`common_mode` constants are the default `(7,2,10,10)`, so `cormax` = 10 ADU, while the actual
+pedestal-subtracted column medians are **290 ADU (p90 485, max 1051)**. Every one of the 12,288
+column groups fails the guard, so psana applies zero correction: `det.calib(evt)` and
+`det.calib(evt, cmpars=(7,0,0,0))` differ by **0 pixels**. Two consequences:
+
+- This is the only reason the 193x row is safe. It is a property of this run's calib constants, not
+  of the detector, so **it must not be hardcoded** — `cmpars` is read from `det.common_mode(run)`.
+  The 3.1 ms the correction costs is the segmented sort, and on a run whose `cormax` is set
+  appropriately that cost buys real changes to the image.
+- The experiment's common-mode parameters are ineffective. Confluence says `par[2]` "needs to be
+  adjusted by users per experiment"; here it was left at the default and there is an uncorrected
+  ~290 ADU per-column baseline. Worth raising with the beamline — it does not hurt GLINT (the
+  peak-finder's annulus is local, hence the 100% Jaccard) but it will hurt anything integrating
+  absolute intensities.
+
+Not yet wired into the reader — that is the next step, and it is now a plumbing change rather than
+an open question.
 
 **5. The launcher's env cannot satisfy both psana and torch.** (Was marked done in `5d6c9e0`; that was wrong -- see below.) That release
 silently drops a detector whose `ConfigV` it cannot parse: the configStore has no entry, and

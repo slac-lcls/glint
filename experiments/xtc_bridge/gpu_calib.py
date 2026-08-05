@@ -26,30 +26,38 @@ Each cost a measured run to find:
 
 3. COMMON MODE IS PART OF det.calib, and it is on by default for this detector. See `_common_mode`.
 
-STATE, 2026-08-05. Three earlier runs of validate_gpu_calib.py on mfxx49820 r0016, 40 events,
-differing only in how the gain mode was resolved, and all three still MULTIPLYING by gain:
+MEASURED, 2026-08-05, mfxx49820 r0016, 40 events, job 34277115. With all three items above, this
+module reproduces det.calib BIT FOR BIT -- 0.000 ADU residual -- and the same PeakFinderV4 run on
+both images returns the identical 445 peaks: 0 only-CPU, 0 only-GPU, Jaccard 100.0%.
+
+    det.calib (CPU)                              141.32 ms
+    this module, full (ped+cm+gain+mask)           3.82 ms    37x
+    this module, no common mode                    0.73 ms   193x
+
+Three earlier runs, differing only in how the gain mode was resolved and all still MULTIPLYING by
+gain, are kept here because they are the reason to distrust a residual as a fidelity measure:
 
                           guessed (13,3)   DAQ (14,2)    psana decode
                           job 34275323     job 34275620  job 34275959
-    det.calib (CPU)        142.84 ms        142.33 ms     144.12 ms
-    this module              1.40 ms          1.37 ms       1.11 ms   (130x)
     per-pixel residual      4050 ADU         4035 ADU      1431 ADU
     peak-set Jaccard          35.7%            55.5%         58.6%
 
-Fixing the decode cut the residual 2.8x and moved the Jaccard 3 points. The 1431 ADU that survived
-was read at the time as the common-mode term. IT WAS NOT, and the arithmetic says so: psana caps
-each common-mode offset at `cormax` ADU (10 by default for this detector) and applies it to a subset
-of pixels, so common mode CANNOT move a frame by 1431 ADU RMS under any parameters. That residual is
-the inverted gain of item 1 above. Common mode is a real but second-order term on top of it.
+The 1431 ADU left after the decode was fixed was read at the time as the common-mode term. It was
+not, and the arithmetic said so before the measurement did: psana caps each common-mode offset at
+`cormax` ADU and applies it to a subset of pixels, so common mode cannot move a frame by 1431 ADU
+RMS under any parameters. It was the inverted gain.
 
-So the honest reading of the table is: it measures the speed of the GPU path and nothing about its
-fidelity, because all three rows share a bug that dominates the fidelity columns. The numbers to
-trust are the ones from the next run, with all three items above implemented. The arbiter is
-validate_gpu_calib.py and the number to read is the peak-set Jaccard, not the residual: a bias that
-shifts every pixel equally changes no peak, and it is the hit set that the rest of the pipeline sees.
+WHY BOTH ROWS ABOVE ARE EXACT, i.e. why dropping common mode costs nothing here (job 34277169). On
+this run it is inoperative FOR PSANA TOO. The run's constants are the default (7,2,10,10), so cormax
+is 10 ADU, while the actual pedestal-subtracted column medians are 290 ADU (p90 485, max 1051).
+All 12,288 column groups fail the guard, and det.calib(evt) equals det.calib(evt, cmpars=(7,0,0,0))
+to the pixel. That is a property of THIS RUN'S CALIBRATION CONSTANTS, not of the detector and not of
+this module -- which is exactly why cmpars is read from det.common_mode(run) and never hardcoded.
+On a run whose cormax is set for the data, the 3.1 ms the correction costs buys real changes.
 
-DO NOT WIRE THIS INTO THE READER UNTIL THAT JACCARD IS MEASURED AND HIGH. 130x on 98% of the event
-while losing a third of the real peaks is not a speedup anyone can use.
+It also means the experiment's common-mode parameters are doing nothing about a ~290 ADU per-column
+baseline. Harmless to peak-finding, whose annulus is local -- hence the 100% Jaccard -- but not
+harmless to anything reading absolute intensities.
 """
 from __future__ import annotations
 

@@ -238,3 +238,20 @@ def test_launcher_forwards_every_xtc_flag(flag, value):
         argv, err = _run_launcher(pathlib.Path(td), ["--exp", "e", "--run", "1", flag, value])
     assert flag in argv, f"{flag} was dropped: {err}"
     assert value in argv
+
+
+# ------------------------------------------------------- integration flags (STATUS.md item 3)
+def test_launcher_forwards_integrate_as_a_bare_switch(tmp_path):
+    """`--integrate` takes no value. The whitelist loop advances two positions per flag, so a bare
+    switch that is not declared as one swallows whatever follows it -- silently eating the next
+    flag's name and pairing its value with the wrong option."""
+    argv, err = _run_launcher(tmp_path, ["--exp", "e", "--run", "1", "--integrate",
+                                         "--zdist", "0.1027"])
+    assert "--integrate" in argv, err
+    assert "--zdist" in argv and "0.1027" in argv, f"the switch swallowed the next flag: {argv}"
+
+
+@pytest.mark.parametrize("flag,value", [("--int-dmin", "2.0"), ("--int-tol", "0.006")])
+def test_launcher_forwards_integration_tuning(tmp_path, flag, value):
+    argv, err = _run_launcher(tmp_path, ["--exp", "e", "--run", "1", flag, value])
+    assert flag in argv and value in argv, err

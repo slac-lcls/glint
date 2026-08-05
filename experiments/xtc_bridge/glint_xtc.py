@@ -95,6 +95,19 @@ def build_parser():
                     help=f"pf8 ONLY: min per-peak max-pixel SNR. Not tied to --thr-high; it stands "
                          f"in for the integrated-SNR cut pf8 lacks, and is sharp -- 10 turns this "
                          f"into a pass-through (default {xtc_core.PF8_MIN_SNR})")
+    ig = ap.add_argument_group(
+        "integration (xtc route, psana1)",
+        "Off by default, in which case the stream is ORIENTATION-ONLY: every reflection row carries "
+        "I=0/sigma=0 and a merge of it produces zeros. --integrate adds a SECOND PASS that re-reads "
+        "the indexed events, predicts their reflections from the recovered orientation and "
+        "box-integrates, giving a stream partialator can merge. Needs --geom for the panel model. "
+        "Costs roughly n_events*0.9ms + n_indexed*146ms, since only wanted events are calibrated.")
+    ig.add_argument("--integrate", action="store_true",
+                    help="second pass: predict + box-integrate, writing real I/sigma")
+    ig.add_argument("--int-dmin", type=float, default=2.0,
+                    help="resolution limit for prediction, A (default 2.0)")
+    ig.add_argument("--int-tol", type=float, default=0.006,
+                    help="Ewald excitation-error half-width, 1/A (default 0.006)")
     ap.add_argument("--cell", nargs="+", metavar="V",
                     help='known cell "a b c al be ga" (skip consensus); omit for fully-blind')
     ap.add_argument("--nbest", type=int, default=3)
@@ -154,10 +167,64 @@ def index_and_write(out, args, out_path, report=True):
         Mc_known = cell_to_Ar(*[float(x) for x in " ".join(args.cell).split()])
     images = [{"image": f"xtc://{args.exp}_r{args.run}", "event": e} for e in out["events"]]
     results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest)
-    n_idx = write_stream(results, out_path)
+    if getattr(args, "integrate", False):
+        n_idx = integrate_and_write(results, args, out_path, report=report)
+    else:
+        n_idx = write_stream(results, out_path)
     if report:
         _report(stats, out_path)
     return results, stats, n_idx
+
+
+def integrate_and_write(results, args, out_path, report=True):
+    """PASS 2: re-read the indexed events, predict their reflections and box-integrate, then write a
+    stream with REAL I/sigma that partialator can merge.
+
+    Without this the stream is orientation-only: `glint/stream.py` writes every reflection row as
+    `h k l 0.00 0.00 ...`, so only the Miller indices are real and a merge of it produces zeros.
+
+    REQUIRES --geom. Prediction projects q onto named CrystFEL panels (corner, fs/ss basis, res,
+    coffset), and psana's per-pixel coordinates do not carry that panel model -- they are positions,
+    not a tiling. The frame is handed over reshaped to the (nseg*H, W) slab a .geom addresses.
+    """
+    from glint.lute_bridge import parse_geom
+    from glint.predict import predict_spots, integrate_spots, write_stream_integrated
+    import xtc_qreader_psana1 as rd
+
+    if not args.geom:
+        sys.exit("--integrate on the xtc route needs --geom: prediction projects onto CrystFEL "
+                 "panels, which psana per-pixel coords do not define. Either pass the .geom the "
+                 "reference geometry lives in, or drop --integrate for an orientation-only stream.")
+    if args.psana != "1":
+        sys.exit("--integrate is wired on the psana1 (xtc1) route only so far")
+
+    panels, _glob = parse_geom(args.geom)
+    by_event = {int(r["event"]): r for r in results if r.get("M") is not None}
+    if not by_event:
+        return write_stream_integrated([], out_path, geom_text=open(args.geom).read())
+
+    if report:
+        print(f"  integrating {len(by_event)} indexed frames (pass 2: re-read + predict + box-sum)",
+              flush=True)
+    lam = args.wavelength
+    out = []
+    for ev, frame in rd.frames_for_events(args.exp, args.run, args.det, by_event,
+                                          calib_dir=args.calib_dir, max_events=args.max_events):
+        r = by_event[ev]
+        pred = predict_spots(r["M"], panels, args.zdist, lam,
+                             dmin=args.int_dmin, tol=args.int_tol)
+        if not len(pred):
+            continue
+        I, sig, peak, bg = integrate_spots(frame, pred)
+        out.append({"image": r["image"], "event": ev, "M": r["M"],
+                    "pred": pred, "I": I, "sigma": sig, "peak": peak, "bg": bg})
+
+    n = write_stream_integrated(out, out_path, geom_text=open(args.geom).read(),
+                                clen_m=args.zdist,
+                                photon_eV=(12398.419843320026 / lam) if lam else 9392.7)
+    if report:
+        print(f"  wrote {n} integrated chunks -> {out_path}", flush=True)
+    return n
 
 
 def main(argv=None):

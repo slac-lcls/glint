@@ -32,12 +32,16 @@ if [ -z "$XTC" ]; then
 fi
 
 # Everything glint_xtc.py accepts. Each takes a value; LUTE emits no bare switches on this route.
+XTC_SWITCHES="--integrate"    # value-less flags
 XTC_FLAGS=" --exp --run --det --zdist --wavelength --psana --geom --calib-dir --cell --nbest \
---min-peaks --max-events --peakfinder --min-pix --son-min --thr-high --thr-low --pf8-min-snr --reader-env --energy-det -o --out "
+--min-peaks --max-events --peakfinder --min-pix --son-min --thr-high --thr-low --pf8-min-snr --int-dmin --int-tol --reader-env --energy-det -o --out "
 args=(); dropped=()
 i=1
 while [ $i -le $# ]; do
     a="${!i}"; j=$((i + 1)); v="${!j}"
+    case " $XTC_SWITCHES " in                           # bare switches take NO value
+        *" $a "*) args+=("$a"); i=$((i + 1)); continue ;;
+    esac
     case "$XTC_FLAGS" in
         *" $a "*) args+=("$a" "$v") ;;
         *)        dropped+=("$a") ;;

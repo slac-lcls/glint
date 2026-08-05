@@ -38,6 +38,44 @@ def _wavelength_A(ebeam_det, evt):
     return None
 
 
+def frames_for_events(exp, run, det, wanted, calib_dir=None, max_events=0):
+    """PASS 2 of the two-pass offline route: re-read a run and yield the CALIBRATED frames of the
+    events that pass 1 managed to index, as `(event_index, frame_2d)`.
+
+    Indexing needs only q; integration needs PIXELS. Holding every calibrated frame from pass 1 is
+    not an option -- 8.65 MB each on Epix10ka2M, 16.8 on Jungfrau4M, so a 6000-event run is 50-100 GB
+    -- and the cell is not known until the cross-frame consensus has seen every frame, so the pixels
+    cannot be consumed on the way past either. Re-reading is the way out.
+
+    It is cheaper than it sounds because `det.calib` is the whole cost of an event and it is called
+    ONLY for wanted events: measured on mfxx49820 r0016, calib is 145.8 ms of a 149.2 ms event while
+    advancing the event stream is 0.94 ms. So pass 2 costs about
+        n_events * 0.94 ms  +  n_indexed * 145.8 ms
+    rather than a second full pass. (psana1 `idx` mode would allow true random access and skip the
+    walk entirely; sequential-with-skip is simpler and the walk is not the expensive part.)
+
+    Yields the frame reshaped to the CrystFEL (nseg*H, W) slab, which is the layout a .geom's
+    min/max_fs/ss address and what `integrate_spots` expects.
+    """
+    import psana
+
+    if calib_dir:
+        psana.setOption("psana.calib-dir", str(calib_dir))
+    ds = psana.DataSource(f"exp={exp}:run={int(run)}")
+    detector = psana.Detector(det)
+    wanted = set(int(e) for e in wanted)
+    for i, evt in enumerate(ds.events()):
+        if max_events and i >= max_events:
+            break
+        if i not in wanted:
+            continue                         # skip BEFORE calib -- that is the entire saving
+        frame = detector.calib(evt)
+        if frame is None:
+            continue
+        f = np.asarray(frame)
+        yield i, (f.reshape(-1, f.shape[-1]) if f.ndim == 3 else f)
+
+
 def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
                           min_peaks=6, max_events=0, rank=0, nranks=1, calib_dir=None, geom=None,
                           peakfinder="v4",

@@ -54,6 +54,13 @@ def build_parser():
                          "2 = LCLS-II xtc2, read in conda2 over envbridge. Default 1.")
     ap.add_argument("--reader-env", default="xpp_drp_gpu_311",
                     help="--psana 2 only: conda2 env with psana2 + cupy that does the peak-finding")
+    ap.add_argument("--gpu-calib", action="store_true",
+                    help="calibrate on the GPU instead of det.calib (psana1 + Epix10ka only). "
+                         "det.calib is 97.7%% of an event on this route; the device path reproduces "
+                         "it exactly (0.000 ADU residual, identical hit set on mfxx49820 r0016) at "
+                         "0.73-3.8 ms against 141 ms, and in pass 1 the frame never leaves the GPU. "
+                         "Raises rather than falling back if the detector is not supported, so a "
+                         "silent return to the slow path cannot be mistaken for a speedup.")
     ap.add_argument("--calib-dir", default=None,
                     help="psana calib-dir override (psana1 only). Use when psana would resolve a "
                          "different geometry than the one a trusted refinement was built on; --zdist "
@@ -125,11 +132,20 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
         # LCLS-I: psana1 is in THIS env with torch -- read in-process, no bridge.
         import xtc_qreader_psana1
         if verbose:
-            print(f"peak-finding {args.exp} run {args.run} in-process (psana1) ...", flush=True)
+            print(f"peak-finding {args.exp} run {args.run} in-process (psana1)"
+                  f"{' with GPU calibration' if args.gpu_calib else ''} ...", flush=True)
         return xtc_qreader_psana1.run_to_qframes_psana1(
             args.exp, args.run, args.det, args.zdist, args.wavelength,
-            args.min_peaks, args.max_events, rank, nranks, args.calib_dir, args.geom, **pf_kw)
+            args.min_peaks, args.max_events, rank, nranks, args.calib_dir, args.geom,
+            gpu_calib=args.gpu_calib, **pf_kw)
     # LCLS-II: psana2 cannot co-import with torch -- read in conda2 over the bridge.
+    if args.gpu_calib:
+        # Checked BEFORE the envbridge import, so an unsupported combination reports itself rather
+        # than sending the user off to install a package that would not have helped.
+        # The psana2 reader runs in a conda2 env over envbridge, and only the peak COORDINATES cross
+        # back. Device calibration there would have to live on the far side of the bridge, in that
+        # env's cupy, which is a different piece of work than this flag.
+        sys.exit("--gpu-calib is psana1-only so far (the psana2 reader runs over envbridge in conda2)")
     try:
         import envbridge
     except ImportError:
@@ -209,7 +225,8 @@ def integrate_and_write(results, args, out_path, report=True):
     lam = args.wavelength
     out = []
     for ev, frame in rd.frames_for_events(args.exp, args.run, args.det, by_event,
-                                          calib_dir=args.calib_dir, max_events=args.max_events):
+                                          calib_dir=args.calib_dir, max_events=args.max_events,
+                                          gpu_calib=args.gpu_calib):
         r = by_event[ev]
         pred = predict_spots(r["M"], panels, args.zdist, lam,
                              dmin=args.int_dmin, tol=args.int_tol)

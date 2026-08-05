@@ -38,7 +38,22 @@ def _wavelength_A(ebeam_det, evt):
     return None
 
 
-def frames_for_events(exp, run, det, wanted, calib_dir=None, max_events=0):
+def make_gpu_calibrator(detector, run):
+    """`det.calib` on the device, or a clear refusal. Returns a callable raw(uint16) -> device frame.
+
+    det.calib is 97.7% of an event on this route and 141 ms of it; gpu_calib reproduces it exactly on
+    Epix10ka (0.000 ADU residual, identical 445-peak hit set over 40 events of mfxx49820 r0016) at
+    0.73 ms with this run's common-mode constants, 3.82 ms with a set that actually corrects.
+
+    This RAISES rather than falling back to det.calib when the GPU path is unavailable. A silent
+    fallback would leave the caller believing it got a 190x speedup it did not get, and this
+    codebase has already been bitten once by a check that quietly did nothing.
+    """
+    import gpu_calib
+    return gpu_calib.GpuCalibrator(detector, int(run))
+
+
+def frames_for_events(exp, run, det, wanted, calib_dir=None, max_events=0, gpu_calib=False):
     """PASS 2 of the two-pass offline route: re-read a run and yield the CALIBRATED frames of the
     events that pass 1 managed to index, as `(event_index, frame_2d)`.
 
@@ -56,6 +71,10 @@ def frames_for_events(exp, run, det, wanted, calib_dir=None, max_events=0):
 
     Yields the frame reshaped to the CrystFEL (nseg*H, W) slab, which is the layout a .geom's
     min/max_fs/ss address and what `integrate_spots` expects.
+
+    `gpu_calib` calibrates on the device instead. Unlike pass 1 this must come BACK to the host:
+    `integrate_spots` is numpy and its `np.asarray` refuses a cupy array outright. The copy is ~1 ms
+    against the ~145 ms of det.calib it replaces, so the trade is still overwhelmingly worth it.
     """
     import psana
 
@@ -63,13 +82,19 @@ def frames_for_events(exp, run, det, wanted, calib_dir=None, max_events=0):
         psana.setOption("psana.calib-dir", str(calib_dir))
     ds = psana.DataSource(f"exp={exp}:run={int(run)}")
     detector = psana.Detector(det)
+    gcal = make_gpu_calibrator(detector, run) if gpu_calib else None
     wanted = set(int(e) for e in wanted)
     for i, evt in enumerate(ds.events()):
         if max_events and i >= max_events:
             break
         if i not in wanted:
             continue                         # skip BEFORE calib -- that is the entire saving
-        frame = detector.calib(evt)
+        if gcal is not None:
+            import cupy as cp
+            raw = detector.raw(evt)
+            frame = None if raw is None else cp.asnumpy(gcal(raw))
+        else:
+            frame = detector.calib(evt)
         if frame is None:
             continue
         f = np.asarray(frame)
@@ -81,13 +106,20 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
                           peakfinder="v4",
                           min_pix=xtc_core.PF_MIN_PIX, son_min=xtc_core.PF_SON_MIN,
                           thr_high=xtc_core.PF_THR_HIGH, thr_low=xtc_core.PF_THR_LOW,
-                          pf8_min_snr=xtc_core.PF8_MIN_SNR):
+                          pf8_min_snr=xtc_core.PF8_MIN_SNR, gpu_calib=False):
     """Peak-find a whole psana1 (LCLS-I) run in-process and return its q-frames -- same dict contract
     as the psana2 reader: {qframes, events, n_events, n_sent, n_skipped_wl}.
 
     rank/nranks shard events round-robin (rank r owns event i iff i % nranks == r) for the MPI wrapper;
     the default rank=0/nranks=1 owns everything, so single-process behaviour is unchanged. Events are
-    numbered by the global enumerate index, so shards are disjoint and the returned `events` are global."""
+    numbered by the global enumerate index, so shards are disjoint and the returned `events` are global.
+
+    `gpu_calib` replaces `det.calib` with the device path (Epix10ka only; see make_gpu_calibrator).
+    The frame then STAYS ON THE DEVICE all the way into the peak-finders, which take cupy arrays --
+    so this removes the host upload of every frame as well as the calibration itself. Only the peak
+    COORDINATES come back, a few hundred floats instead of 8.65 MB. Nothing else in the loop needs to
+    know: `frame.shape` and `frame[p]` mean the same thing on either array type, and the geometry is
+    built from psana coords, not from the frame."""
     if zdist <= 0:
         raise ValueError("zdist (sample-detector distance, m) is REQUIRED: psana per-pixel Z is nominal")
 
@@ -130,6 +162,8 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
         except Exception:
             raise ValueError("no wavelength and EBeam detector unavailable")
 
+    gcal = make_gpu_calibrator(detector, run) if gpu_calib else None
+
     X = Y = Zc = kin = None
     finders = []
     qframes, events = [], []
@@ -139,7 +173,11 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
             break
         if not xtc_core.event_in_shard(i, rank, nranks):
             continue                         # not this rank's event -- skip before the expensive calib
-        frame = detector.calib(evt)          # psana1: pedestal/gain/common-mode applied -> (nseg,H,W)
+        if gcal is not None:                 # same arithmetic, on the device; frame is a cupy array
+            raw = detector.raw(evt)
+            frame = None if raw is None else gcal(raw)
+        else:
+            frame = detector.calib(evt)      # psana1: pedestal/gain/common-mode applied -> (nseg,H,W)
         if frame is None:
             continue
         # WAVELENGTH FIRST, then geometry. peakfinder8 bins the background in RADIAL shells, so its

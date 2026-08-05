@@ -91,15 +91,23 @@ def gain_mode_planes(det, run):
     a reimplementation of it, and folds pedestal, gain factor and the H/M common-mode selection into
     those two cases. Per event the GPU then does one select per plane and no gather.
     """
+    # The family guard runs BEFORE the epix10ka imports, so an unsupported detector is told which
+    # family it is rather than which module failed to import.
+    peds = det.pedestals(run)
+    peds = None if peds is None else np.asarray(peds, dtype=np.float32)
+    # A 4-D pedestal array is NOT enough to identify the family: Jungfrau's is 4-D too, with 3 gain
+    # modes and (512,1024) panels, and it decodes its range from the raw high bits rather than from
+    # the detector configuration -- gain_maps_epix10ka_any would be meaningless there. Demand the
+    # epix10ka signature: 7 modes and a (352,384) panel, which covers 2M, Quad and single alike.
+    if peds is None or peds.ndim != 4 or peds.shape[0] != 7 or peds.shape[-2:] != (352, 384):
+        raise NotImplementedError(
+            "the GPU calibration path is implemented for the Epix10ka family only -- expected "
+            "pedestals (7, nseg, 352, 384), got "
+            f"{None if peds is None else tuple(peds.shape)}. Jungfrau and epixHR need their own "
+            "decode (UtilsJungfrau / UtilsEpixHR); until then use det.calib on those detectors.")
     from Detector.UtilsEpix10ka import gain_maps_epix10ka_any, B14
     from Detector.GlobalUtils import divide_protected
 
-    peds = det.pedestals(run)
-    peds = None if peds is None else np.asarray(peds, dtype=np.float32)
-    if peds is None or peds.ndim != 4:
-        raise NotImplementedError(
-            "gain-mode decode is implemented for the Epix10ka family (4-D pedestals, "
-            f"got shape {None if peds is None else peds.shape})")
     nmodes = peds.shape[0]
     gain = det.gain(run)
     if gain is None:
@@ -155,10 +163,11 @@ class GpuCalibrator:
     B14 = np.uint16(1 << 14)                  # psana's B14; the one per-event gain bit
 
     def __init__(self, det, run, cmpars=None, dtype=None):
+        # Detector first, GPU second: an unsupported detector must report ITSELF, not a missing cupy.
+        (p0, f0, h0), (p1, f1, h1), shape = gain_mode_planes(det, run)
         import cupy as cp
         self.cp = cp
         self.dt = dtype or cp.float32
-        (p0, f0, h0), (p1, f1, h1), shape = gain_mode_planes(det, run)
         self.shape = shape
 
         cmp_ = det.common_mode(run) if cmpars is None else cmpars

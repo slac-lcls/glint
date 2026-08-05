@@ -29,6 +29,12 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # xtc_core sits beside this file
+# ...and the repo root, so `import glint` works however this file is invoked. `python
+# experiments/xtc_bridge/glint_xtc.py` puts THIS file's directory on sys.path, not the working
+# directory, so glint_launch.sh's `cd` to the repo root does NOT make the package importable:
+# the read and peak-find stages run fine (they only need xtc_core, which sits here) and the run
+# then dies at the first `import glint` inside index_and_write, after all the expensive work.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import xtc_core
 
 
@@ -64,14 +70,31 @@ def build_parser():
         "Defaults are calibrated on Epix10ka2M at MFX to match CrystFEL peakfinder8's hit rate; "
         "tune per detector. Too loose and blank frames become 'hits' -- PeakFinderV4's own library "
         "defaults (min-pix 1, no noise floor) pass 100% of frames.")
+    pf.add_argument("--peakfinder", choices=("v4", "pf8", "pf8-panel"), default="v4",
+                    help="v4 = local-annulus finder (default; needs no geometry). pf8 = the vendored "
+                         "peakfinder8 over the WHOLE detector, seams masked -- radial-shell background, "
+                         "the closer match to what PeakFinderSFX/CrystFEL run upstream, and the one to "
+                         "use OFF-LINE when the xtc hit set must line up with a peakfinder8 reference. "
+                         "pf8-panel = the same finder per panel: ~1/nseg the statistics per radial "
+                         "shell, but panels are independent, which is what a latency-bound STREAMING "
+                         "consumer wants. Both need a wavelength before the first frame (per-pixel q "
+                         "is q(lambda)), so pass --wavelength when per-event photon energy is "
+                         "unreliable.")
     pf.add_argument("--min-pix", type=int, default=xtc_core.PF_MIN_PIX,
                     help=f"min connected pixels per peak (default {xtc_core.PF_MIN_PIX})")
     pf.add_argument("--son-min", type=float, default=xtc_core.PF_SON_MIN,
-                    help=f"min integrated peak SNR (default {xtc_core.PF_SON_MIN})")
+                    help=f"min integrated peak SNR, V4 ONLY -- pf8 has no integrated-SNR cut "
+                         f"(default {xtc_core.PF_SON_MIN})")
     pf.add_argument("--thr-high", type=float, default=xtc_core.PF_THR_HIGH,
-                    help=f"seed SNR threshold (default {xtc_core.PF_THR_HIGH})")
+                    help=f"seed SNR, V4 ONLY -- pf8's brightness cut is --pf8-min-snr "
+                         f"(default {xtc_core.PF_THR_HIGH})")
     pf.add_argument("--thr-low", type=float, default=xtc_core.PF_THR_LOW,
-                    help=f"grow SNR threshold (default {xtc_core.PF_THR_LOW})")
+                    help=f"component-extent SNR: v4 grow threshold, pf8 thr_snr "
+                         f"(default {xtc_core.PF_THR_LOW})")
+    pf.add_argument("--pf8-min-snr", type=float, default=xtc_core.PF8_MIN_SNR,
+                    help=f"pf8 ONLY: min per-peak max-pixel SNR. Not tied to --thr-high; it stands "
+                         f"in for the integrated-SNR cut pf8 lacks, and is sharp -- 10 turns this "
+                         f"into a pass-through (default {xtc_core.PF8_MIN_SNR})")
     ap.add_argument("--cell", nargs="+", metavar="V",
                     help='known cell "a b c al be ga" (skip consensus); omit for fully-blind')
     ap.add_argument("--nbest", type=int, default=3)
@@ -83,8 +106,8 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
     """Read + peak-find one event shard (rank of nranks; default the whole run) -> the reader's dict
     {qframes, events, n_events, n_sent, n_skipped_wl}. Dispatches xtc1 in-process vs xtc2 over the
     bridge; identical q-core either way."""
-    pf_kw = dict(min_pix=args.min_pix, son_min=args.son_min,
-                 thr_high=args.thr_high, thr_low=args.thr_low)
+    pf_kw = dict(min_pix=args.min_pix, son_min=args.son_min, pf8_min_snr=args.pf8_min_snr,
+                 thr_high=args.thr_high, thr_low=args.thr_low, peakfinder=args.peakfinder)
     if args.psana == "1":
         # LCLS-I: psana1 is in THIS env with torch -- read in-process, no bridge.
         import xtc_qreader_psana1
@@ -111,8 +134,8 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
     return envbridge.call(
         reader_env, "xtc_qreader:run_to_qframes",
         args.exp, args.run, args.det, args.zdist, args.wavelength, args.energy_det,
-        args.min_peaks, args.max_events, rank, nranks,
-        args.min_pix, args.son_min, args.thr_high, args.thr_low)
+        args.min_peaks, args.max_events, rank, nranks, args.peakfinder,
+        args.min_pix, args.son_min, args.thr_high, args.thr_low, args.pf8_min_snr)
 
 
 def index_and_write(out, args, out_path, report=True):

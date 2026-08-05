@@ -56,6 +56,41 @@ detector — recorded as a negative result.
 
 ---
 
+## What has actually been EXECUTED, as opposed to read
+
+This distinction is the reason this file exists. Until 2026-08-05 every measurement on this route
+called `run_to_qframes_psana1` directly, from a process whose `PYTHONPATH` already carried the repo
+root — i.e. the *reader* was exercised and the *entry point* never was. Running
+`glint_launch.sh` for the first time found two defects that reading had missed (a fatal
+`ModuleNotFoundError` at the first `import glint`, and every peak-finder threshold being unreachable
+from `IndexGLINTParameters`). Both are fixed; both are the kind of defect only execution finds.
+
+| component | status |
+|---|---|
+| `glint_launch.sh` xtc routing + flag whitelist | **run** — S3DF job 34240308 |
+| `glint_xtc.py` read + peak-find + index + write | **run** — same job |
+| `IndexGLINTParameters` validators (`_one_source`, per-source `peakfinder`) | **never run** — no test, no CI |
+| the `peaks` and `images` routes | untouched by this branch; not re-run |
+| psana2 / `--psana 2` over envbridge | **never run on this branch** |
+| MPI sharding (`glint_xtc_mpi.py`) | **never run on this branch** |
+
+**The one end-to-end run, job 34240308** — `glint_launch.sh --exp mfxx49820 --run 16 --det
+MfxEndstation.0:Epix10ka2M.0 --zdist 0.102973 --wavelength 1.290757 --max-events 200 --min-peaks 6
+--peakfinder v4 --geom <btx r0016.geom> --calib-dir <private> --top-peaks 100 -o lute_e2e.stream`:
+
+- `--top-peaks` correctly reported as dropped on stderr (it is a `glint_cli`-only flag)
+- 200 events -> 54 frames with >= 6 peaks -> **50 indexed (92%)**: blind, +5 N-best recovered,
+  +30 rescued
+- cell `38.3 / 79.2 / 79.9 A`, angles 89.2 / 89.7 / 90.0, against a truth of `38.4 / 79.3 / 79.5`
+- stream is valid CrystFEL 2.3 with 54 chunks and 50 `indexed_by = glint`
+
+Two things that run also shows. The stream reports `lattice_type = triclinic, centering = P`
+because GLINT imposes no symmetry — the true lysozyme is tetragonal *P*4<sub>3</sub>2<sub>1</sub>2,
+so symmetry has to be supplied downstream. And the reflection rows carry the placeholder
+`I`/`sigma(I)`/`fs`/`ss` described in #3 below; this is what a merge would have to be built on.
+
+---
+
 ## The seven things that stand between this and production
 
 **1. The LUTE task model has no test.** `experiments/xtc_bridge/` has `test_core.py`,

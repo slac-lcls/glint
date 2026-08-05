@@ -1,19 +1,26 @@
-"""Does GPU pedestal+gain match psana's det.calib, and what does dropping common mode cost?
+"""Does the GPU path match psana's det.calib, and what is common mode worth? STATUS.md item 4.
 
-STATUS.md item 4. det.calib is 145.8 ms of a 149.2 ms event; the DAQ does the same arithmetic on the
-device in microseconds. Before any of that is used, two questions have to be answered with numbers:
+det.calib is 145.8 ms of a 149.2 ms event; the same arithmetic runs on the device in about a
+millisecond. Before any of that is used, two questions have to be answered with numbers:
 
   1. SPEED. What is the GPU path actually worth on this route?
-  2. FIDELITY. det.calib applies pedestal, gain AND common mode -- a data-dependent per-ASIC/row
-     median subtraction that Reader.cu has no equivalent of. The GPU path here does pedestal and gain
-     only. That difference is the whole risk, and it is measured here rather than argued about.
+  2. FIDELITY. Does it produce the same image, and -- the only part that matters downstream -- the
+     same peaks?
 
 Fidelity is reported three ways, because they answer different questions:
   * per-pixel residual        -- how far the images differ at all
-  * residual vs the noise     -- is the difference below or above what the peak-finder calls signal
-  * PEAK-SET agreement        -- the only one that matters downstream: run the SAME finder on both
-                                 and compare the hits, because a bias that shifts every pixel
-                                 equally changes nothing about which pixels are peaks
+  * residual vs the frame RMS -- is the difference below or above what the peak-finder calls signal
+  * PEAK-SET agreement        -- run the SAME finder on both and compare the hits, because a bias
+                                 that shifts every pixel equally changes nothing about which pixels
+                                 are peaks, and a small bias in the wrong place changes everything
+
+TWO GPU CONFIGURATIONS are measured against the one CPU reference, because their difference is the
+answer to a question that was previously guessed at. `full` mirrors det.calib including common mode;
+`no-cm` is pedestal and gain only, which is all that `Reader.cu` does and all that this module did
+before 2026-08-05. Comparing their Jaccards says what reinstating common mode actually bought, and
+comparing either against the earlier 58.6% says what the inverted-gain fix bought. Common mode is
+capped at cormax ADU per group by construction, so if it moves the peak set much, that is worth
+knowing before the DAQ's pedestal-and-gain-only path is trusted on this detector.
 """
 import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -34,18 +41,22 @@ det = psana.Detector(DET)
 import cupy as cp
 import gpu_calib, xtc_core
 
-gc = gpu_calib.GpuCalibrator(det, RUN)
-print(f"decode: psana gain modes via gain_maps_epix10ka_any, two precomputed plane pairs "
-      f"(data bit 14 clear/set)  shape={gc.shape}")
+full = gpu_calib.GpuCalibrator(det, RUN)
+nocm = gpu_calib.GpuCalibrator(det, RUN, cmpars=(7, 0, 0, 0))
+print(f"shape={full.shape}  det.common_mode(run)={np.asarray(full.cmpars).tolist()}")
+print(f"applied: mode={full.mode} (bitmask +4 banks +1 rows +2 cols)  "
+      f"cormax={full.cormax} ADU  npixmin={full.npixmin}")
+print("gain: psana gfac = 1/det.gain (ADU/keV -> keV/ADU), NOT a multiply by det.gain")
 
 pf = xtc_core.load_peakfinder_v4().PeakFinderV4
 finders = None
 
-t_cpu, t_gpu = [], []
-res_rel, res_sig = [], []
-same, only_cpu, only_gpu = 0, 0, 0
+t_cpu, t_full, t_nocm = [], [], []
+res = {"full": [], "no-cm": []}
+rel = {"full": [], "no-cm": []}
+agree = {"full": [0, 0, 0], "no-cm": [0, 0, 0]}     # shared, only-CPU, only-GPU
 n = 0
-for i, evt in enumerate(ds.events()):
+for evt in ds.events():
     if n >= N:
         break
     raw = det.raw(evt)
@@ -55,16 +66,13 @@ for i, evt in enumerate(ds.events()):
     if ref is None:
         continue
     cp.cuda.Stream.null.synchronize()
-    t2 = time.perf_counter(); got = gc(raw); cp.cuda.Stream.null.synchronize()
-    t3 = time.perf_counter()
-    t_cpu.append(t1 - t0); t_gpu.append(t3 - t2)
+    t2 = time.perf_counter(); g_full = full(raw); cp.cuda.Stream.null.synchronize()
+    t3 = time.perf_counter(); g_nocm = nocm(raw); cp.cuda.Stream.null.synchronize()
+    t4 = time.perf_counter()
+    t_cpu.append(t1 - t0); t_full.append(t3 - t2); t_nocm.append(t4 - t3)
 
-    g = cp.asnumpy(got).astype(np.float32)
     r = np.asarray(ref, np.float32)
-    d = g - r
     rms_r = float(np.std(r))
-    res_rel.append(float(np.sqrt(np.mean(d * d))))
-    res_sig.append(res_rel[-1] / rms_r if rms_r else np.nan)
 
     if finders is None:
         try:
@@ -85,28 +93,35 @@ for i, evt in enumerate(ds.events()):
                 s.add((p, int(x), int(y)))
         return s
 
-    a, b = hits(r), hits(g)
-    same += len(a & b); only_cpu += len(a - b); only_gpu += len(b - a)
+    a = hits(r)
+    for tag, dev in (("full", g_full), ("no-cm", g_nocm)):
+        gg = cp.asnumpy(dev).astype(np.float32)
+        d = gg - r
+        res[tag].append(float(np.sqrt(np.mean(d * d))))
+        rel[tag].append(res[tag][-1] / rms_r if rms_r else np.nan)
+        b = hits(gg)
+        agree[tag][0] += len(a & b); agree[tag][1] += len(a - b); agree[tag][2] += len(b - a)
     n += 1
 
 med = lambda v: 1e3 * float(np.median(v))
 print(f"\n{n} events")
-print(f"{'path':22s} {'median ms':>10s}")
-print("-" * 34)
-print(f"{'psana det.calib (CPU)':22s} {med(t_cpu):10.2f}")
-print(f"{'GPU ped+gain':22s} {med(t_gpu):10.2f}")
-print("-" * 34)
-print(f"speedup: {med(t_cpu)/max(med(t_gpu),1e-9):.0f}x on the calibration stage alone")
+print(f"{'path':28s} {'median ms':>10s} {'speedup':>9s}")
+print("-" * 50)
+print(f"{'psana det.calib (CPU)':28s} {med(t_cpu):10.2f} {'':>9s}")
+print(f"{'GPU full (ped+cm+gain+mask)':28s} {med(t_full):10.2f} "
+      f"{med(t_cpu)/max(med(t_full),1e-9):8.0f}x")
+print(f"{'GPU no-cm (ped+gain+mask)':28s} {med(t_nocm):10.2f} "
+      f"{med(t_cpu)/max(med(t_nocm),1e-9):8.0f}x")
 
-print(f"\nFIDELITY (GPU ped+gain vs det.calib, which also does common mode)")
-print(f"  per-pixel RMS residual   : {np.median(res_rel):.3f} ADU")
-print(f"  residual / frame RMS     : {100*np.median(res_sig):.2f}%")
-print(f"\nPEAK-SET agreement, same PeakFinderV4 and thresholds on both images:")
-tot = same + only_cpu + only_gpu
-print(f"  peaks found on BOTH      : {same}")
-print(f"  only on det.calib        : {only_cpu}")
-print(f"  only on GPU ped+gain     : {only_gpu}")
-print(f"  Jaccard                  : {100.0*same/max(tot,1):.1f}%")
-print("\nThe Jaccard is the number to judge on. A large per-pixel residual with a high Jaccard means")
-print("common mode shifts the background but not which pixels are peaks; a low Jaccard means the")
-print("fast path changes the hit set and must not be used without reinstating common mode.")
+print(f"\nFIDELITY vs det.calib")
+print(f"{'config':10s} {'RMS residual':>14s} {'/frame RMS':>12s} {'shared':>8s} {'onlyCPU':>8s} "
+      f"{'onlyGPU':>8s} {'Jaccard':>9s}")
+print("-" * 74)
+for tag in ("full", "no-cm"):
+    s, oc, og = agree[tag]
+    print(f"{tag:10s} {np.median(res[tag]):11.3f} ADU {100*np.median(rel[tag]):11.2f}% "
+          f"{s:8d} {oc:8d} {og:8d} {100.0*s/max(s+oc+og,1):8.1f}%")
+
+print("\nJaccard is the number to judge on. `full` is the one that decides whether this can be wired")
+print("into the reader; `full` minus `no-cm` is what common mode is worth on this detector, and")
+print("hence whether the DAQ's pedestal-and-gain-only Reader.cu would be safe here.")

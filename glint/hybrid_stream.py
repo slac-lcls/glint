@@ -40,7 +40,7 @@ def _hkl(q, M):
 
 
 def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, cascade=None,
-                 alias_gate=None):
+                 alias_gate=None, triage_topk=None):
     """Fully-blind hybrid. (1) N-BEST blind-index every frame (top-`nbest` distinct cells, not just
     argmax). (2) consensus over the POOLED N-best hypotheses (aliases scatter, truth clusters ->
     sturdier cell). (3) per frame pick the highest-scored N-best cell consistent with the consensus
@@ -60,10 +60,27 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     n_blind = sum(1 for nb in NB if nb)
 
     n_pool = 0
+    vote_idx = list(range(n))          # bound on BOTH branches; the known-cell path never votes
     if Mc_known is not None:
         Mc, support = np.asarray(Mc_known, float), -1
     else:                                                        # consensus over the POOLED hypotheses
-        pool = [c for nb in NB for c, _ in nb]
+        # TRIAGE (opt-in). The streaming path votes over the top-`warm_topk` frames by peak count
+        # (warmup_batch); this path has always pooled EVERY frame, which is the worse position to be
+        # in and not the safer one. The random-agreement floor grows with the number of hypotheses
+        # drawn, so pooling more frames does not buy a sturdier cell past a point -- it buys a bigger
+        # lottery. Measured on mfxx49820 r0016 (2228 frames, unrefined geometry): pooling all 6294
+        # hypotheses locked a WRONG doubled-c cell on a 23-vote cluster, while the triaged vote
+        # REFUSED at every k from 16 to 512, because 1-2 votes out of 48-1536 can never clear
+        # min_support AND the runner-up margin. Triage also picks the STRONGEST diffraction, so the
+        # frames it does keep are the ones most likely to index correctly.
+        #
+        # Default None = pool everything, i.e. bit-identical to before. Set it and the vote is
+        # restricted; the per-frame N-best pick and the rescue below still see every frame, so this
+        # changes only WHO VOTES, never who gets indexed.
+        if triage_topk:
+            from glint.warmup_batch import triage_order            # the SAME selector streaming uses
+            vote_idx = triage_order([len(q) for q in frames], int(triage_topk), floor=1)
+        pool = [c for i in vote_idx for c, _ in NB[i]]
         # A bare min_support=3 is an ABSOLUTE floor, and this pool is not a fixed size: it is
         # n_frames x nbest. At 120 frames that is 360 hypotheses; at 2200 it is ~6300, where a
         # 23-cluster (0.4% of the pool) clears 3 by chance and every downstream frame then gets
@@ -87,8 +104,10 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
         # `alias_gate=AliasGate()` to a default StreamDriver is a silent no-op. Neither path was
         # protected where it mattered; this call is the first place the gate guards a primary lock.
         if Mc is not None and alias_gate is not None:
-            voters = [q for q, nb in zip(frames, NB)
-                      if any(same_lattice(c, Mc) for c, _ in nb)]
+            # drawn from the SAME frames that voted, so the alias check and the statistical check
+            # are answering about one population rather than two
+            voters = [frames[i] for i in vote_idx
+                      if any(same_lattice(c, Mc) for c, _ in NB[i])]
             if voters:
                 Mc = alias_gate.confirm(Mc, np.vstack(voters))   # may return a tighter alias, or None
 
@@ -127,6 +146,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     stats = {"n": n, "n_blind": n_blind, "support": support, "edges": edges, "n_nbest": n_nb,
              "n_resc": n_resc, "n_casc": n_casc, "n_idx": n_idx, "Mc": Mc,
              "n_pool": n_pool, "support_frac": (support / n_pool) if n_pool else None,
+             "n_voters": len(vote_idx) if Mc_known is None else 0, "triage_topk": triage_topk,
              "consensus_refused": bool(Mc is None and n_pool)}
     return results, stats
 

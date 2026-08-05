@@ -26,6 +26,42 @@ from .lattice import reduced_params
 DEF_RTOL, DEF_CTOL, DEF_VTOL = 0.05, 0.06, 0.10          # == consensus_cell defaults
 
 
+def consensus_accept(win, runner, n_pool, min_support=3, min_frac=0.0, min_lead=1.0, min_gap=0):
+    """THE acceptance rule for a consensus cluster -- shared by BOTH consensus paths.
+
+    It lives here, and `multishot.consensus_cell` imports it, because the two paths were each
+    enforcing a different SUBSET of these tests and therefore disagreed on the same data. Measured on
+    mfxx49820 r0016 triaged to the top-16 frames (leader 3 of 48 hypotheses): `consensus_cell`
+    ACCEPTED (3 clears its 2% pool share, and 3 >= 1.5x a runner-up of <=2) while `RunningConsensus`
+    REFUSED (its adaptive gap wanted an absolute lead of 3). Neither was wrong; they were answering
+    different questions and calling both answers "the consensus".
+
+    Four tests, and a caller may use any subset -- what matters is that there is now ONE definition
+    of each, so "we require a margin over the runner-up" means the same thing on both paths:
+
+      min_support  absolute floor on the leader.
+      min_frac     leader as a SHARE of the pool. The random-agreement floor grows with the number
+                   of hypotheses drawn, so a fixed absolute floor cannot hold from 360 hypotheses to
+                   6300; 23/6294 = 0.37% cleared an absolute 3 and locked a wrong cell.
+      min_lead     leader / runner-up, a RATIO. Scale-free: meaningful whether the leader is 3 or 300.
+      min_gap      leader - runner-up, a DIFFERENCE. Not scale-free, and that is the point at small
+                   N: with a leader of 3 a ratio of 1.5 tolerates a runner-up of 2, which is a
+                   coin-flip, while a gap of 3 demands the field be empty.
+
+    Defaults (min_frac=0, min_lead=1.0, min_gap=0) are inert, so a caller passing none of them gets
+    `win >= min_support` exactly.
+    """
+    if win < min_support:
+        return False
+    if min_frac > 0.0 and win < min_frac * n_pool:
+        return False
+    if min_lead > 1.0 and runner > 0 and win < min_lead * runner:
+        return False
+    if min_gap > 0 and (win - runner) < min_gap:
+        return False
+    return True
+
+
 class RunningConsensus:
     """Incremental same_lattice vote histogram + sequential early-stop.
 
@@ -39,16 +75,21 @@ class RunningConsensus:
     """
 
     __slots__ = ("min_support", "base_gap", "gap", "rtol", "ctol", "vtol", "adaptive",
-                 "groups", "nframes")
+                 "groups", "nframes", "npool", "min_frac", "min_lead")
 
     def __init__(self, min_support=3, gap=2, rtol=DEF_RTOL, ctol=DEF_CTOL, vtol=DEF_VTOL,
-                 adaptive=True):
+                 adaptive=True, min_frac=0.0, min_lead=1.0):
         self.min_support = int(min_support)
         self.base_gap = int(gap); self.gap = int(gap)
         self.rtol = rtol; self.ctol = ctol; self.vtol = vtol
         self.adaptive = bool(adaptive)
+        # Pool-share and ratio tests, both INERT by default so the shipped streaming lock is
+        # unchanged. They exist so this path can be made to agree with consensus_cell's, which
+        # enforced them while this one did not -- see consensus_accept.
+        self.min_frac = float(min_frac); self.min_lead = float(min_lead)
         self.groups = []                                  # each: [rep_M, lens, cos, det, weight]
         self.nframes = 0
+        self.npool = 0                                    # hypotheses added, not frames
 
     def _match(self, l, c, d, g):
         lg, cg, dg = g[1], g[2], g[3]
@@ -60,6 +101,7 @@ class RunningConsensus:
         """Add ONE candidate cell (3x3 basis, columns a,b,c) to the running histogram."""
         M = np.asarray(M, float)
         l, c = reduced_params(M); d = abs(np.linalg.det(M))
+        self.npool += 1                                   # the denominator min_frac needs
         for g in self.groups:
             if self._match(l, c, d, g):
                 g[4] += 1; return
@@ -98,6 +140,7 @@ class RunningConsensus:
         batch consensus_cell result exactly."""
         g = self.gap if gap is None else int(gap)
         rep, w0, w1 = self.leaders()
-        if rep is not None and w0 >= self.min_support and (w0 - w1) >= g:
+        if rep is not None and consensus_accept(w0, w1, self.npool, self.min_support,
+                                                self.min_frac, self.min_lead, g):
             return rep, w0, w1
         return None, w0, w1

@@ -9,7 +9,7 @@ refuses to lock, and a slowly-accumulating leader (the mosaic signature) raises 
 import numpy as np
 from glint.running_consensus import RunningConsensus
 from glint.lattice import reduced_params
-from glint.multishot import consensus_cell
+from glint.multishot import consensus_cell, same_lattice
 
 
 def _rot(theta, axis=2):                                        # a rotation -- reduced_params is invariant,
@@ -41,7 +41,15 @@ def test_batch_equivalence():
         fr.append(np.diag(1.0 / rng.uniform(150, 300, 3)))
         frames.append(fr)
     pooled = [M for fr in frames for M in fr]                   # SAME order -> greedy grouping is identical
-    rep_b, sup_b = consensus_cell(pooled, min_support=3)
+    # medoid=False so BOTH sides return the group's founder. consensus_cell now reports the medoid
+    # of the winning group by default while RunningConsensus still reports the founder, so the
+    # default settings compare two deliberately different representatives. That is not what this
+    # test is about -- it claims the two GROUPINGS agree, so it pins the representative choice and
+    # compares like with like. Without this the assertion below passes only because every member of
+    # this test's group shares a reduced_params fingerprint (they are M_TRUE rotated, and the
+    # fingerprint is rotation-invariant), so every medoid distance is 0 and argmin returns the
+    # founder anyway. Add any scatter to the group and it would break for the wrong reason.
+    rep_b, sup_b = consensus_cell(pooled, min_support=3, medoid=False)
 
     rc = RunningConsensus(min_support=3, adaptive=False)
     for fr in frames:
@@ -51,6 +59,12 @@ def test_batch_equivalence():
     assert sup_r == sup_b, (sup_r, sup_b)                       # identical support count
     assert _rp_eq(rep_r, rep_b), (reduced_params(rep_r), reduced_params(rep_b))
     assert _rp_eq(rep_r, M_TRUE)                                # and it is the true cell
+
+    # and the medoid, which IS the default, must still be the same lattice -- a different member of
+    # the winning group, never a different group.
+    rep_med, sup_med = consensus_cell(pooled, min_support=3)
+    assert sup_med == sup_b, (sup_med, sup_b)                   # representative choice cannot move support
+    assert same_lattice(rep_med, M_TRUE)
 
 
 def test_early_stop_locks_clean():

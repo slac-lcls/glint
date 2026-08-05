@@ -19,7 +19,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE)); sys.path.insert(0, HERE)
-from glint.multishot import _accept
+from glint.multishot import _accept, same_lattice
 
 ok = True
 
@@ -84,6 +84,33 @@ check("gate is a NO-OP: same consensus cell", np.allclose(on["Mc"], off["Mc"]))
 check("benchmark support clears the 2% floor with room",
       on["support"] >= 3 * CONSENSUS_MIN_FRAC * on["n_pool"],
       f"support {on['support']} vs floor {CONSENSUS_MIN_FRAC*on['n_pool']:.1f}")
+
+
+print("\nPART 3 -- offline triage (hybrid_index triage_topk)")
+# triage_topk=None must be bit-identical to not passing it at all -- the whole point is that the
+# published regime is untouched until someone opts in.
+base = hybrid_index(frames, nbest=3)[1]
+none_ = hybrid_index(frames, nbest=3, triage_topk=None)[1]
+check("triage_topk=None is a NO-OP: same cell", np.allclose(base["Mc"], none_["Mc"]))
+check("triage_topk=None is a NO-OP: same n_idx", base["n_idx"] == none_["n_idx"])
+check("triage_topk=None votes with every frame",
+      none_["n_voters"] == len(frames), f"{none_['n_voters']} of {len(frames)}")
+
+npk = [len(q) for q in frames]
+for k in (32, 64):
+    st = hybrid_index(frames, nbest=3, triage_topk=k)[1]
+    exp = min(k, sum(1 for c in npk if c >= 1))
+    print(f"  top-{k:<4d} voters {st['n_voters']:3d}  pool {st['n_pool']:4d}  "
+          f"support {st['support']:3d} ({100.0*st['support']/max(st['n_pool'],1):4.1f}%)  "
+          f"refused={st['consensus_refused']}  n_idx {st['n_idx']}")
+    check(f"top-{k} restricts the vote to {exp} frames", st["n_voters"] == exp,
+          f"got {st['n_voters']}")
+    check(f"top-{k} pool is voters*nbest", st["n_pool"] <= st["n_voters"] * 3)
+    # The benchmark must still find the SAME cell from a triaged vote -- if it cannot, the default
+    # must not move, because this set is what the published numbers come from.
+    if not st["consensus_refused"]:
+        check(f"top-{k} finds the same cell as the full vote",
+              same_lattice(np.asarray(st["Mc"], float), np.asarray(base["Mc"], float)))
 
 print("\nALL PASS" if ok else "\nFAILURES ABOVE")
 raise SystemExit(0 if ok else 1)

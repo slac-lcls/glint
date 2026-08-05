@@ -477,7 +477,7 @@ class StreamDriver:
                  snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
                  adaptive_relock=False, min_inliers=0, min_inlier_frac=0.15,
-                 warm_topk=16, warm_floor=1,
+                 warm_topk=32, warm_floor=1,   # 16 refused real MFX data; see warmup_batch()
                  double_hit=False, geom_refine=False, geom_refine_kw=None,
                  rescue_buffer=0, fanout=None, alias_gate=None,
                  lock_probe=False, probe_null=64, lock_min_z=None, warmup_rescue=False,
@@ -765,6 +765,18 @@ class StreamDriver:
         index, so scoring every frame is effectively free.
 
         `frames`: (B,H,W) host/device stack. See glint.warmup_batch for the CPU-testable core.
+
+        `warm_topk` DEFAULT IS 32, RAISED FROM 16 (2026-08-04). Measured on real MFX xtc1
+        (mfxx49820 r0016, 2228 frames, Epix10ka2M): at top-16 the triaged vote reached only 3 of 48
+        hypotheses (6.2%) and REFUSED to lock even on the correct refined geometry; top-32 locked
+        correctly (11/96, 11.5%), as did 64/128/512. 16 was tuned on denser synthetic stacks and is
+        too tight for real sparse stills.
+
+        Note what triage buys, because it is the opposite of a threshold: on the WRONG (unrefined)
+        geometry this path REFUSED at every k from 16 to 512, where both the pooled offline consensus
+        and the sequential streaming lock returned a confident wrong cell. Capping the pool at
+        k*nbest hypotheses starves a chance cluster of the votes it needs, rather than trying to
+        out-run it with a bigger bar -- and it costs nothing on good data.
         """
         if not self._blind:
             return True                                          # already locked -- nothing to warm up

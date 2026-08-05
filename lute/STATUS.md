@@ -4,9 +4,13 @@ Written 2026-08-05. The point of this file is that the state of this integration
 the code, not in a chat log or one person's head. Every number below has a named source; anything
 without one is marked as an assumption.
 
-**Bottom line: not production-ready.** The raw-xtc route runs and produces a correct cell on real
-data and, with `--integrate`, a stream partialator can merge. It is still ~150 ms/event with
-98% of that in CPU calibration, and no ana env satisfies both its psana and its torch needs.
+**Bottom line: six of the seven below are closed.** The raw-xtc route runs on real data and produces
+a correct cell; with `--integrate` it emits a stream partialator can merge; with `--gpu-calib` it
+calibrates on the device for 4.1x end-to-end wall and a byte-identical stream; it runs under an ana
+release that can see Jungfrau; and it checks its own geometry provenance at startup instead of
+failing silently. What is left is item 6 — `PF8_MIN_SNR` is detector-specific and has to be
+calibrated before `pf8` is used on new hardware — and the fact that this repo still has no CI, so
+the task-model tests written for item 1 run only when someone runs them.
 
 ---
 
@@ -93,8 +97,9 @@ so symmetry has to be supplied downstream. And the reflection rows carry the pla
 
 ## The seven things that stand between this and production
 
-**Progress: 3 of 7 done**, item 1 partially (tests yes, CI no); item 5 was marked done and reverted. Struck-through items are closed,
-with the commit that closed them and how it was verified. The rest are open and unchanged.
+**Progress: 6 of 7 struck through** — item 1 only partly (its tests exist, CI does not), and item 6
+is the one still fully open. A struck-through item carries the commit that closed it and how it was
+verified; item 6 is unchanged from when it was written.
 
 **1. ~~The LUTE task model has no test.~~ TESTS DONE (`bdbe67b`), CI STILL OPEN.**
 `lute/test_glint_index.py` covers all eight validators and the launcher's per-destination flag
@@ -352,12 +357,17 @@ along invisibly — which is exactly the `cxilu8823` r0226 situation.
 
 ---
 
-## Suggested order
+## What is left
 
-1. `--pf8-min-snr` through the launcher and the task model (#2) — trivial, and it is a real knob.
-2. A test for the task model and launcher (#1) — the validators and the whitelist are pure functions.
-3. Integration on the xtc route (#3) — the difference between a demo and a usable plug-in.
-4. GPU calibration (#4) — the largest win, and a conversation with the DAQ group rather than a
-   solo port, since `Reader.cu` is theirs and the LCLStreamer path needs the same thing.
+The original list suggested an order for items 2, 1, 3, 4; all four are done, as are 5 and 7. What
+remains:
 
-Items 5-7 are documented rather than fixed; each is a footgun with a known shape.
+1. **Item 6 — per-detector peak-finder thresholds.** The one item still fully open, and the only one
+   that is a measurement rather than code.
+2. **CI (the open half of item 1).** `lute/test_glint_index.py` (41 tests), `test_gpu_calib_wiring.py`,
+   `test_gpu_calib_cm.py`, `test_first_index_per_group.py` and `test_geom_provenance.py` all run with
+   no GPU, no psana and no data — exactly the layer a GitHub runner can host. Nothing runs them
+   automatically today.
+3. **Beyond the seven, not blocking them:** `gpu_calib.py` is Epix10ka-family only and refuses
+   loudly on anything else (item 4); Jungfrau and epixHR need their own decode
+   (`UtilsJungfrau` / `UtilsEpixHR`) before they get the 4.1x.

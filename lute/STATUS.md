@@ -93,13 +93,27 @@ so symmetry has to be supplied downstream. And the reflection rows carry the pla
 
 ## The seven things that stand between this and production
 
-**Progress: 2 of 7 done.** Struck-through items are closed, with the commit that closed
-them and how it was verified. The rest are open and unchanged.
+**Progress: 3 of 7 done**, item 1 partially (tests yes, CI no). Struck-through items are closed,
+with the commit that closed them and how it was verified. The rest are open and unchanged.
 
-**1. The LUTE task model has no test.** `experiments/xtc_bridge/` has `test_core.py`,
-`test_mpi_smoke.py`, `test_shard.py`; nothing references `IndexGLINT` or `glint_index`. There is no
-CI in this repo at all. The launcher's flag whitelist, the `_one_source` exclusivity validator, and
-the per-source `peakfinder` validation are all untested code paths.
+**1. ~~The LUTE task model has no test.~~ TESTS DONE (`bdbe67b`), CI STILL OPEN.**
+`lute/test_glint_index.py` covers all eight validators and the launcher's per-destination flag
+filter: 41 tests, no GPU, no psana, no data. The launcher tests **run** `glint_launch.sh` with a fake
+`python` on `PATH` that records argv, rather than reimplementing its filter — the two defects found
+by hand were a shell-level import failure and a missing whitelist entry, neither of which a
+Python-only test would see.
+
+Verified by mutation rather than by passing: removing `--pf8-min-snr` from the whitelist fails
+exactly the regression test written for it, and disabling the two-source check fails three.
+
+Two things the exercise exposed. The model is **pydantic V1 only** — `_xtc_requires` and `_xtc_only`
+take the `field` argument, which v2's shim refuses outright, so the class cannot be constructed under
+v2 at all; LUTE pins v1, and on a v2 box the tests point `pydantic` at the bundled `pydantic.v1`.
+And the first draft passed 23 of 41 **vacuously**: a stand-in base from the wrong pydantic attached
+no validators, so every negative test failed loudly and every positive one passed for no reason.
+
+**Still open:** this repo has no CI. A GitHub runner has no GPU, so a workflow could cover exactly
+this pure-Python layer — the one that until now had no tests.
 
 **2. ~~`--pf8-min-snr` cannot reach the program.~~ DONE (`7867d88`).** It exists in `glint_xtc.py`'s argparse and is a real
 tuning knob (see #6), but it is missing from `XTC_FLAGS` in `glint_launch.sh` and has no field in

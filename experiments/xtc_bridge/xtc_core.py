@@ -172,6 +172,19 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min
                              "lam=, or use --wavelength so the reader has one before geometry setup"
                              % peakfinder)
         PeakFinder8 = load_peakfinder8().PeakFinder8
+        # THRESHOLD MAPPING -- the two finders do not spend the same numbers the same way, and the
+        # similar parameter NAMES are a trap. v4 labels components on `grow = snr > thr_low`, keeps
+        # those containing a `seed = snr > thr_high` LOCAL MAX, then cuts on son_min, the INTEGRATED
+        # SNR sum(I-bg)/sqrt(sum sigma^2). pf8 labels on `cand = snr > thr_snr` and cuts min_snr
+        # against the per-peak MAX PIXEL SNR; it has no integrated-SNR cut at all. So:
+        #     thr_snr <- thr_low     which pixels form a component
+        #     min_snr <- thr_high    the component must contain one bright pixel (v4's seed)
+        #     son_min -> NO analogue; do not route it into min_snr
+        # Passing thr_snr=thr_high with min_snr=son_min, as this did until 2026-08-05, stiffens both
+        # cuts at once (extent 10 vs 5, brightness 15 vs 10) and min_pix compounds it, since pf8 then
+        # counts only pixels above 10 where v4 counts above 5. Measured on mfxx49820 r0016 over 6000
+        # events that cost pf8 22 peaks/frame against v4's 35, and 95.8% of btx's indexed frames
+        # against v4's 99.9% -- a mis-mapping that reads exactly like a finder deficit.
         qmap = pixel_q(X, Y, Zc, kin, float(lam))               # (nseg,H,W) in 1/A
         gmask = good if good is not None else np.ones(shape, bool)
         if peakfinder == "pf8-panel":
@@ -180,7 +193,7 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min
             # radial shell -- for a latency-bound consumer that is the right trade.
             finders = _PanelFinders([
                 PeakFinder8(cp.asarray(qmap[p]), mask=cp.asarray(gmask[p]), dtype=cp.float32,
-                            min_pix=min_pix, min_snr=son_min, thr_snr=thr_high)
+                            min_pix=min_pix, min_snr=thr_high, thr_snr=thr_low)
                 for p in range(nseg)])
         else:
             # OFFLINE default: ONE finder over the whole detector, seams masked. See _StackedFinder.
@@ -195,7 +208,7 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min
             gs &= ~bad; qs[bad] = 0.0
             finders = _StackedFinder(
                 PeakFinder8(cp.asarray(qs), mask=cp.asarray(gs), dtype=cp.float32,
-                            min_pix=min_pix, min_snr=son_min, thr_snr=thr_high),
+                            min_pix=min_pix, min_snr=thr_high, thr_snr=thr_low),
                 nseg, H, pitch)
     else:
         finders = _PanelFinders([

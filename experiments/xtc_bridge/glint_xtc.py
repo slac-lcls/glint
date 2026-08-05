@@ -77,11 +77,14 @@ def build_parser():
     pf.add_argument("--min-pix", type=int, default=xtc_core.PF_MIN_PIX,
                     help=f"min connected pixels per peak (default {xtc_core.PF_MIN_PIX})")
     pf.add_argument("--son-min", type=float, default=xtc_core.PF_SON_MIN,
-                    help=f"min integrated peak SNR (default {xtc_core.PF_SON_MIN})")
+                    help=f"min integrated peak SNR, V4 ONLY -- pf8 has no integrated-SNR cut "
+                         f"(default {xtc_core.PF_SON_MIN})")
     pf.add_argument("--thr-high", type=float, default=xtc_core.PF_THR_HIGH,
-                    help=f"seed SNR threshold (default {xtc_core.PF_THR_HIGH})")
+                    help=f"seed SNR: v4 seed threshold, pf8 min peak-max SNR "
+                         f"(default {xtc_core.PF_THR_HIGH})")
     pf.add_argument("--thr-low", type=float, default=xtc_core.PF_THR_LOW,
-                    help=f"grow SNR threshold (default {xtc_core.PF_THR_LOW})")
+                    help=f"component-extent SNR: v4 grow threshold, pf8 thr_snr "
+                         f"(default {xtc_core.PF_THR_LOW})")
     ap.add_argument("--cell", nargs="+", metavar="V",
                     help='known cell "a b c al be ga" (skip consensus); omit for fully-blind')
     ap.add_argument("--nbest", type=int, default=3)

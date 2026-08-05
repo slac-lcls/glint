@@ -35,6 +35,27 @@ PF_THR_LOW = 5.0
 #     min_snr 10  ->  5025 frames, 100.0% of btx's indexed frames, 74.0% pickup  <- a pass-through
 # 5 units of min_snr swing the hit rate from 37% to 84% of all events, which is exactly why this is
 # its own constant: tuning --son-min for v4 must not silently drag pf8 across that cliff.
+#
+# THIS VALUE IS DETECTOR-SPECIFIC, and that is measured, not a disclaimer. The same ladder on
+# cxilu8823 r0226 (Jungfrau4M, 8x512x1024, 75 um, 4.2 Mpix -- against Epix10ka2M's 16x352x384,
+# 100 um, 2.2 Mpix), thr_snr=5 / min_pix=3 / min_peaks=6, 1500 events:
+#     min_snr 10 -> 97.7% of events called hits, 91 peaks/frame
+#     min_snr 12 -> 97.5%, 59
+#     min_snr 15 -> 95.9%, 33      <- the shipped default, on the WRONG SIDE of this detector's knee
+#     min_snr 20 -> 85.7%, 24
+#     min_snr 30 -> 50.9%, 33
+# Both detectors show the same shape -- a flat region, then a knee -- but the knee sits ROUGHLY 2x
+# HIGHER on Jungfrau: Epix falls 84%->37% across 10->15, Jungfrau is still at 95.9% at 15 and does
+# not turn over until 20->30. So the same constant selects 37% of events on one detector and 96% on
+# the other, and Jungfrau's equivalent operating point is somewhere near 25-30. Calibrate per
+# detector with this ladder (~9 min/point at 1500 events) via --pf8-min-snr; do not assume 15.
+# (Peaks/frame is 33 at both 15 and 30 -- past the knee the cut is removing whole weak FRAMES, not
+# trimming peaks off the survivors, so peaks/frame alone will not tell you where the knee is.)
+#
+# Related, and new at this frame size: the fused indexing kernels stage each frame's q into shared
+# memory sized by Pmax and do not accept more than 2048 peaks in fp64. Epix ran 22-41 peaks/frame,
+# nowhere near it. Jungfrau's p90 is 1655 at min_snr 15 and ~2000 at 10-12, so on a detector this
+# large a loose brightness cut can hand the indexer frames it cannot take.
 PF8_MIN_SNR = 15.0
 
 

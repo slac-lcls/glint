@@ -199,8 +199,31 @@ column groups fails the guard, so psana applies zero correction: `det.calib(evt)
   peak-finder's annulus is local, hence the 100% Jaccard) but it will hurt anything integrating
   absolute intensities.
 
-Not yet wired into the reader — that is the next step, and it is now a plumbing change rather than
-an open question.
+**Wired into the psana1 reader behind `--gpu-calib`**, and verified end to end (job 34277504,
+mfxx49820 r0016, 1500 events, A100). The two runs differ only in that flag:
+
+| | `det.calib` | `--gpu-calib` |
+|---|---|---|
+| wall | **4m38s** | **1m08s** (4.1x) |
+| frames with >=6 peaks | 629 | 629 |
+| blind indexed | 612/629 (97%) | 612/629 (97%) |
+| consensus cell | [38.3 79.1 80.3] A, support 239 | identical |
+| final indexed | 589/629 (93%) | 589/629 (93%) |
+| stream sha256 | `728ce3c5bd6572a4` | `728ce3c5bd6572a4` |
+
+The streams are **byte-identical** — not equal within a tolerance, the same file. 4.1x rather than
+193x is the honest end-to-end figure and is the one to quote: calibration was 98% of the event and
+is now ~0, so what remains is GLINT itself, and indexing plus consensus is most of the 68 s.
+
+In pass 1 the frame never leaves the device — the peak-finders take cupy arrays — so the host upload
+of every frame goes too, and only peak coordinates come back. Pass 2 must copy back, since
+`integrate_spots` is numpy and its `np.asarray` refuses a cupy array.
+
+The flag **raises rather than falling back** on an unsupported detector. A silent fallback would let
+a caller believe it got the speedup, or worse believe the two paths agreed because both quietly ran
+`det.calib`. The guard cannot key on 4-D pedestals: Jungfrau's are 4-D too, and epix10ka's decode
+would have produced garbage there **without raising**. It demands 7 gain modes and a (352,384)
+panel. Jungfrau and epixHR need their own decode before they can use this.
 
 **5. The launcher's env cannot satisfy both psana and torch.** (Was marked done in `5d6c9e0`; that was wrong -- see below.) That release
 silently drops a detector whose `ConfigV` it cannot parse: the configStore has no entry, and

@@ -93,7 +93,7 @@ so symmetry has to be supplied downstream. And the reflection rows carry the pla
 
 ## The seven things that stand between this and production
 
-**Progress: 3 of 7 done**, item 1 partially (tests yes, CI no). Struck-through items are closed,
+**Progress: 2 of 7 done**, item 1 partially (tests yes, CI no); item 5 was marked done and reverted. Struck-through items are closed,
 with the commit that closed them and how it was verified. The rest are open and unchanged.
 
 **1. ~~The LUTE task model has no test.~~ TESTS DONE (`bdbe67b`), CI STILL OPEN.**
@@ -144,14 +144,30 @@ in the raw value's high bits; `Reader.cu` uses `rangeOffset`/`rangeBits` and ind
 `&gainArray[range*nElements]`) and **common mode** (a data-dependent per-ASIC median subtraction that
 `det.calib` does and `Reader.cu` does not). Dropping common mode changes the hit set.
 
-**5. ~~The launcher pins `ana-4.0.58-py3-minipytorch`, which cannot see some detectors.~~ DONE (`5d6c9e0`).** That release
+**5. The launcher's env cannot satisfy both psana and torch.** (Was marked done in `5d6c9e0`; that was wrong -- see below.) That release
 silently drops a detector whose `ConfigV` it cannot parse: the configStore has no entry, and
 `psana.Detector()` raises `KeyError: Source string not found in configStore`, which reads exactly
 like a mistyped detector name. Measured on `cxilu8823` r0226 (Jungfrau4M): `Jungfrau.ConfigV4` is
 absent under 4.0.58 and present under **4.0.59**, same stack, same torch 1.11 and cupy 13.0. The
-reader distinguishes the two causes in its error message, and the launcher now pins **4.0.59**,
-overridable with `GLINT_ANA_ENV`. Verified rather than assumed: the end-to-end run under 4.0.59
-(S3DF job 34272799) reproduces the 4.0.58 result exactly -- 54 chunks, 50 indexed.
+reader distinguishes the two causes in its error message.
+
+**The env fix does not exist.** Repinning to 4.0.59 looked right and was reverted: these are the
+only two ana envs carrying torch at all, and neither satisfies both halves.
+
+| env | torch | `Jungfrau.ConfigV4` |
+|---|---|---|
+| `ana-4.0.58-py3-minipytorch` | **2.1.0** | **cannot parse** |
+| `ana-4.0.59-py3-minipytorch` | 1.11.0 | parses |
+
+4.0.59 is a torch DOWNGRADE, and GLINT's M2 dedup calls `Tensor.scatter_reduce_`, added in torch
+1.12 -- so under 4.0.59 indexing dies with `AttributeError` before writing anything (S3DF job
+34274283). I asserted in `5d6c9e0` that the two envs carried the same torch 1.11.0; I had only
+measured 4.0.59 and assumed the other matched.
+
+Default is back to 4.0.58, overridable with `GLINT_ANA_ENV`. It works on every detector whose
+ConfigV it can parse, which is all of them except the newest. For one it cannot see, the routes
+are a `scatter_reduce_` compatibility shim in `glint/glint_index.py`, or reading in 4.0.59 over
+**envbridge** and indexing in 4.0.58 -- exactly the split envbridge already performs for psana2.
 
 **6. `PF8_MIN_SNR = 15` is detector-specific, and that is measured.** Same ladder on Jungfrau4M
 (`cxilu8823` r0226, 8x512x1024, 75 um), job 34224833, `thr_snr=5`/`min_pix=3`:

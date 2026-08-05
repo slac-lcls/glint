@@ -16,11 +16,19 @@
 # rejected by argparse rather than silently ignored.
 set -o pipefail
 source /sdf/group/lcls/ds/ana/sw/conda1/manage/bin/psconda.sh >/dev/null 2>&1
-# 4.0.59, not 4.0.58: 4.0.58 cannot parse some detectors' ConfigV and drops them from the
-# configStore silently, so psana.Detector() raises a KeyError that reads like a bad detector
-# name (measured on cxilu8823 r0226, Jungfrau4M). 4.0.59 is the same stack one release up --
-# same torch 1.11.0, same cupy 13.0.0 -- and parses it. Override with GLINT_ANA_ENV.
-conda activate "${GLINT_ANA_ENV:-ana-4.0.59-py3-minipytorch}" >/dev/null 2>&1
+# NO ANA RELEASE SATISFIES BOTH HALVES OF THIS ROUTE. Measured 2026-08-05, and these are the
+# only two ana envs carrying torch at all:
+#   ana-4.0.58-py3-minipytorch  torch 2.1.0  cupy yes  -- CANNOT parse Jungfrau.ConfigV4
+#   ana-4.0.59-py3-minipytorch  torch 1.11.0 cupy yes  -- parses it
+# 4.0.58 drops a detector whose ConfigV it cannot read, silently, so psana.Detector() raises a
+# KeyError that reads like a mistyped name (cxilu8823 r0226, Jungfrau4M). But 4.0.59 is a torch
+# DOWNGRADE, and GLINT's M2 dedup calls Tensor.scatter_reduce_, added in torch 1.12 -- under
+# 4.0.59 indexing dies with AttributeError before writing anything.
+# 4.0.58 is therefore the default: it works on every detector whose ConfigV it can parse, which is
+# all of them except the newest. For a detector 4.0.58 cannot see, the options are a
+# scatter_reduce_ shim in glint/glint_index.py, or reading in 4.0.59 over envbridge and indexing
+# in 4.0.58 -- which is what envbridge already does for psana2.
+conda activate "${GLINT_ANA_ENV:-ana-4.0.58-py3-minipytorch}" >/dev/null 2>&1
 cd "$(dirname "$0")/.." || exit 1                       # repo root (so `glint` imports)
 
 for a in "$@"; do                                       # does this invocation name the xtc source?

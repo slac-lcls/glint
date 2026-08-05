@@ -50,8 +50,63 @@ class IndexGLINTParameters(ThirdPartyParameters):
                     "exclusive with `peaks`.",
         flag_type="--", rename_param="images",
     )
+    # ---- THIRD frame source: raw xtc, read in-process (psana1) or over envbridge (psana2) --------
+    # PeakFinderSFX stays in the DAG and remains the default route; this is for runs where GLINT
+    # should read the xtc itself and no .cxi is wanted. It routes glint_launch.sh to
+    # experiments/xtc_bridge/glint_xtc.py instead of glint.glint_cli -- a different program with a
+    # different flag set, which is why the launcher whitelists rather than forwarding blindly.
+    #
+    # NOTE ON PEAK-FINDING, because this source changes who does it. With `peaks` the peaks come from
+    # peakfinder8 upstream; with `images` you can set `peakfinder: stored` and REUSE the .cxi's own
+    # peakfinder8/Cheetah peaks. Raw xtc carries no stored peak list, so GLINT must find its own
+    # (PeakFinderV4). This is the ONE route where GLINT's finder stands in for peakfinder8 rather
+    # than deferring to it -- so validate a new detector here before trusting a rate.
+    exp: Optional[str] = Field(
+        None,
+        description="ALTERNATIVE to `peaks`/`images`: LCLS experiment id, read straight from xtc. "
+                    "Requires `run` and `zdist`. Mutually exclusive with the other two sources.",
+        flag_type="--", rename_param="exp",
+    )
+    run: Optional[PositiveInt] = Field(
+        None, description="Run number; only with `exp`.", flag_type="--", rename_param="run",
+    )
+    det: Optional[str] = Field(
+        None,
+        description="psana detector name for the `exp` source, e.g. 'MfxEndstation.0:Epix10ka2M.0' "
+                    "or a Jungfrau alias. Get the exact string from psana's DetNames().",
+        flag_type="--", rename_param="det",
+    )
+    zdist: Optional[PositiveFloat] = Field(
+        None,
+        description="Sample-detector distance in METRES; REQUIRED with `exp`. psana's per-pixel Z is "
+                    "nominal, so GLINT replaces it. A wrong value scales every |q|: source it from "
+                    "the refined geometry (a .geom's clen+coffset, or a .poni Distance).",
+        flag_type="--", rename_param="zdist",
+    )
+    psana: Optional[Literal["1", "2"]] = Field(
+        None,
+        description="Only with `exp`. '1' = LCLS-I xtc1, read IN-PROCESS (psana1 coexists with torch "
+                    "in the GLINT env). '2' = LCLS-II xtc2, read in conda2 over envbridge, which must "
+                    "be installed. The CLI defaults to 1.",
+        flag_type="--", rename_param="psana",
+    )
+    calib_dir: Optional[str] = Field(
+        None,
+        description="Only with `exp`, psana1: override psana's calib dir. Needed when psana would "
+                    "resolve a LATER deployed geometry than the one your refinement was built on -- "
+                    "--zdist replaces only Z, so X/Y still come from whatever psana picks.",
+        flag_type="--", rename_param="calib-dir",
+    )
     geom: str = Field(
-        "", description="CrystFEL .geom file.", flag_type="--", rename_param="geom",
+        "",
+        description="CrystFEL .geom file. With `peaks`/`images` this is the detector geometry. With "
+                    "`exp` it is optional to the CLI but USUALLY REQUIRED IN PRACTICE: psana's "
+                    "deployed calibration is often the UNREFINED starting geometry, while the "
+                    "refinement downstream trusts (btx / BayFAI / CrystFEL) exists only as a .geom "
+                    "and never round-trips back into psana. Measured on mfxx49820 r0016 that gap is "
+                    "a median 3.16% error in |q|, signed per detector quadrant, which no --zdist can "
+                    "absorb -- and it was enough to make blind indexing return a wrong doubled-c cell.",
+        flag_type="--", rename_param="geom",
     )
     peakfinder: Literal["v4", "pf9", "stored"] = Field(
         "stored",
@@ -176,15 +231,46 @@ class IndexGLINTParameters(ThirdPartyParameters):
                 values["tofile"] = legacy
         return values
 
-    @validator("images", always=True)
-    def _one_source(cls, images: Optional[str], values: Dict[str, Any]) -> Optional[str]:
-        """Exactly one frame source: the CrystFEL peak stream, or raw images GLINT finds peaks in."""
+    @validator("exp", always=True)
+    def _one_source(cls, exp: Optional[str], values: Dict[str, Any]) -> Optional[str]:
+        """EXACTLY ONE frame source: a CrystFEL peak stream, raw .cxi images, or raw xtc.
+
+        Hung on `exp` rather than `images` because pydantic runs field validators in DECLARATION
+        order, and `exp` is declared last of the three -- so this is the first point at which all
+        three values are visible in `values`."""
         peaks: str = values.get("peaks") or ""
-        if images and peaks:
-            raise ValueError("set `peaks` OR `images`, not both (they are alternative frame sources)")
-        if not images and not peaks:
-            raise ValueError("one of `peaks` (from PeakFinderSFX) or `images` (raw .cxi) is required")
-        return images
+        images: str = values.get("images") or ""
+        chosen = [n for n, v in (("peaks", peaks), ("images", images), ("exp", exp)) if v]
+        if len(chosen) > 1:
+            raise ValueError(f"set exactly ONE frame source, got {chosen}: `peaks` (from "
+                             "PeakFinderSFX), `images` (raw .cxi) and `exp` (raw xtc) are "
+                             "alternatives, not layers")
+        if not chosen:
+            raise ValueError("one frame source is required: `peaks` (from PeakFinderSFX), `images` "
+                             "(raw .cxi), or `exp` (+`run`, raw xtc)")
+        return exp
+
+    @validator("run", "zdist", always=True)
+    def _xtc_requires(cls, v: Any, values: Dict[str, Any], field: Any) -> Any:
+        """`run` and `zdist` are mandatory with `exp`.
+
+        zdist especially: glint_xtc REQUIRES it, because psana's per-pixel Z is nominal. Omitting it
+        would fail inside a Slurm job rather than here at config time."""
+        if values.get("exp") and v in (None, ""):
+            raise ValueError(f"`{field.name}` is required with `exp` (the raw xtc source)")
+        return v
+
+    @validator("det", "psana", "calib_dir", always=True)
+    def _xtc_only(cls, v: Any, values: Dict[str, Any], field: Any) -> Any:
+        """Reject the xtc-only knobs on the other two sources instead of letting them be dropped.
+
+        glint_launch.sh whitelists flags per destination, so one of these set alongside `peaks` would
+        be silently discarded -- and the run would look as though it had honoured a setting the
+        indexer never saw. NOTE `wavelength` is deliberately NOT in this list: it is meaningful on
+        all three sources."""
+        if v not in (None, "") and not values.get("exp"):
+            raise ValueError(f"`{field.name}` applies only to the `exp` (raw xtc) source")
+        return v
 
     @validator("top_peaks", always=True)
     def _top_peaks_images_only(cls, top_peaks: Optional[int], values: Dict[str, Any]) -> Optional[int]:

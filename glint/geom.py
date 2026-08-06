@@ -89,11 +89,11 @@ def read_crystfel_peaks(path):
     """Read a CrystFEL stream's 'Peaks from peak search' blocks (what peakfinder8/LUTE emits).
     Returns [{'image':str, 'event':int|str, 'peaks':(N,2) fs,ss}, ...] -- one per chunk."""
     chunks = []
-    image = None; event = 0; peaks = []; inpk = False
+    image = None; event = 0; peaks = []; inpk = False; open_chunk = False
     for line in open(path):
         s = line.strip()
         if s.startswith("----- Begin chunk"):
-            image = None; event = 0; peaks = []; inpk = False
+            image = None; event = 0; peaks = []; inpk = False; open_chunk = True
         elif s.startswith("Image filename:"):
             image = s.split(":", 1)[1].strip()
         elif s.startswith("Event:"):
@@ -107,6 +107,14 @@ def read_crystfel_peaks(path):
         elif s.startswith("End of peak list"):
             inpk = False
         elif s.startswith("----- End chunk"):
+            # One frame per Begin/End PAIR. Without the latch a stream carrying a stray second
+            # 'End chunk' emits the frame again -- same image, same event, same peaks, because
+            # nothing is reset until the next 'Begin chunk'. Silent duplicates do not change a
+            # percentage but they double every count and every consensus pool, which reads as more
+            # evidence than there is. Measured: a 3000-chunk stream parsed as N=6000.
+            if not open_chunk:
+                continue
+            open_chunk = False
             chunks.append({"image": image, "event": event,
                            "peaks": np.array(peaks, float).reshape(-1, 2)})
         elif inpk:

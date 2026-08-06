@@ -10,7 +10,8 @@ calibrates on the device for 4.1x end-to-end wall and a byte-identical stream; i
 release that can see Jungfrau; and it checks its own geometry provenance at startup instead of
 failing silently. What is left is item 6 — `PF8_MIN_SNR` is detector-specific and has to be
 calibrated before `pf8` is used on new hardware — and the fact that this repo still has no CI, so
-the task-model tests written for item 1 run only when someone runs them.
+the task-model tests written for item 1 run only when someone runs them (item 6 now has a
+reference-scored measurement on a good run, but the true `min_snr` ladder still wants raw images).
 
 ---
 
@@ -106,8 +107,10 @@ so symmetry has to be supplied downstream. And the reflection rows carry the pla
 ## The seven things that stand between this and production
 
 **Progress: 6 of 7 struck through** — item 1 only partly (its tests exist, CI does not), and item 6
-is the one still fully open. A struck-through item carries the commit that closed it and how it was
-verified; item 6 is unchanged from when it was written.
+is the one still open. A struck-through item carries the commit that closed it and how it was
+verified. Item 6 was re-measured on 2026-08-06 against a real indexing reference on a run the
+beamline kept; it stays open because the true `min_snr` ladder needs raw images from a good Jungfrau
+run, and the one it was originally measured on had been discarded by its own experiment.
 
 **1. ~~The LUTE task model has no test.~~ TESTS DONE (`bdbe67b`), CI STILL OPEN.**
 `lute/test_glint_index.py` covers all eight validators and the launcher's per-destination flag
@@ -315,7 +318,48 @@ Both detectors show the same shape — a flat region then a knee — but Jungfra
 higher. The shipped 15 selects 37% of events on one detector and 96% on the other. Calibrate per
 detector before using pf8 on new hardware; v4 (the default) is unaffected.
 
-**Caveat on the Jungfrau column, added 2026-08-06.** It is measured on `cxilu8823` **r0226**, and
+**REDONE ON A GOOD RUN, 2026-08-06 (job 34379248).** `cxilu8823` **r0207** — a run the beamline kept
+and indexed, **1623/3000 = 54.1%** with xgandalf and the cell supplied. Its images are gone (xtc on
+tape), but its peak lists survive in the beamline's stream, and a peak-finder's SNR cut keeps the
+strong peaks and drops the weak, so cutting those lists by intensity walks the same axis. Every rung
+is scored by the thing that matters — how many of the **3000 offered frames** still index, the same
+denominator as the reference:
+
+| keep | median pk/frame | frames with >=10 pk | known-cell | blind |
+|---|---|---|---|---|
+| 100% | 43.9 | 3000 | **72.3%** | 70.7% |
+| 75% | 32.9 | 2983 | **72.6%** | 71.0% |
+| 50% | 21.9 | 2693 | 64.3% | 62.0% |
+| 35% | 15.3 | 1916 | 50.0% | 48.0% |
+| 25% | 11.0 | 1251 | 35.1% | 41.6% |
+| 15% | 6.6 | 508 | 14.8% | 14.3% |
+
+Three things this says that a pass-rate ladder could not.
+
+**The safe band is wide.** Discarding the weakest QUARTER of every frame's peaks costs nothing at
+all (72.3 -> 72.6%). Even at half, GLINT still beats the reference. At 35% — two thirds of the peaks
+thrown away — it is level with what xgandalf achieved using all of them.
+
+**What collapses the yield is `min_peaks`, not indexing.** The per-frame success rate RISES as the
+cut tightens (72% -> 87%), because the frames that survive are the strong ones. The 3000-frame yield
+falls only because frames drop below `--min-peaks 10` and are never offered. So the risk in a
+mis-set `PF8_MIN_SNR` is not degraded solutions, it is **silent frame loss through a coupled
+parameter** — and `min_peaks` is where a per-detector adjustment has to be made too.
+
+**The lattice is robust.** The blind consensus cell moves from `[49.7 56.5 68.5]` to
+`[49.2 56.9 68.6]` across the whole ladder — stable after losing 85% of the peaks.
+
+One row to read carefully: blind at keep=25% reports 1247/1251 (99%), but its consensus **REFUSED**
+(best cluster 19.3% of the pool) and it fell back to per-frame top-1 with no cross-frame validation.
+That 99% is the pattern item 7 exists to make visible, not a result.
+
+**What this is NOT.** An intensity cut is a PROXY for an SNR cut, not the same knob: peakfinder8's
+SNR is relative to a local background, so a weak peak on a quiet background can outrank a stronger
+one in a noisy region. This measures selectivity-by-strength. The true `min_snr` ladder needs raw
+images from a good Jungfrau run — `cxil1005322` is fully staged (57 TB, Jungfrau4M, refined
+`r0007.geom`) and is the place to do it, once a reference hit list exists for it.
+
+**Caveat on the ORIGINAL Jungfrau column above.** It is measured on `cxilu8823` **r0226**, and
 r0226 is a run the experiment's own processing DISCARDED — their CrystFEL stream
 (`results/prabin/rhodopsin/100us/100us204-232.stream`) covers 20 runs in 204–232 and skips
 226/227/228. r0226 is also the only run of that experiment with raw xtc still on disk, which is why

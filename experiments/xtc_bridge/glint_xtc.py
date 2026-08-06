@@ -172,9 +172,12 @@ def index_and_write(out, args, out_path, report=True):
     .stream. Always writes a valid (possibly header-only) stream so an empty shard still produces a
     mergeable part. Returns (results, stats, n_indexed)."""
     from glint.stream import write_stream
+    # The .geom is optional on this route (psana's own pixel coords are the fallback), but when one
+    # was given it must reach the writer -- without a geometry block CrystFEL cannot open the file.
+    geom_text = open(args.geom).read() if getattr(args, "geom", None) else None
     frames = [np.asarray(q, float) for q in out["qframes"]]
     if not frames:
-        n_idx = write_stream([], out_path)   # header-only, valid empty stream
+        n_idx = write_stream([], out_path, geom_text=geom_text)   # header-only, valid empty stream
         return None, None, n_idx
     from glint.hybrid_stream import hybrid_index, _report
     Mc_known = None
@@ -186,7 +189,7 @@ def index_and_write(out, args, out_path, report=True):
     if getattr(args, "integrate", False):
         n_idx = integrate_and_write(results, args, out_path, report=report)
     else:
-        n_idx = write_stream(results, out_path)
+        n_idx = write_stream(results, out_path, geom_text=geom_text)
     if report:
         _report(stats, out_path)
     return results, stats, n_idx

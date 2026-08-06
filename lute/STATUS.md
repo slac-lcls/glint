@@ -73,7 +73,7 @@ from `IndexGLINTParameters`). Both are fixed; both are the kind of defect only e
 |---|---|
 | `glint_launch.sh` xtc routing + flag whitelist | **run** — S3DF job 34240308 |
 | `glint_xtc.py` read + peak-find + index + write | **run** — same job |
-| `IndexGLINTParameters` validators (`_one_source`, per-source `peakfinder`) | **never run** — no test, no CI |
+| `IndexGLINTParameters` validators (`_one_source`, per-source `peakfinder`) | **tested** — `lute/test_glint_index.py`, 44 pass; still no CI (item 1) |
 | the `peaks` and `images` routes | untouched by this branch; not re-run |
 | psana2 / `--psana 2` over envbridge | **never run on this branch** |
 | MPI sharding (`glint_xtc_mpi.py`) | **never run on this branch** |
@@ -86,7 +86,15 @@ MfxEndstation.0:Epix10ka2M.0 --zdist 0.102973 --wavelength 1.290757 --max-events
 - 200 events -> 54 frames with >= 6 peaks -> **50 indexed (92%)**: blind, +5 N-best recovered,
   +30 rescued
 - cell `38.3 / 79.2 / 79.9 A`, angles 89.2 / 89.7 / 90.0, against a truth of `38.4 / 79.3 / 79.5`
-- stream is valid CrystFEL 2.3 with 54 chunks and 50 `indexed_by = glint`
+- stream has 54 chunks and 50 indexed crystals
+
+**Correction, 2026-08-06.** This bullet used to read "stream is valid CrystFEL 2.3 ... and 50
+`indexed_by = glint`". It was neither: CrystFEL 0.10.2 could not open that file at all, and
+`indexed_by = glint` was one of the three reasons. Nobody had run a CrystFEL binary against the
+orientation-only writer — a round trip through GLINT's own reader passes either way. Fixed in
+`ba54639`; `experiments/test_stream_crystfel.py` now runs `process_hkl` itself. Measured before and
+after on the same 3000-frame stream: **0 -> 14,514 hkl lines**. The `--integrate` writer
+(`predict.write_stream_integrated`, item 3) was always correct and is unaffected.
 
 Two things that run also shows. The stream reports `lattice_type = triclinic, centering = P`
 because GLINT imposes no symmetry — the true lysozyme is tetragonal *P*4<sub>3</sub>2<sub>1</sub>2,
@@ -306,6 +314,17 @@ alone: `experiments/paper_xg_gpu.py`, `experiments/bench_h2h.py`, `experiments/p
 Both detectors show the same shape — a flat region then a knee — but Jungfrau's knee sits roughly 2x
 higher. The shipped 15 selects 37% of events on one detector and 96% on the other. Calibrate per
 detector before using pf8 on new hardware; v4 (the default) is unaffected.
+
+**Caveat on the Jungfrau column, added 2026-08-06.** It is measured on `cxilu8823` **r0226**, and
+r0226 is a run the experiment's own processing DISCARDED — their CrystFEL stream
+(`results/prabin/rhodopsin/100us/100us204-232.stream`) covers 20 runs in 204–232 and skips
+226/227/228. r0226 is also the only run of that experiment with raw xtc still on disk, which is why
+it was used. A pass-rate ladder on a run whose frames are noise-dominated will show a high
+pass-rate at every threshold, so "Jungfrau's knee is 2x higher" may be a property of THAT RUN rather
+than of the detector. The re-measurement does not need xtc: the beamline stream carries the peak
+lists for the good runs (r0207: 3000 frames extracted, 54.1% indexed by xgandalf), and
+`glint_cli --peaks --geom` consumes them directly. **Until that is redone, treat the Jungfrau row as
+provisional.**
 
 **~~7. Geometry provenance is load-bearing and silent when wrong.~~ NO LONGER SILENT.** On
 `mfxx49820` psana's deployed geometry is the unrefined 2021 starting calibration; blind indexing

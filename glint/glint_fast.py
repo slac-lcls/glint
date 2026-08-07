@@ -494,4 +494,4 @@ if __name__ == "__main__":
     if not scalar:
         print(f"    GPU front-end (M1-M3) {1e3*acc['gpu_front']/n:7.1f} ms/frame")
         print(f"    GPU M4 batched anneal {1e3*acc['m4_gpu']/n:7.1f} ms/frame  (~{acc['ntri']//n} triplets/frame)")
-    print(f"  ACCURACY    same_lattice {sl}/{n} ({100*sl//n}%)  gated frac>=.25 {g25}/{n} ({100*g25//n}%)  >=10refl {g10}/{n} ({100*g10//n}%)")
+    print(f"  ACCURACY    same_lattice {sl}/{n} ({round(100*sl/n)}%)  gated frac>=.25 {g25}/{n} ({round(100*g25/n)}%)  >=10refl {g10}/{n} ({round(100*g10/n)}%)")   # ROUND (0f456a0), not floor

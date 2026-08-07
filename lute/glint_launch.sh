@@ -16,7 +16,25 @@
 # rejected by argparse rather than silently ignored.
 set -o pipefail
 source /sdf/group/lcls/ds/ana/sw/conda1/manage/bin/psconda.sh >/dev/null 2>&1
-conda activate ana-4.0.58-py3-minipytorch >/dev/null 2>&1
+# BOTH ANA RELEASES NOW WORK. These are the only two ana envs carrying torch at all:
+#   ana-4.0.58-py3-minipytorch  torch 2.1.0   cupy yes  -- CANNOT parse Jungfrau.ConfigV4
+#   ana-4.0.59-py3-minipytorch  torch 1.11.0  cupy yes  -- parses it
+# 4.0.58 drops a detector whose ConfigV it cannot read, silently, so psana.Detector() raises a
+# KeyError that reads like a mistyped name (cxilu8823 r0226, Jungfrau4M); the reader turns that into
+# a message naming the real cause. 4.0.59 reads it, at the price of a torch DOWNGRADE.
+#
+# That downgrade used to be fatal -- GLINT called Tensor.scatter_reduce_ (torch 1.12+) and
+# torch.backends.mps (also 1.12+), so under 4.0.59 indexing died with AttributeError before writing
+# anything. Both are gone: see glint/glint_index.py::_first_index_per_group. Every torch API the
+# glint package uses was then probed against BOTH envs (S3DF jobs 34277932 / 34278651) and nothing
+# else is missing on 1.11.
+#
+# 4.0.58 stays the default because it is the newer torch and covers every detector whose ConfigV it
+# can parse, which is all of them except the newest. For one it cannot see, just switch:
+#     GLINT_ANA_ENV=ana-4.0.59-py3-minipytorch
+# The shim is exact, not approximate -- with it, 4.0.58 reproduces its own pre-shim stream byte for
+# byte (sha 728ce3c5bd6572a4, job 34278559).
+conda activate "${GLINT_ANA_ENV:-ana-4.0.58-py3-minipytorch}" >/dev/null 2>&1
 cd "$(dirname "$0")/.." || exit 1                       # repo root (so `glint` imports)
 
 for a in "$@"; do                                       # does this invocation name the xtc source?
@@ -28,12 +46,16 @@ if [ -z "$XTC" ]; then
 fi
 
 # Everything glint_xtc.py accepts. Each takes a value; LUTE emits no bare switches on this route.
+XTC_SWITCHES="--integrate"    # value-less flags
 XTC_FLAGS=" --exp --run --det --zdist --wavelength --psana --geom --calib-dir --cell --nbest \
---min-peaks --max-events --peakfinder --min-pix --son-min --thr-high --thr-low --pf8-min-snr --reader-env --energy-det -o --out "
+--min-peaks --max-events --peakfinder --min-pix --son-min --thr-high --thr-low --pf8-min-snr --int-dmin --int-tol --reader-env --energy-det -o --out "
 args=(); dropped=()
 i=1
 while [ $i -le $# ]; do
     a="${!i}"; j=$((i + 1)); v="${!j}"
+    case " $XTC_SWITCHES " in                           # bare switches take NO value
+        *" $a "*) args+=("$a"); i=$((i + 1)); continue ;;
+    esac
     case "$XTC_FLAGS" in
         *" $a "*) args+=("$a" "$v") ;;
         *)        dropped+=("$a") ;;

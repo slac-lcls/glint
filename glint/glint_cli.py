@@ -158,7 +158,9 @@ def main():
             write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
                                     photon_eV=float(gg.get("photon_energy", 9392.7)), clen_m=float(gg.get("clen", 0.15)))
     else:
-        write_stream(results, args.out)
+        # the .geom is what makes the stream readable at all -- see stream.write_stream
+        write_stream(results, args.out,
+                     geom_text=open(args.geom).read() if args.geom else None)
     _report(stats, args.out)
     if args.integrate:
         print(f"  integrated         : {nint} frames / {tot} reflections (real I/sigma) -> {args.out}")

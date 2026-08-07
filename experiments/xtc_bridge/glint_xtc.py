@@ -54,6 +54,13 @@ def build_parser():
                          "2 = LCLS-II xtc2, read in conda2 over envbridge. Default 1.")
     ap.add_argument("--reader-env", default="xpp_drp_gpu_311",
                     help="--psana 2 only: conda2 env with psana2 + cupy that does the peak-finding")
+    ap.add_argument("--gpu-calib", action="store_true",
+                    help="calibrate on the GPU instead of det.calib (psana1 + Epix10ka only). "
+                         "det.calib is 97.7%% of an event on this route; the device path reproduces "
+                         "it exactly (0.000 ADU residual, identical hit set on mfxx49820 r0016) at "
+                         "0.73-3.8 ms against 141 ms, and in pass 1 the frame never leaves the GPU. "
+                         "Raises rather than falling back if the detector is not supported, so a "
+                         "silent return to the slow path cannot be mistaken for a speedup.")
     ap.add_argument("--calib-dir", default=None,
                     help="psana calib-dir override (psana1 only). Use when psana would resolve a "
                          "different geometry than the one a trusted refinement was built on; --zdist "
@@ -95,6 +102,19 @@ def build_parser():
                     help=f"pf8 ONLY: min per-peak max-pixel SNR. Not tied to --thr-high; it stands "
                          f"in for the integrated-SNR cut pf8 lacks, and is sharp -- 10 turns this "
                          f"into a pass-through (default {xtc_core.PF8_MIN_SNR})")
+    ig = ap.add_argument_group(
+        "integration (xtc route, psana1)",
+        "Off by default, in which case the stream is ORIENTATION-ONLY: every reflection row carries "
+        "I=0/sigma=0 and a merge of it produces zeros. --integrate adds a SECOND PASS that re-reads "
+        "the indexed events, predicts their reflections from the recovered orientation and "
+        "box-integrates, giving a stream partialator can merge. Needs --geom for the panel model. "
+        "Costs roughly n_events*0.9ms + n_indexed*146ms, since only wanted events are calibrated.")
+    ig.add_argument("--integrate", action="store_true",
+                    help="second pass: predict + box-integrate, writing real I/sigma")
+    ig.add_argument("--int-dmin", type=float, default=2.0,
+                    help="resolution limit for prediction, A (default 2.0)")
+    ig.add_argument("--int-tol", type=float, default=0.006,
+                    help="Ewald excitation-error half-width, 1/A (default 0.006)")
     ap.add_argument("--cell", nargs="+", metavar="V",
                     help='known cell "a b c al be ga" (skip consensus); omit for fully-blind')
     ap.add_argument("--nbest", type=int, default=3)
@@ -112,11 +132,20 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
         # LCLS-I: psana1 is in THIS env with torch -- read in-process, no bridge.
         import xtc_qreader_psana1
         if verbose:
-            print(f"peak-finding {args.exp} run {args.run} in-process (psana1) ...", flush=True)
+            print(f"peak-finding {args.exp} run {args.run} in-process (psana1)"
+                  f"{' with GPU calibration' if args.gpu_calib else ''} ...", flush=True)
         return xtc_qreader_psana1.run_to_qframes_psana1(
             args.exp, args.run, args.det, args.zdist, args.wavelength,
-            args.min_peaks, args.max_events, rank, nranks, args.calib_dir, args.geom, **pf_kw)
+            args.min_peaks, args.max_events, rank, nranks, args.calib_dir, args.geom,
+            gpu_calib=args.gpu_calib, **pf_kw)
     # LCLS-II: psana2 cannot co-import with torch -- read in conda2 over the bridge.
+    if args.gpu_calib:
+        # Checked BEFORE the envbridge import, so an unsupported combination reports itself rather
+        # than sending the user off to install a package that would not have helped.
+        # The psana2 reader runs in a conda2 env over envbridge, and only the peak COORDINATES cross
+        # back. Device calibration there would have to live on the far side of the bridge, in that
+        # env's cupy, which is a different piece of work than this flag.
+        sys.exit("--gpu-calib is psana1-only so far (the psana2 reader runs over envbridge in conda2)")
     try:
         import envbridge
     except ImportError:
@@ -143,9 +172,12 @@ def index_and_write(out, args, out_path, report=True):
     .stream. Always writes a valid (possibly header-only) stream so an empty shard still produces a
     mergeable part. Returns (results, stats, n_indexed)."""
     from glint.stream import write_stream
+    # The .geom is optional on this route (psana's own pixel coords are the fallback), but when one
+    # was given it must reach the writer -- without a geometry block CrystFEL cannot open the file.
+    geom_text = open(args.geom).read() if getattr(args, "geom", None) else None
     frames = [np.asarray(q, float) for q in out["qframes"]]
     if not frames:
-        n_idx = write_stream([], out_path)   # header-only, valid empty stream
+        n_idx = write_stream([], out_path, geom_text=geom_text)   # header-only, valid empty stream
         return None, None, n_idx
     from glint.hybrid_stream import hybrid_index, _report
     Mc_known = None
@@ -154,10 +186,65 @@ def index_and_write(out, args, out_path, report=True):
         Mc_known = cell_to_Ar(*[float(x) for x in " ".join(args.cell).split()])
     images = [{"image": f"xtc://{args.exp}_r{args.run}", "event": e} for e in out["events"]]
     results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest)
-    n_idx = write_stream(results, out_path)
+    if getattr(args, "integrate", False):
+        n_idx = integrate_and_write(results, args, out_path, report=report)
+    else:
+        n_idx = write_stream(results, out_path, geom_text=geom_text)
     if report:
         _report(stats, out_path)
     return results, stats, n_idx
+
+
+def integrate_and_write(results, args, out_path, report=True):
+    """PASS 2: re-read the indexed events, predict their reflections and box-integrate, then write a
+    stream with REAL I/sigma that partialator can merge.
+
+    Without this the stream is orientation-only: `glint/stream.py` writes every reflection row as
+    `h k l 0.00 0.00 ...`, so only the Miller indices are real and a merge of it produces zeros.
+
+    REQUIRES --geom. Prediction projects q onto named CrystFEL panels (corner, fs/ss basis, res,
+    coffset), and psana's per-pixel coordinates do not carry that panel model -- they are positions,
+    not a tiling. The frame is handed over reshaped to the (nseg*H, W) slab a .geom addresses.
+    """
+    from glint.lute_bridge import parse_geom
+    from glint.predict import predict_spots, integrate_spots, write_stream_integrated
+    import xtc_qreader_psana1 as rd
+
+    if not args.geom:
+        sys.exit("--integrate on the xtc route needs --geom: prediction projects onto CrystFEL "
+                 "panels, which psana per-pixel coords do not define. Either pass the .geom the "
+                 "reference geometry lives in, or drop --integrate for an orientation-only stream.")
+    if args.psana != "1":
+        sys.exit("--integrate is wired on the psana1 (xtc1) route only so far")
+
+    panels, _glob = parse_geom(args.geom)
+    by_event = {int(r["event"]): r for r in results if r.get("M") is not None}
+    if not by_event:
+        return write_stream_integrated([], out_path, geom_text=open(args.geom).read())
+
+    if report:
+        print(f"  integrating {len(by_event)} indexed frames (pass 2: re-read + predict + box-sum)",
+              flush=True)
+    lam = args.wavelength
+    out = []
+    for ev, frame in rd.frames_for_events(args.exp, args.run, args.det, by_event,
+                                          calib_dir=args.calib_dir, max_events=args.max_events,
+                                          gpu_calib=args.gpu_calib):
+        r = by_event[ev]
+        pred = predict_spots(r["M"], panels, args.zdist, lam,
+                             dmin=args.int_dmin, tol=args.int_tol)
+        if not len(pred):
+            continue
+        I, sig, peak, bg = integrate_spots(frame, pred)
+        out.append({"image": r["image"], "event": ev, "M": r["M"],
+                    "pred": pred, "I": I, "sigma": sig, "peak": peak, "bg": bg})
+
+    n = write_stream_integrated(out, out_path, geom_text=open(args.geom).read(),
+                                clen_m=args.zdist,
+                                photon_eV=(12398.419843320026 / lam) if lam else 9392.7)
+    if report:
+        print(f"  wrote {n} integrated chunks -> {out_path}", flush=True)
+    return n
 
 
 def main(argv=None):

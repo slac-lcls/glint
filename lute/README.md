@@ -10,6 +10,30 @@ fast-feedback-style indexing is simply *unavailable* in LUTE today. GLINT fills 
 indexing + cross-frame consensus, ~10^2-10^3x faster, emitting the same CrystFEL `.stream` format the
 rest of the DAG consumes.
 
+## Is it ready?
+
+Partly, and [**STATUS.md**](STATUS.md) is the honest answer -- what is measured, what is assumed, and
+what has never been run. It tracks
+[the seven things that stand between this and production](STATUS.md#the-seven-things-that-stand-between-this-and-production),
+struck through as they close:
+
+| | | |
+|---|---|---|
+| 1 | ~~no test for the LUTE task model~~ | tests done, **CI still open** |
+| 2 | ~~`--pf8-min-snr` unreachable~~ | **done** |
+| 3 | ~~emitted `.stream` not mergeable~~ | **done**, verified on real data (needs `integrate: true`, below) |
+| 4 | ~~150 ms/event, 98% of it CPU calibration~~ | **done** -- `--gpu-calib`, byte-identical stream, 4.1x end to end |
+| 5 | ~~no ana env satisfies both psana and torch~~ | **done** -- GLINT runs on torch 1.11, so both do |
+| 6 | `PF8_MIN_SNR = 15` is detector-specific | **open** — re-measured on a good run; the coupled risk is `min_peaks` |
+| 7 | ~~geometry provenance is silent when wrong~~ | **done** -- startup check, three states, never silent |
+
+The one still open is item 6: `PF8_MIN_SNR` is detector-specific and needs calibrating per
+detector before `peakfinder: pf8` is used on new hardware. It does not affect the default `v4`.
+Re-measured on `cxilu8823` r0207 against the beamline's own 54.1% (job 34379248): the safe band is
+wide — discarding the weakest **quarter** of every frame's peaks costs nothing — and what actually
+collapses the yield is frames falling below **`min_peaks`**, not the threshold degrading solutions.
+Tune the two together.
+
 > **The default stream is ORIENTATION-ONLY and is NOT mergeable.** Every reflection carries
 > placeholder `I=0.00 sigma(I)=0.00`. Choose one of:
 >   * `integrate: true` -- GLINT predicts and box-integrates its own reflections and writes real

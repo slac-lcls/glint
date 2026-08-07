@@ -27,11 +27,23 @@ def _vec(s):
 
 
 def _wavelength_A(d):
-    """Resolve wavelength in Angstrom from photon_energy (eV) or wavelength (m or A)."""
+    """Resolve wavelength in Angstrom from photon_energy (eV) or wavelength (m or A).
+
+    Returns None when the geometry does not carry a LITERAL value -- either the key is absent, or
+    it is an HDF5 path (`photon_energy = /LCLS/photon_energy_eV`), which is the NORMAL form in an
+    LCLS .geom because the energy is per-shot. There is nothing to resolve it against on the
+    `--peaks` route, so the caller supplies `--wavelength`; this used to raise on the path form
+    instead, which made every stock LCLS .geom unparseable before that override was ever read."""
     if "photon_energy" in d:
-        return _HC_eV_A / float(d["photon_energy"])
+        try:
+            return _HC_eV_A / float(d["photon_energy"])
+        except (TypeError, ValueError):
+            return None
     if "wavelength" in d:
-        w = float(d["wavelength"])
+        try:
+            w = float(d["wavelength"])
+        except (TypeError, ValueError):
+            return None
         return w * 1e10 if w < 1e-6 else w     # metres -> A, else already A
     return None
 
@@ -77,11 +89,11 @@ def read_crystfel_peaks(path):
     """Read a CrystFEL stream's 'Peaks from peak search' blocks (what peakfinder8/LUTE emits).
     Returns [{'image':str, 'event':int|str, 'peaks':(N,2) fs,ss}, ...] -- one per chunk."""
     chunks = []
-    image = None; event = 0; peaks = []; inpk = False
+    image = None; event = 0; peaks = []; inpk = False; open_chunk = False
     for line in open(path):
         s = line.strip()
         if s.startswith("----- Begin chunk"):
-            image = None; event = 0; peaks = []; inpk = False
+            image = None; event = 0; peaks = []; inpk = False; open_chunk = True
         elif s.startswith("Image filename:"):
             image = s.split(":", 1)[1].strip()
         elif s.startswith("Event:"):
@@ -95,6 +107,14 @@ def read_crystfel_peaks(path):
         elif s.startswith("End of peak list"):
             inpk = False
         elif s.startswith("----- End chunk"):
+            # One frame per Begin/End PAIR. Without the latch a stream carrying a stray second
+            # 'End chunk' emits the frame again -- same image, same event, same peaks, because
+            # nothing is reset until the next 'Begin chunk'. Silent duplicates do not change a
+            # percentage but they double every count and every consensus pool, which reads as more
+            # evidence than there is. Measured: a 3000-chunk stream parsed as N=6000.
+            if not open_chunk:
+                continue
+            open_chunk = False
             chunks.append({"image": image, "event": event,
                            "peaks": np.array(peaks, float).reshape(-1, 2)})
         elif inpk:
@@ -160,6 +180,24 @@ def _q_from_panels(fs_arr, ss_arr, specs, wavelength_A):
     return (s_hat - np.array([0.0, 0.0, 1.0])) / wavelength_A
 
 
+def _panel_z(name, p):
+    """clen + coffset [m], insisting BOTH are literals.
+
+    `clen` is frequently an HDF5 path in an LCLS .geom (`clen = /LCLS/detector_1/EncoderValue`)
+    because the distance is per-run. This route has no file to resolve it against, and adding a str
+    to a float raises `can only concatenate str` -- which names the language, not the geometry."""
+    out = 0.0
+    for k in ("clen", "coffset"):
+        v = p.get(k, 0.0)
+        if isinstance(v, str):
+            raise ValueError(
+                f"panel {name}: '{k} = {v}' is an HDF5 path, not a distance. The --peaks route has "
+                f"no file to read it from -- edit the .geom to a literal, or use a route that "
+                f"supplies the distance per event.")
+        out += float(v)
+    return out
+
+
 def _specs_from_geom_panels(panels):
     """.geom dict-of-dicts -> _q_from_panels specs. Bounds default to +-inf (a single-panel .geom
     need not declare min_fs) while the panel-local origin defaults to 0 -- they are different
@@ -169,8 +207,8 @@ def _specs_from_geom_panels(panels):
                  off_fs=p.get("min_fs", 0.0), off_ss=p.get("min_ss", 0.0),
                  fsx=p["fsx"], fsy=p["fsy"], ssx=p["ssx"], ssy=p["ssy"],
                  cx=p["corner_x"], cy=p["corner_y"], res=p["res"],
-                 z=p["clen"] + p["coffset"])
-            for p in panels.values()]
+                 z=_panel_z(name, p))
+            for name, p in panels.items()]
 
 
 def peaks_to_q(peaks, geom, wavelength_A=None):

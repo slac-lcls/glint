@@ -28,8 +28,63 @@ import torch
 from glint.lattice import buerger_reduce
 
 PI = np.pi
+# getattr, not torch.backends.mps.is_available(): torch.backends has NO `mps` attribute at all
+# before 1.12, so the plain expression is an AttributeError there. It survives on a GPU node only
+# because `torch.cuda.is_available()` short-circuits ahead of it -- on a CPU-only node under torch
+# 1.11 this line raises at IMPORT time, before anything can be indexed. See _first_index_per_group
+# for why torch 1.11 has to keep working.
+_MPS = getattr(torch.backends, "mps", None)
 DEV = ("cuda" if torch.cuda.is_available() else
-       "mps" if torch.backends.mps.is_available() else "cpu")
+       "mps" if (_MPS is not None and _MPS.is_available()) else "cpu")
+
+
+def _first_index_per_group(inv, n_groups, N):
+    """For each group g in [0,n_groups), the SMALLEST index i with inv[i]==g, or N if g is empty.
+
+    This is exactly
+
+        out = torch.full((n_groups,), N, dtype=torch.long, device=inv.device)
+        out.scatter_reduce_(0, inv, torch.arange(N, device=inv.device),
+                            reduce="amin", include_self=True)
+
+    written without `scatter_reduce_`, which arrived in torch 1.12. GLINT has to run on torch 1.11
+    because that is what `ana-4.0.59` ships, and 4.0.59 is the only LCLS analysis release whose
+    psana can parse `Jungfrau.ConfigV4` -- so on 1.12+ the detector is unreadable and on 1.11 the
+    indexer used to die with AttributeError. STATUS.md item 5.
+
+    Every other route is closed on 1.11, measured rather than assumed (S3DF job 34277932):
+    `torch.scatter_reduce` exists but with a different signature that takes no `src`;
+    `Tensor.scatter_(reduce=)` offers only add/multiply, and multiply is not even implemented for
+    Long on CUDA; `Tensor.index_reduce_` does not exist.
+
+    THE METHOD. Sort the composite key `inv*N + i`. Since i is a permutation of [0,N), those keys
+    are DISTINCT, so the sort is a total order and needs no stability guarantee -- ordering by key
+    groups rows by `inv` and, within a group, by ascending position. The first row of each run is
+    therefore the group's minimum position. The final scatter writes to `g[first]`, which holds each
+    group id at most once, so there is no duplicate-index write either.
+
+    Both of those matter more than they look. The obvious one-liner -- assign in reverse order and
+    let the last write win -- is WRONG on CUDA, where duplicate-index assignment has no defined
+    winner: measured against this reference it missed on 10 of 13 cases and gave different answers
+    across 200 repeats of the same input. `torch.sort(stable=True)` does exist in 1.11 and also
+    works here, but relying on documented stability is a weaker guarantee than not needing it.
+
+    N is the number of candidate vectors or triplets, order 10^3, so `inv*N + i` stays far inside
+    int64; it would only overflow above N ~ 3e9.
+    """
+    out = torch.full((n_groups,), N, dtype=torch.long, device=inv.device)
+    if N == 0:
+        return out
+    key = inv.to(torch.long) * N + torch.arange(N, device=inv.device)
+    ks, _ = torch.sort(key)
+    # rounding_mode="floor" rather than `//`: torch 1.11 deprecates __floordiv__ and warns on every
+    # call. Both agree here (all values are non-negative) but the warning would fire per frame.
+    g = torch.div(ks, N, rounding_mode="floor")
+    p = ks - g * N
+    first = torch.ones_like(g, dtype=torch.bool)
+    first[1:] = g[1:] != g[:-1]
+    out[g[first]] = p[first]
+    return out
 
 # M2 proximity-function form (climb + score). "" = default cos / cos^2 with HARD tol mask.
 # Smooth forms (gauss/vonmises/softcos) carry their OWN falloff, so the hard mask is dropped
@@ -427,8 +482,7 @@ def distinct_maxima_gpu(T, f, tol=2.0, keep=44, minlen=20.0):
     K = (key[:, 0] * b1 + key[:, 1]) * b2 + key[:, 2]         # 3D voxel -> 1D hash
     uniq, inv = torch.unique(K, return_inverse=True)
     N = K.shape[0]
-    firstpos = torch.full((uniq.shape[0],), N, device=T.device, dtype=torch.long)
-    firstpos.scatter_reduce_(0, inv, torch.arange(N, device=T.device), reduce="amin", include_self=True)
+    firstpos = _first_index_per_group(inv, uniq.shape[0], N)   # torch<1.12 safe; see its docstring
     keepmask = torch.zeros(N, dtype=torch.bool, device=T.device)
     keepmask[firstpos] = True                                 # first (=max-f) row per voxel
     return Tc[keepmask][:keep]                                # position order == f-descending
@@ -452,8 +506,7 @@ def distinct_cells_gpu(M, key, tol=1.0):
     Ks = K[order]
     uniq, inv = torch.unique(Ks, return_inverse=True)
     N = Ks.shape[0]
-    firstpos = torch.full((uniq.shape[0],), N, device=M.device, dtype=torch.long)
-    firstpos.scatter_reduce_(0, inv, torch.arange(N, device=M.device), reduce="amin", include_self=True)
+    firstpos = _first_index_per_group(inv, uniq.shape[0], N)   # torch<1.12 safe; see its docstring
     reps = order[firstpos]                                     # max-key rep per signature group
     reps = reps[key[reps] > -1e8]                             # drop invalid cells
     return reps[torch.argsort(key[reps], descending=True)]

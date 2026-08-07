@@ -1,10 +1,11 @@
 """Re-measure `stream_ms` (the streaming per-frame wall) and check that the stage table decomposes it.
 
-WHY. check_numbers.py records stream_ms=4.16 with a stage table summing to 3.47, leaving 0.69 ms/frame
-(17% of the frame) UN-ATTRIBUTED -- large enough that the guard warns on every push. Its own comment
-names the suspect: "the in-situ cross-check run points at stream_ms rather than at a missing stage
-... Re-measure stream_ms itself before quoting this decomposition stage-by-stage." This is that
-re-measurement, made reproducible so the next person does not have to reconstruct the protocol.
+WHY (the state that prompted this; see RESOLVED below for how it ended). check_numbers.py recorded
+stream_ms=4.16 with a stage table summing to 3.47, leaving 0.69 ms/frame (17% of the frame)
+UN-ATTRIBUTED -- large enough that the guard warned on every push. Its own comment named the suspect:
+"the in-situ cross-check run points at stream_ms rather than at a missing stage ... Re-measure
+stream_ms itself before quoting this decomposition stage-by-stage." This is that re-measurement, made
+reproducible so the next person does not have to reconstruct the protocol.
 
 It answers three questions, and the first is the one that matters:
 
@@ -36,11 +37,28 @@ So: min-vs-mean is real but MODEST (1.18x overall), and does NOT explain 0.69 ms
 wall measures 3.49-3.66, i.e. 12-16% BELOW the recorded 4.16. Against a 3.5-3.66 wall the stage
 table's 3.47 leaves 0.03-0.19 ms (1-5%) un-attributed rather than 0.69 (17%).
 
-NOT ACTED ON. stream_ms is deliberately left at 4.16 in check_numbers.py. Correcting it moves several
-headline numbers in GLINT's favour (stream_fps 240->286, peakfind share 28%->33%, the gap to 3500
-hits/s 15x->12x, the FPGA ceiling 1.39x->1.50x), which is exactly when to be slowest, and the
-provenance of 4.16 -- which GPU, which protocol -- is not recoverable from the code. Confirm on the
-hardware the original used before swapping it in.
+RESOLVED 2026-08-07, and the answer was not a measurement problem. Both conditions this note set --
+recover the provenance, confirm the hardware -- were met:
+
+  * PROVENANCE came from the commit that recorded the number, not from the code. 0623e34's message
+    states it: "both arms in the same job on the same A100, interleaved, steady state, min of 15
+    passes over the 40-frame 1024^2 sim".
+  * HARDWARE was confirmed by running THIS harness on both commits in one A100 allocation
+    (A100-SXM4-40GB, 2 rounds, alternating), pointing GLINT_ROOT at each checkout:
+
+        0623e34   wall 4.725 / 4.765 ms     predict 1.132 / 1.126 ms    <- reproduces its 4.42 / 1.11
+        21ca4db   wall 3.657 / 3.618 ms     predict 0.155 / 0.157 ms    <- current main
+
+The old arm reproducing its own recorded values is the whole point: same hardware, same harness, so
+the 1.30x between the arms is real code, not protocol. The gap was never un-attributed work -- it was
+PR #50 ("collapse + fuse predict's gate, -17% wall", merged 2026-07-22, the day AFTER 4.42 was
+recorded, its own message reporting the wall at 3.91 -> 3.69 -> 3.23) never being carried into FACTS.
+
+check_numbers.py now records stream_ms = 3.64 / 275 f/s, and unattributed_ms drops 0.69 -> 0.17 (5%).
+
+NOTE for the next re-measure: `SANITY: predict ... vs FACTS` below assumes you are on current main.
+On a deliberately OLD checkout it will report MISMATCH and that is correct behaviour, not a wrong
+checkout -- the two-arm run above trips it on purpose. Read the commit before believing the warning.
 
 TWO TRAPS, both of which produced wrong numbers here before being caught:
   * RUN IT ON THE CODE YOU MEAN TO MEASURE. A first attempt ran on a feature branch 44 commits behind
@@ -68,7 +86,7 @@ import glint.replica_gpu_batch as rgb
 
 SIM = os.environ.get("GLINT_SIM", "/sdf/home/s/smarches/glint_sim")
 REPEAT = int(os.environ.get("REPEAT", "20"))
-FACTS_STREAM_MS, FACTS_PREDICT_MS = 4.16, 0.16
+FACTS_STREAM_MS, FACTS_PREDICT_MS = 3.64, 0.16
 
 imgs = np.load(f"{SIM}/images.npy"); t = np.load(f"{SIM}/truth.npz")
 N = int(t["det_n"]); pix_mm = float(t["pix_mm"]); dist_mm = float(t["dist_mm"])

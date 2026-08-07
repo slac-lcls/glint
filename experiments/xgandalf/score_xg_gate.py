@@ -53,5 +53,8 @@ for tag, path in [("BLIND","xg_blind120.txt"), ("KNOWN-CELL","xg_known120.txt")]
         n += 1
         M, t = res.get(fid, (None, 0.0))
         a,b,c = gate(M, q); lat += a; g25 += b; g10 += c; ms += t
-    print(f"xgandalf {tag:10s} N={n}: correct-lattice {lat}/{n}={100*lat//n}%  "
-          f">=25%(Table1) {g25}/{n}={100*g25//n}%  >=10refl {g10}/{n}={100*g10//n}%  {ms/n:.0f} ms/frame")
+    # ROUND, not floor -- the deliverables' convention since 0f456a0. Flooring here printed 86/120 as
+    # "71%", which is the value that pair was RETIRED FROM (it is 72%), so the script that SOURCES
+    # xgandalf's rate was reproducing the stale number and contradicting the paper it backs.
+    print(f"xgandalf {tag:10s} N={n}: correct-lattice {lat}/{n}={round(100*lat/n)}%  "
+          f">=25%(Table1) {g25}/{n}={round(100*g25/n)}%  >=10refl {g10}/{n}={round(100*g10/n)}%  {ms/n:.0f} ms/frame")

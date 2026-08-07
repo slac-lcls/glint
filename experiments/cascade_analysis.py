@@ -59,7 +59,7 @@ for i, q in enumerate(frames):
     xg.append(gate(XG.get(i), q))
 gb, gr, fb, xg = map(np.array, (gb, gr, fb, xg))
 g_own = gb | gr
-P = lambda x: f"{int(x.sum()):3d}/{n} = {100 * x.sum() // n:2d}%"
+P = lambda x: f"{int(x.sum()):3d}/{n} = {round(100 * x.sum() / n):2d}%"   # ROUND (0f456a0), not floor
 print("individual (all given LYSO cell; GLINT-blind uses no cell):")
 print(f"  GLINT blind            {P(gb)}")
 print(f"  GLINT rescue (cell)    {P(gr)}")

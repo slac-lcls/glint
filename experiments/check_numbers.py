@@ -64,8 +64,14 @@ FACTS: dict[str, float | str] = {
     # DIALS printed 27% for 32/120 = 26.67 (rounded) while GLINT-(1) printed 76% for 92/120 = 76.67
     # (floored), so three "correct" values for one measurement were in circulation. Counts are now
     # shown inline in the table, which makes the convention checkable instead of inferred.
-    "glint_blind_rate_pct":    77,  # GLINT-(1) blind, 92/120, paper tab:summary
-    "xgandalf_blind_rate_pct": 72,  # xgandalf blind, 86/120, same table and same gate -- DIFFERENT indexers
+    # The COUNTS are the measurement; the percentages are DERIVED from them and checked below. Until
+    # 2026-08-02 the counts lived only in these trailing comments and both percentage keys were read by
+    # nothing, which is precisely how the pair drifted: 76/71 stayed written into the rule text below
+    # while the measurement moved to 77/72, and every run stayed green because no code connected them.
+    "glint1_strict_of120":         92,  # GLINT-(1), blind + cross-frame consensus, >=25%-of-spots bar
+    "glint_blind_rate_pct":        77,  # = round(100 * glint1_strict_of120 / 120)
+    "xgandalf_blind_strict_of120": 86,  # xgandalf blind, SAME bar, SAME peak list -- a different indexer
+    "xgandalf_blind_rate_pct":     72,  # = round(100 * xgandalf_blind_strict_of120 / 120)
     # integration ----------------------------------------------------------------------------------
     "integ_before_ms":     585.0,   # 16 Mpix / 800 reflections, whole-frame float64 upcast
     "integ_after_ms":      7.6,     # upcast removed, bit-identical                           (#17)
@@ -101,20 +107,30 @@ FACTS: dict[str, float | str] = {
     #
     #     predict    pre-#68  0.420 / 0.422 min   ->   post-#68  0.157 / 0.156 min   (2.7x)
     #
-    # 1.11 WAS WRONG TWICE OVER, and the first way has nothing to do with #68: it does not reproduce
-    # even on the pre-#68 arm, which measures 0.42. Per the profiling in the glint-predict-stage-cost
-    # note, 1.11 came from two stacked benchmark artifacts -- tol=0.006 (the predict() SIGNATURE
-    # default) instead of the driver's tol=0.002, plus a bench that rebuilt the `panels` dict INSIDE
-    # the timed call (+0.448 ms). Production rebuilds neither: StreamDriver.__init__ builds panels
-    # once (stream_driver.py:350) and passes the same object every frame. #68 (merged) then fused the
-    # detector projection into the gate kernel and took the corrected 0.42 down to 0.16.
+    # CORRECTION 2026-08-07, to a claim this comment used to make. It said 1.11 "was wrong twice over"
+    # and "does not reproduce even on the pre-#68 arm, which measures 0.42", blaming tol=0.006 plus a
+    # bench that rebuilt `panels` inside the timed call. That was a BAD INFERENCE FROM A BADLY CHOSEN
+    # BASELINE. The arm used as "pre-#68" was 5f72fd0, which already contained #50 -- so it was never
+    # a test of 1.11 at all. Re-measured AT ITS OWN COMMIT (0623e34, A100, driver outside the timer,
+    # tol=0.002, panels built once) predict reads 1.132 / 1.126 ms, i.e. 1.11 is REPRODUCIBLE and was
+    # an honest measurement of the code on 2026-07-21.
+    #
+    # The real history is three honest numbers, each superseded by a merged optimisation:
+    #
+    #     predict   1.11  (<=0623e34)  --#50-->  0.42  --#68-->  0.16
+    #     wall      4.42  (<=0623e34)  --#50-->  ~3.7  --#68-->  3.64
+    #
+    # #50 (96b0dda, "collapse + fuse predict's gate, -17% wall") landed the DAY AFTER 4.42/1.11 were
+    # recorded and its own message reports the wall at 3.91 -> 3.69 -> 3.23. Nothing carried that into
+    # this table. So the lesson is not "someone benchmarked badly" -- it is that a stage table decays
+    # silently when the optimisation PRs that move it do not update it.
     #
     # An independent in-situ cross-check (whole-driver instrumented run, 800 frames, same two arms)
     # agrees on the DELTA even though its absolute scale runs ~8% high because it times stages inside
     # the live pipeline rather than in a loop: predict 0.483 -> 0.207, and the end-to-end wall moved
     # 4.12 -> 3.84, i.e. the wall dropped by 0.28 against a predict saving of 0.28.
-    "stream_ms":           4.16,    # steady state per frame, B=40      (#68; was 5.58, then 4.42)
-    "stream_fps":          240.0,   # = 1000/stream_ms                  (#68; was 179, then 226)
+    "stream_ms":           3.64,    # steady state per frame, B=40   (#50+#68; was 4.42, then 4.16)
+    "stream_fps":          275.0,   # = 1000/stream_ms               (#50+#68; was 226, then 240)
     "peakfind_ms":         1.16,    # LARGEST single stage, 7.3x predict          (#41, open; was 2.38)
     "predict_ms":          0.16,    # fused gate+projection kernel      (#68, merged; was 1.11, 0.42)
     "index_b40_ms":        0.54,    # fused index, B=40 (NOT the 0.26 B=120 amortization)
@@ -165,16 +181,46 @@ FACTS: dict[str, float | str] = {
     # same stages as means inside the live loop rather than as tmin minima costs only 1.18x overall
     # (peakfind 1.05, integrate 1.04, predict 1.35, index 1.45).
     #
-    # DELIBERATELY NOT ACTED ON. stream_ms stays 4.16 and unattributed_ms stays 0.69. Correcting the
-    # wall moves several numbers in GLINT's FAVOUR -- stream_fps 240->286, peakfind share 28%->33%,
-    # the gap to ~3500 hits/s 15x->12x, the FPGA ceiling 1.39x->1.50x -- which is exactly when to be
-    # slowest, and the provenance of 4.16 (which GPU, which protocol) is not recoverable from the
-    # code. Confirm on the hardware the original used, then swap both values together.
-    "unattributed_ms":     0.69,    # = stream_ms - sum(measured stages)          (open, 2026-08-01)
+    # ACTED ON 2026-08-07, after the two conditions above were met. Both were:
+    #
+    # PROVENANCE, which turned out to be recoverable after all -- not from the code, from the commit
+    # that recorded it. 0623e34's message states the protocol outright: "both arms in the same job on
+    # the same A100, interleaved, steady state, min of 15 passes over the 40-frame 1024^2 sim".
+    #
+    # HARDWARE, confirmed by re-running the SAME harness on both commits in one A100 allocation
+    # (A100-SXM4-40GB, 2 rounds, alternating):
+    #
+    #     0623e34  wall 4.725 / 4.765   predict 1.132 / 1.126     <- reproduces 4.42 / 1.11
+    #     21ca4db  wall 3.657 / 3.618   predict 0.155 / 0.157     <- current main
+    #
+    # The old arm reproducing its own recorded values is what licenses the swap: the hardware is the
+    # same, the harness is the same, and the 1.30x difference between the arms is real code. (4.72
+    # against a recorded 4.42 is the protocol difference and points the right way -- the original took
+    # a MIN of 15 passes, this is a MEAN over 800 frames, and a min is expected to sit below a mean.)
+    #
+    # So the 0.69 was never un-attributed work. It was #50's ~0.75 ms, measured and merged on
+    # 2026-07-22 and never carried into this table. With the wall at 3.64 the stage sum of 3.47
+    # leaves 0.17 (5%), which is ordinary protocol slack and no longer trips the warning.
+    #
+    # These numbers move in GLINT's FAVOUR (stream_fps 240->275, peakfind share 28%->32%, the live gap
+    # 15x->13x, the FPGA ceiling 1.39x->1.47x), which is the case for being slow, not for being wrong:
+    # every one of them follows from optimisations that were separately measured and merged. What
+    # would NOT have been legitimate is re-interpreting the same measurement more kindly.
+    "unattributed_ms":     0.17,    # = stream_ms - sum(measured stages)   (protocol slack, 5%)
     # streaming vs offline YIELD -- success fraction, NOT throughput -------------------------------
     # The project's only real-data streaming-vs-offline head-to-head, promoted out of f61a4cf's commit
-    # body where it was the sole record. Same 120-frame real cxidb set, same strict research gate
-    # (same_lattice AND >=25% of spots AND >=10 refl) as the paper's tab:summary.
+    # body where it was the sole record. Same 120-frame real cxidb set; the completeness test is the
+    # paper's strict research bar (>=25% of spots AND >=10 refl).
+    #
+    # THE LATTICE TEST IS NOT THE SAME ON BOTH SIDES, and this comment used to claim it was.
+    # gap_on_real.py gates the streaming arms with strict_gate(M, q, drv.Mc) (:49, :54) -- against the
+    # cell THE DRIVER ITSELF LOCKED -- and the offline arm with strict_gate(M, q, LYSO) (:84), against
+    # the reference cell. The frac and >=10-refl parts are identical; only the same_lattice reference
+    # differs (what_are_the_failures.py:36-43). So streaming is scored on "consistent with the cell we
+    # locked" and offline on "correct". Those coincide only while the lock is right -- it is here, the
+    # locked cell matching the batch consensus cell to <0.01 A on every edge -- but a wrong lock would
+    # let its own frames pass. The bias runs in STREAMING's favour, so the measured gap is a FLOOR:
+    # under drift the true gap can only widen.
     #
     # Denominator is 120 pushed frames in ALL THREE, and the names say so on purpose: `indexing_rate`
     # above is a (strict, loose) PAIR over 120, not a ratio, and reading it as 75/114=66% is the exact
@@ -183,9 +229,18 @@ FACTS: dict[str, float | str] = {
     # INDEX-ONLY. The q-vector dataset cannot exercise the integrate path (test_inlier_frac_gate.py),
     # so these are indexed counts, not integrated-and-merged ones.
     #
-    # The gap is structural, not noise: streaming commits its cell from ~5-6 warm-up frames, while the
-    # offline reference votes across all 120. warmup_rescue recovers the warm-up frames themselves
-    # (5/5) but not the consequences of the early lock.
+    # WHAT CAUSES THE GAP -- measured, and it is NOT the early lock. f61a4cf guessed streaming was
+    # losing frames because it commits its cell from ~5-6 warm-up frames while offline votes across
+    # all 120, and this comment asserted that guess as fact until #73 measured it: consensus, the lock
+    # and cell precision were each checked and cleared. The gap is ONE missing step. Offline runs
+    # blind + N-best on every frame before falling back to known-cell; streaming, once locked, runs
+    # known-cell ONLY. A blind retry on just the gate-failing frames recovers 10 of the 13-frame gap
+    # on real data (78 -> 88 of 120, 77% closed), and the full retry cascade reaches 94 (glint#75).
+    # The retry is NOT SHIPPED, so 78 is the shipped number and 88/94 are headroom, not facts.
+    #
+    # warmup_rescue is FIXED-cost, worth 5/N: 4 points here, 1.2 at 400 frames, negligible at DAQ
+    # rates, while the retry gap grows with N. DIALS-60 shows no gap at all (60/60 from warmup_rescue
+    # alone), so rich frames do not exercise this failure mode -- do not benchmark it on easy data.
     "stream_rate_of120":     73,    # StreamDriver baseline. Corroborated at HEAD: the min_inlier_frac
                                     # table in stream_driver.py (added by 6bfc6a9, after the gate
                                     # changes) re-measures 73 clearing the bar, 0 good frames lost at
@@ -298,9 +353,29 @@ RETIRED = [
          "340x was 11542/34 (the pre-fusion blind figure); against the measured 26 ms it is ~450x", "~450x"),
     Rule("speedup-160", r"(?<![\d.])160\s*(?:×|x|\\times)",
          "the scalar->GPU blind ratio follows 2342/26, not 2342/15", "~90x"),
-    Rule("blind-rate-swap", r"GLINT[^\n]{0,40}\b71\s*\\?%",
-         "71% is XGANDALF's blind rate; GLINT-(1) blind is 77% (92/120, paper tab:summary). Attributing "
-         "71% to GLINT understates it and confuses two indexers measured at the same gate", "77%"),
+    # Two traps here, both live for months. (1) HARD-CODED PROSE DRIFTS. This rule named 76%/71%, the
+    # values the pair was RETIRED FROM on 2026-08-02 (721d5cc), so had it fired it would have told you
+    # to write the number that had just been superseded. It was then hand-corrected to "GLINT-(1) is
+    # 77%" while the SAME SENTENCE still called 71% xgandalf's rate -- which FACTS says is 72%. Half a
+    # correction, and the half that was missed is exactly the confusion the rule exists to catch. It
+    # now interpolates FACTS, so the prose cannot disagree with the table again.
+    # (2) `[^\n]` could not span a line break, and _normalize() folds only spaces and tabs -- so in a
+    # hard-wrapped .tex every candidate site was saved by where the line happened to break. Use
+    # [\s\S] so wrapping is not a hiding place.
+    Rule("blind-rate-swap", r"GLINT[\s\S]{0,40}\b71\s*\\?%",
+         f"71% is xgandalf's RETIRED blind rate (now {FACTS['xgandalf_blind_rate_pct']}%, "
+         f"{FACTS['xgandalf_blind_strict_of120']}/120); GLINT-(1) blind is "
+         f"{FACTS['glint_blind_rate_pct']}% ({FACTS['glint1_strict_of120']}/120, paper tab:summary). "
+         "Attributing 71% to GLINT understates it and conflates two indexers measured at the same bar",
+         f"{FACTS['glint_blind_rate_pct']}%"),
+    # The retired pair as the DELIVERABLES actually phrase it -- "76%" headline beside "xgandalf 71%".
+    # Scoped to that adjacency on purpose: bare 76% and bare 71% are both still CORRECT elsewhere
+    # (91/120 offline, and the 85/120 lattice-bar front end), so an unscoped rule would cry wolf.
+    Rule("blind-pair-retired", r"xgandalf\s*(?:\\?geq\s*)?71\s*\\?%",
+         f"'xgandalf 71%' is the retired blind pair. Measured at the >=25% bar it is "
+         f"{FACTS['xgandalf_blind_rate_pct']}% ({FACTS['xgandalf_blind_strict_of120']}/120) against "
+         f"GLINT-(1)'s {FACTS['glint_blind_rate_pct']}% ({FACTS['glint1_strict_of120']}/120)",
+         f"xgandalf {FACTS['xgandalf_blind_rate_pct']}%"),
     Rule("fused-pred-2.4", r"2\.4\s*(?:→|->|-->)\s*0\.45",
          "the fused kernel replaced the 1.46 ms CUDA-graph path, not a 2.4 ms one; "
          "2.4 inflates the gain from 3.1x to an implied 5.3x", "1.46 -> 0.45"),
@@ -315,22 +390,30 @@ RETIRED = [
          "restore the 1.58 this rule used to recommend -- that was the cold-warmup artefact below)",
          "1.16 ms"),
     Rule("live-gap-20x", r"[~≈]?\s*20\s*(?:×|x|\\times)(?=[^\n]{0,40}(?:gap|short|hits))",
-         "the end-to-end gap to ~3500 hits/s is 3500/240 = ~15x, not ~20x, now that streaming is "
-         "4.16 ms/frame", "~15x"),
-    # --- the streaming wall again, superseded 2026-08-01 by the corrected predict (#68) ---
-    # 4.42 and 226 were correct for their own measurement; what moved is predict, by 0.26 ms/frame.
+         "the end-to-end gap to ~3500 hits/s is 3500/275 = ~13x, not ~20x, now that streaming is "
+         "3.64 ms/frame", "~13x"),
+    # --- the streaming wall, superseded TWICE and for the same reason both times: a merged
+    #     optimisation cut the wall and nobody carried it into this table. 4.42 was honest for
+    #     2026-07-21; #50 obsoleted it the NEXT DAY. 4.16 was 4.42 minus #68 only, so it still
+    #     carried #50's 0.75 ms. Both retire to the measured 3.64.
     Rule("stream-4.42", r"(?<![\d.])4\.42\s*ms",
-         "4.42 ms/frame carried predict at 1.11 ms, which never reproduced (the pre-#68 arm measures "
-         "0.42 and #68 took it to 0.16). The wall is 4.16 ms/frame", "4.16 ms"),
+         "4.42 ms/frame is the 2026-07-21 wall (pre-#50, with predict at 1.11). #50 cut it ~17% the "
+         "next day and #68 cut it again; the measured steady-state wall is 3.64 ms/frame", "3.64 ms"),
+    Rule("stream-4.16", r"(?<![\d.])4\.16\s*ms",
+         "4.16 was 4.42 with ONLY #68 subtracted -- it never had #50's ~0.75 ms taken off, which is "
+         "exactly the 0.69 the guard kept reporting as un-attributed. Measured wall is 3.64 ms/frame",
+         "3.64 ms"),
     # The exempt is load-bearing, not defensive: glint.tex quotes "4.4 ms / 226 frames/s" for a SINGLE
     # ffbidx call (1000/4.4 = 227). That is a different quantity that happens to round to the same
     # number as the retired streaming figure, and without the exempt this rule sends an editor to
     # "correct" a line that is right.
     Rule("stream-226", r"(?<![\d.])226\b(?=[^\n]{0,60}(?:frames?\s*/\s*s|f/s|fps))",
-         "226 f/s is the reciprocal of the retired 4.42 ms", "240",
+         "226 f/s is the reciprocal of the retired 4.42 ms", "275",
          exempt=("ffbidx", "single call", "single} call")),
-    Rule("live-gap-16x", r"[~≈]?\s*16\s*(?:×|x|\\times)(?=[^\n]{0,40}(?:gap|short|hits))",
-         "the gap to ~3500 hits/s follows the current 240 f/s: 3500/240 = ~15x", "~15x"),
+    Rule("stream-240", r"(?<![\d.])240\b(?=[^\n]{0,60}(?:frames?\s*/\s*s|f/s|fps))",
+         "240 f/s is the reciprocal of the retired 4.16 ms", "275"),
+    Rule("live-gap-16x", r"[~≈]?\s*1[56]\s*(?:×|x|\\times)(?=[^\n]{0,40}(?:gap|short|hits))",
+         "the gap to ~3500 hits/s follows the current 275 f/s: 3500/275 = ~13x", "~13x"),
     # --- the COLD-WARMUP stage block, superseded the same day it was written ---
     # These four were published for a few hours between the under-warmed measurement and the warmed
     # re-measure. They are listed because they reached three deliverables, not because they lasted.
@@ -338,20 +421,17 @@ RETIRED = [
          "1.58 ms came from a stage benchmark warmed only ONCE; properly warmed peakfind is 1.16 ms",
          "1.16 ms"),
     Rule("cold-predict-1.34", r"(?<![\d.])1\.34\s*ms",
-         "1.34 ms was the cold-warmup predict figure. Do NOT replace it with the 1.11 this rule used "
-         "to recommend -- that was wrong too (tol=0.006 plus a bench rebuilding `panels` inside the "
-         "timed call). Measured predict is 0.16 ms after #68, 0.42 before it", "0.16 ms"),
-    # --- predict itself, retired 2026-08-01. Two independent errors, so two things to check when
-    #     this fires: the VALUE is wrong, and anything derived from it (the margin, the tie, the
-    #     "next lever" ordering) is wrong with it.
+         "1.34 ms was the cold-warmup predict figure, superseded within a day by 1.11 on the same "
+         "code. Both are pre-#50. Measured predict is 0.16 ms", "0.16 ms"),
+    # --- predict, superseded TWICE by real optimisations: #50 (gate collapse+fusion) then #68
+    #     (detector projection fused into the gate). Each value was honest for its own commit.
     Rule("predict-1.11", r"(?<![\d.])1\.11\s*ms",
-         "1.11 ms for predict never reproduced on ANY arm: the pre-#68 code measures 0.42 in the same "
-         "harness that reproduces peakfind/integrate/h2d to within 7%. It came from tol=0.006 (the "
-         "predict() signature default, not the driver's 0.002) stacked on a benchmark that rebuilt "
-         "the `panels` dict inside the timed call. #68 then took the corrected 0.42 to 0.16",
-         "0.16 ms"),
+         "1.11 ms was predict BEFORE #50. It is not an artifact -- re-measured at its own commit "
+         "(0623e34) on an A100 it reproduces at 1.13 -- but #50 took it to 0.42 and #68 to 0.16. "
+         "Anything derived from it (the peakfind margin, the 'tied' framing, the next-lever ordering) "
+         "is stale with it", "0.16 ms"),
     Rule("predict-0.42-stale", r"(?<![\d.])0\.42\s*ms(?=[^\n]{0,60}predict)",
-         "0.42 ms is the CORRECTED pre-#68 predict, superseded by #68 (merged), which fuses the "
+         "0.42 ms is predict between #50 and #68, superseded by #68 (merged), which fuses the "
          "detector projection into the gate kernel", "0.16 ms"),
     # --- the peakfind-vs-predict MARGIN. Wrong in both directions now, so both are retired and the
     #     replacement is a wording change, not a number swap: the two stages are not close.
@@ -557,6 +637,28 @@ def check_arithmetic() -> list[str]:
     close("ffbidx_speedup = pipelined/fused (throughput:throughput)", float(F["ffbidx_speedup"]),
           float(F["ffbidx_pipelined_ms"]) / float(F["fused_b120_ms"]), tol=0.05)
 
+    # The blind pair, derived from its counts. Both percentage keys were DEAD -- defined and read
+    # nowhere -- across the whole period the pair drifted 76/71 -> 77/72, so the RETIRED rule below
+    # went on naming the superseded values with every run green. Deriving them is what makes that rule
+    # text falsifiable: edit a count without its percentage and this fails.
+    # EXACT, not close(). close() is 3% RELATIVE, which on an integer percentage is nearly two whole
+    # points -- 92 -> 95 frames moves the rate 77 -> 79 and would have slipped through silently. Rates
+    # are integers here; compare them as integers.
+    for _pct_key, _cnt_key in (("glint_blind_rate_pct", "glint1_strict_of120"),
+                               ("xgandalf_blind_rate_pct", "xgandalf_blind_strict_of120")):
+        _want = round(100.0 * int(F[_cnt_key]) / 120.0)
+        if int(F[_pct_key]) != _want:
+            bad.append(f"  FACTS: {_pct_key} = {F[_pct_key]}% but {_cnt_key} = {F[_cnt_key]}/120 rounds to "
+                       f"{_want}% -- a count and its percentage were edited apart")
+    # The ORDERING is the abstract's blind claim -- "indexes more frames blind than the strongest blind
+    # indexer we tested (77% versus 72%)". Note it holds only WITH consensus: the bare single-frame
+    # front ends run the other way (79 vs 86 at this bar), which sec:comparison now says outright. If
+    # this inverts, the abstract's headline is wrong, not just a numeral in this table.
+    if int(F["glint1_strict_of120"]) <= int(F["xgandalf_blind_strict_of120"]):
+        bad.append("  FACTS: GLINT-(1) no longer indexes more frames blind than xgandalf -- the abstract's "
+                   "'more frames blind than the strongest blind indexer we tested' claim is now FALSE, "
+                   "and sec:comparison's ordering with it. Rewrite the claim, do not renumber it")
+
     # These three numbers ARE the paper's sec:streaming yield paragraph. sec:streaming used to claim
     # streaming "indexes no fewer frames than the offline pipeline" because the rates were "properties
     # of the consensus computation, which streaming preserves exactly"; the measured yields refuted it,
@@ -572,6 +674,17 @@ def check_arithmetic() -> list[str]:
     if int(F["stream_rate_of120"]) > int(F["stream_rate_rescue_of120"]):
         bad.append("  FACTS: warmup_rescue now indexes FEWER frames than the baseline it rescues on top "
                    "of -- one of the two was re-measured without the other")
+    # sec:streaming prints the DERIVED percentages, not these counts, so a change here can strand the
+    # published sentence while both checks above stay green. The concrete case is the blind retry #73
+    # located: shipping it takes 78 -> 88, which is still under offline's 91 and still above the
+    # baseline, so both stay silent while "61--65%" goes wrong. Pin the counts to what the paper prints.
+    # (Added in #74, dropped by 721d5cc's merge, restored here.)
+    for _k, _paper_pct in (("stream_rate_of120", 61), ("stream_rate_rescue_of120", 65),
+                           ("offline_rate_of120", 76)):
+        _got = round(100.0 * int(F[_k]) / 120.0)
+        if _got != _paper_pct:
+            bad.append(f"  FACTS: {_k} = {F[_k]}/120 is {_got}%, but sec:streaming prints {_paper_pct}% "
+                       f"-- fix the paper's '61--65% against 76% offline' sentence, not just this table")
     # the claim that motivates the whole live-merge caveat
     if float(F["stream_fps"]) >= float(F["hits_per_s"]):
         bad.append("  FACTS: stream_fps now meets hits_per_s -- the 'not a live merge' caveat in the "

@@ -425,11 +425,18 @@ RETIRED = [
          "code. Both are pre-#50. Measured predict is 0.16 ms", "0.16 ms"),
     # --- predict, superseded TWICE by real optimisations: #50 (gate collapse+fusion) then #68
     #     (detector projection fused into the gate). Each value was honest for its own commit.
+    # RETRACTION EXEMPT, same shape as peakfind-predict-tie below and added for the same reason: the
+    # DRP page explains why the tie framing was wrong, and it cannot do that without naming 1.11 ms.
+    # Without this the rule fires on the correction itself, and trap (b) in the notes above says where
+    # that ends -- the guard trains you to delete the honest hedging. Markers are explanatory phrases
+    # that only appear when the number is being retired, never when it is being asserted.
     Rule("predict-1.11", r"(?<![\d.])1\.11\s*ms",
          "1.11 ms was predict BEFORE #50. It is not an artifact -- re-measured at its own commit "
          "(0623e34) on an A100 it reproduces at 1.13 -- but #50 took it to 0.42 and #68 to 0.16. "
          "Anything derived from it (the peakfind margin, the 'tied' framing, the next-lever ordering) "
-         "is stale with it", "0.16 ms"),
+         "is stale with it", "0.16 ms",
+         exempt=("honest measurement", "briefly claimed", "previously said", "used to say",
+                 "reproduces at its own commit")),
     Rule("predict-0.42-stale", r"(?<![\d.])0\.42\s*ms(?=[^\n]{0,60}predict)",
          "0.42 ms is predict between #50 and #68, superseded by #68 (merged), which fuses the "
          "detector projection into the gate kernel", "0.16 ms"),

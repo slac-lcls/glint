@@ -56,7 +56,7 @@ gr = np.array([gate(index_known_gpu_cell(q, LYSO), q) for q in frames])
 fb = np.array([gate(FB.get(i), q) for i, q in enumerate(frames)])
 xg = np.array([gate(XG.get(i), q) for i, q in enumerate(frames)])
 g_own = gb | gr
-P = lambda x: f"{int(x.sum()):3d}/{n}={100 * x.sum() // n:2d}%"
+P = lambda x: f"{int(x.sum()):3d}/{n}={round(100 * x.sum() / n):2d}%"   # ROUND (0f456a0), not floor
 
 print("=== UNION question (single-frame, cell-given) ===")
 print(f"  xgandalf alone            {P(xg)}")

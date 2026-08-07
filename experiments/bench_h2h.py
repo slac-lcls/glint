@@ -42,7 +42,7 @@ if __name__ == "__main__":
     g = np.array([gpass(M, q) for M, q in zip(blind, frames)])
     print(f"=== device={DEV}  N={n} ===")
     print(f"[1] GLINT blind FAST : {1e3*t_blind/n:.1f} ms/frame ({n/t_blind:.1f} f/s)  "
-          f"gated {g[:,0].sum()}/{n} ({100*g[:,0].sum()//n}%) frac, {g[:,1].sum()}/{n} ({100*g[:,1].sum()//n}%) >=10refl")
+          f"gated {g[:,0].sum()}/{n} ({round(100*g[:,0].sum()/n)}%) frac, {g[:,1].sum()}/{n} ({round(100*g[:,1].sum()/n)}%) >=10refl")   # ROUND, matching the hybrid rows below
 
     # --- Stage 2: consensus cell (no cell assumed) ---
     t1 = time.time(); Mc, support = consensus_cell([M for M in blind if M is not None])

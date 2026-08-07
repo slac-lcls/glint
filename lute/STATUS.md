@@ -355,9 +355,43 @@ That 99% is the pattern item 7 exists to make visible, not a result.
 
 **What this is NOT.** An intensity cut is a PROXY for an SNR cut, not the same knob: peakfinder8's
 SNR is relative to a local background, so a weak peak on a quiet background can outrank a stronger
-one in a noisy region. This measures selectivity-by-strength. The true `min_snr` ladder needs raw
-images from a good Jungfrau run — `cxil1005322` is fully staged (57 TB, Jungfrau4M, refined
-`r0007.geom`) and is the place to do it, once a reference hit list exists for it.
+one in a noisy region. This measures selectivity-by-strength.
+
+**THE REAL `min_snr` LADDER, 2026-08-06 (job 34387880).** Run on raw Jungfrau images from a run its
+experiment KEPT: `cxilw5019` r0019 (A2A receptor, `CxiDs1.0:Jungfrau.0`, staged xtc + covered by the
+beamline's own CrystFEL stream — 1081 Cheetah hits over the run, 80 indexed). Screening candidates
+by hardware is what led to two dead datasets first: an earlier draft of this section pointed at
+`cxil1005322` (57 TB staged, refined geometry) as "the place to do it" — probing it found reborn
+radial-profile configs, a photon-counting histogram and an AgBeh geometry fit, i.e. **solution
+scattering, not crystallography**, and GLINT on 2000 of its events duly "indexed" 100% with
+consensus at 0.2%. Screen on `.cell`/`.stream` evidence, never on the detector.
+
+pf8 over 3000 events, `thr_snr=5`/`min_pix=3`, geometry from the beamline's stream header:
+
+| min_snr | frames >= 10 pk | pass | blind top-1 | consensus |
+|---|---|---|---|---|
+| 3 | 1953 | 65% | 94% | refused, 0.3% |
+| 6 | 1861 | 62% | 94% | refused, 0.3% |
+| 10 | 762 | 25% | 88% | refused, 0.7% |
+| 15 | 444 | 15% | 80% | refused, 0.8% |
+| 20 | 332 | 11% | 79% | refused, 0.9% |
+| 30 | 207 | 7% | 87% | refused, 0.6% |
+
+Three findings. **The pass-rate knee on this run sits between 6 and 10** (62% -> 25%), so the
+shipped 15 is past the knee, not before it. **Practitioners run this detector far below 15**: this
+experiment's Cheetah used `t100-s6-rad5` (min_snr ~6), cxilu8823's indexamajig used `--min-snr=3.5`
+— the shipped value is 2.5–4x above both, which INVERTS the original conclusion that Jungfrau
+"tolerates" a high cut; that tolerance was the discarded run passing everything. And **no rung
+locks consensus** (best 0.9%): 3000 events of a run whose own hit yield was 1081 over its full
+length simply carries too few true hits, so this dataset cannot produce a scored ladder either.
+A known-cell score was tried and is recorded as a NEGATIVE: 77% of snr-3 frames "index" to the
+40.4 x 180.7 x 142.8 A C-centred cell against the beamline's 7.4% — a cell that large has a dense
+enough reciprocal lattice that ten noise peaks fit it, so "indexes to the known cell" is not a
+noise-proof anchor.
+
+What item 6 still needs, precisely: a Jungfrau run with raw images on disk AND an event-mapped
+reference hit list (btx-style). None of the staged datasets provides both; everything above brackets
+the answer without closing it.
 
 **Caveat on the ORIGINAL Jungfrau column above.** It is measured on `cxilu8823` **r0226**, and
 r0226 is a run the experiment's own processing DISCARDED — their CrystFEL stream

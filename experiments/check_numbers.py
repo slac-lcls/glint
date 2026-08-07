@@ -179,8 +179,18 @@ FACTS: dict[str, float | str] = {
     "unattributed_ms":     0.69,    # = stream_ms - sum(measured stages)          (open, 2026-08-01)
     # streaming vs offline YIELD -- success fraction, NOT throughput -------------------------------
     # The project's only real-data streaming-vs-offline head-to-head, promoted out of f61a4cf's commit
-    # body where it was the sole record. Same 120-frame real cxidb set, same strict research gate
-    # (same_lattice AND >=25% of spots AND >=10 refl) as the paper's tab:summary.
+    # body where it was the sole record. Same 120-frame real cxidb set; the completeness test is the
+    # paper's strict research bar (>=25% of spots AND >=10 refl).
+    #
+    # THE LATTICE TEST IS NOT THE SAME ON BOTH SIDES, and this comment used to claim it was.
+    # gap_on_real.py gates the streaming arms with strict_gate(M, q, drv.Mc) (:49, :54) -- against the
+    # cell THE DRIVER ITSELF LOCKED -- and the offline arm with strict_gate(M, q, LYSO) (:84), against
+    # the reference cell. The frac and >=10-refl parts are identical; only the same_lattice reference
+    # differs (what_are_the_failures.py:36-43). So streaming is scored on "consistent with the cell we
+    # locked" and offline on "correct". Those coincide only while the lock is right -- it is here, the
+    # locked cell matching the batch consensus cell to <0.01 A on every edge -- but a wrong lock would
+    # let its own frames pass. The bias runs in STREAMING's favour, so the measured gap is a FLOOR:
+    # under drift the true gap can only widen.
     #
     # Denominator is 120 pushed frames in ALL THREE, and the names say so on purpose: `indexing_rate`
     # above is a (strict, loose) PAIR over 120, not a ratio, and reading it as 75/114=66% is the exact
@@ -189,9 +199,18 @@ FACTS: dict[str, float | str] = {
     # INDEX-ONLY. The q-vector dataset cannot exercise the integrate path (test_inlier_frac_gate.py),
     # so these are indexed counts, not integrated-and-merged ones.
     #
-    # The gap is structural, not noise: streaming commits its cell from ~5-6 warm-up frames, while the
-    # offline reference votes across all 120. warmup_rescue recovers the warm-up frames themselves
-    # (5/5) but not the consequences of the early lock.
+    # WHAT CAUSES THE GAP -- measured, and it is NOT the early lock. f61a4cf guessed streaming was
+    # losing frames because it commits its cell from ~5-6 warm-up frames while offline votes across
+    # all 120, and this comment asserted that guess as fact until #73 measured it: consensus, the lock
+    # and cell precision were each checked and cleared. The gap is ONE missing step. Offline runs
+    # blind + N-best on every frame before falling back to known-cell; streaming, once locked, runs
+    # known-cell ONLY. A blind retry on just the gate-failing frames recovers 10 of the 13-frame gap
+    # on real data (78 -> 88 of 120, 77% closed), and the full retry cascade reaches 94 (glint#75).
+    # The retry is NOT SHIPPED, so 78 is the shipped number and 88/94 are headroom, not facts.
+    #
+    # warmup_rescue is FIXED-cost, worth 5/N: 4 points here, 1.2 at 400 frames, negligible at DAQ
+    # rates, while the retry gap grows with N. DIALS-60 shows no gap at all (60/60 from warmup_rescue
+    # alone), so rich frames do not exercise this failure mode -- do not benchmark it on easy data.
     "stream_rate_of120":     73,    # StreamDriver baseline. Corroborated at HEAD: the min_inlier_frac
                                     # table in stream_driver.py (added by 6bfc6a9, after the gate
                                     # changes) re-measures 73 clearing the bar, 0 good frames lost at
@@ -620,6 +639,17 @@ def check_arithmetic() -> list[str]:
     if int(F["stream_rate_of120"]) > int(F["stream_rate_rescue_of120"]):
         bad.append("  FACTS: warmup_rescue now indexes FEWER frames than the baseline it rescues on top "
                    "of -- one of the two was re-measured without the other")
+    # sec:streaming prints the DERIVED percentages, not these counts, so a change here can strand the
+    # published sentence while both checks above stay green. The concrete case is the blind retry #73
+    # located: shipping it takes 78 -> 88, which is still under offline's 91 and still above the
+    # baseline, so both stay silent while "61--65%" goes wrong. Pin the counts to what the paper prints.
+    # (Added in #74, dropped by 721d5cc's merge, restored here.)
+    for _k, _paper_pct in (("stream_rate_of120", 61), ("stream_rate_rescue_of120", 65),
+                           ("offline_rate_of120", 76)):
+        _got = round(100.0 * int(F[_k]) / 120.0)
+        if _got != _paper_pct:
+            bad.append(f"  FACTS: {_k} = {F[_k]}/120 is {_got}%, but sec:streaming prints {_paper_pct}% "
+                       f"-- fix the paper's '61--65% against 76% offline' sentence, not just this table")
     # the claim that motivates the whole live-merge caveat
     if float(F["stream_fps"]) >= float(F["hits_per_s"]):
         bad.append("  FACTS: stream_fps now meets hits_per_s -- the 'not a live merge' caveat in the "

@@ -325,7 +325,47 @@ def _grp_reduced(reps, RP, rtol, ctol, vtol):
     The runner-up is what tells a decisive lock from a coin-flip between two near-equal clusters --
     the winner's own count cannot, and `max()` alone threw that information away. MEMBERSHIP is kept
     for the same reason: `rep_index` is whichever member happened to CREATE the group, an arbitrary
-    choice that is fine for deciding which lattice won and poor for deciding what it is."""
+    choice that is fine for deciding which lattice won and poor for deciding what it is.
+
+    THAT ARBITRARY CHOICE IS ALSO AN ORDER DEPENDENCE, because the group test compares against the
+    SEED (`RP[grp[0]]`) and tolerance matching is not transitive: whichever hypothesis arrives first
+    defines the group, so the same SET of hypotheses partitions differently under a different input
+    order. Measured on mfxl1038923 by permuting the pool order alone (nothing else changed): support
+    624-979 on r0278 (1.57x) and 608-1268 on r0058 (2.09x), and on r0058 4 of 20 orderings REFUSED
+    outright, because a fragmented cluster falls under min_frac/min_lead. The winning LATTICE is
+    robust to this (0 of 36 answering permutations disagreed, axes within 1.2%) -- it is the SUPPORT
+    that moves, which is the number the acceptance gates read and the paper quotes.
+
+    GLINT_CONSENSUS_STABLE=1 seeds the groups DENSEST-NEIGHBOURHOOD-FIRST, breaking ties on the
+    reduced-cell key, so the partition is a function of the SET alone.
+
+    Seeding centrally is the point, not merely seeding deterministically. Sorting by the cell key is
+    also deterministic and is strictly WORSE than the arbitrary order it replaces (measured on the
+    test pool: support 56, against 81-133 for random orders), because a lexicographic sort starts at
+    the EDGE of the distribution and a boundary seed reaches only one side of its own cluster,
+    slicing it into tolerance-wide slabs. Seeding from the most populated neighbourhood instead gives
+    129 on that pool -- the top of the random range -- and drops the runner-up cluster from 38 to 8,
+    i.e. it stops fragmenting the true cluster, which improves the min_lead margin as well.
+
+    Density is counted on a coarse grid at the grouping tolerances (geometric in the lengths, linear
+    in the angle cosines), which is O(n) rather than the O(n^2) of true neighbour counting. The grid
+    is only a seeding heuristic; group membership is still decided by the same tolerance test, so a
+    hypothesis landing on the wrong side of a grid boundary costs nothing but seed priority.
+    Default off: it changes support values that existing results quote."""
+    if os.environ.get("GLINT_CONSENSUS_STABLE", "0") == "1":
+        def _key(i):
+            (l, c), d = RP[i]
+            return (tuple(l), tuple(c), d)
+
+        def _cellof(i):
+            (l, c), _ = RP[i]
+            return (tuple(int(round(float(np.log(x)) / np.log1p(rtol))) for x in l)
+                    + tuple(int(round(float(y) / ctol)) for y in c))
+
+        dens = {}
+        for idx, w in reps:
+            dens[_cellof(idx)] = dens.get(_cellof(idx), 0) + w
+        reps = sorted(reps, key=lambda t: (-dens[_cellof(t[0])], _key(t[0])))
     groups = []                                               # [rep_index, total_weight, members]
     for idx, w in reps:
         (li, ci), di = RP[idx]

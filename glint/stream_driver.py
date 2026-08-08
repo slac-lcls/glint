@@ -497,10 +497,12 @@ class StreamDriver:
             from glint.glint_fast import index_blind_nbest
             self._dh_index = index_blind_nbest
             # The bare rule (valid cell + >= min_peaks residual inliers) is a peak-count artifact on
-            # peak-rich frames -- 95% real vs 93% azimuth-scrambled on mfxl1038923 r0278 (job
-            # 34409542) -- so n_double now counts the GATED rule (same cell, not an orientation
-            # clone; multilattice.second_lattice_verdict), n_double_raw keeps the old count, and a
-            # 1-in-16 azimuth-scramble null measures the gated rule's own false-accept floor live.
+            # peak-rich frames -- 95% real vs 93% azimuth-scrambled on mfxl1038923 r0278, and 96% vs
+            # 96% on r0058 (jobs 34409542, 34468402) -- so n_double counts the GATED rule instead
+            # (same cell AND >= 15 deg from lattice 1; multilattice.second_lattice_verdict), which
+            # measured 8.7% and 8.9% on those two runs against a 0% scrambled floor. n_double_raw
+            # keeps the old count for comparison, and a 1-in-16 azimuth-scramble null measures the
+            # gated rule's own false-accept floor live, on the run in front of it.
             self.n_double_raw = 0
             self._dh_n = 0; self.n_dh_null_tested = 0; self.n_dh_null_acc = 0
             self._dh_rng = np.random.default_rng(0xD0B13)
@@ -890,7 +892,10 @@ class StreamDriver:
                 # median 62-peak residual the bare test accepted azimuth-SCRAMBLED residuals at 93%
                 # (vs 95% real, job 34409542), and a mosaic-tail clone of lattice 1 passes it via
                 # peaks just outside the deflation tolerance. second_lattice_verdict carries both
-                # gates; the periodic scramble null reports the gated rule's own false-accept floor.
+                # gates -- same cell, and >= 15 deg away, which is what tells a second crystal from
+                # this crystal's own mosaic tail (the angle is bimodal on real data with a near-empty
+                # 5-15 deg band, so the cut is not delicate). The periodic scramble null reports the
+                # gated rule's own false-accept floor on the run actually in front of it.
                 from glint.multilattice import scramble_azimuth, second_lattice_verdict
                 v = second_lattice_verdict(resid, Mcan, self._dh_index, min_peaks=self.min_peaks)
                 self.n_double_raw += bool(v["raw"])
@@ -1178,7 +1183,7 @@ class StreamDriver:
             s["extra_cells"] = [dict(axes=list(np.linalg.norm(e["Mc"], axis=0).round(1)),
                                      **e["acc"].stats(thr=thr, n_theoretical=e["nth"])) for e in self.extra]
         if self.double_hit:
-            s["n_double"] = self.n_double                    # GATED: same cell, not an orientation clone
+            s["n_double"] = self.n_double                    # GATED: same cell AND >= 15 deg away
             s["double_hit_rate"] = self.n_double / max(self.n_indexed, 1)
             s["n_double_raw"] = self.n_double_raw            # the old bare rule, kept for comparison
             s["double_hit_rate_raw"] = self.n_double_raw / max(self.n_indexed, 1)

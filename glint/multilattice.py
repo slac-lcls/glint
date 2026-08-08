@@ -139,8 +139,9 @@ def second_lattice_verdict(resid, M1, index_fn, min_peaks=6, tol=0.15, loose=0.3
                 tail. Both gates are measured, not assumed: on two runs the cell gate takes the null
                 to exactly 0 (0/1449 and 0/2123 scrambled residuals) while 212 and 279 real ones
                 pass it, and the misorientation distribution is bimodal with a near-empty 5-15
-                degree band, so the cut is insensitive. Gated rates: 9.0% and 9.3% of scoreable
-                frames on r0278/r0058 -- an agreement between independent runs.
+                degree band, so the cut is insensitive -- at the shipped 15 deg the gated rates are
+                8.7% and 8.9% of scoreable frames on r0278/r0058, and moving the cut all the way
+                down to 5 deg only takes them to 9.0% and 9.3%. Two independent runs agreeing.
 
     The clone_fraction is still reported (see orientation_clone_fraction) but no longer gates: it
     was the gate until real data showed it keeps three quarters of the clones and kills a tenth of

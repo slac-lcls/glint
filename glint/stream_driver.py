@@ -500,7 +500,7 @@ class StreamDriver:
             # peak-rich frames -- 95% real vs 93% azimuth-scrambled on mfxl1038923 r0278, and 96% vs
             # 96% on r0058 (jobs 34409542, 34468402) -- so n_double counts the GATED rule instead
             # (same cell AND >= 15 deg from lattice 1; multilattice.second_lattice_verdict), which
-            # measured 9.0% and 9.3% on those two runs against a 0% scrambled floor. n_double_raw
+            # measured 8.7% and 8.9% on those two runs against a 0% scrambled floor. n_double_raw
             # keeps the old count for comparison, and a 1-in-16 azimuth-scramble null measures the
             # gated rule's own false-accept floor live, on the run in front of it.
             self.n_double_raw = 0

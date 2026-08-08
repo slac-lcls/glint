@@ -496,6 +496,14 @@ class StreamDriver:
         if self.double_hit:
             from glint.glint_fast import index_blind_nbest
             self._dh_index = index_blind_nbest
+            # The bare rule (valid cell + >= min_peaks residual inliers) is a peak-count artifact on
+            # peak-rich frames -- 95% real vs 93% azimuth-scrambled on mfxl1038923 r0278 (job
+            # 34409542) -- so n_double now counts the GATED rule (same cell, not an orientation
+            # clone; multilattice.second_lattice_verdict), n_double_raw keeps the old count, and a
+            # 1-in-16 azimuth-scramble null measures the gated rule's own false-accept floor live.
+            self.n_double_raw = 0
+            self._dh_n = 0; self.n_dh_null_tested = 0; self.n_dh_null_acc = 0
+            self._dh_rng = np.random.default_rng(0xD0B13)
 
         xp = cp if self.gpu else np
         if mask is None:
@@ -875,15 +883,24 @@ class StreamDriver:
         if self.double_hit:                                 # deflate-and-reindex: a 2nd crystal in this shot?
             resid = deflate_peaks(self._q[i], Mcan)
             if len(resid) >= self.min_peaks:
-                nb2 = self._dh_index(resid, 1)
-                if nb2:
-                    M2 = np.asarray(nb2[0][0], float)
-                    # a 2nd crystal = the deflated residual re-indexes to a valid lattice with enough
-                    # inliers. NOT gated on a different CELL -- SFX double-hits are usually two crystals
-                    # of the SAME protein at different orientations. Deflation removed lattice-1's peaks,
-                    # so the residual-inlier test already rejects merely re-finding lattice 1.
-                    if abs(np.linalg.det(M2)) >= 1.0 and self._inliers(resid, M2) >= self.min_peaks:
-                        self.n_double += 1
+                # A 2nd crystal = the residual re-indexes to the SAME CELL as lattice 1 (SFX double
+                # hits are the same protein at a new orientation) at a genuinely different
+                # orientation. The earlier comment here claimed the residual-inlier test "already
+                # rejects merely re-finding lattice 1" -- measured false on both counts: with a
+                # median 62-peak residual the bare test accepted azimuth-SCRAMBLED residuals at 93%
+                # (vs 95% real, job 34409542), and a mosaic-tail clone of lattice 1 passes it via
+                # peaks just outside the deflation tolerance. second_lattice_verdict carries both
+                # gates; the periodic scramble null reports the gated rule's own false-accept floor.
+                from glint.multilattice import scramble_azimuth, second_lattice_verdict
+                v = second_lattice_verdict(resid, Mcan, self._dh_index, min_peaks=self.min_peaks)
+                self.n_double_raw += bool(v["raw"])
+                self.n_double += bool(v["accepted"])
+                self._dh_n += 1
+                if self._dh_n % 16 == 1:
+                    vn = second_lattice_verdict(scramble_azimuth(resid, self._dh_rng), Mcan,
+                                                self._dh_index, min_peaks=self.min_peaks)
+                    self.n_dh_null_tested += 1
+                    self.n_dh_null_acc += bool(vn["accepted"])
         pred = grid.predict(Mcan, self.panels, self.clen_m, self.wavelength_A, tol=self.tol)
         if len(pred) == 0:
             return
@@ -1161,8 +1178,14 @@ class StreamDriver:
             s["extra_cells"] = [dict(axes=list(np.linalg.norm(e["Mc"], axis=0).round(1)),
                                      **e["acc"].stats(thr=thr, n_theoretical=e["nth"])) for e in self.extra]
         if self.double_hit:
-            s["n_double"] = self.n_double
+            s["n_double"] = self.n_double                    # GATED: same cell, not an orientation clone
             s["double_hit_rate"] = self.n_double / max(self.n_indexed, 1)
+            s["n_double_raw"] = self.n_double_raw            # the old bare rule, kept for comparison
+            s["double_hit_rate_raw"] = self.n_double_raw / max(self.n_indexed, 1)
+            # the gated rule's own false-accept floor, measured live on azimuth-scrambled residuals;
+            # a double_hit_rate is only meaningful read AGAINST this
+            s["n_dh_null"] = self.n_dh_null_tested
+            s["dh_null_rate"] = self.n_dh_null_acc / max(self.n_dh_null_tested, 1)
         if self._grefiner is not None:
             s["geom_correction"] = self._grefiner.correction()
         return s

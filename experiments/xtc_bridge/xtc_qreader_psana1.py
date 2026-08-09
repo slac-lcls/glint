@@ -121,8 +121,10 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
     know: `frame.shape` and `frame[p]` mean the same thing on either array type, and the geometry is
     built from psana coords, not from the frame.
 
-    `peaks_out`, if given a list, also collects each sent frame's peaks as (n,4) float32
-    [fs, ss, intensity, 0] in CrystFEL SLAB coordinates -- one row per q row, same order. Consumers
+    `peaks_out`, if given a list, also collects peaks as (n,4) float32 [fs, ss, intensity, 0] in
+    CrystFEL SLAB coordinates -- one row per q row, same order. It gets ONE ENTRY PER EVENT that
+    reaches the peakfinder, blanks included as an empty array, so it does NOT align with `qframes`
+    (hits only) and a hit rate can be computed from it. Consumers
     that need detector pixels rather than q (a .stream peak list, the streaming monitor's geometry
     check) get them without a second pass over the run; q-only callers pay nothing."""
     if zdist <= 0:
@@ -242,10 +244,14 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
             # loader, so the slab index is just seg-major: fs_slab = fs, ss_slab = seg*H + ss.
             q, px, inten = xtc_core.frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks,
                                             return_px=True)
-            if len(q):
-                Hs = frame.shape[1]
-                peaks_out.append(np.stack([px[:, 2], px[:, 0] * Hs + px[:, 1], inten,
-                                           np.zeros(len(px))], axis=1).astype(np.float32))
+            # ONE ENTRY PER EVENT REACHING THE PEAKFINDER, blanks included as an empty list: a
+            # consumer computing a HIT RATE needs the misses, and `qframes` cannot supply them
+            # because it only carries frames that cleared min_peaks. Without this a monitor fed
+            # from peaks_out reports hit 100% and veto 0% by construction.
+            Hs = frame.shape[1]
+            peaks_out.append(np.stack([px[:, 2], px[:, 0] * Hs + px[:, 1], inten,
+                                       np.zeros(len(px))], axis=1).astype(np.float32)
+                             if len(q) else np.zeros((0, 4), np.float32))
         if len(q):
             qframes.append(np.ascontiguousarray(q))
             events.append(i)

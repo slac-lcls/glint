@@ -287,4 +287,12 @@ def frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks, return_px=False):
     if not return_px:
         return q
     px = np.stack([seg[keep], ss[keep], fs[keep]], axis=1)
-    return q, px, np.asarray(frame)[seg[keep], ss[keep], fs[keep]]
+    # Under gpu_calib the frame is a cupy array, which refuses np.asarray (implicit device->host).
+    # Index it ON THE DEVICE and bring back only the intensities: the whole point of that path is
+    # that a few hundred floats come home instead of the 8.65 MB frame.
+    if type(frame).__module__.split(".")[0] == "cupy":
+        import cupy as cp
+        inten = cp.asnumpy(frame[cp.asarray(seg[keep]), cp.asarray(ss[keep]), cp.asarray(fs[keep])])
+    else:
+        inten = np.asarray(frame)[seg[keep], ss[keep], fs[keep]]
+    return q, px, inten

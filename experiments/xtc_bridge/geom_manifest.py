@@ -310,16 +310,24 @@ def _coords_from_calib_file(path):
 
 
 def _qlam(X, Y, z_um):
-    """|q| * lambda for a flat detector at z.  |q| = |s - kin| / lam with s = r/|r| and
-    kin = (0,0,sign(z)), so (|q|*lam)^2 = 2*(1 - |z|/|r|).
+    """|q| * lambda for a flat detector at z -- DELEGATED to geom_provenance._qmag.
+
+    This used to carry its own closed form, sqrt(2*(1 - |z|/r)), which is algebraically the same
+    quantity as that module's |s - kin| (|s-kin|^2 = 2 - 2*s_z = 2*(1 - |z|/r) for kin along z).
+    Two spellings of one physics in two files that both answer "do these geometries agree?" is
+    exactly how geom_coords and geom.peaks_to_q drifted apart -- see the note in _q_from_panels.
+    One implementation now; the two modules keep their own STATISTICS, which genuinely differ
+    (this one splits at the median |q| and reports an outer population; provenance cuts the beam
+    centre at the 10th percentile and reports per-panel dispersion).
 
     lambda CANCELS in the ratio of two geometries, which is why this check needs no wavelength -- and
     on mfxx49820 that is not a nicety: ebeamPhotonEnergy() returns +-inf on 100 % of that run's
     events, so a check that needed a per-event wavelength would never run there at all.
     """
-    r = np.sqrt(X * X + Y * Y + z_um * z_um)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        return np.sqrt(np.maximum(2.0 * (1.0 - abs(z_um) / r), 0.0))
+    import geom_provenance
+    X = np.asarray(X, float).ravel()
+    Z = np.full(X.size, float(z_um))               # _qmag takes Z only for its SIGN
+    return geom_provenance._qmag(X, Y, Z, abs(float(z_um)) * 1e-6)
 
 
 def _qdelta(Xa, Ya, Xb, Yb, zdist_m, shape=None):

@@ -336,8 +336,9 @@ def _grp_reduced(reps, RP, rtol, ctol, vtol):
     robust to this (0 of 36 answering permutations disagreed, axes within 1.2%) -- it is the SUPPORT
     that moves, which is the number the acceptance gates read and the paper quotes.
 
-    GLINT_CONSENSUS_STABLE=1 seeds the groups DENSEST-NEIGHBOURHOOD-FIRST, breaking ties on the
-    reduced-cell key, so the partition is a function of the SET alone.
+    SO THE GROUPS ARE SEEDED DENSEST-NEIGHBOURHOOD-FIRST, ties broken on the reduced-cell key, which
+    makes the partition a function of the SET alone. GLINT_CONSENSUS_STABLE=0 restores the old
+    order-dependent behaviour for reproducing pre-2026-08-08 results.
 
     Seeding centrally is the point, not merely seeding deterministically. Sorting by the cell key is
     also deterministic and is strictly WORSE than the arbitrary order it replaces (measured on the
@@ -351,8 +352,11 @@ def _grp_reduced(reps, RP, rtol, ctol, vtol):
     in the angle cosines), which is O(n) rather than the O(n^2) of true neighbour counting. The grid
     is only a seeding heuristic; group membership is still decided by the same tolerance test, so a
     hypothesis landing on the wrong side of a grid boundary costs nothing but seed priority.
-    Default off: it changes support values that existing results quote."""
-    if os.environ.get("GLINT_CONSENSUS_STABLE", "0") == "1":
+
+    COST OF THE SWITCH, measured: support moves 891 -> 846 on r0278 and 1117 -> 1060 on r0058 (~5%),
+    same lattice, cells within 0.7%. A support is now a property of the data instead of the order it
+    was read in, which is what makes it quotable at all."""
+    if os.environ.get("GLINT_CONSENSUS_STABLE", "1") == "1":
         def _key(i):
             (l, c), d = RP[i]
             return (tuple(l), tuple(c), d)

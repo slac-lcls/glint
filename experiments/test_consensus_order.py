@@ -10,9 +10,10 @@ This matters beyond reproducibility. Offline pools frames in file order and the 
 sees them in arrival order, so the two can disagree about whether a run locks at all, from nothing
 but the order.
 
-GLINT_CONSENSUS_STABLE=1 canonicalises the order first. These tests pin both halves: the winning
-lattice is robust either way (that was already true), the SUPPORT is not, and under the flag the
-whole result is invariant.
+Stable seeding is now the DEFAULT; GLINT_CONSENSUS_STABLE=0 restores the old path, which this test
+still exercises because the old path is the thing being pinned as broken. Both halves are checked:
+the winning lattice is robust either way (that was already true), the SUPPORT is not, and under the
+default the whole result is invariant.
 
 CPU only, synthetic hypotheses -- no GPU, no data files.
 """
@@ -58,6 +59,8 @@ def build_pool(seed=3, n_true=140, n_spur=260, jitter=0.020):
 
 
 def consensus(pool, stable):
+    # The stable path is now the DEFAULT; "0" is the legacy order-dependent behaviour, which this
+    # test still exercises because it is the thing being pinned as broken.
     os.environ["GLINT_CONSENSUS_STABLE"] = "1" if stable else "0"
     for m in ("glint.multishot",):                      # re-read the flag each call: it is read at
         sys.modules.pop(m, None)                        # call time, but be explicit about intent
@@ -82,16 +85,16 @@ def sweep(pool, stable, n_perm=12, seed=17):
 pool = build_pool()
 print(f"pool: {len(pool)} hypotheses (140 noisy copies of one cell + 260 distinct spurious)")
 
-print("\nDEFAULT (order-dependent): permuting the SAME set moves the support")
+print("\nLEGACY (GLINT_CONSENSUS_STABLE=0): permuting the SAME set moves the support")
 sup, cells, ref = sweep(pool, stable=False)
 spread = sup.max() / max(sup.min(), 1)
 print(f"  support {sup.min()}..{sup.max()} (spread {spread:.2f}x), refused {ref}/{len(sup)}")
-check("support is NOT invariant by default (the defect this pins)", spread > 1.05, spread)
+check("support is NOT invariant under the legacy path (the defect this pins)", spread > 1.05, spread)
 if len(cells):
     axis_spread = float(np.max((cells.max(0) - cells.min(0)) / cells.mean(0)))
     check("the winning LATTICE is robust anyway (<2% axis spread)", axis_spread < 0.02, axis_spread)
 
-print("\nGLINT_CONSENSUS_STABLE=1: the result is a function of the SET")
+print("\nDEFAULT (stable seeding): the result is a function of the SET")
 sup_s, cells_s, ref_s = sweep(pool, stable=True)
 check("support identical under every permutation", len(set(sup_s.tolist())) == 1,
       sorted(set(sup_s.tolist())))
@@ -100,9 +103,9 @@ if len(cells_s) > 1:
     check("cell identical under every permutation",
           bool(np.allclose(cells_s, cells_s[0], atol=1e-9)), cells_s[:2])
 
-print("\nwhere the stable answer falls inside the spread the default was sampling from")
-print(f"  default {sup.min()}..{sup.max()} (median {int(np.median(sup))})  ->  stable {int(sup_s[0])}")
-check("stable support is no worse than the WORST ordering the default could pick",
+print("\nwhere the stable answer falls inside the spread the legacy path was sampling from")
+print(f"  legacy {sup.min()}..{sup.max()} (median {int(np.median(sup))})  ->  stable {int(sup_s[0])}")
+check("stable support is no worse than the WORST ordering the legacy path could pick",
       sup_s[0] >= sup.min(), (sup_s[0], sup.min()))
 
 print("\nsame answer on an unambiguous pool (no behaviour change where there was no ambiguity)")

@@ -256,17 +256,23 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min
     return X, Y, Zc, kin, finders
 
 
-def frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks):
+def frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks, return_px=False):
     """One calibrated (nseg,H,W) frame -> its reciprocal q-vectors (M,3) in 1/A, or an empty (0,3).
+
+    return_px additionally returns the surviving peaks' DETECTOR pixels as (M,3) [seg, ss, fs] and
+    their intensities (M,), filtered by exactly the same mask as q so the rows correspond. Consumers
+    that need CrystFEL slab coordinates rather than psana's (nseg,H,W) get them from the identity the
+    geometry loader enforces (n_cols == W): fs_slab = fs, ss_slab = seg*H + ss.
 
     `finders` is a _PanelFinders or a _StackedFinder; both expose find_all(frame) -> (seg, ss, fs) in
     panel-local coordinates, so the geometry lookup below is identical either way. Peak centroids are
     rounded to the nearest pixel for that lookup; NaN rows (panel-gap pixels have NaN coords) are
     dropped. Returns shape (0,3) if under min_peaks."""
     _, H, W = X.shape
+    empty = (np.empty((0, 3)), np.empty((0, 3), int), np.empty(0)) if return_px else np.empty((0, 3))
     found = finders.find_all(frame)
     if found is None:
-        return np.empty((0, 3))
+        return empty
     seg, ss_f, fs_f = found
     fs = np.rint(fs_f).astype(int)
     ss = np.rint(ss_f).astype(int)
@@ -274,5 +280,19 @@ def frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks):
     r = np.stack([X[seg, ss, fs], Y[seg, ss, fs], np.full(seg.size, Zc)], axis=1)
     s = r / np.linalg.norm(r, axis=1, keepdims=True)
     q = (s - kin) / lam
-    q = q[np.isfinite(q).all(axis=1)]
-    return q if len(q) >= min_peaks else np.empty((0, 3))
+    keep = np.isfinite(q).all(axis=1)                     # NaN coords = panel gaps
+    q = q[keep]
+    if len(q) < min_peaks:
+        return empty
+    if not return_px:
+        return q
+    px = np.stack([seg[keep], ss[keep], fs[keep]], axis=1)
+    # Under gpu_calib the frame is a cupy array, which refuses np.asarray (implicit device->host).
+    # Index it ON THE DEVICE and bring back only the intensities: the whole point of that path is
+    # that a few hundred floats come home instead of the 8.65 MB frame.
+    if type(frame).__module__.split(".")[0] == "cupy":
+        import cupy as cp
+        inten = cp.asnumpy(frame[cp.asarray(seg[keep]), cp.asarray(ss[keep]), cp.asarray(fs[keep])])
+    else:
+        inten = np.asarray(frame)[seg[keep], ss[keep], fs[keep]]
+    return q, px, inten

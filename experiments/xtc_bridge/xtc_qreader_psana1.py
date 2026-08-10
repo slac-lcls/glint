@@ -12,8 +12,12 @@ applies. Returns the same dict contract as xtc_qreader.run_to_qframes.
 """
 from __future__ import annotations
 
+import os
+import sys
+
 import numpy as np
 
+import geom_manifest
 import xtc_core
 
 
@@ -169,6 +173,34 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
                 f"\n  '{det}' is not listed by DetNames either -- check the name.")
         raise KeyError(f"psana.Detector({det!r}) failed for {exp} run {run}.{hint}\n"
                        f"  configStore detectors: {have}\n  original: {e}") from e
+
+    # WHICH GEOMETRY IS THIS RUN ACTUALLY USING? Nothing recorded it, which is the enabling fault
+    # behind STATUS.md item 7: on mfxx49820 r0016 psana served the unrefined 2021 starting
+    # calibration, blind indexing locked a wrong doubled-c cell at support 23/6294 and REPORTED
+    # SUCCESS, and the logs of that run were indistinguishable from one on btx's refined .geom
+    # (support 832). This branches between .geom and psana a few lines above and prints nothing.
+    # Metadata only -- a handful of stat calls plus, for the cross-check, two coordinate arrays; the
+    # module puts it at well under one event against a ~150 ms/event run. Before the first event.
+    #
+    # GLINT_GEOM_MANIFEST=off skips it entirely; =warn keeps the report but downgrades the REFUSALs.
+    # The default is on-and-refusing, which is the module's own argument and a narrow one: the four
+    # refusals are facts, not heuristics (a --geom that does not exist, a --calib-dir psana will
+    # silently ignore, no geometry reachable at all), and every one of them kills the run later
+    # anyway. Refusing here is the same failure an hour earlier, with a reason.
+    _gm = os.environ.get("GLINT_GEOM_MANIFEST", "on").strip().lower()
+    if _gm != "off":
+        try:
+            geom_manifest.check_geometry(detector=detector, run=run, exp=exp, det_name=det,
+                                         calib_dir=calib_dir, geom=geom, env=ds.env(), zdist=zdist,
+                                         rank=rank, nranks=nranks, refuse=(_gm != "warn"))
+        except geom_manifest.GeometryManifestError:
+            raise                            # a REFUSE is a deliberate verdict -- let it through
+        except Exception as exc:             # anything else is a bug in the CHECK, not in the run
+            # Loud, and on stderr, because the module's own rule is that a check which could not run
+            # must never read as healthy -- but a diagnostic must not be the thing that kills a run.
+            print(f"[geom-manifest] UNKNOWN -- the geometry check itself failed and was skipped: "
+                  f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+
     ebeam = None
     if not wavelength:
         try:

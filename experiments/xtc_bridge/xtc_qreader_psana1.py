@@ -17,7 +17,6 @@ import sys
 
 import numpy as np
 
-import geom_manifest
 import xtc_core
 
 
@@ -189,17 +188,28 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
     # anyway. Refusing here is the same failure an hour earlier, with a reason.
     _gm = os.environ.get("GLINT_GEOM_MANIFEST", "on").strip().lower()
     if _gm != "off":
+        # Imported HERE, not at module scope, and for the same reason geom_provenance is (below):
+        # this is a diagnostic, and a diagnostic must not be able to stop data being read. At the
+        # top of the file a syntax error or a missing dependency inside geom_manifest would break
+        # `import xtc_qreader_psana1` itself, so no run could open even with the check turned off.
         try:
-            geom_manifest.check_geometry(detector=detector, run=run, exp=exp, det_name=det,
-                                         calib_dir=calib_dir, geom=geom, env=ds.env(), zdist=zdist,
-                                         rank=rank, nranks=nranks, refuse=(_gm != "warn"))
-        except geom_manifest.GeometryManifestError:
-            raise                            # a REFUSE is a deliberate verdict -- let it through
-        except Exception as exc:             # anything else is a bug in the CHECK, not in the run
-            # Loud, and on stderr, because the module's own rule is that a check which could not run
-            # must never read as healthy -- but a diagnostic must not be the thing that kills a run.
-            print(f"[geom-manifest] UNKNOWN -- the geometry check itself failed and was skipped: "
-                  f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            import geom_manifest
+        except Exception as exc:
+            print(f"[geom-manifest] UNKNOWN -- the geometry check could not be imported and was "
+                  f"skipped: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        else:
+            try:
+                geom_manifest.check_geometry(detector=detector, run=run, exp=exp, det_name=det,
+                                             calib_dir=calib_dir, geom=geom, env=ds.env(),
+                                             zdist=zdist, rank=rank, nranks=nranks,
+                                             refuse=(_gm != "warn"))
+            except geom_manifest.GeometryManifestError:
+                raise                        # a REFUSE is a deliberate verdict -- let it through
+            except Exception as exc:         # anything else is a bug in the CHECK, not in the run
+                # Loud, and on stderr, because the module's own rule is that a check which could not
+                # run must never read as healthy -- but a diagnostic must not kill a run.
+                print(f"[geom-manifest] UNKNOWN -- the geometry check itself failed and was "
+                      f"skipped: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
 
     ebeam = None
     if not wavelength:

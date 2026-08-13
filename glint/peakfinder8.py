@@ -151,7 +151,8 @@ class PeakFinder8:
     """
 
     def __init__(self, q_per_pixel, mask=None, *, nbin=None, thr_snr=5.0, min_snr=5.0,
-                 min_pix=2, max_pix=200, r_min=0.0, n_iter=3, dtype=None, graph=False, smooth=0):
+                 min_pix=2, max_pix=200, r_min=0.0, n_iter=3, dtype=None, graph=False, smooth=0,
+                 thr_adu=None):
         xp = _xp(q_per_pixel); self._xp = xp; self._ndi = _ndimage(xp)
         self.dt = xp.float64 if dtype is None else dtype   # fp32 ~25% faster background loop (verify recall)
         self._smooth = int(smooth)                          # opt-in (>1): uniform_filter1d the radial mu/sig
@@ -165,7 +166,16 @@ class PeakFinder8:
         self.M = RadialIntegrator(q, nbin=nbin, mask=self.good).M.astype(self.dt)   # built ONCE
         self._good_f = self.good.ravel().astype(self.dt)
         self.yy, self.xx = (g.astype(xp.float64) for g in xp.mgrid[0:self.H, 0:self.W])  # fp64 for centroids
-        self.p = dict(thr_snr=thr_snr, min_snr=min_snr, min_pix=min_pix, max_pix=max_pix, n_iter=n_iter)
+        # thr_adu is CrystFEL peakfinder8's `--threshold`: an ABSOLUTE intensity floor a pixel must
+        # clear to join a peak, applied ON TOP OF the relative snr>thr_snr test. Without it, a
+        # min_snr ladder is not the same knob practitioners quote -- mfx101555026 r0013 runs
+        # `--threshold=110 --min-snr=5`, so its 5 is paired with a floor that removes noise a bare
+        # snr test still admits. Default None = OFF, so existing behaviour is unchanged bit for bit
+        # (0.0 would NOT be a no-op: it would also drop zero and negative pixels).
+        # Deliberately NOT applied to the background iteration's peak exclusion, which stays purely
+        # relative -- an absolute floor there would bias the background estimate itself.
+        self.p = dict(thr_snr=thr_snr, min_snr=min_snr, min_pix=min_pix, max_pix=max_pix,
+                      n_iter=n_iter, thr_adu=thr_adu)
         self._fused = False                                # GPU-only fused backward (linear split <=2 rings/px)
         if xp is not np:
             csc = self.M.tocsc(); ip = csc.indptr; ind = csc.indices; dat = csc.data
@@ -265,6 +275,8 @@ class PeakFinder8:
         thr = p["thr_snr"]; f64 = xp.float64
         snr, bg = self._bg_graph(image) if self._graph_want else self._bg_eager(image)
         cand = snr > thr
+        if p["thr_adu"] is not None:
+            cand &= image > p["thr_adu"]          # CrystFEL --threshold, on the RAW pixel value
         isub = xp.clip(image.astype(f64) - bg.reshape(H, W).astype(f64), 0.0, None)  # fp64 for centroids
         lbl, n = ndi.label(cand)                                    # connected-component labelling (not a reduce)
         if n == 0:

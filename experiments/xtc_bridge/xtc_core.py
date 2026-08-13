@@ -57,6 +57,11 @@ PF_THR_LOW = 5.0
 # nowhere near it. Jungfrau's p90 is 1655 at min_snr 15 and ~2000 at 10-12, so on a detector this
 # large a loose brightness cut can hand the indexer frames it cannot take.
 PF8_MIN_SNR = 15.0
+# CrystFEL peakfinder8's `--threshold`: an ABSOLUTE ADU floor a pixel must clear to join a peak,
+# applied on top of the relative snr test. None = off, which is what every number above was measured
+# with. It is NOT optional when comparing against practitioner settings: mfx101555026 r0013 runs
+# `--threshold=110 --min-snr=5`, so quoting their 5 against our 15 compares two different gates.
+PF8_THR_ADU = None
 
 
 def event_in_shard(i, rank, nranks):
@@ -171,6 +176,7 @@ class _StackedFinder:
 
 def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min=PF_SON_MIN,
                   thr_high=PF_THR_HIGH, thr_low=PF_THR_LOW, pf8_min_snr=PF8_MIN_SNR,
+                  pf8_thr_adu=PF8_THR_ADU,
                   peakfinder="v4", lam=None):
     """From per-pixel lab coords (any layout of total size nseg*H*W) build what frame_q needs:
         X, Y : (nseg,H,W) transverse positions in METRES (psana coords are um)
@@ -232,7 +238,8 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min
             # radial shell -- for a latency-bound consumer that is the right trade.
             finders = _PanelFinders([
                 PeakFinder8(cp.asarray(qmap[p]), mask=cp.asarray(gmask[p]), dtype=cp.float32,
-                            min_pix=min_pix, min_snr=pf8_min_snr, thr_snr=thr_low)
+                            min_pix=min_pix, min_snr=pf8_min_snr, thr_snr=thr_low,
+                            thr_adu=pf8_thr_adu)
                 for p in range(nseg)])
         else:
             # OFFLINE default: ONE finder over the whole detector, seams masked. See _StackedFinder.
@@ -247,7 +254,8 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min
             gs &= ~bad; qs[bad] = 0.0
             finders = _StackedFinder(
                 PeakFinder8(cp.asarray(qs), mask=cp.asarray(gs), dtype=cp.float32,
-                            min_pix=min_pix, min_snr=pf8_min_snr, thr_snr=thr_low),
+                            min_pix=min_pix, min_snr=pf8_min_snr, thr_snr=thr_low,
+                            thr_adu=pf8_thr_adu),
                 nseg, H, pitch)
     else:
         finders = _PanelFinders([

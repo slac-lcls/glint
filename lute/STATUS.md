@@ -4,14 +4,16 @@ Written 2026-08-05. The point of this file is that the state of this integration
 the code, not in a chat log or one person's head. Every number below has a named source; anything
 without one is marked as an assumption.
 
-**Bottom line: six of the seven below are closed.** The raw-xtc route runs on real data and produces
-a correct cell; with `--integrate` it emits a stream partialator can merge; with `--gpu-calib` it
-calibrates on the device for 4.1x end-to-end wall and a byte-identical stream; it runs under an ana
-release that can see Jungfrau; and it checks its own geometry provenance at startup instead of
-failing silently. What is left is item 6 — `PF8_MIN_SNR` is detector-specific and has to be
-calibrated before `pf8` is used on new hardware — and the fact that this repo still has no CI, so
-the task-model tests written for item 1 run only when someone runs them (item 6 now has a
-reference-scored measurement on a good run, but the true `min_snr` ladder still wants raw images).
+**Bottom line: all seven are closed** (item 6 as a measurement with a reframing — see its section).
+The raw-xtc route runs on real data and produces a correct cell; with `--integrate` it emits a
+stream partialator can merge; with `--gpu-calib` it calibrates on the device for 4.1x end-to-end
+wall and a byte-identical stream; it runs under an ana release that can see Jungfrau; it checks its
+own geometry provenance at startup instead of failing silently; and CI now runs the CPU-only test
+layer on every push (glint#107). Item 6's answer, measured on raw Jungfrau **16M** images
+(`mfx101555026` r0013) against the beamline's own event-mapped hit list: **the calibrated object is
+the pair (`threshold`, `min_snr`), not `min_snr` alone** — with the beamline's 110 ADU floor
+(`thr_adu`, glint#108) the shipped 15 sits near the knee on this detector, while the floor-less
+Epix10ka2M ladder below is not comparable to practitioner settings.
 
 ---
 
@@ -404,6 +406,48 @@ lists for the good runs (r0207: 3000 frames extracted, 54.1% indexed by xgandalf
 `glint_cli --peaks --geom` consumes them directly. **Until that is redone, treat the Jungfrau row as
 provisional.**
 
+**RESOLVED 2026-08-13 — measured on the detector SFX actually uses.** The ladder ran on raw images
+of `mfx101555026` r0013 (**Jungfrau 16M**, LCLS-II xtc2, MFX; ClCRY4, 54.15/87.29/141.33 A), 3000
+events, all eight rungs peak-found from ONE calibration per event, against an event-mapped reference:
+the experiment's own Cheetah `frames.txt` covers every event, hits AND misses, and psana2
+`evt.timestamp` equals Cheetah's `event_id` exactly and in order (verified 3000/3000). Jobs
+34783529/34786015; outputs in `~/glint_16m/` (`ladder_r0013.json`, and `r0013_pf8snr5.cxi` — a
+btx-shape event-mapped peak list over all 3000 events, the reference that previously existed nowhere
+on disk for any Jungfrau run).
+
+Two findings, and the first reframes the item:
+
+1. **The calibrated object is the PAIR (`threshold`, `min_snr`), not `min_snr` alone.** CrystFEL's
+   peakfinder8 applies an absolute ADU floor (`--threshold`) on top of the relative snr test, and
+   every practitioner value ever held against our 15 was paired with one (this beamline:
+   `--threshold=110 --min-snr=5`). Our finder had no such floor until `thr_adu` (glint#108, default
+   `None` = bit-identical to before). Without it, snr 3–10 called 92% of events hits against the
+   beamline's own 30% — so the Epix10ka2M ladder above, measured floor-less, is not comparable to
+   any quoted practitioner setting.
+
+2. **With the beamline's floor (110 ADU), the shipped 15 sits near the knee on Jungfrau 16M.**
+   Scored against Cheetah's per-event hit flag (1301 hits / 3000): min_snr 10 = 99.9% recall at
+   48.3% precision (over-calls 2x; median 51 peaks/frame), **15 = 64.3% recall at 90.7% precision**
+   (922 offered, median 22 peaks), 20 = 45.1% recall at 100.0% precision (587 offered, zero pickup
+   on non-hits). The knee is between 10 and 15 — the opposite of the floor-less Epix10ka2M picture,
+   and the low rungs still carried a median of 478 peaks/frame WITH the floor, which is why a bare
+   snr number was never the knob anyone else was quoting.
+
+Method caveats, stated: the reference is Cheetah's hit definition (t100-s6), so precision/recall are
+consistency against the beamline's validated processing, not absolute truth; 250/3000 events had no
+finite `ebeamPhotonEnergy` and used the run-median wavelength rather than being dropped (the reader's
+default skip would have silently shrunk the denominator). Indexing yield could NOT serve as the
+score here: blind consensus REFUSED at every rung (support 0.3–2.7%), because ClCRY4's ~667,000 A^3
+cell is blind-spurious-limited — which independently replicates the paper's cxidb-62 large-cell
+finding on a different detector, protein and facility, and is the acceptance gate doing its job.
+(The first attempt crashed the consensus on degenerate N-best hypotheses; fixed in glint#109.)
+
+Reproduction recipe (the environment split is real): stage 1 (read + peak-find) needs psana2+cupy —
+the default conda2 release has NO cupy; `conda activate xpp_drp_gpu_311` then **`unset PYTHONPATH`**
+(psconda.sh pins the release psana ahead of the env, which fails as a circular import). Stage 2
+(indexing) needs torch — conda1 `ana-4.0.59-py3-minipytorch`, which cannot read xtc2. The two stages
+hand off q-vectors as an npz, which also makes re-scoring free.
+
 **~~7. Geometry provenance is load-bearing and silent when wrong.~~ NO LONGER SILENT.** On
 `mfxx49820` psana's deployed geometry is the unrefined 2021 starting calibration; blind indexing
 locked a wrong doubled-*c* cell at support 23/6294 and reported success. Supplying btx's refined
@@ -456,15 +500,19 @@ along invisibly — which is exactly the `cxilu8823` r0226 situation.
 
 ## What is left
 
-The original list suggested an order for items 2, 1, 3, 4; all four are done, as are 5 and 7. What
-remains:
+All seven items are closed. Item 6 closed 2026-08-13 as a measurement on Jungfrau 16M (see its
+section: the calibrated object is the (`threshold`, `min_snr`) pair; `thr_adu` landed in glint#108).
+CI closed via glint#107: six CPU-only test files run on every push and pull request
+(`lute/test_glint_index.py` — 44 tests — plus five `xtc_bridge` script tests), with the GPU
+(`test_core.py`) and MPI (`test_mpi_smoke.py`) tests excluded as unhostable and said so in the
+workflow. What remains is beyond the seven, not blocking them:
 
-1. **Item 6 — per-detector peak-finder thresholds.** The one item still fully open, and the only one
-   that is a measurement rather than code.
-2. **CI (the open half of item 1).** `lute/test_glint_index.py` (41 tests), `test_gpu_calib_wiring.py`,
-   `test_gpu_calib_cm.py`, `test_first_index_per_group.py` and `test_geom_provenance.py` all run with
-   no GPU, no psana and no data — exactly the layer a GitHub runner can host. Nothing runs them
-   automatically today.
-3. **Beyond the seven, not blocking them:** `gpu_calib.py` is Epix10ka-family only and refuses
-   loudly on anything else (item 4); Jungfrau and epixHR need their own decode
-   (`UtilsJungfrau` / `UtilsEpixHR`) before they get the 4.1x.
+1. **`gpu_calib.py` is Epix10ka-family only** and refuses loudly on anything else (item 4).
+   Jungfrau and epixHR need their own decode (`UtilsJungfrau` / `UtilsEpixHR`) before they get the
+   4.1x — and this now matters more than when it was written: current SFX at MFX runs Jungfrau 16M
+   on LCLS-II xtc2, where the psana1 route (and with it `gpu_calib`) does not apply at all.
+2. **The psana2 route has no GPU-capable default environment**: the conda2 release lacks cupy, the
+   one env with psana2+cupy (`xpp_drp_gpu_311`) lacks torch, and activating it under psconda.sh
+   requires `unset PYTHONPATH` (the release psana is pinned ahead of the env). The item-6 ladder ran
+   as two stages with an npz handoff for exactly this reason; anything productized for current MFX
+   data inherits the same split until an env carries all three.

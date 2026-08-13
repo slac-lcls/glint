@@ -361,15 +361,36 @@ def _grp_reduced(reps, RP, rtol, ctol, vtol):
             (l, c), d = RP[i]
             return (tuple(l), tuple(c), d)
 
+        _ck = {}
+
         def _cellof(i):
+            """Quantised cell key, for counting how dense each hypothesis's neighbourhood is.
+
+            A DEGENERATE hypothesis -- an edge that is zero, negative or non-finite -- has no
+            meaningful log: np.log gives -inf or nan, and round() of that raises OverflowError
+            rather than returning a number. Those hypotheses are real. They appear in N-best pools
+            on noisy data, and this took down a 3000-frame Jungfrau 16M run at its sixth threshold,
+            after 15 minutes of reading, in code that only ever ran on cleaner pools before.
+
+            They get a sentinel key instead: excluded from the density counts and sorted last, which
+            is exactly the seeding order they had before densest-seeding existed (glint#102). The
+            grouping loop below is unchanged and still sees them."""
+            if i in _ck:
+                return _ck[i]
             (l, c), _ = RP[i]
-            return (tuple(int(round(float(np.log(x)) / np.log1p(rtol))) for x in l)
-                    + tuple(int(round(float(y) / ctol)) for y in c))
+            k = None
+            if (all(np.isfinite(x) and x > 0 for x in l) and all(np.isfinite(y) for y in c)):
+                k = (tuple(int(round(float(np.log(x)) / np.log1p(rtol))) for x in l)
+                     + tuple(int(round(float(y) / ctol)) for y in c))
+            _ck[i] = k
+            return k
 
         dens = {}
         for idx, w in reps:
-            dens[_cellof(idx)] = dens.get(_cellof(idx), 0) + w
-        reps = sorted(reps, key=lambda t: (-dens[_cellof(t[0])], _key(t[0])))
+            k = _cellof(idx)
+            if k is not None:                      # a degenerate cell seeds nothing
+                dens[k] = dens.get(k, 0) + w
+        reps = sorted(reps, key=lambda t: (-dens.get(_cellof(t[0]), 0), _key(t[0])))
     groups = []                                               # [rep_index, total_weight, members]
     for idx, w in reps:
         (li, ci), di = RP[idx]

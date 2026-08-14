@@ -654,6 +654,15 @@ class StreamDriver:
         # confirmation over the leader's small-index derivative lattices, run on the observed q of the
         # voting frames just before a relock commits. Default None => never runs => bit-identical.
         self._alias_gate = alias_gate
+        # The PRIMARY blind lock is gated too, not just the watchdog's relock (see _gate_lock). That
+        # needs each voting frame's q AND the leader's lattice in that frame's orientation, which
+        # RunningConsensus does not keep -- it is a histogram of cells with no frame identity. So the
+        # blind path retains (q, cells) per indexed frame while it is still hunting for a cell. Bounded:
+        # the gate only needs enough frames to vote, and a stream that never locks must not grow a
+        # buffer forever. None (gate off) => nothing is retained => bit-identical.
+        self._gate_buf = deque(maxlen=256) if alias_gate is not None else None
+        self._gate_last_support = -1                     # re-gate only when new votes arrived (see _gate_lock)
+        self.n_gate_refused = 0                          # blind locks the gate turned down
         # Opt-in lock-quality probe (glint.spurious_meter.null_margin): on each relock, measure how far
         # the new cell's overlap sits above the random-orientation floor on its supporting frames -- a
         # live "is this lock resting on real signal" z. lock_min_z (if set) refuses a too-weak lock.
@@ -733,6 +742,38 @@ class StreamDriver:
                                          if M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
                                          and self._fits(q, np.asarray(M, float)))
 
+    def _gate_lock(self, Mc, support):
+        """Alias-gate a BLIND consensus lock. Returns the cell to lock (possibly a tighter derivative
+        lattice) or None to refuse it.
+
+        The vote share cannot tell a cell from its own index<=N super-cell: a doubled axis collects
+        exactly the same peaks, they just sit on every OTHER node, so both cells win the same votes.
+        The gate is the deterministic complement -- it scores the systematically absent nodes.
+
+        Fed PER FRAME, each frame's own agreeing N-best hypothesis being the leader's lattice in that
+        frame's orientation. Never `confirm(Mc, pooled_q)`: coverage and occupancy are computed in the
+        leader's frame, so pooling many orientations puts every candidate at chance coverage and the
+        score collapses to a 1/V preference for smaller cells (measured: that refused the TRUE
+        cxidb-62 cell, every half-volume derivative scoring 1.5-1.8x the leader).
+
+        A refusal does NOT reset the vote histogram: the frames keep accumulating so a later, cleaner
+        lock can still fire. Re-gating is skipped until support actually grows, so a standing refusal
+        costs one gate call, not one per frame."""
+        if self._alias_gate is None or not self._gate_buf:
+            return Mc
+        if support is not None and support == self._gate_last_support:
+            return None                                  # already refused on exactly these votes
+        voters = [(q, next(c for c in cells if same_lattice(c, Mc)))
+                  for q, cells in self._gate_buf
+                  if any(same_lattice(c, Mc) for c in cells)]
+        if not voters:
+            return Mc                                    # nothing to testify -> leave the vote alone
+        Mg = self._alias_gate.confirm_frames(Mc, voters)
+        if Mg is None:
+            self.n_gate_refused += 1
+            self._gate_last_support = support
+        return Mg
+
     # ------------------------------------------------------------------ ingest ------------------
     def _push_blind(self, frame):
         """Warm-up ingest: peak-find + blind-index this frame, feed the running consensus, lock on fire.
@@ -750,11 +791,16 @@ class StreamDriver:
             qq = qq[np.isfinite(qq).all(1)]
             if len(qq) >= self.min_peaks:
                 nb = self._blind_index(qq, self.warmup_nbest)   # N-best candidate cells for this frame
-                self._rc.add_frame([c for c, _ in nb])
+                cells = [c for c, _ in nb if c is not None]
+                self._rc.add_frame(cells)
                 self.n_warmup += 1
+                if self._gate_buf is not None:
+                    self._gate_buf.append((qq, cells))          # per-frame evidence for the lock-time gate
                 if self._warmup_buf is not None:
                     self._warmup_buf.append(qq)                 # retained for post-lock rescue (see __init__)
         Mc, sup, _ = self._rc.verdict()
+        if Mc is not None:
+            Mc = self._gate_lock(Mc, sup)                       # may tighten the cell, or refuse the lock
         if Mc is not None:
             self._lock(Mc, sup, standardize=True)               # -> known-cell batched path from here
 
@@ -809,7 +855,10 @@ class StreamDriver:
         self.n_pushed += len(frames); self.n_warmup += len(qs)
         if self._warmup_buf is not None:
             self._warmup_buf.extend(qs)                          # retained for post-lock rescue (see __init__)
-        Mc, sup = warmup_consensus(qs, self._blind_index, self._rc, self.warmup_nbest, fanout)
+        Mc, sup = warmup_consensus(qs, self._blind_index, self._rc, self.warmup_nbest, fanout,
+                                   sink=self._gate_buf)         # per-frame evidence for the lock-time gate
+        if Mc is not None:
+            Mc = self._gate_lock(Mc, sup)                        # may tighten the cell, or refuse the lock
         if Mc is not None:
             self.locked_after = self.n_pushed
             self._lock(Mc, sup, standardize=True)
@@ -1030,7 +1079,7 @@ class StreamDriver:
         if self._watch is None:
             self._watch = RunningConsensus(min_support=3, gap=2, adaptive=False)
         cells = self._all_cells()
-        still_missed = []
+        still_missed = []; watch_ev = []
         # Fan the independent blind indexes across workers (default `_fanout` is the serial
         # single-GPU loop, so the votes -- and the lock -- are BIT-IDENTICAL to the old per-frame
         # loop; RunningConsensus is a histogram, add_frame order does not change the verdict.
@@ -1054,7 +1103,10 @@ class StreamDriver:
                     break
             if rescued:
                 continue
-            self._watch.add_frame([c for c, _ in nb])
+            cells = [c for c, _ in nb if c is not None]
+            self._watch.add_frame(cells)
+            if q is not None:
+                watch_ev.append((q, cells))             # per-frame evidence for the gate below
             still_missed.append(i)
         missed = still_missed
         Mn = self._watch.verdict()[0]
@@ -1062,23 +1114,21 @@ class StreamDriver:
             return
         Mn = _conventional_tetragonal(np.asarray(Mn, float))
         if self._alias_gate is not None:
-            # Deterministic single-lock confirmation. Score the gate on the ONE missed frame that best fits
-            # the voted cell -- the missed frames are at DIFFERENT orientations, so a pooled cloud has no
-            # common lattice fit and tightness would be noise; a single well-fitting frame is one
-            # orientation, which is what coverage/occupancy need. Returns the leader (confirmed), a tighter
-            # derivative lattice (adopt mode), or None (refuse -> do NOT reset self._watch, so the histogram
-            # keeps accumulating for a later, cleaner lock).
-            cand_q, best_ni = None, -1
-            for i in missed:
-                q = self._q[i]
-                if q is None:
-                    continue
-                ni = self._inliers(q, Mn)
-                if ni > best_ni:
-                    best_ni, cand_q = ni, q
-            if cand_q is not None:
-                Mg = self._alias_gate.confirm(Mn, cand_q)
+            # Deterministic relock confirmation, scored PER FRAME and voted -- the missed frames are at
+            # different orientations, and coverage/occupancy are only meaningful within one orientation.
+            # Each voting frame supplies its own N-best hypothesis that agrees with the voted cell, i.e.
+            # that lattice as oriented on that frame. (This used to score the single best-fitting frame
+            # via `confirm`, which is one frame's opinion -- exactly what the gate's min_frames exists to
+            # refuse.) Returns the leader (confirmed/abstained), a tighter derivative lattice (adopt
+            # mode), or None (refuse -> do NOT reset self._watch, so the histogram keeps accumulating
+            # for a later, cleaner lock).
+            voters = [(q, next(c for c in cs if same_lattice(c, Mn)))
+                      for q, cs in watch_ev
+                      if any(same_lattice(c, Mn) for c in cs)]
+            if voters:
+                Mg = self._alias_gate.confirm_frames(Mn, voters)
                 if Mg is None:
+                    self.n_gate_refused += 1
                     return
                 Mn = _conventional_tetragonal(np.asarray(Mg, float))
         if any(same_lattice(Mn, Mc) for Mc in self._all_cells()):

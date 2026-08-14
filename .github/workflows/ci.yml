@@ -44,6 +44,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_consensus_degenerate.py
 
+      - name: experiments/test_stream_gate_lock.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_stream_gate_lock.py
+
       # The xtc_bridge tests are plain scripts, not pytest test functions: they
       # print their own results and sys.exit(1) on failure. They insert their own
       # directory on sys.path and import sibling modules, so each is run from

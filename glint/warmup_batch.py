@@ -33,7 +33,7 @@ def triage_order(score, topk, floor=1):
     return [int(i) for i in order if score[i] >= floor][:topk]
 
 
-def warmup_consensus(qs, blind_index, rc, nbest=3, fanout=None):
+def warmup_consensus(qs, blind_index, rc, nbest=3, fanout=None, sink=None):
     """Fan the independent blind indexes across workers, pool their N-best into ONE consensus round.
 
     qs          : list of per-frame reciprocal-vector arrays (the triaged picks).
@@ -43,6 +43,9 @@ def warmup_consensus(qs, blind_index, rc, nbest=3, fanout=None):
     fanout      : callable(list_q, nbest) -> list of N-best lists, one per q, dispatched across
                   GPUs/workers. Default = serial single-GPU loop (the current behaviour), so nothing
                   breaks without a multi-GPU transport.
+    sink        : optional list; if given, receives (q, [cells]) per indexed frame. The alias gate
+                  needs the leader's lattice AS ORIENTED ON EACH FRAME, and each frame's own N-best
+                  already carries it -- collecting it here costs nothing and saves re-indexing.
 
     Returns (Mc, support). Mc is None if the batch did not reach consensus -- widen `topk` or pull
     more of the buffer and call again (the vote accumulates across calls).
@@ -51,9 +54,12 @@ def warmup_consensus(qs, blind_index, rc, nbest=3, fanout=None):
         return (None, 0)
     fan = fanout or (lambda Q, k: [blind_index(q, k) for q in Q])
     nbests = fan(qs, nbest)
-    for nb in nbests:
+    for q, nb in zip(qs, nbests):
         if nb:
-            rc.add_frame([c for c, _ in nb])
+            cells = [c for c, _ in nb if c is not None]
+            rc.add_frame(cells)
+            if sink is not None:
+                sink.append((q, cells))
     Mc, sup, _ = rc.verdict()
     return (Mc, sup)
 

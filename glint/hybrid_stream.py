@@ -121,11 +121,21 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
         # protected where it mattered; this call is the first place the gate guards a primary lock.
         if Mc is not None and alias_gate is not None:
             # drawn from the SAME frames that voted, so the alias check and the statistical check
-            # are answering about one population rather than two
-            voters = [frames[i] for i in vote_idx
+            # are answering about one population rather than two.
+            #
+            # PER FRAME, in each frame's own orientation -- NOT `confirm(Mc, np.vstack(voters))`, which
+            # is what this line used to do and which cannot work: coverage and occupancy are both
+            # computed in the leader's frame, so a pooled cloud of many orientations puts every
+            # candidate at chance coverage and leaves the score a 1/V preference for smaller cells.
+            # Measured on the cxidb-62 lock, that refused the TRUE cell (every half-volume derivative
+            # scored 1.5-1.8x the leader) while the same gate per frame confirmed it 30/40. The frame's
+            # own agreeing N-best hypothesis IS the leader's lattice in that frame's orientation, so
+            # the correct input is already in hand -- no re-indexing.
+            voters = [(frames[i], next(c for c, _ in NB[i] if same_lattice(c, Mc)))
+                      for i in vote_idx
                       if any(same_lattice(c, Mc) for c, _ in NB[i])]
             if voters:
-                Mc = alias_gate.confirm(Mc, np.vstack(voters))   # may return a tighter alias, or None
+                Mc = alias_gate.confirm_frames(Mc, voters)       # may return a tighter alias, or None
 
     results = []; n_idx = n_resc = n_nb = 0
     for q, nb, t1, meta in zip(frames, NB, top1, images):

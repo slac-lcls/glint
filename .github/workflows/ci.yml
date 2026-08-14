@@ -20,11 +20,29 @@ jobs:
         # numpy is all the xtc_bridge scripts need; pytest + pydantic are what
         # lute/test_glint_index.py needs (it calls pytest.importorskip("pydantic"),
         # so without pydantic it would silently skip instead of testing anything).
-        run: python -m pip install --upgrade pip numpy pytest pydantic
+        # scipy is what importing the glint package itself needs -- cupy and numba
+        # are both guarded by try/except, but scipy is a hard import in multishot,
+        # seed and localize, so without it none of the glint/ tests below can run.
+        run: python -m pip install --upgrade pip numpy scipy pytest pydantic
 
       - name: lute/test_glint_index.py
         run: python -m pytest test_glint_index.py -q
         working-directory: lute
+
+      # Regression tests for glint/ itself. Same script-style contract as the
+      # xtc_bridge ones (print, then sys.exit(1) on failure), but run from the repo
+      # root with PYTHONPATH=. so `import glint` resolves to the worktree.
+      - name: experiments/test_alias_gate.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_alias_gate.py
+
+      - name: experiments/test_pf8_thr_adu.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_pf8_thr_adu.py
+
+      - name: experiments/test_consensus_degenerate.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_consensus_degenerate.py
 
       # The xtc_bridge tests are plain scripts, not pytest test functions: they
       # print their own results and sys.exit(1) on failure. They insert their own

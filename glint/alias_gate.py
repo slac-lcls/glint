@@ -266,10 +266,11 @@ class AliasGate:
     observed peaks just as tightly -- see the pseudo-centering case in the tests), so adopt is best-
     effort per-frame repair, not a guaranteed recovery. Prefer the default refuse in streaming."""
 
-    __slots__ = ("max_index", "margin", "hkl_tol", "adopt", "min_coverage", "frac_beat", "last", "info")
+    __slots__ = ("max_index", "margin", "hkl_tol", "adopt", "min_coverage", "frac_beat", "min_frames",
+                 "last", "info")
 
     def __init__(self, max_index=2, margin=1.10, hkl_tol=0.15, adopt=False, min_coverage=None,
-                 frac_beat=0.5):
+                 frac_beat=0.5, min_frames=3):
         self.max_index = int(max_index)
         self.margin = float(margin)              # an alias must be >margin x tighter to overrule the leader
         self.hkl_tol = float(hkl_tol)
@@ -280,6 +281,10 @@ class AliasGate:
         self.min_coverage = (coverage_floor(self.hkl_tol, self.margin, self.max_index)
                              if min_coverage is None else float(min_coverage))
         self.frac_beat = float(frac_beat)        # confirm_frames: share of frames an alias must win to overrule
+        # ...and at least this many testable frames before that share means anything. A cross-frame gate
+        # that fires on one frame's opinion is not a cross-frame gate; 3 mirrors consensus_cell's own
+        # absolute min_support floor.
+        self.min_frames = int(min_frames)
         self.last = None                         # (leader_score, best_score, best_is_leader) for logging
         self.info = None                         # dict: verdict + the numbers behind it
 
@@ -326,7 +331,8 @@ class AliasGate:
         `frames` = iterable of (q, M) pairs: q the frame's reciprocal peaks (N x 3) and M the leader's
         lattice as oriented on THAT frame (in consensus this is free -- it is the frame's own N-best
         hypothesis that agreed with the lock). Frames whose leader coverage is at chance are dropped as
-        untestable rather than counted as either verdict.
+        untestable rather than counted as either verdict, and if fewer than `min_frames` survive that
+        drop the gate abstains instead of ruling on a handful.
 
         A real alias is systematic: it out-tightens the leader on essentially every frame, because the
         absences that betray it are a property of the lattice, not of the shot. Per-frame noise is not,
@@ -360,8 +366,9 @@ class AliasGate:
         self.last = (float(n_tested), float(len(winners)), frac <= self.frac_beat)
         base = {"frames_seen": n_seen, "frames_tested": n_tested, "frames_beaten": len(winners),
                 "frac_beaten": frac, "median_best_over_leader": med}
-        if n_tested == 0:
-            self.info = dict(base, verdict="abstain", reason="no frame indexed the leader above chance")
+        if n_tested < max(self.min_frames, 1):
+            self.info = dict(base, verdict="abstain",
+                             reason=f"only {n_tested} frame(s) indexed the leader above chance")
             return M_leader
         if frac <= self.frac_beat:
             self.info = dict(base, verdict="confirm")

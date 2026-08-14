@@ -228,6 +228,20 @@ def test_confirm_frames_drops_untestable_frames():
     assert gate.info["frames_seen"] == 16 and gate.info["frames_tested"] == 8, gate.info
 
 
+def test_confirm_frames_abstains_on_too_few_testable_frames():
+    """A cross-frame gate that fires on one frame's opinion is not a cross-frame gate: if the untestable
+    drop leaves fewer than min_frames, abstain rather than let a single frame refuse a lock."""
+    rng = np.random.default_rng(SEED + 10)
+    H = hnf_matrices(2)[-1]
+    fr = _frames(M_TRUE, rng, k=2)
+    sup = [(q, M @ H) for q, M in fr]                          # 2 frames that WOULD refuse the super-cell
+    gate = AliasGate()
+    out = gate.confirm_frames(M_TRUE @ H, sup)
+    assert out is not None, "refused a lock on 2 frames"
+    assert gate.info["verdict"] == "abstain" and gate.info["frames_tested"] == 2, gate.info
+    assert AliasGate(min_frames=1).confirm_frames(M_TRUE @ H, sup) is None, "min_frames=1 should rule"
+
+
 def test_min_coverage_zero_restores_prefix_behaviour():
     """The floor is a knob, not a hard-wired policy: min_coverage=0 reproduces the pre-fix verdict, which
     is how the old refusals stay reproducible for comparison."""

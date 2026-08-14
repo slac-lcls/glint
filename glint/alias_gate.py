@@ -251,8 +251,14 @@ def tightness(M, Q, hkl_tol=0.15):
 
 # -------------------------------------------------------------------------------------- the gate ----
 class AliasGate:
-    """Confirm (or reject) a consensus lock by the Occam-tightness test over the leader's derivative
-    lattices. Default `adopt=False` REFUSES an ambiguous lock (returns None -> the driver keeps
+    """Confirm (or reject) a lock by the Occam-tightness test over the leader's derivative lattices.
+
+    Two entry points, and picking the right one is not a style choice: `confirm` takes ONE frame's peaks
+    in the leader's orientation, `confirm_frames` takes a CROSS-FRAME lock as (q, M) pairs and votes the
+    per-frame verdicts. Pooling frames into `confirm` is the failure this class is now built around --
+    see the module docstring.
+
+    Default `adopt=False` REFUSES an ambiguous lock (returns None -> the driver keeps
     accumulating votes so cross-frame consensus can resolve the cell -- the conservative streaming
     choice, and the one that matters: it reliably STOPS a super-cell alias from locking). `adopt=True`
     instead swaps in the tightest derivative; that is the true cell on rich or multi-frame data, but a
@@ -326,7 +332,9 @@ class AliasGate:
         absences that betray it are a property of the lattice, not of the shot. Per-frame noise is not,
         which is why the decision is a share (`frac_beat`, default: more than half the testable frames)
         and not a single frame's opinion. Returns the leader (confirm/abstain), the plurality alias
-        (adopt), or None (refuse)."""
+        (adopt), or None (refuse). `self.info` carries the counts; `self.last` is
+        (n_tested, n_beaten, confirmed) here rather than confirm's (leader, best, best_is_leader),
+        since there is no single pair of scores to report."""
         M_leader = np.asarray(M_leader, float)
         floor = self.min_coverage
         n_seen = n_tested = 0

@@ -41,8 +41,8 @@ and GPU-batchable). There are two paths:
 
 - **Blind path** (`glint_fast.py::index_blind_fast`) — the contribution. ffbidx cannot
   run blind, so these modules are xgandalf-lineage + original, not ffbidx.
-- **Known-cell path** (`replica_gpu.py`) — a faithful GPU port of ffbidx, used only to
-  rescue blind failures.
+- **Known-cell path** (`replica_gpu.py`) — a GPU reimplementation of ffbidx's method, used
+  only to rescue blind failures.
 
 | module | ffbidx | GLINT-blind | provenance |
 |---|---|---|---|
@@ -55,7 +55,14 @@ and GPU-batchable). There are two paths:
 | consensus | — (per-frame) | derive cell across frames | original — no ffbidx analog |
 
 Only **M3 (cos ascent)** and **M5 (ifss)** are literally shared crystallography. The
-known-cell rescue path *is* ffbidx (replicated, then GPU-batched).
+known-cell rescue path *reimplements* ffbidx's method, then GPU-batches it.
+
+> **Provenance.** "Reimplements" is meant strictly: every line here is GLINT's own
+> torch/cupy, and no ffbidx, xgandalf, CrystFEL or psana source is present in this
+> repository. What is shared with those projects is the published *method*, which is cited.
+> The lineage is not clean-room — `replica_gpu.py` was written while reading ffbidx's
+> C++/CUDA source — so "reimplemented" is the accurate word and "independently derived"
+> would not be.
 
 ## 3. Throughput: the engineering wins
 

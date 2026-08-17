@@ -7,6 +7,10 @@ name = "glint-indexer"
 version = "0.1.0"
 description = "GLINT: a fast GPU-native blind crystallography indexer for serial crystallography (SFX)"
 readme = "README.md"
+# Deliberately NOT a "License :: OSI Approved :: BSD" classifier: the terms are BSD-3-Clause
+# PLUS an enhancements grant-back (the SLAC/DOE variant, same shape as SPDX BSD-3-Clause-LBNL),
+# so naming plain BSD-3-Clause in metadata would misstate them. Point at the file instead.
+license = {file = "LICENSE.md"}
 requires-python = ">=3.9"
 authors = [{name = "Stefano Marchesini", email = "smarchesini@gmail.com"}]
 keywords = ["crystallography", "indexing", "serial-crystallography", "SFX", "GPU", "diffraction", "LCLS"]
@@ -27,3 +31,5 @@ glint = "glint.glint_cli:main"
 [tool.setuptools]
 # engine lives in `glint`; `fftindex` is a thin back-compat alias so old `import fftindex` keeps working
 packages = ["glint", "fftindex"]     # experiments/ are research scripts (not shipped)
+# Ship the licence and the third-party notices inside the wheel, not just in the repo.
+license-files = ["LICENSE.md", "THIRD_PARTY_NOTICES.md"]

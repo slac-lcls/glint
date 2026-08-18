@@ -19,20 +19,26 @@ struck through as they close:
 
 | | | |
 |---|---|---|
-| 1 | ~~no test for the LUTE task model~~ | tests done, **CI still open** |
+| 1 | ~~no test for the LUTE task model~~ | **done** -- tests, and CI runs six CPU-only files on every push (glint#107) |
 | 2 | ~~`--pf8-min-snr` unreachable~~ | **done** |
 | 3 | ~~emitted `.stream` not mergeable~~ | **done**, verified on real data (needs `integrate: true`, below) |
 | 4 | ~~150 ms/event, 98% of it CPU calibration~~ | **done** -- `--gpu-calib`, byte-identical stream, 4.1x end to end |
 | 5 | ~~no ana env satisfies both psana and torch~~ | **done** -- GLINT runs on torch 1.11, so both do |
-| 6 | `PF8_MIN_SNR = 15` is detector-specific | **open** — re-measured on a good run; the coupled risk is `min_peaks` |
+| 6 | ~~`PF8_MIN_SNR = 15` is detector-specific~~ | **done as a reframing** (glint#110) -- the calibrated object is the PAIR (`threshold`, `min_snr`) |
 | 7 | ~~geometry provenance is silent when wrong~~ | **done** -- startup check, three states, never silent |
 
-The one still open is item 6: `PF8_MIN_SNR` is detector-specific and needs calibrating per
-detector before `peakfinder: pf8` is used on new hardware. It does not affect the default `v4`.
-Re-measured on `cxilu8823` r0207 against the beamline's own 54.1% (job 34379248): the safe band is
-wide — discarding the weakest **quarter** of every frame's peaks costs nothing — and what actually
-collapses the yield is frames falling below **`min_peaks`**, not the threshold degrading solutions.
-Tune the two together.
+All seven are now closed. Item 6 closed as a measurement that **reframed the question**: `min_snr`
+is not the calibrated quantity on its own. With the beamline's 110 ADU floor (`thr_adu`, glint#108)
+the shipped 15 sits near the knee on raw Jungfrau **16M** (`mfx101555026` r0013, scored against the
+beamline's own event-mapped hit list), while a *floor-less* ladder on a kept Jungfrau run puts the
+knee at **6--10**, with practitioners running 3.5--6. So calibrate the pair (`threshold`,
+`min_snr`) per detector before `peakfinder: pf8` is used on new hardware; it does not affect the
+default `v4`.
+
+Two cautions, both recorded in [STATUS.md](STATUS.md): the earlier conclusion that Jungfrau
+"tolerates" a high cut came from **a run the beamline discarded**, which passed everything at every
+threshold — that framing is inverted, not merely refined. And `min_peaks` is coupled: what collapses
+yield is frames falling below it, not the threshold degrading solutions. Tune the two together.
 
 > **The default stream is ORIENTATION-ONLY and is NOT mergeable.** Every reflection carries
 > placeholder `I=0.00 sigma(I)=0.00`. Choose one of:

@@ -108,6 +108,15 @@ FACTS: dict[str, float | str] = {
     "seqstop_p90_lock":         12,   # 90th percentile (was 10 at n=120 -- longer pool, longer tail)
     "seqstop_false_locks":       0,   # of 400 orderings, vs the batch consensus cell AND the textbook
     "seqstop_trials":          400,
+    # Batched vs per-frame known-cell, at the gate. The paper used to call these "rate-identical in
+    # aggregate" on the strength of the n=120 split being EXACTLY 9-9. That symmetry is the sample,
+    # not the algorithm: at n=480 it is 23-29. The totals agree only to within the discordant noise.
+    "bvp_disagree_of120":       18,  # frames where batched and per-frame gate differently
+    "bvp_batched_only_120":      9,
+    "bvp_perframe_only_120":     9,
+    "bvp_disagree_of480":       52,
+    "bvp_batched_only_480":     23,
+    "bvp_perframe_only_480":    29,
     "ffbidx_known_strict_of480":   373,  # ffbidx known-cell, n=480
     "xgandalf_known_strict_of480": 397,  # xgandalf known-cell, n=480
     # integration ----------------------------------------------------------------------------------
@@ -819,6 +828,21 @@ def check_arithmetic() -> list[str]:
         bad.append("  FACTS: the known-cell offline arm no longer beats the blind one at n=480 "
                    f"({F['offline_rate_of480']} vs {F['glint1_strict_of480']}) -- sec:streaming calls it "
                    "'a stronger comparator than the blind GLINT-(1)'. Rewrite that, do not renumber")
+    # "aggregate agreement to within the discordant noise" is a claim about a SIGN TEST on the
+    # discordant pairs, so check it there. If the split ever becomes significant the two paths are not
+    # interchangeable and tab:summary's batched footnote has to say so.
+    for _tag, _a, _b in (("120", "bvp_batched_only_120", "bvp_perframe_only_120"),
+                         ("480", "bvp_batched_only_480", "bvp_perframe_only_480")):
+        _x, _y = int(F[_a]), int(F[_b])
+        _m = _x + _y
+        _p = 1.0 if _m == 0 else min(1.0, 2.0 * sum(comb(_m, _k) for _k in range(min(_x, _y) + 1)) / 2.0 ** _m)
+        if _p <= 0.05:
+            bad.append(f"  FACTS: batched vs per-frame is now significant at n={_tag} ({_x} vs {_y}, "
+                       f"p={_p:.3g}) -- the paper says the two agree in aggregate to within the "
+                       "discordant noise. They are no longer interchangeable; rewrite tab:summary's "
+                       "batched footnote and sec:arch, do not renumber")
+        if _x + _y != int(F["bvp_disagree_of" + _tag]):
+            bad.append(f"  FACTS: bvp_disagree_of{_tag} does not equal its two halves")
     if int(F["stream_fail_nobody480"]) > int(F["stream_fail_of480"]):
         bad.append("  FACTS: more streaming failures are recovered by nobody than exist")
     # the claim that motivates the whole live-merge caveat

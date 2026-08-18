@@ -84,6 +84,19 @@ FACTS: dict[str, float | str] = {
     "xgandalf_blind_rate_pct_480":  73,  # = round(100 * xgandalf_blind_strict_of480 / 480)
     "mcnemar480_glint_only":        29,  # discordant frames GLINT-(1) indexes and xgandalf does not
     "mcnemar480_xgandalf_only":     33,  # and the other way -- exact two-sided McNemar p = 0.70
+    # sec:streaming at n=480 (2026-08-17). The published 120 reproduces EXACTLY as a control
+    # (91 / 73 / 78 / 88), so these are the same arms on 4x the frames, not a re-definition.
+    "stream_rate_of480":       323,  # StreamDriver baseline, strict gate
+    "stream_rate_rescue_of480": 331,  # + warmup_rescue + adaptive_relock
+    "offline_rate_of480":      357,  # offline hybrid_index(Mc_known=LYSO), same gate
+    # THE inversion: the blind retry stops being a patch that closes a gap and becomes a net WIN.
+    "retry_rate_of480":        365,  # streaming + blind retry on gate-failing frames -- PAST offline
+    "retry_rate_of120":         88,  # the same retry on the 120 subset, still SHORT of offline's 91
+    "stream_fail_of480":       152,  # frames streaming fails at the strict gate
+    "stream_fail_nobody480":    65,  # ...that NO indexer tested recovers (43%)
+    "union_all_indexers_480":  407,  # union of GLINT blind/(1), xgandalf blind+known, ffbidx, offline
+    "ffbidx_known_strict_of480":   373,  # ffbidx known-cell, n=480
+    "xgandalf_known_strict_of480": 397,  # xgandalf known-cell, n=480
     # integration ----------------------------------------------------------------------------------
     "integ_before_ms":     585.0,   # 16 Mpix / 800 reflections, whole-frame float64 upcast
     "integ_after_ms":      7.6,     # upcast removed, bit-identical                           (#17)
@@ -738,6 +751,28 @@ def check_arithmetic() -> list[str]:
         if _got != _paper_pct:
             bad.append(f"  FACTS: {_k} = {F[_k]}/120 is {_got}%, but sec:streaming prints {_paper_pct}% "
                        f"-- fix the paper's '61--65% against 76% offline' sentence, not just this table")
+    # sec:streaming's n=480 block. The ORDERING is the paragraph's point, and it inverts between the
+    # two run lengths, which is exactly why both are pinned: at n=120 the retry falls SHORT of offline
+    # (88 < 91) and the text says it "closes 77%"; at n=480 it lands PAST offline (365 > 357) and the
+    # text says it "does more than close it". Lose either relation and one of those two sentences goes
+    # wrong -- and they are adjacent, so a single careless re-measure can invert one and not the other.
+    if int(F["retry_rate_of480"]) <= int(F["offline_rate_of480"]):
+        bad.append("  FACTS: the blind retry no longer beats offline at n=480 -- sec:streaming's 'does "
+                   "more than close it: 365 of 480, eight frames past the offline pipeline's 357' is now "
+                   "FALSE. Rewrite that passage, do not renumber it")
+    if int(F["retry_rate_of120"]) >= int(F["offline_rate_of120"]):
+        bad.append("  FACTS: the retry now meets offline at n=120 too -- sec:streaming's 'the crossover "
+                   "is a property of run length' rests on it falling SHORT there (88 < 91). Revisit")
+    # The narrowing is the other half of the paragraph: 13 points at 120, 6-7 at 480. Derive both from
+    # the counts so a re-measure cannot leave the prose's "narrows with run length" unsupported.
+    _g120 = 100.0 * (int(F["offline_rate_of120"]) - int(F["stream_rate_rescue_of120"])) / 120.0
+    _g480 = 100.0 * (int(F["offline_rate_of480"]) - int(F["stream_rate_rescue_of480"])) / 480.0
+    if not _g480 < _g120:
+        bad.append(f"  FACTS: the streaming gap no longer narrows with run length ({_g120:.1f} pt at 120, "
+                   f"{_g480:.1f} pt at 480) -- sec:streaming's '13 points there, 6-7 here' and the "
+                   "withdrawal of 'the gap is a standing tax' both depend on it")
+    if int(F["stream_fail_nobody480"]) > int(F["stream_fail_of480"]):
+        bad.append("  FACTS: more streaming failures are recovered by nobody than exist")
     # the claim that motivates the whole live-merge caveat
     if float(F["stream_fps"]) >= float(F["hits_per_s"]):
         bad.append("  FACTS: stream_fps now meets hits_per_s -- the 'not a live merge' caveat in the "

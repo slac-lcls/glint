@@ -95,6 +95,12 @@ FACTS: dict[str, float | str] = {
     "stream_fail_of480":       152,  # frames streaming fails at the strict gate
     "stream_fail_nobody480":    65,  # ...that NO indexer tested recovers (43%)
     "union_all_indexers_480":  407,  # union of GLINT blind/(1), xgandalf blind+known, ffbidx, offline
+    # sec:streaming's "ingests essentially every frame" clause, MEASURED off the driver's own
+    # post-lock accept counter. It used to read "114 of 115", which was the misreading `indexing_rate`
+    # is annotated against below: 114 is the LOOSE half of the (strict, loose) pair 75/114 over 120
+    # PUSHED frames, not a numerator over the 115 post-lock ones. The real value there is 111.
+    "driver_accept_of115":     111,  # post-lock frames the driver accepts at its count-only gate, n=120
+    "driver_accept_of475":     442,  # ...and at n=480 (5 warm-up frames in both, so 115 and 475)
     "ffbidx_known_strict_of480":   373,  # ffbidx known-cell, n=480
     "xgandalf_known_strict_of480": 397,  # xgandalf known-cell, n=480
     # integration ----------------------------------------------------------------------------------
@@ -411,6 +417,18 @@ RETIRED = [
          f"{FACTS['mcnemar480_glint_only']} vs {FACTS['mcnemar480_xgandalf_only']}, p=0.70. The 120-frame "
          "8:2 split was a favourable subsample; the supportable claim is that the two MATCH",
          "matches the strongest blind indexer we tested (346 vs 350 of 480 frames, p=0.7)"),
+    # The pair-vs-ratio misreading, caught at its one known site. `indexing_rate` = "75/114" is a
+    # (strict, loose) PAIR over 120 pushed frames; sec:streaming turned the loose half into a
+    # numerator over the 115 post-lock frames and published "114 of 115". Measured, it is 111 of 115
+    # (442 of 475 at n=480). Keyed on the exact adjacency because bare 114 and bare 115 are both
+    # legitimate elsewhere.
+    Rule("postlock-114-of-115", r"114\s*(?:of|/)\s*115",
+         f"114 is the LOOSE half of the (strict, loose) pair indexing_rate = {FACTS['indexing_rate']} "
+         "over 120 PUSHED frames -- not a numerator over the 115 post-lock frames. The driver's own "
+         f"post-lock accept counter gives {FACTS['driver_accept_of115']} of 115 at n=120 and "
+         f"{FACTS['driver_accept_of475']} of 475 at n=480",
+         f"{FACTS['driver_accept_of475']} of 475 post-lock frames at n=480, "
+         f"{FACTS['driver_accept_of115']} of 115 on the 120"),
     Rule("fused-pred-2.4", r"2\.4\s*(?:→|->|-->)\s*0\.45",
          "the fused kernel replaced the 1.46 ms CUDA-graph path, not a 2.4 ms one; "
          "2.4 inflates the gain from 3.1x to an implied 5.3x", "1.46 -> 0.45"),

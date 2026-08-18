@@ -312,6 +312,11 @@ FACTS: dict[str, float | str] = {
                                     # CORROBORATED UNCHANGED in the same run: offline 91 (exactly), and the
                                     # blind-retry arm 88 -- so the paper's 76% and 73% do not move; only the
                                     # live figure is in question.                (f61a4cf; H200 A/B, open)
+    # ⚠ TWO DIFFERENT PIPELINES, and they are one frame apart at n=120 and eleven apart at n=480,
+    # which is how they got conflated. sec:streaming's offline reference is hybrid_index(Mc_known=
+    # LYSO) -- HANDED the cell, consensus skipped -- while tab:summary's GLINT-(1) row is the BLIND
+    # pipeline that derives its own cell. The text used to explain 91-vs-92 as one pipeline scored
+    # against the textbook vs the voted cell; at n=480 that reading is refuted outright (357 vs 346).
     "offline_rate_of120":    91,    # offline consensus pipeline (known-hybrid at the same gate);
                                     # independently corroborated by azimuth_validate.py's reconciliation
                                     # block, which records known-hybrid 91 / blind-hybrid 93  (f61a4cf, open)
@@ -807,6 +812,13 @@ def check_arithmetic() -> list[str]:
     if abs(_ub - 0.75) > 0.01:
         bad.append(f"  FACTS: {F['seqstop_trials']} trials give a 95% upper bound of {_ub:.2f}%, but "
                    "sec:streaming prints 0.75% -- the bound and the trial count were edited apart")
+    # The known-cell offline arm must stay ABOVE the blind one at n=480, because sec:streaming now
+    # says outright that it is "a stronger comparator" and that the shortfall is measured against the
+    # stronger one. If a re-measure inverts them that sentence is backwards.
+    if int(F["offline_rate_of480"]) <= int(F["glint1_strict_of480"]):
+        bad.append("  FACTS: the known-cell offline arm no longer beats the blind one at n=480 "
+                   f"({F['offline_rate_of480']} vs {F['glint1_strict_of480']}) -- sec:streaming calls it "
+                   "'a stronger comparator than the blind GLINT-(1)'. Rewrite that, do not renumber")
     if int(F["stream_fail_nobody480"]) > int(F["stream_fail_of480"]):
         bad.append("  FACTS: more streaming failures are recovered by nobody than exist")
     # the claim that motivates the whole live-merge caveat

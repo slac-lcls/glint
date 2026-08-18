@@ -84,6 +84,32 @@ FACTS: dict[str, float | str] = {
     "xgandalf_blind_rate_pct_480":  73,  # = round(100 * xgandalf_blind_strict_of480 / 480)
     "mcnemar480_glint_only":        29,  # discordant frames GLINT-(1) indexes and xgandalf does not
     "mcnemar480_xgandalf_only":     33,  # and the other way -- exact two-sided McNemar p = 0.70
+    # sec:streaming at n=480 (2026-08-17). The published 120 reproduces EXACTLY as a control
+    # (91 / 73 / 78 / 88), so these are the same arms on 4x the frames, not a re-definition.
+    "stream_rate_of480":       323,  # StreamDriver baseline, strict gate
+    "stream_rate_rescue_of480": 331,  # + warmup_rescue + adaptive_relock
+    "offline_rate_of480":      357,  # offline hybrid_index(Mc_known=LYSO), same gate
+    # THE inversion: the blind retry stops being a patch that closes a gap and becomes a net WIN.
+    "retry_rate_of480":        365,  # streaming + blind retry on gate-failing frames -- PAST offline
+    "retry_rate_of120":         88,  # the same retry on the 120 subset, still SHORT of offline's 91
+    "stream_fail_of480":       152,  # frames streaming fails at the strict gate
+    "stream_fail_nobody480":    65,  # ...that NO indexer tested recovers (43%)
+    "union_all_indexers_480":  407,  # union of GLINT blind/(1), xgandalf blind+known, ffbidx, offline
+    # sec:streaming's "ingests essentially every frame" clause, MEASURED off the driver's own
+    # post-lock accept counter. It used to read "114 of 115", which was the misreading `indexing_rate`
+    # is annotated against below: 114 is the LOOSE half of the (strict, loose) pair 75/114 over 120
+    # PUSHED frames, not a numerator over the 115 post-lock ones. The real value there is 111.
+    "driver_accept_of115":     111,  # post-lock frames the driver accepts at its count-only gate, n=120
+    "driver_accept_of475":     442,  # ...and at n=480 (5 warm-up frames in both, so 115 and 475)
+    # The sequential-stop trial, re-run at n=480 over 400 random arrival orders. Blind N-best is
+    # deterministic per frame, so the candidates are cached once and replayed shuffled -- the trials
+    # differ ONLY in order, which is what the claim is about. The 120 reproduces (median 6, 0/400).
+    "seqstop_median_lock":       6,   # frames to reach the batch consensus cell, median, n=480
+    "seqstop_p90_lock":         12,   # 90th percentile (was 10 at n=120 -- longer pool, longer tail)
+    "seqstop_false_locks":       0,   # of 400 orderings, vs the batch consensus cell AND the textbook
+    "seqstop_trials":          400,
+    "ffbidx_known_strict_of480":   373,  # ffbidx known-cell, n=480
+    "xgandalf_known_strict_of480": 397,  # xgandalf known-cell, n=480
     # integration ----------------------------------------------------------------------------------
     "integ_before_ms":     585.0,   # 16 Mpix / 800 reflections, whole-frame float64 upcast
     "integ_after_ms":      7.6,     # upcast removed, bit-identical                           (#17)
@@ -398,6 +424,18 @@ RETIRED = [
          f"{FACTS['mcnemar480_glint_only']} vs {FACTS['mcnemar480_xgandalf_only']}, p=0.70. The 120-frame "
          "8:2 split was a favourable subsample; the supportable claim is that the two MATCH",
          "matches the strongest blind indexer we tested (346 vs 350 of 480 frames, p=0.7)"),
+    # The pair-vs-ratio misreading, caught at its one known site. `indexing_rate` = "75/114" is a
+    # (strict, loose) PAIR over 120 pushed frames; sec:streaming turned the loose half into a
+    # numerator over the 115 post-lock frames and published "114 of 115". Measured, it is 111 of 115
+    # (442 of 475 at n=480). Keyed on the exact adjacency because bare 114 and bare 115 are both
+    # legitimate elsewhere.
+    Rule("postlock-114-of-115", r"114\s*(?:of|/)\s*115",
+         f"114 is the LOOSE half of the (strict, loose) pair indexing_rate = {FACTS['indexing_rate']} "
+         "over 120 PUSHED frames -- not a numerator over the 115 post-lock frames. The driver's own "
+         f"post-lock accept counter gives {FACTS['driver_accept_of115']} of 115 at n=120 and "
+         f"{FACTS['driver_accept_of475']} of 475 at n=480",
+         f"{FACTS['driver_accept_of475']} of 475 post-lock frames at n=480, "
+         f"{FACTS['driver_accept_of115']} of 115 on the 120"),
     Rule("fused-pred-2.4", r"2\.4\s*(?:→|->|-->)\s*0\.45",
          "the fused kernel replaced the 1.46 ms CUDA-graph path, not a 2.4 ms one; "
          "2.4 inflates the gain from 3.1x to an implied 5.3x", "1.46 -> 0.45"),
@@ -738,6 +776,39 @@ def check_arithmetic() -> list[str]:
         if _got != _paper_pct:
             bad.append(f"  FACTS: {_k} = {F[_k]}/120 is {_got}%, but sec:streaming prints {_paper_pct}% "
                        f"-- fix the paper's '61--65% against 76% offline' sentence, not just this table")
+    # sec:streaming's n=480 block. The ORDERING is the paragraph's point, and it inverts between the
+    # two run lengths, which is exactly why both are pinned: at n=120 the retry falls SHORT of offline
+    # (88 < 91) and the text says it "closes 77%"; at n=480 it lands PAST offline (365 > 357) and the
+    # text says it "does more than close it". Lose either relation and one of those two sentences goes
+    # wrong -- and they are adjacent, so a single careless re-measure can invert one and not the other.
+    if int(F["retry_rate_of480"]) <= int(F["offline_rate_of480"]):
+        bad.append("  FACTS: the blind retry no longer beats offline at n=480 -- sec:streaming's 'does "
+                   "more than close it: 365 of 480, eight frames past the offline pipeline's 357' is now "
+                   "FALSE. Rewrite that passage, do not renumber it")
+    if int(F["retry_rate_of120"]) >= int(F["offline_rate_of120"]):
+        bad.append("  FACTS: the retry now meets offline at n=120 too -- sec:streaming's 'the crossover "
+                   "is a property of run length' rests on it falling SHORT there (88 < 91). Revisit")
+    # The narrowing is the other half of the paragraph: 13 points at 120, 6-7 at 480. Derive both from
+    # the counts so a re-measure cannot leave the prose's "narrows with run length" unsupported.
+    _g120 = 100.0 * (int(F["offline_rate_of120"]) - int(F["stream_rate_rescue_of120"])) / 120.0
+    _g480 = 100.0 * (int(F["offline_rate_of480"]) - int(F["stream_rate_rescue_of480"])) / 480.0
+    if not _g480 < _g120:
+        bad.append(f"  FACTS: the streaming gap no longer narrows with run length ({_g120:.1f} pt at 120, "
+                   f"{_g480:.1f} pt at 480) -- sec:streaming's '13 points there, 6-7 here' and the "
+                   "withdrawal of 'the gap is a standing tax' both depend on it")
+    # The false-lock bound the paper quotes as "a 95% upper bound of 0.75% per ordering" is
+    # 1 - 0.05**(1/N) for ZERO events in N trials. It is only that number while the count is zero and
+    # the trial count is 400; either moving silently invalidates the printed bound.
+    if int(F["seqstop_false_locks"]) != 0:
+        bad.append("  FACTS: the sequential stop now has false locks -- sec:streaming's 'zero false "
+                   "locks in 400 trials' and the 0.75% upper bound derived from it are both wrong. "
+                   "Recompute the bound for a nonzero count, do not just edit the number")
+    _ub = 100.0 * (1.0 - 0.05 ** (1.0 / int(F["seqstop_trials"])))
+    if abs(_ub - 0.75) > 0.01:
+        bad.append(f"  FACTS: {F['seqstop_trials']} trials give a 95% upper bound of {_ub:.2f}%, but "
+                   "sec:streaming prints 0.75% -- the bound and the trial count were edited apart")
+    if int(F["stream_fail_nobody480"]) > int(F["stream_fail_of480"]):
+        bad.append("  FACTS: more streaming failures are recovered by nobody than exist")
     # the claim that motivates the whole live-merge caveat
     if float(F["stream_fps"]) >= float(F["hits_per_s"]):
         bad.append("  FACTS: stream_fps now meets hits_per_s -- the 'not a live merge' caveat in the "

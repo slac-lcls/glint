@@ -78,12 +78,23 @@ FACTS: dict[str, float | str] = {
     # subset that reproduces 92 and 86 EXACTLY -- that reproduction is the control that makes these
     # rows quotable. The 8:2 discordant split at n=120 did NOT persist: over the 360 added frames it
     # runs 21:31, so 4x the frames CONFIRM the tie instead of resolving it. Quote the n you mean.
-    "glint1_strict_of480":         346,  # GLINT-(1), blind + consensus, >=25%-of-spots bar, n=480
-    "glint_blind_rate_pct_480":     72,  # = round(100 * glint1_strict_of480 / 480)
+    # GLINT-(1) IS `hybrid_index(Mc_known=None)` -- N-best blind, consensus over the POOLED N-best,
+    # best N-best cell consistent with it, then cell-general rescue. NOT compare3.py's blind-top-1 +
+    # consensus + rescue. The two are indistinguishable on the 120 subset (both 92) and 15 frames
+    # apart at n=480 (361 vs 346), so the choice was invisible until the set grew. Settled 2026-08-18.
+    "glint1_strict_of480":         361,  # GLINT-(1) = hybrid_index(None), >=25%-of-spots bar, n=480
+    "glint_blind_rate_pct_480":     75,  # = round(100 * glint1_strict_of480 / 480)
     "xgandalf_blind_strict_of480": 350,  # xgandalf blind, same bar, same peak list, n=480
     "xgandalf_blind_rate_pct_480":  73,  # = round(100 * xgandalf_blind_strict_of480 / 480)
-    "mcnemar480_glint_only":        29,  # discordant frames GLINT-(1) indexes and xgandalf does not
-    "mcnemar480_xgandalf_only":     33,  # and the other way -- exact two-sided McNemar p = 0.70
+    "mcnemar480_glint_only":        34,  # discordant frames GLINT-(1) indexes and xgandalf does not
+    "mcnemar480_xgandalf_only":     23,  # and the other way -- exact two-sided McNemar p = 0.18
+    # sec:consensus's "consensus recovers everything knowing the cell is worth" is BAR-DEPENDENT and
+    # was stated at the bar where it fails. Same pipeline, cell derived vs handed.
+    "truecell_strict_of480":       357,  # hybrid_index(LYSO), strict bar -- BELOW consensus's 361
+    "cons_vs_true_strict_cons":     16,  # discordant, consensus-only        (p = 0.57, a tie)
+    "cons_vs_true_strict_true":     12,
+    "cons_10refl_of480":           458,  # at the >=10-reflection bar the handed cell PULLS AHEAD
+    "truecell_10refl_of480":       468,
     # sec:streaming at n=480 (2026-08-17). The published 120 reproduces EXACTLY as a control
     # (91 / 73 / 78 / 88), so these are the same arms on 4x the frames, not a re-definition.
     "stream_rate_of480":       323,  # StreamDriver baseline, strict gate
@@ -108,6 +119,15 @@ FACTS: dict[str, float | str] = {
     "seqstop_p90_lock":         12,   # 90th percentile (was 10 at n=120 -- longer pool, longer tail)
     "seqstop_false_locks":       0,   # of 400 orderings, vs the batch consensus cell AND the textbook
     "seqstop_trials":          400,
+    # Batched vs per-frame known-cell, at the gate. The paper used to call these "rate-identical in
+    # aggregate" on the strength of the n=120 split being EXACTLY 9-9. That symmetry is the sample,
+    # not the algorithm: at n=480 it is 23-29. The totals agree only to within the discordant noise.
+    "bvp_disagree_of120":       18,  # frames where batched and per-frame gate differently
+    "bvp_batched_only_120":      9,
+    "bvp_perframe_only_120":     9,
+    "bvp_disagree_of480":       52,
+    "bvp_batched_only_480":     23,
+    "bvp_perframe_only_480":    29,
     "ffbidx_known_strict_of480":   373,  # ffbidx known-cell, n=480
     "xgandalf_known_strict_of480": 397,  # xgandalf known-cell, n=480
     # integration ----------------------------------------------------------------------------------
@@ -312,6 +332,11 @@ FACTS: dict[str, float | str] = {
                                     # CORROBORATED UNCHANGED in the same run: offline 91 (exactly), and the
                                     # blind-retry arm 88 -- so the paper's 76% and 73% do not move; only the
                                     # live figure is in question.                (f61a4cf; H200 A/B, open)
+    # ⚠ TWO DIFFERENT PIPELINES, and they are one frame apart at n=120 and eleven apart at n=480,
+    # which is how they got conflated. sec:streaming's offline reference is hybrid_index(Mc_known=
+    # LYSO) -- HANDED the cell, consensus skipped -- while tab:summary's GLINT-(1) row is the BLIND
+    # pipeline that derives its own cell. The text used to explain 91-vs-92 as one pipeline scored
+    # against the textbook vs the voted cell; at n=480 that reading is refuted outright (357 vs 346).
     "offline_rate_of120":    91,    # offline consensus pipeline (known-hybrid at the same gate);
                                     # independently corroborated by azimuth_validate.py's reconciliation
                                     # block, which records known-hybrid 91 / blind-hybrid 93  (f61a4cf, open)
@@ -419,11 +444,12 @@ RETIRED = [
     # would cry wolf. What is retired is the CLAIM SHAPE -- "matches or exceeds ... blind indexer" -- and
     # quoting the 120 pair as if it were the headline result. At n=480 GLINT is 4 frames BEHIND.
     Rule("blind-lead-retired", r"(?:matches|indexes)\s+(?:more|or\s+exceeds)[\s\S]{0,60}blind\s+indexer",
-         f"the blind LEAD did not survive n=480: GLINT-(1) {FACTS['glint1_strict_of480']}/480 against "
-         f"xgandalf {FACTS['xgandalf_blind_strict_of480']}/480, discordant "
-         f"{FACTS['mcnemar480_glint_only']} vs {FACTS['mcnemar480_xgandalf_only']}, p=0.70. The 120-frame "
-         "8:2 split was a favourable subsample; the supportable claim is that the two MATCH",
-         "matches the strongest blind indexer we tested (346 vs 350 of 480 frames, p=0.7)"),
+         f"'exceeds' is not supported at n=480: GLINT-(1) {FACTS['glint1_strict_of480']}/480 against "
+         f"xgandalf {FACTS['xgandalf_blind_strict_of480']}/480 leads in DIRECTION (discordant "
+         f"{FACTS['mcnemar480_glint_only']} vs {FACTS['mcnemar480_xgandalf_only']}) but only at p=0.18, "
+         "so four times the frames still do not license a ranking. The supportable claim is MATCHES",
+         f"matches the strongest blind indexer we tested ({FACTS['glint1_strict_of480']} vs "
+         f"{FACTS['xgandalf_blind_strict_of480']} of 480 frames, p=0.18)"),
     # The pair-vs-ratio misreading, caught at its one known site. `indexing_rate` = "75/114" is a
     # (strict, loose) PAIR over 120 pushed frames; sec:streaming turned the loose half into a
     # numerator over the 115 post-lock frames and published "114 of 115". Measured, it is 111 of 115
@@ -807,6 +833,38 @@ def check_arithmetic() -> list[str]:
     if abs(_ub - 0.75) > 0.01:
         bad.append(f"  FACTS: {F['seqstop_trials']} trials give a 95% upper bound of {_ub:.2f}%, but "
                    "sec:streaming prints 0.75% -- the bound and the trial count were edited apart")
+    # sec:streaming and sec:consensus BOTH now say the handed cell buys nothing at the strict bar --
+    # 357 against consensus's 361, a tie on the discordant frames. That is a sign-test claim, so check
+    # it as one; comparing totals is what let the last four coincidences pass for identities.
+    _cs, _ct = int(F["cons_vs_true_strict_cons"]), int(F["cons_vs_true_strict_true"])
+    _m = _cs + _ct
+    _p = 1.0 if _m == 0 else min(1.0, 2.0 * sum(comb(_m, _k) for _k in range(min(_cs, _ct) + 1)) / 2.0 ** _m)
+    if _p <= 0.05:
+        bad.append(f"  FACTS: handing the pipeline the cell is now significant at the strict bar "
+                   f"({_cs} vs {_ct}, p={_p:.3g}) -- sec:consensus says 'consensus recovers everything "
+                   "knowing the cell is worth' at that bar, and sec:streaming that it 'buys it "
+                   "nothing'. Rewrite both")
+    # ...and the OTHER half of that sentence: at the >=10-reflection bar the handed cell IS ahead,
+    # which is why the claim is now stated per bar instead of flatly. If it inverts, so does the text.
+    if int(F["truecell_10refl_of480"]) <= int(F["cons_10refl_of480"]):
+        bad.append("  FACTS: the handed cell no longer leads at the >=10-reflection bar "
+                   f"({F['truecell_10refl_of480']} vs {F['cons_10refl_of480']}) -- sec:consensus's "
+                   "'the true cell does pull ahead' at that bar is now wrong")
+    # "aggregate agreement to within the discordant noise" is a claim about a SIGN TEST on the
+    # discordant pairs, so check it there. If the split ever becomes significant the two paths are not
+    # interchangeable and tab:summary's batched footnote has to say so.
+    for _tag, _a, _b in (("120", "bvp_batched_only_120", "bvp_perframe_only_120"),
+                         ("480", "bvp_batched_only_480", "bvp_perframe_only_480")):
+        _x, _y = int(F[_a]), int(F[_b])
+        _m = _x + _y
+        _p = 1.0 if _m == 0 else min(1.0, 2.0 * sum(comb(_m, _k) for _k in range(min(_x, _y) + 1)) / 2.0 ** _m)
+        if _p <= 0.05:
+            bad.append(f"  FACTS: batched vs per-frame is now significant at n={_tag} ({_x} vs {_y}, "
+                       f"p={_p:.3g}) -- the paper says the two agree in aggregate to within the "
+                       "discordant noise. They are no longer interchangeable; rewrite tab:summary's "
+                       "batched footnote and sec:arch, do not renumber")
+        if _x + _y != int(F["bvp_disagree_of" + _tag]):
+            bad.append(f"  FACTS: bvp_disagree_of{_tag} does not equal its two halves")
     if int(F["stream_fail_nobody480"]) > int(F["stream_fail_of480"]):
         bad.append("  FACTS: more streaming failures are recovered by nobody than exist")
     # the claim that motivates the whole live-merge caveat

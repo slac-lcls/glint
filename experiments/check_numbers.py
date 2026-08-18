@@ -101,6 +101,13 @@ FACTS: dict[str, float | str] = {
     # PUSHED frames, not a numerator over the 115 post-lock ones. The real value there is 111.
     "driver_accept_of115":     111,  # post-lock frames the driver accepts at its count-only gate, n=120
     "driver_accept_of475":     442,  # ...and at n=480 (5 warm-up frames in both, so 115 and 475)
+    # The sequential-stop trial, re-run at n=480 over 400 random arrival orders. Blind N-best is
+    # deterministic per frame, so the candidates are cached once and replayed shuffled -- the trials
+    # differ ONLY in order, which is what the claim is about. The 120 reproduces (median 6, 0/400).
+    "seqstop_median_lock":       6,   # frames to reach the batch consensus cell, median, n=480
+    "seqstop_p90_lock":         12,   # 90th percentile (was 10 at n=120 -- longer pool, longer tail)
+    "seqstop_false_locks":       0,   # of 400 orderings, vs the batch consensus cell AND the textbook
+    "seqstop_trials":          400,
     "ffbidx_known_strict_of480":   373,  # ffbidx known-cell, n=480
     "xgandalf_known_strict_of480": 397,  # xgandalf known-cell, n=480
     # integration ----------------------------------------------------------------------------------
@@ -789,6 +796,17 @@ def check_arithmetic() -> list[str]:
         bad.append(f"  FACTS: the streaming gap no longer narrows with run length ({_g120:.1f} pt at 120, "
                    f"{_g480:.1f} pt at 480) -- sec:streaming's '13 points there, 6-7 here' and the "
                    "withdrawal of 'the gap is a standing tax' both depend on it")
+    # The false-lock bound the paper quotes as "a 95% upper bound of 0.75% per ordering" is
+    # 1 - 0.05**(1/N) for ZERO events in N trials. It is only that number while the count is zero and
+    # the trial count is 400; either moving silently invalidates the printed bound.
+    if int(F["seqstop_false_locks"]) != 0:
+        bad.append("  FACTS: the sequential stop now has false locks -- sec:streaming's 'zero false "
+                   "locks in 400 trials' and the 0.75% upper bound derived from it are both wrong. "
+                   "Recompute the bound for a nonzero count, do not just edit the number")
+    _ub = 100.0 * (1.0 - 0.05 ** (1.0 / int(F["seqstop_trials"])))
+    if abs(_ub - 0.75) > 0.01:
+        bad.append(f"  FACTS: {F['seqstop_trials']} trials give a 95% upper bound of {_ub:.2f}%, but "
+                   "sec:streaming prints 0.75% -- the bound and the trial count were edited apart")
     if int(F["stream_fail_nobody480"]) > int(F["stream_fail_of480"]):
         bad.append("  FACTS: more streaming failures are recovered by nobody than exist")
     # the claim that motivates the whole live-merge caveat

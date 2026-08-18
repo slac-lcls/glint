@@ -39,6 +39,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+from math import comb
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -72,6 +73,17 @@ FACTS: dict[str, float | str] = {
     "glint_blind_rate_pct":        77,  # = round(100 * glint1_strict_of120 / 120)
     "xgandalf_blind_strict_of120": 86,  # xgandalf blind, SAME bar, SAME peak list -- a different indexer
     "xgandalf_blind_rate_pct":     72,  # = round(100 * xgandalf_blind_strict_of120 / 120)
+    # The SAME two blind arms extended to 480 frames of the same run (2026-08-17). Identical peak
+    # finder (pf8 out of the CrystFEL stream), identical gate, and the published 120 embedded as a
+    # subset that reproduces 92 and 86 EXACTLY -- that reproduction is the control that makes these
+    # rows quotable. The 8:2 discordant split at n=120 did NOT persist: over the 360 added frames it
+    # runs 21:31, so 4x the frames CONFIRM the tie instead of resolving it. Quote the n you mean.
+    "glint1_strict_of480":         346,  # GLINT-(1), blind + consensus, >=25%-of-spots bar, n=480
+    "glint_blind_rate_pct_480":     72,  # = round(100 * glint1_strict_of480 / 480)
+    "xgandalf_blind_strict_of480": 350,  # xgandalf blind, same bar, same peak list, n=480
+    "xgandalf_blind_rate_pct_480":  73,  # = round(100 * xgandalf_blind_strict_of480 / 480)
+    "mcnemar480_glint_only":        29,  # discordant frames GLINT-(1) indexes and xgandalf does not
+    "mcnemar480_xgandalf_only":     33,  # and the other way -- exact two-sided McNemar p = 0.70
     # integration ----------------------------------------------------------------------------------
     "integ_before_ms":     585.0,   # 16 Mpix / 800 reflections, whole-frame float64 upcast
     "integ_after_ms":      7.6,     # upcast removed, bit-identical                           (#17)
@@ -376,6 +388,16 @@ RETIRED = [
          f"{FACTS['xgandalf_blind_rate_pct']}% ({FACTS['xgandalf_blind_strict_of120']}/120) against "
          f"GLINT-(1)'s {FACTS['glint_blind_rate_pct']}% ({FACTS['glint1_strict_of120']}/120)",
          f"xgandalf {FACTS['xgandalf_blind_rate_pct']}%"),
+    # The retired HEADLINE, not the retired numbers: 77% and 72% are still correct about the 120-frame
+    # subset and appear legitimately three times in sec:comparison, so a rule keyed on either numeral
+    # would cry wolf. What is retired is the CLAIM SHAPE -- "matches or exceeds ... blind indexer" -- and
+    # quoting the 120 pair as if it were the headline result. At n=480 GLINT is 4 frames BEHIND.
+    Rule("blind-lead-retired", r"(?:matches|indexes)\s+(?:more|or\s+exceeds)[\s\S]{0,60}blind\s+indexer",
+         f"the blind LEAD did not survive n=480: GLINT-(1) {FACTS['glint1_strict_of480']}/480 against "
+         f"xgandalf {FACTS['xgandalf_blind_strict_of480']}/480, discordant "
+         f"{FACTS['mcnemar480_glint_only']} vs {FACTS['mcnemar480_xgandalf_only']}, p=0.70. The 120-frame "
+         "8:2 split was a favourable subsample; the supportable claim is that the two MATCH",
+         "matches the strongest blind indexer we tested (346 vs 350 of 480 frames, p=0.7)"),
     Rule("fused-pred-2.4", r"2\.4\s*(?:→|->|-->)\s*0\.45",
          "the fused kernel replaced the 1.46 ms CUDA-graph path, not a 2.4 ms one; "
          "2.4 inflates the gain from 3.1x to an implied 5.3x", "1.46 -> 0.45"),
@@ -657,14 +679,38 @@ def check_arithmetic() -> list[str]:
         if int(F[_pct_key]) != _want:
             bad.append(f"  FACTS: {_pct_key} = {F[_pct_key]}% but {_cnt_key} = {F[_cnt_key]}/120 rounds to "
                        f"{_want}% -- a count and its percentage were edited apart")
-    # The ORDERING is the abstract's blind claim -- "indexes more frames blind than the strongest blind
-    # indexer we tested (77% versus 72%)". Note it holds only WITH consensus: the bare single-frame
-    # front ends run the other way (79 vs 86 at this bar), which sec:comparison now says outright. If
-    # this inverts, the abstract's headline is wrong, not just a numeral in this table.
+    # Same derivation for the n=480 rows. Note the denominator differs, so this cannot be folded into
+    # the loop above -- and folding it would be the exact mistake that makes a percentage stop tracking
+    # its count.
+    for _pct_key, _cnt_key in (("glint_blind_rate_pct_480", "glint1_strict_of480"),
+                               ("xgandalf_blind_rate_pct_480", "xgandalf_blind_strict_of480")):
+        _want = round(100.0 * int(F[_cnt_key]) / 480.0)
+        if int(F[_pct_key]) != _want:
+            bad.append(f"  FACTS: {_pct_key} = {F[_pct_key]}% but {_cnt_key} = {F[_cnt_key]}/480 rounds to "
+                       f"{_want}% -- a count and its percentage were edited apart")
+    # The n=120 ordering (92 > 86) is still a true fact about that subset, but it is NO LONGER a
+    # headline: the synopsis and intro now quote the 480 tie, because the lead did not survive 4x the
+    # frames. Keep the subset ordering pinned so a re-measure cannot silently invert the text at
+    # sec:comparison that still discusses it.
     if int(F["glint1_strict_of120"]) <= int(F["xgandalf_blind_strict_of120"]):
-        bad.append("  FACTS: GLINT-(1) no longer indexes more frames blind than xgandalf -- the abstract's "
-                   "'more frames blind than the strongest blind indexer we tested' claim is now FALSE, "
-                   "and sec:comparison's ordering with it. Rewrite the claim, do not renumber it")
+        bad.append("  FACTS: GLINT-(1) no longer leads xgandalf on the 120-frame subset -- sec:comparison "
+                   "discusses that lead and its 8:2 discordant split explicitly. Rewrite that passage, "
+                   "do not renumber it")
+    # THE claim the paper now leads with: at n=480 the two are INDISTINGUISHABLE. That is a statement
+    # about the discordant pairs, not about the rates, so check it where it lives -- recompute the exact
+    # two-sided McNemar and fail if it stops supporting "indistinguishable". A rate edit that leaves the
+    # discordant counts alone would otherwise sail through.
+    _b01, _b10 = int(F["mcnemar480_glint_only"]), int(F["mcnemar480_xgandalf_only"])
+    _m = _b01 + _b10
+    _p = 1.0 if _m == 0 else min(1.0, 2.0 * sum(comb(_m, _k) for _k in range(0, min(_b01, _b10) + 1)) / 2.0 ** _m)
+    if _p <= 0.05:
+        bad.append(f"  FACTS: the n=480 blind pair is no longer a tie (exact McNemar p = {_p:.3g} from "
+                   f"{_b01} vs {_b10} discordant) -- the synopsis and intro say 'matches ... p=0.7'. "
+                   "Rewrite that claim rather than editing these counts")
+    if abs((_b01 - _b10) - (int(F["glint1_strict_of480"]) - int(F["xgandalf_blind_strict_of480"]))) != 0:
+        bad.append("  FACTS: the n=480 discordant counts and the n=480 totals disagree -- their difference "
+                   "must equal the difference of the totals (concordant frames cancel). One of the two "
+                   "was re-measured without the other")
 
     # These three numbers ARE the paper's sec:streaming yield paragraph. sec:streaming used to claim
     # streaming "indexes no fewer frames than the offline pipeline" because the rates were "properties

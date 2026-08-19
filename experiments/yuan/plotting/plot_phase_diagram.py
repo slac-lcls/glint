@@ -29,6 +29,7 @@ YUAN_DIR = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, YUAN_DIR)
 sys.path.insert(0, os.path.join(YUAN_DIR, ".."))
 RESULTS = os.path.join(YUAN_DIR, "results_grid.jsonl")
+RESULTS_MATCHED = os.path.join(YUAN_DIR, "results_grid_matched.jsonl")
 GRID_DIR = os.path.join(YUAN_DIR, "data", "grid")
 OUTDIR = os.path.dirname(__file__)
 
@@ -58,6 +59,26 @@ def load_grid():
                 row.append(100.0 * sum(f > 0.7 for f in fracs) / len(fracs) if fracs else np.nan)
             z[arm][na] = row
     return z
+
+
+def load_matched():
+    """PTS_MATCHED (issue #59): same NA -> [pct_solved per noise] shape as load_grid()'s per-arm
+    dict, but from results_grid_matched.jsonl -- the matched-control arm isolating curvature from
+    the TAN tangent evidence's data-quality confound (fresh/denser/cleaner/independent re-sim)."""
+    if not os.path.exists(RESULTS_MATCHED):
+        return None
+    rows = [json.loads(l) for l in open(RESULTS_MATCHED)]
+    by_cell = collections.defaultdict(list)
+    for r in rows:
+        by_cell[(r["na"], r["noise"])].append(r["frac"])
+    out = {}
+    for na in NA_LIST:
+        row = []
+        for noise in NOISE_LADDER:
+            fracs = by_cell.get((na, noise))
+            row.append(100.0 * sum(f > 0.7 for f in fracs) / len(fracs) if fracs else np.nan)
+        out[na] = row
+    return out
 
 
 def load_na_streaks():
@@ -124,6 +145,12 @@ def main():
 
     plot_tan_vs_pts(z)
 
+    z_matched = load_matched()
+    if z_matched is not None:
+        plot_tan_vs_pts_matched(z, z_matched)
+    else:
+        print("results_grid_matched.jsonl not found -- skipping the issue #59 matched-control figure")
+
 
 def plot_tan_vs_pts(z, noise_focus=1e-3):
     """Companion 2D figure: the specific, mechanistic finding Stefano's review asked for --
@@ -148,6 +175,44 @@ def plot_tan_vs_pts(z, noise_focus=1e-3):
     ax.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
     png_path = os.path.join(OUTDIR, "tan_vs_pts.png")
+    fig.savefig(png_path, dpi=200, bbox_inches="tight")
+    print(f"saved {png_path}")
+
+
+def plot_tan_vs_pts_matched(z, z_matched, noise_focus=1e-3):
+    """Issue #59 matched-control companion: adds PTS_MATCHED (same fresh reprs TAN's tangent
+    bonus uses, scored points-only, no tangent gate) to the PTS/TAN/COM view above -- decomposes
+    the PTS-to-TAN gap into a data-quality effect (PTS -> PTS_MATCHED) and a curvature effect
+    (PTS_MATCHED -> TAN), shaded to make the split visible at a glance rather than just the
+    confounded PTS-to-TAN gap."""
+    j = NOISE_LADDER.index(noise_focus)
+    na_arr = np.array(NA_LIST)
+    pts = np.array([z["PTS"][na][j] for na in NA_LIST])
+    tan = np.array([z["TAN"][na][j] for na in NA_LIST])
+    com = np.array([z["COM"][na][j] for na in NA_LIST])
+    matched = np.array([z_matched[na][j] for na in NA_LIST])
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.4))
+    valid = ~(np.isnan(pts) | np.isnan(matched) | np.isnan(tan))
+    ax.fill_between(na_arr, pts, matched, where=valid, color="#e8a33d", alpha=0.35,
+                    label="data-quality effect", zorder=1)
+    ax.fill_between(na_arr, matched, tan, where=valid, color="#262c82", alpha=0.20,
+                    label="curvature effect", zorder=1)
+    ax.plot(na_arr, com, "o--", color="#b5502e", label="COM", linewidth=1.5, markersize=5,
+           alpha=0.8, zorder=2)
+    ax.plot(na_arr, pts, "o-", color="#7b8dde", label="PTS", linewidth=2, markersize=6, zorder=3)
+    ax.plot(na_arr, matched, "o-", color="#e8a33d", label="PTS_MATCHED", linewidth=2,
+           markersize=6, zorder=3)
+    ax.plot(na_arr, tan, "o-", color="#262c82", label="TAN", linewidth=2, markersize=6, zorder=3)
+    ax.set_xlabel("NA")
+    ax.set_ylabel("% solved")
+    ax.set_title(f"Issue #59 matched control at noise={noise_focus:.0e} Å⁻¹\n"
+                f"PTS -> PTS_MATCHED = data quality; PTS_MATCHED -> TAN = curvature")
+    ax.set_ylim(-3, 103)
+    ax.legend(frameon=False, fontsize=8, loc="upper left")
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    png_path = os.path.join(OUTDIR, "tan_vs_pts_matched.png")
     fig.savefig(png_path, dpi=200, bbox_inches="tight")
     print(f"saved {png_path}")
 

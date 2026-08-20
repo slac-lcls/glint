@@ -67,6 +67,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_lock_gate_wiring.py
 
+      # Not a test: it checks that run_ci_locally.py's STEPS still matches the steps above, so the
+      # local "run it as poor as CI" harness cannot quietly fall behind this file and start
+      # reporting ALL PASS over a step it no longer runs.
+      - name: experiments/run_ci_locally.py --check-sync
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/run_ci_locally.py --check-sync
+
 
       # The xtc_bridge tests are plain scripts, not pytest test functions: they
       # print their own results and sys.exit(1) on failure. They insert their own

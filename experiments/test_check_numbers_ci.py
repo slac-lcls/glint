@@ -16,14 +16,18 @@ against the multinomial the data come from, and not merely that the numbers look
 Run: `python experiments/test_check_numbers_ci.py` or `pytest`.
 """
 import math
-import random
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = (ROOT / "experiments" / "check_numbers.py").read_text(encoding="utf-8")
 
 # Lift the helpers out of check_arithmetic without importing the module (that runs the whole guard).
-_body = SRC[SRC.index("    _Z975 = "):SRC.index("    _N480, _plateau_lo")]
+_BEG = "# --- BEGIN paired-difference interval"
+_END = "# --- END paired-difference interval"
+if _BEG not in SRC or _END not in SRC:                 # the markers are the contract; without them
+    raise SystemExit("check_numbers.py no longer marks the interval block -- this test would "
+                     "silently extract the wrong code, so it refuses to run")
+_body = SRC[SRC.index(chr(10), SRC.index(_BEG)) + 1:SRC.index(_END)]
 _NS: dict = {}
 exec("\n".join(l[4:] for l in _body.split("\n")), _NS)          # noqa: S102
 ci_diff, p10_mle = _NS["_ci_diff"], _NS["_p10_mle"]
@@ -72,32 +76,57 @@ def test_zero_discordant_pairs_is_not_certainty():
     assert hi - lo > 0.005, f"(0,0) interval [{lo}, {hi}] is implausibly tight for no data"
 
 
-def test_coverage_is_at_least_nominal():
-    """The property the two previous versions failed. Simulate from the multinomial the counts
-    actually come from and check the interval covers the true difference >= 95% of the time.
+def _exact_coverage(p01: float, p10: float, n: int, w: int = 9) -> "tuple[float, float]":
+    """EXACT coverage by enumerating the multinomial, not by sampling.
 
-    Deliberately includes (2, 0): the conditional interval scored 59.3% there, and several hybrid
-    arms in the real sweep sit in that sparse regime.
+    The previous version of this test simulated 4000 trials and accepted >= 93%. At 4000 trials a
+    true 93.6% usually clears 93%, so it could not reliably separate the broken interval (93.67%
+    here) from a correct one (95.06%) -- it only ever caught the old code through the sparse (2,0)
+    case. Enumeration removes the sampling noise entirely, so the threshold can sit between the
+    two without a power argument.
+
+    Returns (covered mass, mass outside the enumerated window) so the truncation is reported rather
+    than assumed; the window is +-w sd, which leaves ~1e-13 unaccounted.
     """
-    for (a, b) in ((10, 29), (32, 21), (2, 0)):
-        p01, p10 = a / N, b / N
-        true = p01 - p10
-        rng = random.Random(20260820)
-        trials, cov = 4000, 0
-        for _ in range(trials):
-            x = y = 0
-            for _ in range(N):                       # multinomial by N Bernoulli draws
-                u = rng.random()
-                if u < p01:
-                    x += 1
-                elif u < p01 + p10:
-                    y += 1
-            lo, hi = ci_diff(x, y, N)
-            cov += lo <= true <= hi
-        rate = cov / trials
-        # 4000 trials -> +-1.1% at 95%; 0.93 leaves room for that while still failing the 93.6%
-        # and 59.3% the previous interval produced.
-        assert rate >= 0.93, f"coverage {100*rate:.1f}% at ({a},{b}) -- below nominal"
+    true = p01 - p10
+    lg = math.lgamma
+    m0, s0 = n * p01, math.sqrt(n * p01 * (1 - p01)) + 1
+    m1, s1 = n * p10, math.sqrt(n * p10 * (1 - p10)) + 1
+    xs = range(max(0, int(m0 - w * s0)), min(n, int(m0 + w * s0)) + 1)
+    ys = range(max(0, int(m1 - w * s1)), min(n, int(m1 + w * s1)) + 1)
+    NEG = -1e18                                       # log 0: a cell that cannot occur
+    l0 = math.log(p01) if p01 > 0 else NEG
+    l1 = math.log(p10) if p10 > 0 else NEG
+    lr = math.log(1 - p01 - p10)
+    cov = tot = 0.0
+    for x in xs:
+        for y in ys:
+            if x + y > n:
+                continue
+            lp = (lg(n + 1) - lg(x + 1) - lg(y + 1) - lg(n - x - y + 1)
+                  + (x * l0 if x else 0.0) + (y * l1 if y else 0.0) + (n - x - y) * lr)
+            if lp < -700:                             # underflows to 0 anyway
+                continue
+            pm = math.exp(lp)
+            tot += pm
+            lo, hi = ci_diff(x, y, n)
+            if lo <= true <= hi:
+                cov += pm
+    return cov, 1.0 - tot
+
+
+def test_coverage_is_at_least_nominal():
+    """The property both previous versions failed, checked exactly.
+
+    Measured with this enumeration, the retired conditional interval scores 93.67% at (10,29) and
+    59.35% at (2,0) -- the second being the sparse regime several hybrid arms of the real sweep sit
+    in. Tango scores 95.06% and 98.37%. The bar is 94.5%: above anything the broken interval
+    achieves at (10,29), below what a valid one does, and with no sampling noise to argue about.
+    """
+    for (a, b) in ((10, 29), (32, 21), (29, 54), (2, 0)):
+        cov, neglected = _exact_coverage(a / N, b / N, N)
+        assert abs(neglected) < 1e-9, f"({a},{b}): {neglected:.1e} of the mass fell outside the window"
+        assert cov >= 0.945, f"coverage {100*cov:.2f}% at ({a},{b}) -- below nominal"
 
 
 if __name__ == "__main__":

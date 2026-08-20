@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 HOME = Path.home()
+REPO = Path(__file__).resolve().parent.parent   # the checkout this file ships in
 
 # --------------------------------------------------------------------------------------- the facts
 # Measured, and the single source of truth. Provenance in the trailing comment: PR number where
@@ -444,9 +445,13 @@ DEFAULT_TARGETS = [
     # README.md kept claiming "~550x the throughput" (11542/21.3, the retired blind figure) long after
     # the paper and the decks had been corrected to ~340x. The guard watched the deliverables we
     # publish and missed the three files a new collaborator opens first.
-    HOME / "git/glint/README.md",
-    HOME / "git/glint/ROADMAP.md",
-    HOME / "git/glint/GLINT_REPORT.md",
+    # ...resolved from THIS CHECKOUT, not from a fixed clone path. These three live in the repo, so
+    # keying them to ~/git/glint meant a worktree, a CI runner or anyone else's clone silently
+    # checked a different copy or none at all -- which is why the guard had never run in CI on the
+    # files it is most able to check.
+    REPO / "README.md",
+    REPO / "ROADMAP.md",
+    REPO / "GLINT_REPORT.md",
 ]
 PDF_TARGETS = [
     HOME / "git/slides/glint/glint_summary.pdf",
@@ -850,6 +855,7 @@ def check_arithmetic() -> list[str]:
     # p01 - p10 = d. Measured coverage on the same configurations: 95.0%, 98.3%, and (0,0) gives
     # [-0.79%, +0.79%]. experiments/test_check_numbers_ci.py pins both the closed-form MLE and the
     # coverage.
+    # --- BEGIN paired-difference interval (lifted verbatim by experiments/test_check_numbers_ci.py) ---
     _Z975 = 1.959963984540054
 
     def _p10_mle(n01: int, n10: int, n: int, d: float) -> float:
@@ -890,7 +896,20 @@ def check_arithmetic() -> list[str]:
             a, b = (a, mid) if _score(n01, n10, n, mid) < -z else (mid, b)
         return low, (a + b) / 2
 
-    _N480, _plateau_lo, _plateau_hi = 480, 0.0, 0.0
+    # --- END paired-difference interval ---
+
+    # The table must be COMPLETE before anything is concluded from it: deleting an entry would
+    # otherwise quietly narrow "every arm, both channels" to "the arms that are left".
+    _M3_ARMS = (2, 3, 4, 5, 6, 10, 12, 16, 24, 32, 48, 80)
+    _want_keys = {(a, c) for a in _M3_ARMS for c in ("blind", "hybrid")}
+    if set(M3_SPLITS) != _want_keys:
+        _missing = sorted(_want_keys - set(M3_SPLITS)); _extra = sorted(set(M3_SPLITS) - _want_keys)
+        bad.append(f"  FACTS: M3_SPLITS is not the full sweep -- missing {_missing}, unexpected "
+                   f"{_extra}. The block claims every arm in both channels; it can only claim what "
+                   "is in the table")
+
+    _N480 = 480
+    _bounds = {"blind": [0.0, 0.0], "hybrid": [0.0, 0.0]}
     for (_arm, _ch), (_g, _l) in sorted(M3_SPLITS.items()):
         _p = _mcnemar_p(_g, _l)
         if _arm == 2 and _p > 0.05:
@@ -904,19 +923,46 @@ def check_arithmetic() -> list[str]:
             bad.append(f"  FACTS: M3 STEPS=2/{_ch} split {_g}/{_l} says the SHORT arm gained at "
                        "least as many frames as it lost, i.e. fewer steps are as good or better. "
                        "That inverts the block, and p cannot catch it -- McNemar is symmetric")
-        if _arm >= 4 and _p <= 0.05:
+        # EVERY arm but 2, not just >= 4. Arm 3 fell through both branches and was unguarded, so
+        # the "only significant arm is 2" invariant did not actually cover the arm most likely to
+        # move next -- it is the one adjacent to the significant one.
+        if _arm != 2 and _p <= 0.05:
             bad.append(f"  FACTS: M3 STEPS={_arm}/{_ch} now reaches significance (split {_g}/{_l}, "
-                       f"p = {_p:.3g}). The block says no arm from 4 to 80 does -- that IS the "
-                       "result, so rewrite the claim rather than the table")
+                       f"p = {_p:.3g}). The block says STEPS=2 is the only arm that differs -- that "
+                       "IS the result, so rewrite the claim rather than the table")
         if _arm >= 4:
             _lo, _hi = _ci_diff(_g, _l, _N480)
-            _plateau_lo, _plateau_hi = min(_plateau_lo, _lo), max(_plateau_hi, _hi)
+            _bounds[_ch][0] = min(_bounds[_ch][0], _lo)
+            _bounds[_ch][1] = max(_bounds[_ch][1], _hi)
     # ...and the SIZE the data still admit, which is the honest version of "no difference".
     # glint_fast quotes this interval verbatim; if it widens, that sentence is wrong.
-    if _plateau_lo < -0.045 or _plateau_hi > 0.060:
-        bad.append(f"  FACTS: across 4..80 the 95% CI on the rate difference now spans "
-                   f"[{100*_plateau_lo:+.2f}%, {100*_plateau_hi:+.2f}%], wider than the "
-                   "[-4.0%, +5.4%] glint_fast states as the bound on any undetected effect")
+    # ...and the SIZE the data still admit, PER CHANNEL and at the bound glint_fast actually
+    # prints. A single merged extremum let the hybrid claim drift up to the blind allowance, and a
+    # slack threshold (-4.5/+6.0) permitted numbers the prose does not support. These are the
+    # displayed values with one rounding step of slack, no more.
+    # The headline totals are DERIVED, not independent: arm_total = default_total + gained - lost.
+    # They were added as flat facts and then orphaned when the splits moved into M3_SPLITS, which
+    # is the failure this file documents twice over -- a fact nothing reads is a comment, and here
+    # the comment was a number the prose quotes. Tie each one to the split it came from.
+    for _ch, _arm, _key in (("blind", 2, "m3_blind_steps2_of480"),
+                            ("blind", 4, "m3_blind_steps4_of480"),
+                            ("blind", 80, "m3_blind_steps80_of480"),
+                            ("hybrid", 2, "m3_hybrid_steps2_of480"),
+                            ("hybrid", 32, "m3_hybrid_steps32_of480")):
+        _base = F["m3_blind_steps8_of480"] if _ch == "blind" else F["m3_hybrid_steps8_of480"]
+        _g, _l = M3_SPLITS[(_arm, _ch)]
+        if int(F[_key]) != int(_base) + _g - _l:
+            bad.append(f"  FACTS: {_key} = {F[_key]} but the {_ch} STEPS={_arm} split {_g}/{_l} "
+                       f"against a default of {_base} gives {int(_base) + _g - _l}. One of the two "
+                       "was edited without the other")
+
+    for _ch, (_want_lo, _want_hi) in (("blind", (-0.040, 0.054)), ("hybrid", (-0.037, 0.034))):
+        _lo, _hi = _bounds[_ch]
+        if _lo < _want_lo - 0.0005 or _hi > _want_hi + 0.0005:
+            bad.append(f"  FACTS: across 4..80 the {_ch} 95% CI on the rate difference now spans "
+                       f"[{100*_lo:+.2f}%, {100*_hi:+.2f}%], outside the "
+                       f"[{100*_want_lo:+.1f}%, {100*_want_hi:+.1f}%] glint_fast states as the "
+                       "bound on any undetected effect in that channel")
 
     # m3_steps_default must BE the shipped default, not a description of it -- a fact nothing reads
     # is a comment (cf. the glint_blind_rate_pct drift above). Read it out of the source.

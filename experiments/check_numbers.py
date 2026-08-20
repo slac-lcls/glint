@@ -148,6 +148,21 @@ FACTS: dict[str, float | str] = {
                                          # test is trivially satisfied (2% of 54 = 1.08 < 3), so
                                          # neither scale-free test protects the small-pool tail
     "poolgate_bad_wrong_removed":  192,  # = 194 - 2
+    # Binary vs weighted peaks, n=480 (experiments/weight_sweep.py). The family binarises before
+    # the transform; this measured whether a soft intensity weight beats it. It does not -- every
+    # arm is significantly worse at blind, and the damage across the up-weighting arms is a linear
+    # function of the Kish effective sample size (r = +0.997), i.e. reweighting discards peaks
+    # rather than extracting information. `inverse` is the falsifier arm and the one point off
+    # that line, which is what shows DIRECTION matters on top of variance.
+    "pw_blind_binary_of480":     282,  # the control; == the STEPS=8 arm of steps_sweep, exactly
+    "pw_hybrid_binary_of480":    361,
+    "pw_blind_quarter_of480":    253,  # gentlest weighting, still -29 (p < 0.001)
+    "pw_blind_sqrt_of480":       200,
+    "pw_blind_linear_of480":     116,  # -166; intensity-proportional is catastrophic
+    "pw_blind_inverse_of480":    251,  # falsifier: DOWN-weights strong peaks, -31 at n_eff 0.526
+    "pw_neff_sqrt":            0.693,  # ...vs sqrt's -82 at a HIGHER n_eff of 0.693
+    "pw_neff_inverse":         0.526,
+    "pw_r_neff_upweighting":   0.997,  # Pearson r(n_eff, blind delta), excluding the falsifier
     # Batched vs per-frame known-cell, at the gate. The paper used to call these "rate-identical in
     # aggregate" on the strength of the n=120 split being EXACTLY 9-9. That symmetry is the sample,
     # not the algorithm: at n=480 it is 23-29. The totals agree only to within the discordant noise.
@@ -778,6 +793,18 @@ def check_arithmetic() -> list[str]:
     # real replay gives, because a refused stream keeps running and can lock later. The estimate
     # was written here while the measurement was still going and never re-read against the table
     # it sits beside, which is this file's own failure mode reproduced inside this file.
+    # The peak-weight block. Two claims carry it, and both are orderings rather than values, so a
+    # later edit cannot flip the conclusion while leaving the table looking plausible.
+    if F["pw_blind_binary_of480"] <= max(F["pw_blind_quarter_of480"], F["pw_blind_sqrt_of480"],
+                                         F["pw_blind_linear_of480"], F["pw_blind_inverse_of480"]):
+        bad.append("  FACTS: binary was MEASURED the best blind arm (282); a table where some "
+                   "weighting beats it has inverted the result this block exists to record")
+    # The falsifier: LOWER n_eff than sqrt, yet a BETTER rate. That inequality is the whole
+    # evidence that direction matters and not just variance.
+    if not (F["pw_neff_inverse"] < F["pw_neff_sqrt"]
+            and F["pw_blind_inverse_of480"] > F["pw_blind_sqrt_of480"]):
+        bad.append("  FACTS: the inverse arm must sit BELOW sqrt in n_eff and ABOVE it in rate "
+                   "(0.526 < 0.693, 251 > 200); without that the variance story is unfalsified")
     if F["poolgate_clean_maxpool"] != F["poolgate_bad_minpool"]:
         bad.append("  FACTS: poolgate_clean_maxpool and poolgate_bad_minpool were MEASURED equal "
                    "(54); moving one without the other erases the overlap the claim rests on")

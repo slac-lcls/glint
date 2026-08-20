@@ -38,6 +38,11 @@ STEPS = [
     "experiments/test_lock_probe.py",
     "experiments/test_running_consensus.py",
     "experiments/test_lock_gate_wiring.py",
+    "experiments/test_multilattice.py",
+    "experiments/test_warmup_batch.py",
+    "experiments/test_missbuf_rescue.py",
+    "experiments/test_geom_bridge.py",
+    "experiments/test_geom_refine.py",
     # Skips without a GPU and exits 0 (glint#123). Running it here is still worth the second it
     # costs: the module body resolves HKLGrid/_panel_geom/recip_from_M/cell_to_Ar at import, so a
     # rename in glint/ fails here rather than waiting for someone with a GPU.

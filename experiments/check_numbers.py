@@ -163,6 +163,10 @@ FACTS: dict[str, float | str] = {
     "pw_neff_sqrt":            0.693,  # ...vs sqrt's -82 at a HIGHER n_eff of 0.693
     "pw_neff_inverse":         0.526,
     "pw_r_neff_upweighting":   0.997,  # Pearson r(n_eff, blind delta), excluding the falsifier
+    "pw_qpow_default":           1.0,  # the shipped |q|^-QPOW exponent the "binary" control IS.
+                                       # Read from glint_fast.py below, not just described: if the
+                                       # default moves, the control is no longer the shipped weight
+                                       # and every arm is measured against something nobody runs.
     # DISCORDANT splits, because "significantly worse" is a p-value, not a margin. Same reason the
     # M3 block stores them: totals cannot decide an exact McNemar. Recomputed in check_arithmetic.
     "pw_quarter_gained":          18,  # the gentlest weighting, and still p = 4.2e-4
@@ -803,6 +807,23 @@ def check_arithmetic() -> list[str]:
     # real replay gives, because a refused stream keeps running and can lock later. The estimate
     # was written here while the measurement was still going and never re-read against the table
     # it sits beside, which is this file's own failure mode reproduced inside this file.
+    # The "binary" control is the SHIPPED weight, w = |q|^-QPOW at QPOW=1.0 -- so tie the fact to
+    # the source rather than to a comment about the source. Same defect the M3 block had: a fact
+    # nothing reads is a comment, and this one silently defines what "binary" even means here.
+    _gf_p = Path(__file__).resolve().parent.parent / "glint" / "glint_fast.py"
+    _gf_s = _gf_p.read_text(encoding="utf-8") if _gf_p.exists() else ""
+    _qm = re.search(r'QPOW = float\(os\.environ\.get\("QPOW", "([\d.]+)"\)\)', _gf_s)
+    if not _gf_s:
+        bad.append(f"  FACTS: {_gf_p} unreadable, so pw_qpow_default is unchecked and the peak-"
+                   "weight control is defined by nothing")
+    elif _qm is None:
+        bad.append("  FACTS: the QPOW default could not be located in glint/glint_fast.py -- the "
+                   "pw_qpow_default check is dead; fix the pattern rather than dropping it")
+    elif float(_qm.group(1)) != float(F["pw_qpow_default"]):
+        bad.append(f"  FACTS: pw_qpow_default is {F['pw_qpow_default']} but glint_fast ships "
+                   f"{_qm.group(1)}; the 'binary' arm is no longer the shipped weight, so every "
+                   "weighting comparison is against a baseline nobody runs")
+
     # The peak-weight block's headline is "every soft weighting is SIGNIFICANTLY worse", which is a
     # claim about p-values; check them as such, from the stored splits, and require the reconciling
     # margin so the splits and the totals cannot drift apart.

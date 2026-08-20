@@ -40,6 +40,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_pf8_thr_adu.py
 
+      - name: experiments/test_asic_seam_mask.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_asic_seam_mask.py
+
       - name: experiments/test_consensus_degenerate.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_consensus_degenerate.py

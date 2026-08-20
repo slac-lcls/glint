@@ -125,17 +125,27 @@ def test_pool_switch_running_lock_unchanged_small_refuses_large():
     """RunningConsensus with the gated lock: clean small-pool locking is bit-identical to gap-only,
     and a leader that is a tiny share of a large pool is refused instead of locked."""
     # Clean stream: true cell every frame + fresh scatter. Locks identically with and without the gate.
-    for kw in (dict(), dict(min_frac=0.02, min_lead=1.5, pool_switch=72)):
+    # Both arms are recorded and COMPARED, not each checked against "some correct lock" in
+    # isolation: the claim is that the gate changes NOTHING here, and an isolated per-arm assertion
+    # would still pass if the gated arm locked on a different frame, with different support, or on
+    # a different member of the same lattice group.
+    out = {}
+    for tag, kw in (("gap-only", dict()),
+                    ("pool-keyed", dict(min_frac=0.02, min_lead=1.5, pool_switch=72))):
         rc = RunningConsensus(min_support=3, gap=2, adaptive=True, **kw)
-        locked_at = None
+        out[tag] = None
         for f in range(12):
             rc.add_frame([_rot(0.13 * f) @ M_TRUE, _SCATTER[f % len(_SCATTER)]])
             M, w0, w1 = rc.verdict()
             if M is not None:
-                locked_at = f + 1
+                out[tag] = (f + 1, w0, w1, M, rc.npool)
                 break
-        assert locked_at is not None and _rp_eq(M, M_TRUE), (locked_at, kw)
+        assert out[tag] is not None and _rp_eq(M, M_TRUE), (tag, out[tag])
         assert rc.npool < 72, rc.npool                          # clean locks live BELOW the switch
+    a, b = out["gap-only"], out["pool-keyed"]
+    assert a[:3] == b[:3], (a[:3], b[:3])                       # same frame, support, runner-up
+    assert np.array_equal(a[3], b[3]), (a[3], b[3])             # and the SAME cell, not merely one
+    assert a[4] == b[4], (a[4], b[4])                           # of the same lattice; same pool too
     # Floor regime: the "leader" recurs 1/25 frames while every frame adds 3 scatter cells that
     # are unique BY CONSTRUCTION (a 6%-spaced 12x12x12 length ladder; rtol=0.05 cannot group two
     # distinct rungs -- a random 150-300 draw birthday-collides into its own clusters and locks the

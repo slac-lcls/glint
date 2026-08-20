@@ -1,11 +1,15 @@
 """Running-histogram cross-frame consensus with a sequential early-stop.
 
 The batch ``consensus_cell`` (glint.multishot) pools ALL frames' candidate cells, then greedily groups
-them by ``same_lattice`` and returns the max-weight group if its support >= min_support. This module runs
-the *identical* grouping INCREMENTALLY -- one frame at a time -- so a streaming driver (task #52) can test
+them by ``same_lattice`` and returns the max-weight group if its support >= min_support. This module
+runs that grouping INCREMENTALLY -- one frame at a time -- so a streaming driver (task #52) can test
 after every frame and LOCK the consensus cell the instant it is unambiguous, instead of waiting for a
-fixed batch. Locking is what flips the driver from blind indexing (~26 ms/frame) to the batched
-known-cell rescue path (~0.26 ms/frame).
+fixed batch. It is the batch path's ARRIVAL-ORDER grouping that is reproduced here, which was the
+only kind there was when this was written and is now the legacy one: the batch path has seeded from
+the densest neighbourhood since glint#102 and this path has not (GROUPING ORDER, below, is the whole
+story and it is not a footnote -- the two can pick different winners from the same hypotheses).
+Locking is what flips the driver from blind indexing (~26 ms/frame) to the batched known-cell
+rescue path (~0.26 ms/frame).
 
 Equivalence, and its EXPIRY DATE: feed every frame, then ``verdict(gap=0)`` returns the same
 max-weight group as ``consensus_cell`` -- same ``reduced_params`` fingerprint, same (rtol, ctol,

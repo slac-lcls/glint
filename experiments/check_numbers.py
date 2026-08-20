@@ -149,18 +149,21 @@ FACTS: dict[str, float | str] = {
                                          # neither scale-free test protects the small-pool tail
     "poolgate_bad_wrong_removed":  192,  # = 194 - 2
     # M3 ascent steps, re-measured at n=480 (experiments/steps_sweep.py, 13 arms 2->80, strict bar,
-    # exact McNemar vs the shipped default). The point of the block is that the knob is INERT above
-    # 4, so the numbers worth pinning are the plateau's ends and the one arm that is not on it.
+    # exact McNemar vs the shipped default). What the block records is that NO arm from 4 to 80
+    # shows a detectable difference, and how large an undetected one could still be -- not that the
+    # knob is inert, which would assert the null. See the CI bound checked below.
     "m3_steps_default":            8,   # shipped; a throughput choice, not an accuracy one
     "m3_blind_steps8_of480":     282,
-    "m3_blind_steps4_of480":     284,   # p = 0.894 vs 8 -- saturation is at 4, not 8
-    "m3_blind_steps80_of480":    293,   # p = 0.169 vs 8 -- 10x the work buys nothing measurable
+    "m3_blind_steps4_of480":     284,   # p = 0.894: no difference DETECTED vs 8. Not
+                                        # "saturation is at 4" -- that reads a null as a
+                                        # finding, which is the error this block avoids.
+    "m3_blind_steps80_of480":    293,   # p = 0.169 vs 8 -- 10x the work, no detectable gain
     "m3_blind_steps2_of480":     257,   # p = 0.008 vs 8 -- the ONLY significant arm, and it is worse
     "m3_hybrid_steps8_of480":    361,
     "m3_hybrid_steps2_of480":    342,   # p = 0.003 vs 8
-    "m3_hybrid_steps32_of480":   366,   # the max, p = 0.458 vs 8 -- i.e. not a better setting
+    "m3_hybrid_steps32_of480":   366,   # the observed max; p = 0.458 vs 8, so not shown better
     "m3_ms_steps8":              6.1,   # ms/frame blind, A100
-    "m3_ms_steps80":             9.8,   # = 1.62x for a rate that does not move
+    "m3_ms_steps80":             9.8,   # = 1.62x, for no rate change anyone can detect
     # Discordant splits live in M3_SPLITS below -- every arm, both channels. Four hand-picked
     # endpoints were not enough: null endpoints say nothing about a non-monotonic interior.
     # Batched vs per-frame known-cell, at the gate. The paper used to call these "rate-identical in
@@ -834,44 +837,58 @@ def check_arithmetic() -> list[str]:
         m = a + b
         return 1.0 if m == 0 else min(1.0, 2.0 * sum(comb(m, k) for k in range(min(a, b) + 1)) / 2.0 ** m)
 
-    def _cp_lower(k: int, m: int, alpha: float) -> float:
-        """Clopper-Pearson lower bound: the x where P(Bin(m,x) >= k) = alpha. Increasing in x."""
-        if k <= 0:
-            return 0.0
-        lo, hi = 0.0, 1.0
-        for _ in range(80):
-            mid = (lo + hi) / 2
-            tail = sum(comb(m, j) * mid ** j * (1 - mid) ** (m - j) for j in range(k, m + 1))
-            lo, hi = (mid, hi) if tail < alpha else (lo, mid)
-        return (lo + hi) / 2
+    # Tango (1998) score interval for the paired rate difference d = p01 - p10.
+    #
+    # The first version of this was Clopper-Pearson on the conditional share n01/(n01+n10),
+    # rescaled by the OBSERVED discordance rate m/n. That conditions on m and then reports the
+    # result as an interval for the marginal difference, which ignores the randomness in m.
+    # Measured coverage: 93.6% at the (10,29)-matching probabilities, and 59.3% at (2,0) -- and
+    # (0,0) came out as the zero-width [0, 0], i.e. certainty from no information. It read as an
+    # exact interval and was not one.
+    #
+    # Tango's score interval inverts the score test for d, using the constrained MLE of p10 under
+    # p01 - p10 = d. Measured coverage on the same configurations: 95.0%, 98.3%, and (0,0) gives
+    # [-0.79%, +0.79%]. experiments/test_check_numbers_ci.py pins both the closed-form MLE and the
+    # coverage.
+    _Z975 = 1.959963984540054
 
-    def _cp_upper(k: int, m: int, alpha: float) -> float:
-        """Clopper-Pearson upper bound: the x where P(Bin(m,x) <= k) = alpha. Decreasing in x."""
-        if k >= m:
-            return 1.0
-        lo, hi = 0.0, 1.0
-        for _ in range(80):
-            mid = (lo + hi) / 2
-            tail = sum(comb(m, j) * mid ** j * (1 - mid) ** (m - j) for j in range(0, k + 1))
-            lo, hi = (mid, hi) if tail > alpha else (lo, mid)
-        return (lo + hi) / 2
+    def _p10_mle(n01: int, n10: int, n: int, d: float) -> float:
+        """Constrained MLE of p10 given p01 - p10 = d. Maximising
+             L(p) = n01*ln(p+d) + n10*ln(p) + r*ln(1-2p-d),  r = n - n01 - n10
+        and clearing denominators gives 2n*p^2 - [n01+n10 - d*(n01+3*n10+2r)]*p - n10*d*(1-d) = 0;
+        the positive root is the MLE. (Checked against brute-force maximisation, agrees to 9e-7.)"""
+        r = n - n01 - n10
+        B = n01 + n10 - d * (n01 + 3 * n10 + 2 * r)
+        C = -n10 * d * (1 - d)
+        p = (B + max(B * B - 8 * n * C, 0.0) ** 0.5) / (4 * n)
+        return min(max(p, max(0.0, -d)), (1.0 - d) / 2)
 
-    def _ci_diff(n01: int, n10: int, n: int, alpha: float = 0.05):
-        """Exact 95% CI on the RATE difference (arm - default) from the discordant split.
+    def _score(n01: int, n10: int, n: int, d: float) -> float:
+        p10 = _p10_mle(n01, n10, n, d)
+        var = n * (2 * p10 + d * (1 - d))
+        if var <= 0:
+            k = n01 - n10 - n * d
+            return 0.0 if k == 0 else (1e18 if k > 0 else -1e18)
+        return (n01 - n10 - n * d) / var ** 0.5
+
+    def _ci_diff(n01: int, n10: int, n: int, z: float = _Z975):
+        """95% CI on the RATE difference (arm - default) = {d : |Z(d)| <= z}.
 
         This is what turns "not significant" into a statement with a SIZE attached, which is the
-        point: the block quotes an interval instead of claiming a parameter is inert. Clopper-
-        Pearson on p = n01/m, rescaled by m/n because only discordant pairs carry the difference.
-
-        Hand-rolled because this file imports nothing third-party. The first version had the
-        bounds SWAPPED and ~0.4 points off and still read plausibly, so it is pinned against
-        scipy in experiments/test_check_numbers_ci.py.
+        point: the block quotes an interval instead of claiming a parameter is inert. Z is
+        decreasing in d, so each end is a single bisection.
         """
-        m = n01 + n10
-        if m == 0:
-            return 0.0, 0.0
-        return (m * (2 * _cp_lower(n01, m, alpha / 2) - 1) / n,
-                m * (2 * _cp_upper(n01, m, alpha / 2) - 1) / n)
+        point = (n01 - n10) / n
+        a, b = -1.0 + 1e-12, point
+        for _ in range(60):
+            mid = (a + b) / 2
+            a, b = (mid, b) if _score(n01, n10, n, mid) > z else (a, mid)
+        low = (a + b) / 2
+        a, b = point, 1.0 - 1e-12
+        for _ in range(60):
+            mid = (a + b) / 2
+            a, b = (a, mid) if _score(n01, n10, n, mid) < -z else (mid, b)
+        return low, (a + b) / 2
 
     _N480, _plateau_lo, _plateau_hi = 480, 0.0, 0.0
     for (_arm, _ch), (_g, _l) in sorted(M3_SPLITS.items()):
@@ -880,6 +897,13 @@ def check_arithmetic() -> list[str]:
             bad.append(f"  FACTS: M3 STEPS=2/{_ch} was MEASURED significantly worse; the stored "
                        f"split {_g}/{_l} now gives p = {_p:.3g}, so glint_fast's 'the only arm that "
                        "differs is the shortest, and it is worse' no longer holds")
+        # ...and WORSE, which the p-value alone cannot say: McNemar is symmetric, so swapping the
+        # split to (54, 29) leaves p = 0.008 untouched while turning STEPS=2 into significantly
+        # BETTER than the default. The direction is half the claim, so check it explicitly.
+        if _arm == 2 and _g >= _l:
+            bad.append(f"  FACTS: M3 STEPS=2/{_ch} split {_g}/{_l} says the SHORT arm gained at "
+                       "least as many frames as it lost, i.e. fewer steps are as good or better. "
+                       "That inverts the block, and p cannot catch it -- McNemar is symmetric")
         if _arm >= 4 and _p <= 0.05:
             bad.append(f"  FACTS: M3 STEPS={_arm}/{_ch} now reaches significance (split {_g}/{_l}, "
                        f"p = {_p:.3g}). The block says no arm from 4 to 80 does -- that IS the "
@@ -892,7 +916,7 @@ def check_arithmetic() -> list[str]:
     if _plateau_lo < -0.045 or _plateau_hi > 0.060:
         bad.append(f"  FACTS: across 4..80 the 95% CI on the rate difference now spans "
                    f"[{100*_plateau_lo:+.2f}%, {100*_plateau_hi:+.2f}%], wider than the "
-                   "[-3.9%, +5.2%] glint_fast states as the bound on any undetected effect")
+                   "[-4.0%, +5.4%] glint_fast states as the bound on any undetected effect")
 
     # m3_steps_default must BE the shipped default, not a description of it -- a fact nothing reads
     # is a comment (cf. the glint_blind_rate_pct drift above). Read it out of the source.

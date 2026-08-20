@@ -94,9 +94,14 @@ KEEP = int(os.environ.get("KEEP", "44"))                    # distinct_maxima re
 # That is deliberately NOT phrased as "the step count is inert". Failing to reject is not evidence
 # of no difference, and 12 arms per channel were compared without correction -- under Bonferroni
 # (0.05/12 = 0.0042) even STEPS=2 survives in hybrid only. What the data DO bound is the SIZE of
-# any effect that went undetected: across 4..80 the exact 95% CI on the rate difference against
-# STEPS=8 lies within [-3.9%, +5.2%] blind and [-3.4%, +3.2%] hybrid -- at most about 25 of 480
-# frames either way, with the widest interval at STEPS=80 ([-0.9%, +5.2%]).
+# any effect that went undetected: across 4..80 the 95% CI on the rate difference against STEPS=8
+# lies within [-4.0%, +5.4%] blind and [-3.7%, +3.4%] hybrid -- at most about 26 of 480 frames
+# either way, with the widest interval at STEPS=80 ([-0.7%, +5.4%]).
+#
+# Those are Tango (1998) score intervals for the PAIRED difference. The first version of this
+# comment quoted a Clopper-Pearson interval on the conditional discordant share, which ignores the
+# randomness in how many discordant pairs there are -- measured coverage 93.6% at one of these
+# splits and 59.3% in the sparse regime several hybrid arms sit in. It read as exact and was not.
 #
 # So the engineering conclusion stands without needing equivalence: an effect that could not be
 # detected at n=480 and is bounded below ~5% is not worth 1.62x the front-end cost (6.1 -> 9.8

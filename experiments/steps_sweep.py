@@ -26,6 +26,7 @@ starts measuring a different question.
 
   python steps_sweep.py <q480.txt> <out.npz> [STEPS_LIST]
 """
+import hashlib
 import os, sys, time
 from pathlib import Path
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -57,7 +58,23 @@ if 8 not in STEPS_LIST:
 
 frames = [q for q in gf.load(QFILE) if len(q) >= 6]
 n = len(frames)
-print(f"# {n} frames from {QFILE}; STEPS arms: {STEPS_LIST}", flush=True)
+# PIN THE DATASET, not just the control. The first-120 hybrid check below is satisfied by any file
+# whose first 120 frames behave -- a 120-frame file, or a different 480-frame set sharing that
+# prefix. This benchmark has a live dataset trap (q480_fix.txt is the stream-derived set;
+# frames480.txt is a DIFFERENT dataset with ~5x the peaks per frame), so the identity of the input
+# is checked before any arm runs, not inferred from the result afterwards.
+_EXPECT_N, _EXPECT_DIGEST = 480, "c88021"          # q480_fix.txt; the run prints the digest
+_h = hashlib.sha256()
+for _q in frames:
+    _h.update(np.ascontiguousarray(np.asarray(_q, np.float64)).tobytes())
+_digest = _h.hexdigest()[:6]
+print(f"# {n} frames from {QFILE}; digest {_digest}; STEPS arms: {STEPS_LIST}", flush=True)
+if n != _EXPECT_N:
+    raise SystemExit(f"expected {_EXPECT_N} frames, got {n} -- this is not the n=480 benchmark, "
+                     "and the first-120 control would not have noticed")
+if _digest != _EXPECT_DIGEST:
+    raise SystemExit(f"frame digest {_digest} != {_EXPECT_DIGEST}: same frame COUNT, different "
+                     "data. Re-derive the constant deliberately if the q-set is meant to change")
 print(f"# shipped default STEPS={gf.STEPS}\n", flush=True)
 
 

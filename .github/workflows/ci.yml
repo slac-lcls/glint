@@ -55,6 +55,18 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_lock_probe.py
 
+      - name: experiments/test_running_consensus.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_running_consensus.py
+
+      # The pool-keyed lock gate ships as a production DEFAULT, which lives only in
+      # StreamDriver.__init__'s signature and its one call site. test_running_consensus.py
+      # above covers the rule; this covers the wiring, and without it dropping those
+      # kwargs passes every other suite here.
+      - name: experiments/test_lock_gate_wiring.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_lock_gate_wiring.py
+
       # SKIPS here, deliberately. A green check on this step is NOT coverage of the fused
       # gate+project kernel: the skip returns before a single HKLGrid is built, so everything
       # inside main() is untested on this runner and has to be run on a GPU node by hand.
@@ -66,6 +78,14 @@ jobs:
       - name: experiments/test_gate_project.py (skips without a GPU)
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_gate_project.py
+
+      # Not a test: it checks that run_ci_locally.py's STEPS still matches the steps above, so the
+      # local "run it as poor as CI" harness cannot quietly fall behind this file and start
+      # reporting ALL PASS over a step it no longer runs.
+      - name: experiments/run_ci_locally.py --check-sync
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/run_ci_locally.py --check-sync
+
 
       # The xtc_bridge tests are plain scripts, not pytest test functions: they
       # print their own results and sys.exit(1) on failure. They insert their own

@@ -482,7 +482,11 @@ class StreamDriver:
                  rescue_buffer=0, fanout=None, alias_gate=None,
                  lock_probe=False, probe_null=64, lock_min_z=None, warmup_rescue=False,
                  qc_frac_threshold=None, stream_out=None, stream_geom_text=None,
-                 stream_image="glint.cxi", stream_symmetry=None, stream_peaks=None):
+                 stream_image="glint.cxi", stream_symmetry=None, stream_peaks=None,
+                 # APPENDED, not inserted next to the other lock_* options where they belong
+                 # by topic: this constructor is not keyword-only, so adding a parameter anywhere
+                 # but the end silently rebinds every positional argument after it.
+                 lock_frac=0.02, lock_lead=1.5, lock_pool_switch=72):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -711,7 +715,19 @@ class StreamDriver:
         self.n_warmup = 0; self.locked_after = None; self.consensus_support = None
         if self._blind:
             self.Mc = None; self.grid = None; self.n_theoretical = None
-            self._rc = RunningConsensus(min_support=lock_support, gap=lock_gap, adaptive=adaptive_gap)
+            # The pool-keyed acceptance gate (glint.running_consensus.consensus_accept). ON by
+            # default because it is measured free: over 400 random arrival orders of the cxidb-120
+            # benchmark NOT ONE changes its lock frame, cell, support or runner-up against the
+            # gap-only rule, so the driver's published lock behaviour is untouched -- while on
+            # mfxx49820 r0016 (unrefined geometry) the gap-only rule locks a WRONG lattice on 194 of
+            # 400 orders and this leaves 2. Set lock_frac=0 / lock_lead=1 / lock_pool_switch=0 to
+            # restore the bare gap rule. The watchdog's relock consensus below is deliberately NOT
+            # gated: its pool grows over a whole run so it is arguably more exposed, but a false
+            # REFUSAL there means missing a genuine sample change, and that trade has not been
+            # measured.
+            self._rc = RunningConsensus(min_support=lock_support, gap=lock_gap, adaptive=adaptive_gap,
+                                        min_frac=lock_frac, min_lead=lock_lead,
+                                        pool_switch=lock_pool_switch)
             from glint.glint_fast import index_blind_nbest      # torch; imported only in blind mode
             self._blind_index = index_blind_nbest
         else:

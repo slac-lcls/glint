@@ -161,3 +161,4 @@ if __name__ == "__main__":
             print(f"FAIL  {t.__name__}: {type(e).__name__}: {e}")
             traceback.print_exc()
     print(f"{ok}/{len(tests)} passed")
+    raise SystemExit(0 if ok == len(tests) else 1)

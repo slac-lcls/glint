@@ -10,10 +10,20 @@ Builds a real StreamDriver on CPU (`use_gpu=False`), which is cheap: the blind b
 constructs the vote histogram and resolves the blind indexer lazily, so no GPU, no pixels and no
 peak-finding are involved in reading back what it was given.
 
+That lazy `from glint.glint_fast import index_blind_nbest` is the one thing standing between this
+file and a torch-free machine, and it is also the seam the other driver tests inject through. It is
+stubbed here UNCONDITIONALLY rather than only when torch is missing: the first version of this file
+passed locally and failed CI with ModuleNotFoundError, which is precisely the divergence a
+conditional stub preserves. Nothing here exercises the indexer, so nothing is lost by never
+importing the real one.
+
 Run: `python experiments/test_lock_gate_wiring.py` or `pytest`. Wired into the CPU CI job
 alongside test_running_consensus.py, which covers the rule this covers the wiring of.
 """
+import contextlib
 import inspect
+import sys
+import types
 
 import numpy as np
 
@@ -27,9 +37,27 @@ M_KC = np.diag([1 / 79.0, 1 / 79.0, 1 / 38.0])   # RECIPROCAL basis; a direct-sp
                                                  # an HKL grid of absurd size
 
 
+@contextlib.contextmanager
+def _no_torch_needed():
+    """Stand in for glint.glint_fast so the blind branch's lazy import resolves without torch."""
+    stub = types.ModuleType("glint.glint_fast")
+    stub.index_blind_nbest = lambda q, k: []          # never called: nothing here indexes a frame
+    had = "glint.glint_fast" in sys.modules
+    prev = sys.modules.get("glint.glint_fast")
+    sys.modules["glint.glint_fast"] = stub
+    try:
+        yield
+    finally:                                          # leave the interpreter as we found it, or a
+        if had:                                       # later test in the same pytest process would
+            sys.modules["glint.glint_fast"] = prev    # silently inherit the stub
+        else:
+            sys.modules.pop("glint.glint_fast", None)
+
+
 def _driver(**kw):
-    return StreamDriver(None, PANELS, 0.1, 1.3, (N, N), dtype=np.uint16, B=8, dmin=3.0,
-                        use_gpu=False, **kw)
+    with _no_torch_needed():
+        return StreamDriver(None, PANELS, 0.1, 1.3, (N, N), dtype=np.uint16, B=8, dmin=3.0,
+                            use_gpu=False, **kw)
 
 
 def test_blind_driver_gets_the_pool_keyed_gate_by_default():

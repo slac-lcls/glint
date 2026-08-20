@@ -78,31 +78,40 @@ from glint.multishot import same_lattice
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 NTOP = int(os.environ.get("NTOP", "30"))                    # ② candidate-pool size (M4 width)
 KEEP = int(os.environ.get("KEEP", "44"))                    # distinct_maxima retained
-# M3 ascent steps. 8 is a THROUGHPUT choice, not an accuracy one -- see the n=480 sweep below.
-# Kept at 8 because it is the cheapest point on the plateau with margin, not because the rate
-# depends on it.
+# M3 ascent steps. 8 is a THROUGHPUT choice: no arm from 4 to 80 is measurably better, and the
+# longer ones cost real time. See below for what that does and does not license as a claim.
 #
 # RE-MEASURED at n=480 (experiments/steps_sweep.py, 13 arms 2->80, strict bar, exact McNemar
-# against this default). The plateau starts at 4 and runs to 80, the largest arm tested -- what
-# happens beyond 80 was not measured and is not claimed:
+# against this default):
 #   STEPS      2     3     4     5     6     8    10    12    16    24    32    48    80
 #   blind    257   268   284   276   279   282   280   285   288   290   289   281   293
 #   hybrid   342   354   361   360   363   361   355   355   358   359   366   365   362
-# ONE arm differs significantly from 8, and it is STEPS=2, which is WORSE (blind p=0.008,
-# hybrid p=0.003). Every arm from 4 to 80 is indistinguishable: blind p>=0.17, hybrid p>=0.32.
-# Running the ascent ten times longer costs 1.62x (6.1 -> 9.8 ms/frame) and buys nothing
-# measurable.
 #
-# This RETIRES three claims the previous comment made from an n=120 sweep, all of which were
-# reading sample noise as structure:
-#   "blind saturates >=8"          -- it saturates at 4 (284 vs 282, p=0.894).
-#   "16-80 flat within +-3 frames" -- that range spans 281-293 at n=480. Still not significant,
-#                                     but the +-3 was the 120-frame sample, not the algorithm.
-#   "STEPS=5 ... drops to 77, not  -- at n=480 STEPS=5 is 276 vs 282, p=0.441. No such cliff.
+# NO SIGNIFICANT DIFFERENCE IS DETECTED anywhere from 4 to 80, in either channel (blind p >= 0.17,
+# hybrid p >= 0.32). The one arm that does differ is STEPS=2, and it is WORSE (blind p = 0.008,
+# hybrid p = 0.003).
+#
+# That is deliberately NOT phrased as "the step count is inert". Failing to reject is not evidence
+# of no difference, and 12 arms per channel were compared without correction -- under Bonferroni
+# (0.05/12 = 0.0042) even STEPS=2 survives in hybrid only. What the data DO bound is the SIZE of
+# any effect that went undetected: across 4..80 the exact 95% CI on the rate difference against
+# STEPS=8 lies within [-3.9%, +5.2%] blind and [-3.4%, +3.2%] hybrid -- at most about 25 of 480
+# frames either way, with the widest interval at STEPS=80 ([-0.9%, +5.2%]).
+#
+# So the engineering conclusion stands without needing equivalence: an effect that could not be
+# detected at n=480 and is bounded below ~5% is not worth 1.62x the front-end cost (6.1 -> 9.8
+# ms/frame). A tighter claim needs a larger n or a pre-registered equivalence margin; neither was
+# run, and "inert" would be asserting the null.
+#
+# This RETIRES three claims the previous comment made from an n=120 sweep, all of them sample noise
+# read as structure:
+#   "blind saturates >=8"          -- 284 at STEPS=4 vs 282 at 8, p = 0.894.
+#   "16-80 flat within +-3 frames" -- that range spans 281-293 at n=480.
+#   "STEPS=5 ... drops to 77, not  -- 276 vs 282, p = 0.441. No such cliff.
 #    blind-safe"
-# It also does NOT support the wider claim that M3's accuracy rests on under-optimising: more
-# steps of this ascent do not degrade it. That claim came from CG/BB/Newton/LM all scoring lower,
-# and a different OPTIMISER is not more steps of the same one -- that half remains untested.
+# It also does NOT bear on the wider claim that M3 rests on under-optimising: that came from
+# CG/BB/Newton/LM scoring lower, and a different OPTIMISER is not more steps of the same one.
+# Untested here.
 STEPS = int(os.environ.get("STEPS", "8"))
 QDIST = os.environ.get("QDIST", "0") == "1"                  # D2: reciprocal-distance inlier (sigma-matched)
 QDTOL = float(os.environ.get("QDTOL", "0.004"))             # inlier radius in 1/A (q-space)

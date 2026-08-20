@@ -47,6 +47,13 @@ QFILE = sys.argv[1]
 OUT = sys.argv[2]
 STEPS_LIST = [int(x) for x in sys.argv[3].split(",")] if len(sys.argv) > 3 else \
     [2, 3, 4, 5, 6, 8, 10, 12, 16, 24, 32, 48, 80]
+# The baseline is not optional. A custom arm list without it used to run, report "no control was
+# checked", write the npz and exit 0 -- i.e. publish results while stating that nothing verified
+# they came from the published pipeline. Add it instead of refusing: the arm is cheap and every
+# other arm is meaningless without something to compare against.
+if 8 not in STEPS_LIST:
+    STEPS_LIST = sorted(set(STEPS_LIST) | {8})
+    print("# STEPS=8 added: it is the control every other arm is measured against", flush=True)
 
 frames = [q for q in gf.load(QFILE) if len(q) >= 6]
 n = len(frames)
@@ -95,8 +102,8 @@ if 8 in d:
     if not ok:
         raise SystemExit(f"control failed: first-120 hybrid {h120} != 92; this sweep is measuring "
                          f"something other than the published pipeline, so {OUT} was NOT written")
-else:
-    print("\n!! STEPS=8 not in the arm list -- no control was checked", flush=True)
+else:                                       # unreachable: 8 is forced into STEPS_LIST above
+    raise SystemExit("STEPS=8 missing from the arm list -- no control, so nothing was written")
 
 np.savez(OUT, steps=np.array([r[0] for r in rows]),
          blind=np.array([r[1] for r in rows]), hybrid=np.array([r[2] for r in rows]),

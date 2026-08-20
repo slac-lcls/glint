@@ -161,19 +161,8 @@ FACTS: dict[str, float | str] = {
     "m3_hybrid_steps32_of480":   366,   # the max, p = 0.458 vs 8 -- i.e. not a better setting
     "m3_ms_steps8":              6.1,   # ms/frame blind, A100
     "m3_ms_steps80":             9.8,   # = 1.62x for a rate that does not move
-    # DISCORDANT counts, not totals. The conclusions here are exact-McNemar p-values, and a p-value
-    # is a function of the paired (arm-only, default-only) split -- the same 257-vs-282 totals can
-    # be significant or not depending on how the frames pair up, so guarding totals would leave the
-    # actual claim unguarded. Stored the way the cons-vs-truecell and batched-vs-per-frame blocks
-    # below already do it, and the p is RECOMPUTED in check_arithmetic rather than typed here.
-    "m3_blind2_gained":           29,   # STEPS=2 indexed, STEPS=8 did not
-    "m3_blind2_lost":             54,   # ...and the other way; p = 0.008
-    "m3_hybrid2_gained":          10,
-    "m3_hybrid2_lost":            29,   # p = 0.003
-    "m3_blind4_gained":           29,   # the saturation arm: 29/27 is as null as a split gets
-    "m3_blind4_lost":             27,   # p = 0.894
-    "m3_blind80_gained":          32,   # ten times the work
-    "m3_blind80_lost":            21,   # p = 0.169 -- not significant
+    # Discordant splits live in M3_SPLITS below -- every arm, both channels. Four hand-picked
+    # endpoints were not enough: null endpoints say nothing about a non-monotonic interior.
     # Batched vs per-frame known-cell, at the gate. The paper used to call these "rate-identical in
     # aggregate" on the strength of the n=120 split being EXACTLY 9-9. That symmetry is the sample,
     # not the algorithm: at n=480 it is 23-29. The totals agree only to within the discordant noise.
@@ -405,6 +394,38 @@ FACTS: dict[str, float | str] = {
     "ffbidx_latency_ms":   4.4,     # per single call -- a LATENCY
     "ffbidx_pipelined_ms": 3.1,     # persistent indexer -- the THROUGHPUT comparator
     "ffbidx_speedup":      12.0,    # = ffbidx_pipelined_ms / fused_b120_ms (throughput vs throughput)
+}
+
+# Every arm-vs-default discordant split from the n=480 M3 sweep, both channels: (arm-only,
+# default-only) -- frames this STEPS indexed and 8 did not, and the reverse. Its own table rather
+# than 48 flat FACTS keys, and COMPLETE rather than sampled: the claim is about the whole 4..80
+# range and the sweep is non-monotonic, so checking endpoints would leave the interior unguarded
+# while looking rigorous. check_arithmetic recomputes every p and every interval from these.
+M3_SPLITS = {
+    (  2, "blind"): ( 29,  54),
+    (  3, "blind"): ( 31,  45),
+    (  4, "blind"): ( 29,  27),
+    (  5, "blind"): ( 18,  24),
+    (  6, "blind"): ( 24,  27),
+    ( 10, "blind"): ( 18,  20),
+    ( 12, "blind"): ( 21,  18),
+    ( 16, "blind"): ( 30,  24),
+    ( 24, "blind"): ( 27,  19),
+    ( 32, "blind"): ( 30,  23),
+    ( 48, "blind"): ( 22,  23),
+    ( 80, "blind"): ( 32,  21),
+    (  2, "hybrid"): ( 10,  29),
+    (  3, "hybrid"): ( 16,  23),
+    (  4, "hybrid"): ( 16,  16),
+    (  5, "hybrid"): ( 14,  15),
+    (  6, "hybrid"): ( 20,  18),
+    ( 10, "hybrid"): ( 12,  18),
+    ( 12, "hybrid"): ( 10,  16),
+    ( 16, "hybrid"): ( 14,  17),
+    ( 24, "hybrid"): ( 14,  16),
+    ( 32, "hybrid"): ( 17,  12),
+    ( 48, "hybrid"): ( 16,  12),
+    ( 80, "hybrid"): ( 19,  18),
 }
 
 DEFAULT_TARGETS = [
@@ -804,40 +825,91 @@ def check_arithmetic() -> list[str]:
     # real replay gives, because a refused stream keeps running and can lock later. The estimate
     # was written here while the measurement was still going and never re-read against the table
     # it sits beside, which is this file's own failure mode reproduced inside this file.
-    # The M3 block's claim is "the knob is inert above 4, and only STEPS=2 is worse". That is a
-    # statement about exact-McNemar p-values, so it is checked as one: recompute each from its
-    # stored discordant split instead of asserting the totals and hoping.
+    # The M3 block. It does NOT claim equivalence -- failing to reject is not evidence of no
+    # difference -- so what is guarded is what was measured: no arm from 4 to 80 reaches
+    # significance in either channel, STEPS=2 does, and the interval bounding any true effect stays
+    # where glint_fast quotes it. EVERY arm is checked, both channels: the sweep is non-monotonic,
+    # so endpoint checks would leave the interior unguarded while looking thorough.
     def _mcnemar_p(a: int, b: int) -> float:
         m = a + b
         return 1.0 if m == 0 else min(1.0, 2.0 * sum(comb(m, k) for k in range(min(a, b) + 1)) / 2.0 ** m)
 
-    for _tag, _g, _l, _want_sig in (("blind STEPS=2", "m3_blind2_gained", "m3_blind2_lost", True),
-                                    ("hybrid STEPS=2", "m3_hybrid2_gained", "m3_hybrid2_lost", True),
-                                    ("blind STEPS=4", "m3_blind4_gained", "m3_blind4_lost", False),
-                                    ("blind STEPS=80", "m3_blind80_gained", "m3_blind80_lost", False)):
-        _p = _mcnemar_p(int(F[_g]), int(F[_l]))
-        if _want_sig and _p > 0.05:
-            bad.append(f"  FACTS: {_tag} vs the default was MEASURED significant (p = 0.008/0.003); "
-                       f"the stored split {F[_g]}/{F[_l]} now gives p = {_p:.3g}, so glint_fast's "
-                       "'exactly one arm differs, and it is worse' no longer holds")
-        if not _want_sig and _p <= 0.05:
-            bad.append(f"  FACTS: {_tag} vs the default was MEASURED null; the stored split "
-                       f"{F[_g]}/{F[_l]} now gives p = {_p:.3g}, which would mean the step count "
-                       "is NOT inert above 4 -- the whole point of the block")
-    # The splits must also reconcile with the totals they came from: gained - lost = the difference
-    # in indexed frames. Without this the two halves of the block could drift apart unnoticed.
-    for _tag, _g, _l, _arm, _base in (
-            ("blind STEPS=2", "m3_blind2_gained", "m3_blind2_lost",
-             "m3_blind_steps2_of480", "m3_blind_steps8_of480"),
-            ("blind STEPS=4", "m3_blind4_gained", "m3_blind4_lost",
-             "m3_blind_steps4_of480", "m3_blind_steps8_of480"),
-            ("blind STEPS=80", "m3_blind80_gained", "m3_blind80_lost",
-             "m3_blind_steps80_of480", "m3_blind_steps8_of480"),
-            ("hybrid STEPS=2", "m3_hybrid2_gained", "m3_hybrid2_lost",
-             "m3_hybrid_steps2_of480", "m3_hybrid_steps8_of480")):
-        if int(F[_g]) - int(F[_l]) != int(F[_arm]) - int(F[_base]):
-            bad.append(f"  FACTS: {_tag}: discordant split {F[_g]}-{F[_l]} does not reconcile with "
-                       f"the totals {F[_arm]}-{F[_base]}")
+    def _cp_lower(k: int, m: int, alpha: float) -> float:
+        """Clopper-Pearson lower bound: the x where P(Bin(m,x) >= k) = alpha. Increasing in x."""
+        if k <= 0:
+            return 0.0
+        lo, hi = 0.0, 1.0
+        for _ in range(80):
+            mid = (lo + hi) / 2
+            tail = sum(comb(m, j) * mid ** j * (1 - mid) ** (m - j) for j in range(k, m + 1))
+            lo, hi = (mid, hi) if tail < alpha else (lo, mid)
+        return (lo + hi) / 2
+
+    def _cp_upper(k: int, m: int, alpha: float) -> float:
+        """Clopper-Pearson upper bound: the x where P(Bin(m,x) <= k) = alpha. Decreasing in x."""
+        if k >= m:
+            return 1.0
+        lo, hi = 0.0, 1.0
+        for _ in range(80):
+            mid = (lo + hi) / 2
+            tail = sum(comb(m, j) * mid ** j * (1 - mid) ** (m - j) for j in range(0, k + 1))
+            lo, hi = (mid, hi) if tail > alpha else (lo, mid)
+        return (lo + hi) / 2
+
+    def _ci_diff(n01: int, n10: int, n: int, alpha: float = 0.05):
+        """Exact 95% CI on the RATE difference (arm - default) from the discordant split.
+
+        This is what turns "not significant" into a statement with a SIZE attached, which is the
+        point: the block quotes an interval instead of claiming a parameter is inert. Clopper-
+        Pearson on p = n01/m, rescaled by m/n because only discordant pairs carry the difference.
+
+        Hand-rolled because this file imports nothing third-party. The first version had the
+        bounds SWAPPED and ~0.4 points off and still read plausibly, so it is pinned against
+        scipy in experiments/test_check_numbers_ci.py.
+        """
+        m = n01 + n10
+        if m == 0:
+            return 0.0, 0.0
+        return (m * (2 * _cp_lower(n01, m, alpha / 2) - 1) / n,
+                m * (2 * _cp_upper(n01, m, alpha / 2) - 1) / n)
+
+    _N480, _plateau_lo, _plateau_hi = 480, 0.0, 0.0
+    for (_arm, _ch), (_g, _l) in sorted(M3_SPLITS.items()):
+        _p = _mcnemar_p(_g, _l)
+        if _arm == 2 and _p > 0.05:
+            bad.append(f"  FACTS: M3 STEPS=2/{_ch} was MEASURED significantly worse; the stored "
+                       f"split {_g}/{_l} now gives p = {_p:.3g}, so glint_fast's 'the only arm that "
+                       "differs is the shortest, and it is worse' no longer holds")
+        if _arm >= 4 and _p <= 0.05:
+            bad.append(f"  FACTS: M3 STEPS={_arm}/{_ch} now reaches significance (split {_g}/{_l}, "
+                       f"p = {_p:.3g}). The block says no arm from 4 to 80 does -- that IS the "
+                       "result, so rewrite the claim rather than the table")
+        if _arm >= 4:
+            _lo, _hi = _ci_diff(_g, _l, _N480)
+            _plateau_lo, _plateau_hi = min(_plateau_lo, _lo), max(_plateau_hi, _hi)
+    # ...and the SIZE the data still admit, which is the honest version of "no difference".
+    # glint_fast quotes this interval verbatim; if it widens, that sentence is wrong.
+    if _plateau_lo < -0.045 or _plateau_hi > 0.060:
+        bad.append(f"  FACTS: across 4..80 the 95% CI on the rate difference now spans "
+                   f"[{100*_plateau_lo:+.2f}%, {100*_plateau_hi:+.2f}%], wider than the "
+                   "[-3.9%, +5.2%] glint_fast states as the bound on any undetected effect")
+
+    # m3_steps_default must BE the shipped default, not a description of it -- a fact nothing reads
+    # is a comment (cf. the glint_blind_rate_pct drift above). Read it out of the source.
+    _gf_path = Path(__file__).resolve().parent.parent / "glint" / "glint_fast.py"
+    _gf = _gf_path.read_text(encoding="utf-8") if _gf_path.exists() else ""
+    _m = re.search(r'STEPS = int\(os\.environ\.get\("STEPS", "(\d+)"\)\)', _gf)
+    if not _gf:
+        bad.append(f"  FACTS: {_gf_path} unreadable, so m3_steps_default is unchecked and the "
+                   "whole M3 block is stated against a baseline nothing verifies")
+    elif _m is None:
+        bad.append("  FACTS: the STEPS default could not be located in glint/glint_fast.py, so "
+                   "the m3_steps_default check is dead -- fix the pattern, do not drop the check")
+    elif int(_m.group(1)) != int(F["m3_steps_default"]):
+        bad.append(f"  FACTS: m3_steps_default is {F['m3_steps_default']} but glint_fast ships "
+                   f"{_m.group(1)}; every M3 comparison is against a baseline that is no longer "
+                   "the default, so the block describes a setting nobody runs")
+
     if F["poolgate_clean_maxpool"] != F["poolgate_bad_minpool"]:
         bad.append("  FACTS: poolgate_clean_maxpool and poolgate_bad_minpool were MEASURED equal "
                    "(54); moving one without the other erases the overlap the claim rests on")

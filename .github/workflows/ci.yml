@@ -55,6 +55,34 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_lock_probe.py
 
+      # Script-contract fixes: each of these swallowed its own assertion failures and exited 0,
+      # so none could have failed a CI step before now. Exit codes verified by deliberately
+      # breaking an assertion in each. All five run on numpy+scipy alone -- numba, torch and
+      # cupy are import-guarded, and the driver tests inject their own blind indexer/fan-out
+      # rather than reaching for a GPU, so nothing here degrades silently on the CPU runner.
+      - name: experiments/test_multilattice.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_multilattice.py
+
+      - name: experiments/test_warmup_batch.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_warmup_batch.py
+
+      - name: experiments/test_missbuf_rescue.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_missbuf_rescue.py
+
+      - name: experiments/test_geom_bridge.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_geom_bridge.py
+
+      # ~50s, by far the slowest step here: it refines over 540 synthetic frames. Kept because
+      # it is the only cover of the geometry-refinement solver, but it is the first candidate
+      # to trim if this job gets tight.
+      - name: experiments/test_geom_refine.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_geom_refine.py
+
       # SKIPS here, deliberately. A green check on this step is NOT coverage of the fused
       # gate+project kernel: the skip returns before a single HKLGrid is built, so everything
       # inside main() is untested on this runner and has to be run on a GPU node by hand.

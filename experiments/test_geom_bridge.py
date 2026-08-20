@@ -83,9 +83,11 @@ if __name__ == "__main__":
         if s < 4:
             cell = np.round(np.sort(np.linalg.norm(r.M, axis=0)), 1) if r.M is not None else None
             print(f"  trial {s}: {len(qb):2d} spots  bridge_err={err:.2e} 1/A  cell={cell}  lyso?={ok}")
-    print(f"\nbridge round-trip max error: {worst:.2e} 1/A  ({'PASS' if worst < 1e-9 else 'CHECK'})")
+    ok_roundtrip = worst < 1e-9
+    ok_index = nlyso >= trials - 1
+    print(f"\nbridge round-trip max error: {worst:.2e} 1/A  ({'PASS' if ok_roundtrip else 'CHECK'})")
     print(f"indexed {nidx}/{trials}, correct lysozyme {nlyso}/{trials}  "
-          f"({'PASS' if nlyso >= trials - 1 else 'CHECK'})")
+          f"({'PASS' if ok_index else 'CHECK'})")
 
     # --- CrystFEL peak-search stream input path (what LUTE/peakfinder8 emits) ---
     from glint.geom import read_crystfel_peaks
@@ -110,6 +112,8 @@ if __name__ == "__main__":
         qb = peaks_to_q(ch["peaks"], geom)
         r = index_shot(qb, float(np.linalg.norm(qb, axis=1).max()))
         ok_stream += r.M is not None and same_lattice(r.M, LYSO)
+    ok_peakstream = ok_stream == len(chunks)
     print(f"CrystFEL peak-stream input: {len(chunks)} chunks read, "
           f"{ok_stream}/{len(chunks)} indexed to lysozyme  "
-          f"({'PASS' if ok_stream == len(chunks) else 'CHECK'})")
+          f"({'PASS' if ok_peakstream else 'CHECK'})")
+    raise SystemExit(0 if (ok_roundtrip and ok_index and ok_peakstream) else 1)

@@ -163,6 +163,16 @@ FACTS: dict[str, float | str] = {
     "pw_neff_sqrt":            0.693,  # ...vs sqrt's -82 at a HIGHER n_eff of 0.693
     "pw_neff_inverse":         0.526,
     "pw_r_neff_upweighting":   0.997,  # Pearson r(n_eff, blind delta), excluding the falsifier
+    # DISCORDANT splits, because "significantly worse" is a p-value, not a margin. Same reason the
+    # M3 block stores them: totals cannot decide an exact McNemar. Recomputed in check_arithmetic.
+    "pw_quarter_gained":          18,  # the gentlest weighting, and still p = 4.2e-4
+    "pw_quarter_lost":            47,
+    "pw_sqrt_gained":             22,
+    "pw_sqrt_lost":              104,
+    "pw_linear_gained":           10,
+    "pw_linear_lost":            176,
+    "pw_inverse_gained":          35,  # the falsifier is significantly worse TOO -- that both
+    "pw_inverse_lost":            66,  # directions hurt is half the argument (p = 2.7e-3)
     # Batched vs per-frame known-cell, at the gate. The paper used to call these "rate-identical in
     # aggregate" on the strength of the n=120 split being EXACTLY 9-9. That symmetry is the sample,
     # not the algorithm: at n=480 it is 23-29. The totals agree only to within the discordant noise.
@@ -793,6 +803,28 @@ def check_arithmetic() -> list[str]:
     # real replay gives, because a refused stream keeps running and can lock later. The estimate
     # was written here while the measurement was still going and never re-read against the table
     # it sits beside, which is this file's own failure mode reproduced inside this file.
+    # The peak-weight block's headline is "every soft weighting is SIGNIFICANTLY worse", which is a
+    # claim about p-values; check them as such, from the stored splits, and require the reconciling
+    # margin so the splits and the totals cannot drift apart.
+    for _tag, _g, _l, _arm in (("quarter", "pw_quarter_gained", "pw_quarter_lost",
+                                "pw_blind_quarter_of480"),
+                               ("sqrt", "pw_sqrt_gained", "pw_sqrt_lost", "pw_blind_sqrt_of480"),
+                               ("linear", "pw_linear_gained", "pw_linear_lost",
+                                "pw_blind_linear_of480"),
+                               ("inverse", "pw_inverse_gained", "pw_inverse_lost",
+                                "pw_blind_inverse_of480")):
+        _m = int(F[_g]) + int(F[_l])
+        _p = 1.0 if _m == 0 else min(1.0, 2.0 * sum(comb(_m, _k)
+                                                    for _k in range(min(int(F[_g]), int(F[_l])) + 1))
+                                     / 2.0 ** _m)
+        if _p > 0.05:
+            bad.append(f"  FACTS: blind {_tag} vs binary was MEASURED significantly worse; the "
+                       f"stored split {F[_g]}/{F[_l]} now gives p = {_p:.3g}, so glint_fast's "
+                       "'EVERY soft weighting is significantly worse' no longer holds")
+        if int(F[_g]) - int(F[_l]) != int(F[_arm]) - int(F["pw_blind_binary_of480"]):
+            bad.append(f"  FACTS: blind {_tag}: discordant split {F[_g]}-{F[_l]} does not reconcile "
+                       f"with the totals {F[_arm]}-{F['pw_blind_binary_of480']}")
+
     # The peak-weight block. Two claims carry it, and both are orderings rather than values, so a
     # later edit cannot flip the conclusion while leaving the table looking plausible.
     if F["pw_blind_binary_of480"] <= max(F["pw_blind_quarter_of480"], F["pw_blind_sqrt_of480"],

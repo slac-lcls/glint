@@ -14,8 +14,15 @@ bit-identical to it. If that fails, nothing downstream is a controlled compariso
   python stream2qi.py <stream> <geom> <list> <out.npz> [--verify q480_fix.txt]
 """
 import os, sys
+from pathlib import Path
+
 import numpy as np
-sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
+# Resolve the checkout from THIS FILE, so a vendored copy always measures the tree it ships in.
+# A hard-coded path made the harness import whichever worktree happened to exist on the author's
+# box -- i.e. not necessarily the code under review, and nothing at all for anyone else.
+# GLINT_ROOT overrides it, which is what a copy living outside experiments/ needs.
+ROOT = os.environ.get("GLINT_ROOT") or str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, ROOT)
 from glint.geom import parse_geom, _q_from_panels, _specs_from_geom_panels
 
 STREAM, GEOM, LST, OUT = sys.argv[1:5]

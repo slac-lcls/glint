@@ -37,11 +37,16 @@ measuring GLINT. Intensities come from the npz, whose per-frame shapes were veri
   python weight_sweep.py <q480_fix.txt> <qi480.npz> <out.npz> [ARMS]
 """
 import os, sys, time
+from pathlib import Path
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 
-WT = "/sdf/home/s/smarches/glint_streamfix_wt"
-sys.path.insert(0, WT); sys.path.insert(0, WT + "/experiments")
+# Resolve the checkout from THIS FILE, so a vendored copy always measures the tree it ships in.
+# A hard-coded path made the harness import whichever worktree happened to exist on the author's
+# box -- i.e. not necessarily the code under review, and nothing at all for anyone else.
+# GLINT_ROOT overrides it, which is what a copy living outside experiments/ needs.
+ROOT = os.environ.get("GLINT_ROOT") or str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, "experiments"))
 import torch
 import glint.glint_fast as gf
 import glint.hybrid_stream as hs
@@ -161,6 +166,22 @@ for name, f in ARMS:
           f"| first-120 blind {gb[:120].sum():3d} hybrid {gh[:120].sum():3d}   "
           f"| n_eff/N {neff[name]:.3f}   | {time.time()-t0:5.0f}s", flush=True)
 
+# The control is checked BEFORE anything is written. A harness that says "do not report these
+# numbers" and then exits 0 having saved them is offering an unattended runner a result it has
+# itself disowned -- and the first run of this sweep DID fail this control (the npz's q is full
+# float32, the published text q-set is 6dp, and not one of the 480 frames is bit-identical).
+_b = dict((r[0], r) for r in rows).get("binary")
+if _b is not None:
+    _ok = (_b[4] == 92)
+    print(f"\nCONTROL binary first-120: blind {_b[3]} (expect 78, the STRICT bar -- the 84 in"
+          f" glint_fast's comment is same_lattice only), hybrid {_b[4]} (expect 92)"
+          f"  -> {'OK' if _ok else 'MISMATCH'}", flush=True)
+    if not _ok:
+        raise SystemExit(f"control failed: binary first-120 hybrid {_b[4]} != 92; this is not the "
+                         f"published pipeline, so {OUT} was NOT written")
+else:
+    print("\n!! no binary arm -- there is no control and no baseline to compare against", flush=True)
+
 np.savez(OUT, arms=np.array([r[0] for r in rows]), n=n,
          neff=np.array([neff[r[0]] for r in rows]), **gates)
 print(f"\nwrote {OUT}")
@@ -187,7 +208,4 @@ if "binary" in dict((r[0], r) for r in rows):
         [int(gates[f"blind_{nm}"].sum()) - int(gates["blind_binary"].sum()) for nm, _ in ARMS])
     if len(xs) > 2:
         print(f"  Pearson r(n_eff, blind delta) = {np.corrcoef(xs, ys)[0,1]:+.3f}")
-    b = dict((r[0], r) for r in rows)["binary"]
-    print(f"\nCONTROL binary first-120: blind {b[3]} (expect 78, the STRICT bar -- the 84 in"
-          f" glint_fast's comment is same_lattice only), hybrid {b[4]} (expect 92)"
-          f"  -> {'OK' if b[4] == 92 else 'MISMATCH -- do not report these numbers'}")
+

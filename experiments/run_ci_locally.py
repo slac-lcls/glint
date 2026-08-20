@@ -38,6 +38,10 @@ STEPS = [
     "experiments/test_lock_probe.py",
     "experiments/test_running_consensus.py",
     "experiments/test_lock_gate_wiring.py",
+    # Skips without a GPU and exits 0 (glint#123). Running it here is still worth the second it
+    # costs: the module body resolves HKLGrid/_panel_geom/recip_from_M/cell_to_Ar at import, so a
+    # rename in glint/ fails here rather than waiting for someone with a GPU.
+    "experiments/test_gate_project.py",
 ]
 
 # Runs in the child via `python -c`, with the target script passed as argv[1] -- embedding the

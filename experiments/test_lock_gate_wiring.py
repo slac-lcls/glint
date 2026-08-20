@@ -10,7 +10,8 @@ Builds a real StreamDriver on CPU (`use_gpu=False`), which is cheap: the blind b
 constructs the vote histogram and resolves the blind indexer lazily, so no GPU, no pixels and no
 peak-finding are involved in reading back what it was given.
 
-Run: `python experiments/test_lock_gate_wiring.py` or `pytest`.
+Run: `python experiments/test_lock_gate_wiring.py` or `pytest`. Wired into the CPU CI job
+alongside test_running_consensus.py, which covers the rule this covers the wiring of.
 """
 import inspect
 
@@ -77,3 +78,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"FAIL  {t.__name__}: {type(e).__name__}: {e}")
     print(f"{ok}/{len(tests)} passed")
+    # The repo's script contract, stated in .github/workflows/ci.yml: print, then exit non-zero on
+    # failure. Without this the file reports "2/6 passed" and still exits 0, so a CI step running it
+    # goes green on a red suite -- which matters now that CI runs this file.
+    raise SystemExit(0 if ok == len(tests) else 1)

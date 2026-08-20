@@ -120,6 +120,18 @@ def test_pool_switch_keys_scale_tests_on_pool_size():
     # pool_switch=0 (default) applies the scale tests at EVERY pool size -- existing callers unchanged.
     assert not consensus_accept(3, 0, 18, min_frac=0.5, pool_switch=0)
 
+    # RATIO-ONLY, because everything above is carried by min_frac alone: below the switch the
+    # runner-up is 0 and min_lead is inert by construction (`runner > 0` guards it), and above it
+    # 23 >= 1.5 * 8 passes the ratio and only the share refuses. A regression that stopped keying
+    # min_lead on the pool would survive all of it. Here the share is trivially satisfied
+    # (0.02 * 100 = 2 <= 10) so the ratio decides: 10 < 1.5 * 8 = 12.
+    assert consensus_accept(10, 8, 71, min_frac=0.02, min_lead=1.5, pool_switch=72)      # skipped
+    assert not consensus_accept(10, 8, 72, min_frac=0.02, min_lead=1.5, pool_switch=72)  # binds
+    # ...and the boundary is where it says it is: the test is `n_pool >= pool_switch`, so equality
+    # BINDS. 71 vs 72 is the whole difference, and an off-by-one there would be invisible without it.
+    assert consensus_accept(10, 8, 71, min_lead=1.5, pool_switch=72)
+    assert not consensus_accept(10, 8, 72, min_lead=1.5, pool_switch=72)
+
 
 def test_pool_switch_running_lock_unchanged_small_refuses_large():
     """RunningConsensus with the gated lock: clean small-pool locking is bit-identical to gap-only,
@@ -194,3 +206,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"FAIL  {t.__name__}: {type(e).__name__}: {e}")
     print(f"{ok}/{len(tests)} passed")
+    # The repo's script contract, stated in .github/workflows/ci.yml: print, then exit non-zero on
+    # failure. Without this the file reports "2/6 passed" and still exits 0, so a CI step running it
+    # goes green on a red suite -- which matters now that CI runs this file.
+    raise SystemExit(0 if ok == len(tests) else 1)

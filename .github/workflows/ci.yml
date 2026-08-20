@@ -48,6 +48,18 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_stream_gate_lock.py
 
+      - name: experiments/test_running_consensus.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_running_consensus.py
+
+      # The pool-keyed lock gate ships as a production DEFAULT, which lives only in
+      # StreamDriver.__init__'s signature and its one call site. test_running_consensus.py
+      # above covers the rule; this covers the wiring, and without it dropping those
+      # kwargs passes every other suite here.
+      - name: experiments/test_lock_gate_wiring.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_lock_gate_wiring.py
+
       # The xtc_bridge tests are plain scripts, not pytest test functions: they
       # print their own results and sys.exit(1) on failure. They insert their own
       # directory on sys.path and import sibling modules, so each is run from

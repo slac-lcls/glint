@@ -48,6 +48,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_stream_gate_lock.py
 
+      # Covers the watchdog relock path (rescue + alias gate) that test_stream_gate_lock.py does not
+      # reach. It was already failing on main when it was added -- unrun -- which is how the #112
+      # rescue regression shipped.
+      - name: experiments/test_lock_probe.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_lock_probe.py
+
       # The xtc_bridge tests are plain scripts, not pytest test functions: they
       # print their own results and sys.exit(1) on failure. They insert their own
       # directory on sys.path and import sibling modules, so each is run from

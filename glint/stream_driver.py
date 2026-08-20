@@ -1103,10 +1103,14 @@ class StreamDriver:
                     break
             if rescued:
                 continue
-            cells = [c for c, _ in nb if c is not None]
-            self._watch.add_frame(cells)
+            # NOT `cells`: that name holds the ACTIVE cell list this loop rescues against, and
+            # rebinding it here made every later frame check itself against the previous frame's blind
+            # candidates instead -- a self-match that "rescued" the frame into cell 0's accumulator and
+            # kept it out of watch_ev, starving the gate below of the frames its min_frames needs.
+            vote_cells = [c for c, _ in nb if c is not None]
+            self._watch.add_frame(vote_cells)
             if q is not None:
-                watch_ev.append((q, cells))             # per-frame evidence for the gate below
+                watch_ev.append((q, vote_cells))        # per-frame evidence for the gate below
             still_missed.append(i)
         missed = still_missed
         Mn = self._watch.verdict()[0]

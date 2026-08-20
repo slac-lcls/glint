@@ -476,14 +476,17 @@ class StreamDriver:
                  B=64, dmin=2.0, tol=0.002, half=3, gap=2, ring=3, min_peaks=6,
                  snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
-                 lock_frac=0.02, lock_lead=1.5, lock_pool_switch=72,
                  adaptive_relock=False, min_inliers=0, min_inlier_frac=0.15,
                  warm_topk=32, warm_floor=1,   # 16 refused real MFX data; see warmup_batch()
                  double_hit=False, geom_refine=False, geom_refine_kw=None,
                  rescue_buffer=0, fanout=None, alias_gate=None,
                  lock_probe=False, probe_null=64, lock_min_z=None, warmup_rescue=False,
                  qc_frac_threshold=None, stream_out=None, stream_geom_text=None,
-                 stream_image="glint.cxi", stream_symmetry=None, stream_peaks=None):
+                 stream_image="glint.cxi", stream_symmetry=None, stream_peaks=None,
+                 # APPENDED, not inserted next to the other lock_* options where they belong
+                 # by topic: this constructor is not keyword-only, so adding a parameter anywhere
+                 # but the end silently rebinds every positional argument after it.
+                 lock_frac=0.02, lock_lead=1.5, lock_pool_switch=72):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)

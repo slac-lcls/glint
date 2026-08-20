@@ -7,8 +7,13 @@ after every frame and LOCK the consensus cell the instant it is unambiguous, ins
 fixed batch. Locking is what flips the driver from blind indexing (~26 ms/frame) to the batched
 known-cell rescue path (~0.26 ms/frame).
 
-Equivalence: feed every frame, then ``verdict(gap=0)`` returns the same max-weight group as
-``consensus_cell`` -- same ``reduced_params`` fingerprint, same (rtol, ctol, vtol) tolerances.
+Equivalence, and its EXPIRY DATE: feed every frame, then ``verdict(gap=0)`` returns the same
+max-weight group as ``consensus_cell`` -- same ``reduced_params`` fingerprint, same (rtol, ctol,
+vtol) tolerances -- but only while the batch path also groups in arrival order, i.e. under
+``GLINT_CONSENSUS_STABLE=0``. Under the default the batch path seeds from the densest
+neighbourhood (glint#102) and the two can return DIFFERENT winners on the same hypotheses; see
+GROUPING ORDER below, where they do. The claim held unconditionally when it was written and has
+been conditional since #102 landed.
 
 GROUPING ORDER -- a real difference from the batch path. This module groups greedily in the order
 hypotheses ARRIVE (first tolerance match wins), which is what ``consensus_cell`` also did until
@@ -191,7 +196,9 @@ class RunningConsensus:
         """Return (locked_cell, support, lead) if the stop rule fires now, else (None, support, lead).
 
         gap overrides the (possibly adapted) gap -- pass gap=0 after the last frame to reproduce the
-        batch consensus_cell result exactly."""
+        batch consensus_cell result, which is exact only under GLINT_CONSENSUS_STABLE=0 (the module
+        docstring's Equivalence note says why: since glint#102 the batch path seeds from the densest
+        neighbourhood and this one still groups in arrival order)."""
         g = self.gap if gap is None else int(gap)
         rep, w0, w1 = self.leaders()
         if rep is not None and consensus_accept(w0, w1, self.npool, self.min_support,

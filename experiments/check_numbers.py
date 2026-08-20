@@ -771,11 +771,24 @@ def check_arithmetic() -> list[str]:
                    f'counts ({F["poolgate_bad_wrong_gaponly"]} - {F["poolgate_bad_wrong_gated"]})')
     # The overlap is the load-bearing part of the result: the clean side's LARGEST pool at lock and
     # the bad side's SMALLEST are the same number. That is why no switch removes every wrong lock,
-    # and why the honest claim is "193 of 194", not "all". If a later edit moves one and not the
-    # other, the trade-off silently becomes a clean separation that was never measured.
+    # and why the honest claim is 192 of 194 (poolgate_bad_wrong_removed), not "all". If a later
+    # edit moves one and not the other, the trade-off silently becomes a clean separation that was
+    # never measured. This comment said "193 of 194" until review caught it -- 193 was the estimate
+    # from the single-pass n_pool profile, which stops at the first ungated lock; 192 is what the
+    # real replay gives, because a refused stream keeps running and can lock later. The estimate
+    # was written here while the measurement was still going and never re-read against the table
+    # it sits beside, which is this file's own failure mode reproduced inside this file.
     if F["poolgate_clean_maxpool"] != F["poolgate_bad_minpool"]:
         bad.append("  FACTS: poolgate_clean_maxpool and poolgate_bad_minpool were MEASURED equal "
                    "(54); moving one without the other erases the overlap the claim rests on")
+    # ...and the prose beside these keys must not drift from them. The comment above quoted a
+    # superseded 193 while the table said 192; a guard whose own commentary can go stale silently
+    # is not guarding itself. Read this file back and require the derived count to appear in it.
+    _self = open(__file__, encoding="utf-8").read()
+    if f'{F["poolgate_bad_wrong_removed"]} of {F["poolgate_bad_locks_gaponly"] - F["poolgate_bad_true_gaponly"]}' not in _self:
+        bad.append(f'  FACTS: the pool-gate commentary must state '
+                   f'"{F["poolgate_bad_wrong_removed"]} of '
+                   f'{F["poolgate_bad_wrong_gaponly"]}" -- it has drifted from the table')
 
     # The blind pair, derived from its counts. Both percentage keys were DEAD -- defined and read
     # nowhere -- across the whole period the pair drifted 76/71 -> 77/72, so the RETIRED rule below

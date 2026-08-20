@@ -148,6 +148,19 @@ FACTS: dict[str, float | str] = {
                                          # test is trivially satisfied (2% of 54 = 1.08 < 3), so
                                          # neither scale-free test protects the small-pool tail
     "poolgate_bad_wrong_removed":  192,  # = 194 - 2
+    # M3 ascent steps, re-measured at n=480 (experiments/steps_sweep.py, 13 arms 2->80, strict bar,
+    # exact McNemar vs the shipped default). The point of the block is that the knob is INERT above
+    # 4, so the numbers worth pinning are the plateau's ends and the one arm that is not on it.
+    "m3_steps_default":            8,   # shipped; a throughput choice, not an accuracy one
+    "m3_blind_steps8_of480":     282,
+    "m3_blind_steps4_of480":     284,   # p = 0.894 vs 8 -- saturation is at 4, not 8
+    "m3_blind_steps80_of480":    293,   # p = 0.169 vs 8 -- 10x the work buys nothing measurable
+    "m3_blind_steps2_of480":     257,   # p = 0.008 vs 8 -- the ONLY significant arm, and it is worse
+    "m3_hybrid_steps8_of480":    361,
+    "m3_hybrid_steps2_of480":    342,   # p = 0.003 vs 8
+    "m3_hybrid_steps32_of480":   366,   # the max, p = 0.458 vs 8 -- i.e. not a better setting
+    "m3_ms_steps8":              6.1,   # ms/frame blind, A100
+    "m3_ms_steps80":             9.8,   # = 1.62x for a rate that does not move
     # Batched vs per-frame known-cell, at the gate. The paper used to call these "rate-identical in
     # aggregate" on the strength of the n=120 split being EXACTLY 9-9. That symmetry is the sample,
     # not the algorithm: at n=480 it is 23-29. The totals agree only to within the discordant noise.
@@ -778,6 +791,14 @@ def check_arithmetic() -> list[str]:
     # real replay gives, because a refused stream keeps running and can lock later. The estimate
     # was written here while the measurement was still going and never re-read against the table
     # it sits beside, which is this file's own failure mode reproduced inside this file.
+    # The M3 block's whole claim is "the knob is inert above 4". Two orderings encode it, so an
+    # edit that quietly reintroduces a step-count dependence fails here.
+    if not (F["m3_blind_steps4_of480"] >= F["m3_blind_steps8_of480"] - 5):
+        bad.append("  FACTS: m3_blind_steps4 was MEASURED level with steps8 (284 vs 282); a table "
+                   "where 4 is far below 8 has reintroduced the retired 'saturates >= 8' claim")
+    if F["m3_blind_steps2_of480"] >= F["m3_blind_steps8_of480"]:
+        bad.append("  FACTS: STEPS=2 is the one arm measured WORSE than the default (257 vs 282, "
+                   "p = 0.008); the table now says otherwise")
     if F["poolgate_clean_maxpool"] != F["poolgate_bad_minpool"]:
         bad.append("  FACTS: poolgate_clean_maxpool and poolgate_bad_minpool were MEASURED equal "
                    "(54); moving one without the other erases the overlap the claim rests on")

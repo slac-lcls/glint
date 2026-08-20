@@ -78,7 +78,31 @@ from glint.multishot import same_lattice
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 NTOP = int(os.environ.get("NTOP", "30"))                    # ② candidate-pool size (M4 width)
 KEEP = int(os.environ.get("KEEP", "44"))                    # distinct_maxima retained
-STEPS = int(os.environ.get("STEPS", "8"))                   # M3 ascent steps. Default 8 = blind saturation (same_lattice 84/120, the ceiling; hybrid 117/120) and blind-SAFE; still 4x faster than the old 80 default (front-end 10.8 vs 83ms) at equal-or-better rate. STEPS=5 ties hybrid (118, rescue-buffered) + ~10% faster but blind-standalone drops to 77 -> not blind-safe. Sweep 2026-07-12: blind saturates >=8, 16-80 flat within +-3-frame noise.
+# M3 ascent steps. 8 is a THROUGHPUT choice, not an accuracy one -- see the n=480 sweep below.
+# Kept at 8 because it is the cheapest point on the plateau with margin, not because the rate
+# depends on it.
+#
+# RE-MEASURED at n=480 (experiments/steps_sweep.py, 13 arms 2->80, strict bar, exact McNemar
+# against this default). The plateau starts at 4 and does not end:
+#   STEPS      2     3     4     5     6     8    10    12    16    24    32    48    80
+#   blind    257   268   284   276   279   282   280   285   288   290   289   281   293
+#   hybrid   342   354   361   360   363   361   355   355   358   359   366   365   362
+# ONE arm differs significantly from 8, and it is STEPS=2, which is WORSE (blind p=0.008,
+# hybrid p=0.003). Every arm from 4 to 80 is indistinguishable: blind p>=0.17, hybrid p>=0.32.
+# Running the ascent ten times longer costs 1.62x (6.1 -> 9.8 ms/frame) and buys nothing
+# measurable.
+#
+# This RETIRES three claims the previous comment made from an n=120 sweep, all of which were
+# reading sample noise as structure:
+#   "blind saturates >=8"          -- it saturates at 4 (284 vs 282, p=0.894).
+#   "16-80 flat within +-3 frames" -- that range spans 281-293 at n=480. Still not significant,
+#                                     but the +-3 was the 120-frame sample, not the algorithm.
+#   "STEPS=5 ... drops to 77, not  -- at n=480 STEPS=5 is 276 vs 282, p=0.441. No such cliff.
+#    blind-safe"
+# It also does NOT support the wider claim that M3's accuracy rests on under-optimising: more
+# steps of this ascent do not degrade it. That claim came from CG/BB/Newton/LM all scoring lower,
+# and a different OPTIMISER is not more steps of the same one -- that half remains untested.
+STEPS = int(os.environ.get("STEPS", "8"))
 QDIST = os.environ.get("QDIST", "0") == "1"                  # D2: reciprocal-distance inlier (sigma-matched)
 QDTOL = float(os.environ.get("QDTOL", "0.004"))             # inlier radius in 1/A (q-space)
 DETREJ = os.environ.get("DETREJ", "0") == "1"               # D1: reject degenerate cell (OFF: regressed deflate)

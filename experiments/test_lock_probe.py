@@ -123,6 +123,32 @@ def _alias_driver(gate):
     return drv
 
 
+def test_watchdog_rescue_checks_active_cells_not_the_previous_frame():
+    """The watchdog's rescue check must compare each missed frame against the ACTIVE cells, not against
+    whatever the previous frame blind-indexed to. Runs with NO alias gate: this is the shipped default.
+
+    Regression for #112, which rebound the loop's `cells` variable -- the active-cell list the rescue
+    checks against -- to the current frame's own N-best candidates. From the second unrescued frame on,
+    every frame was then matched against the PREVIOUS frame's candidates, which for a recurring new cell
+    is that same cell: a guaranteed self-match. Each such frame was "rescued" into cells[0]'s grid and
+    accumulator -- the locked cell, the wrong one entirely -- and dropped from the consensus that
+    existed to detect it. Here no active cell explains these frames (driver locked on A, frames are on
+    M_REAL), so a correct watchdog rescues none of them and all five reach the vote.
+
+    #112 claimed `alias_gate=None` left the shipped path bit-identical; this is the assertion that says
+    so. It also guards the gate tests below, which cannot see enough frames to reach `min_frames` when
+    the rescue eats them."""
+    rng = np.random.default_rng(7)
+    drv = _alias_driver(None)                                  # default: gate off
+    missed = _fill(drv, _real_frame_q, rng, k=5)
+    routed = []
+    drv._integrate_one = lambda i, c, g, a, cell_id=0, **kw: routed.append((i, cell_id))
+    drv._watchdog(missed)
+    assert drv.n_watchdog_rescued == 0, \
+        f"no active cell explains these frames, yet {drv.n_watchdog_rescued}/5 were 'rescued'"
+    assert routed == [], f"frames misrouted into an existing cell's accumulator: {routed}"
+
+
 def test_alias_gate_off_locks_alias():
     """No gate: the injected super-cell alias wins consensus and the driver locks it (the failure the gate
     exists to prevent)."""
@@ -149,6 +175,7 @@ def test_alias_gate_adopt_recovers_true():
 if __name__ == "__main__":
     tests = (test_probe_records_high_z_on_real_lock, test_lock_min_z_refuses_weak_lock,
              test_probe_annotate_only_does_not_block, test_default_off_no_probe,
+             test_watchdog_rescue_checks_active_cells_not_the_previous_frame,
              test_alias_gate_off_locks_alias, test_alias_gate_adopt_recovers_true)
     ok = 0
     for t in tests:
@@ -158,3 +185,4 @@ if __name__ == "__main__":
             import traceback
             print(f"FAIL  {t.__name__}: {type(e).__name__}: {e}"); traceback.print_exc()
     print(f"{ok}/{len(tests)} passed")
+    raise SystemExit(0 if ok == len(tests) else 1)

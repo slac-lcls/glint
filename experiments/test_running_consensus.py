@@ -102,9 +102,81 @@ def test_adaptive_gap_raises_when_slow():
     assert rc.gap == rc.base_gap + 1, (rc.gap, rc.base_gap)     # 0.12 <= rate < 0.30  ->  +1
 
 
+def test_pool_switch_keys_scale_tests_on_pool_size():
+    """pool_switch: min_frac/min_lead are SKIPPED below the switch (gap regime) and BIND above it.
+
+    The failure this encodes: a wrong cell recurring at a ~0.4% rate cleared an absolute
+    min_support=3 once the pool was large (23/6294 on mfxx49820 r0016) -- the random-agreement
+    floor grows with pool size, so only a SHARE/RATIO test can hold at large n_pool, while at
+    small n_pool the same tests add lock latency for nothing (measured on cxidb-120: always-on
+    frac/lead stretched worst-case lock 18 -> 42 frames; switch >= 72 is bit-identical to gap-only).
+    """
+    from glint.running_consensus import consensus_accept
+    # Below the switch: a small-pool lock that frac would block (0.5*18 = 9 > 3) goes through on
+    # support+gap alone.
+    assert consensus_accept(3, 0, 18, min_frac=0.5, min_lead=1.5, min_gap=2, pool_switch=72)
+    # Above the switch: the SAME support in a big pool is a floor artifact -> frac refuses it.
+    assert not consensus_accept(23, 8, 6294, min_frac=0.02, min_lead=1.5, min_gap=2, pool_switch=72)
+    # pool_switch=0 (default) applies the scale tests at EVERY pool size -- existing callers unchanged.
+    assert not consensus_accept(3, 0, 18, min_frac=0.5, pool_switch=0)
+
+
+def test_pool_switch_running_lock_unchanged_small_refuses_large():
+    """RunningConsensus with the gated lock: clean small-pool locking is bit-identical to gap-only,
+    and a leader that is a tiny share of a large pool is refused instead of locked."""
+    # Clean stream: true cell every frame + fresh scatter. Locks identically with and without the gate.
+    for kw in (dict(), dict(min_frac=0.02, min_lead=1.5, pool_switch=72)):
+        rc = RunningConsensus(min_support=3, gap=2, adaptive=True, **kw)
+        locked_at = None
+        for f in range(12):
+            rc.add_frame([_rot(0.13 * f) @ M_TRUE, _SCATTER[f % len(_SCATTER)]])
+            M, w0, w1 = rc.verdict()
+            if M is not None:
+                locked_at = f + 1
+                break
+        assert locked_at is not None and _rp_eq(M, M_TRUE), (locked_at, kw)
+        assert rc.npool < 72, rc.npool                          # clean locks live BELOW the switch
+    # Floor regime: the "leader" recurs 1/25 frames while every frame adds 3 scatter cells that
+    # are unique BY CONSTRUCTION (a 6%-spaced 12x12x12 length ladder; rtol=0.05 cannot group two
+    # distinct rungs -- a random 150-300 draw birthday-collides into its own clusters and locks the
+    # test on the wrong mechanism). Support crosses min_support + adapted gap only once the pool is
+    # far past the switch; gap-only locks that floor artifact, the pool-keyed gate refuses it
+    # (share ~1.3% < 2% at every pool size).
+    def _unique_scatter(i):
+        a = 150.0 * 1.06 ** (i % 12)
+        b = 400.0 * 1.06 ** ((i // 12) % 12)
+        c = 1100.0 * 1.06 ** ((i // 144) % 12)
+        return np.diag([1.0 / a, 1.0 / b, 1.0 / c])
+    def floor_frames(n):
+        out = []
+        for f in range(n):
+            fr = [_unique_scatter(3 * f + j) for j in range(3)]
+            if f % 25 == 0:
+                fr[0] = _rot(0.1 * f) @ M_ALIAS
+            out.append(fr)
+        return out
+    frames = floor_frames(200)
+    locks = {}
+    for name, kw in (("gap-only", dict()),
+                     ("pool-keyed", dict(min_frac=0.02, min_lead=1.5, pool_switch=72))):
+        rc = RunningConsensus(min_support=3, gap=2, adaptive=True, **kw)
+        locks[name] = None
+        for f, fr in enumerate(frames):
+            rc.add_frame(fr)
+            M, w0, w1 = rc.verdict()
+            if M is not None:
+                locks[name] = (f + 1, rc.npool)
+                break
+    assert locks["gap-only"] is not None, locks                 # the floor artifact DOES lock today
+    assert locks["gap-only"][1] > 72, locks                     # ... and only in the large-pool regime
+    assert locks["pool-keyed"] is None, locks                   # the pool-keyed gate refuses it
+
+
 if __name__ == "__main__":
     tests = (test_batch_equivalence, test_early_stop_locks_clean,
-             test_refuses_ambiguous_race, test_adaptive_gap_raises_when_slow)
+             test_refuses_ambiguous_race, test_adaptive_gap_raises_when_slow,
+             test_pool_switch_keys_scale_tests_on_pool_size,
+             test_pool_switch_running_lock_unchanged_small_refuses_large)
     ok = 0
     for t in tests:
         try:

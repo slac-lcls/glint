@@ -476,6 +476,7 @@ class StreamDriver:
                  B=64, dmin=2.0, tol=0.002, half=3, gap=2, ring=3, min_peaks=6,
                  snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
+                 lock_frac=0.02, lock_lead=1.5, lock_pool_switch=72,
                  adaptive_relock=False, min_inliers=0, min_inlier_frac=0.15,
                  warm_topk=32, warm_floor=1,   # 16 refused real MFX data; see warmup_batch()
                  double_hit=False, geom_refine=False, geom_refine_kw=None,
@@ -711,7 +712,19 @@ class StreamDriver:
         self.n_warmup = 0; self.locked_after = None; self.consensus_support = None
         if self._blind:
             self.Mc = None; self.grid = None; self.n_theoretical = None
-            self._rc = RunningConsensus(min_support=lock_support, gap=lock_gap, adaptive=adaptive_gap)
+            # The pool-keyed acceptance gate (glint.running_consensus.consensus_accept). ON by
+            # default because it is measured free: over 400 random arrival orders of the cxidb-120
+            # benchmark NOT ONE changes its lock frame, cell, support or runner-up against the
+            # gap-only rule, so the driver's published lock behaviour is untouched -- while on
+            # mfxx49820 r0016 (unrefined geometry) the gap-only rule locks a WRONG lattice on 194 of
+            # 400 orders and this leaves 2. Set lock_frac=0 / lock_lead=1 / lock_pool_switch=0 to
+            # restore the bare gap rule. The watchdog's relock consensus below is deliberately NOT
+            # gated: its pool grows over a whole run so it is arguably more exposed, but a false
+            # REFUSAL there means missing a genuine sample change, and that trade has not been
+            # measured.
+            self._rc = RunningConsensus(min_support=lock_support, gap=lock_gap, adaptive=adaptive_gap,
+                                        min_frac=lock_frac, min_lead=lock_lead,
+                                        pool_switch=lock_pool_switch)
             from glint.glint_fast import index_blind_nbest      # torch; imported only in blind mode
             self._blind_index = index_blind_nbest
         else:

@@ -119,6 +119,35 @@ FACTS: dict[str, float | str] = {
     "seqstop_p90_lock":         12,   # 90th percentile (was 10 at n=120 -- longer pool, longer tail)
     "seqstop_false_locks":       0,   # of 400 orderings, vs the batch consensus cell AND the textbook
     "seqstop_trials":          400,
+    # The n_pool-keyed streaming gate (pool_switch). Two 400-order replays of RunningConsensus over
+    # CACHED per-frame N-best candidates, so the arms differ only in the acceptance rule:
+    #   clean = experiments/nbest_120.npz (cxidb-120, truth LYSO)
+    #   bad   = mfxx49820 r0016, 2228 frames on UNREFINED psana geometry (the q-set alias_test.py
+    #           cached with no geom= -- psana's own), N-best dumped on S3DF by cand_r0016.py to
+    #           ~/glint_gt_mfxx49820/cand_r0016_fixmap.npz; 2098 frames indexed -> 6294 hypotheses
+    # The bad run is the item-7 failure: its POOLED vote returns the true lattice under glint#102
+    # densest seeding (27/6294) and a DOUBLED cell under arrival order (23/6294, vol/truth 2.06,
+    # reproducible today only with GLINT_CONSENSUS_STABLE=0). RunningConsensus groups in arrival
+    # order, so the streaming lock still meets the second one.
+    "poolgate_clean_trials":       400,
+    "poolgate_clean_lock_med":       6,  # frames to lock, gap-only AND switch=72 -- unchanged
+    "poolgate_clean_lock_max":      18,  # worst order, gap-only and switch=72
+    "poolgate_clean_lock_max_onb":  42,  # ...and with frac/lead applied at EVERY pool size
+    "poolgate_clean_maxpool":       54,  # largest n_pool at lock on clean data -> why 72 clears it
+    "poolgate_clean_diff_72":        0,  # of 400 orders differing from gap-only (48 differs on 5)
+    "poolgate_bad_trials":         400,
+    "poolgate_bad_locks_gaponly":  342,  # orders where the SHIPPED gap-only rule locks
+    "poolgate_bad_true_gaponly":   148,  # ...of which on the true lattice
+    "poolgate_bad_wrong_gaponly":  194,  # = 342 - 148; median vol/truth 1.94, i.e. the doubled cell
+    "poolgate_bad_minpool":         54,  # earliest lock -- the tail OVERLAPS clean's max of 54
+    # The gated arms. switch=72 and frac/lead-always-on land on the SAME three locks here, so the
+    # switch costs nothing in protection while costing nothing on clean data either (diff_72 = 0).
+    "poolgate_bad_locks_gated":      3,  # orders that still lock, with frac .02 / lead 1.5
+    "poolgate_bad_true_gated":       1,  # ...of which on the true lattice
+    "poolgate_bad_wrong_gated":      2,  # the residual: locks at n_pool 54-96, where a 2% share
+                                         # test is trivially satisfied (2% of 54 = 1.08 < 3), so
+                                         # neither scale-free test protects the small-pool tail
+    "poolgate_bad_wrong_removed":  192,  # = 194 - 2
     # Batched vs per-frame known-cell, at the gate. The paper used to call these "rate-identical in
     # aggregate" on the strength of the n=120 split being EXACTLY 9-9. That symmetry is the sample,
     # not the algorithm: at n=480 it is 23-29. The totals agree only to within the discordant noise.
@@ -729,6 +758,24 @@ def check_arithmetic() -> list[str]:
           float(F["rep_rate_hz"]) * float(F["hit_rate"]) * float(F["fused_b120_ms"]) / 1000.0, tol=0.12)
     close("ffbidx_speedup = pipelined/fused (throughput:throughput)", float(F["ffbidx_speedup"]),
           float(F["ffbidx_pipelined_ms"]) / float(F["fused_b120_ms"]), tol=0.05)
+
+    # The pool-gate block, EXACT (integer counts -- see the note on close()'s relative tolerance).
+    if F["poolgate_bad_locks_gaponly"] - F["poolgate_bad_true_gaponly"] != F["poolgate_bad_wrong_gaponly"]:
+        bad.append("  FACTS: poolgate_bad_wrong_gaponly must be locks - true "
+                   f'({F["poolgate_bad_locks_gaponly"]} - {F["poolgate_bad_true_gaponly"]})')
+    if F["poolgate_bad_locks_gated"] - F["poolgate_bad_true_gated"] != F["poolgate_bad_wrong_gated"]:
+        bad.append("  FACTS: poolgate_bad_wrong_gated must be gated locks - gated true locks")
+    if (F["poolgate_bad_wrong_gaponly"] - F["poolgate_bad_wrong_gated"]
+            != F["poolgate_bad_wrong_removed"]):
+        bad.append("  FACTS: poolgate_bad_wrong_removed must be the difference of the two wrong "
+                   f'counts ({F["poolgate_bad_wrong_gaponly"]} - {F["poolgate_bad_wrong_gated"]})')
+    # The overlap is the load-bearing part of the result: the clean side's LARGEST pool at lock and
+    # the bad side's SMALLEST are the same number. That is why no switch removes every wrong lock,
+    # and why the honest claim is "193 of 194", not "all". If a later edit moves one and not the
+    # other, the trade-off silently becomes a clean separation that was never measured.
+    if F["poolgate_clean_maxpool"] != F["poolgate_bad_minpool"]:
+        bad.append("  FACTS: poolgate_clean_maxpool and poolgate_bad_minpool were MEASURED equal "
+                   "(54); moving one without the other erases the overlap the claim rests on")
 
     # The blind pair, derived from its counts. Both percentage keys were DEAD -- defined and read
     # nowhere -- across the whole period the pair drifted 76/71 -> 77/72, so the RETIRED rule below

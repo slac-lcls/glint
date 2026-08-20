@@ -161,6 +161,19 @@ FACTS: dict[str, float | str] = {
     "m3_hybrid_steps32_of480":   366,   # the max, p = 0.458 vs 8 -- i.e. not a better setting
     "m3_ms_steps8":              6.1,   # ms/frame blind, A100
     "m3_ms_steps80":             9.8,   # = 1.62x for a rate that does not move
+    # DISCORDANT counts, not totals. The conclusions here are exact-McNemar p-values, and a p-value
+    # is a function of the paired (arm-only, default-only) split -- the same 257-vs-282 totals can
+    # be significant or not depending on how the frames pair up, so guarding totals would leave the
+    # actual claim unguarded. Stored the way the cons-vs-truecell and batched-vs-per-frame blocks
+    # below already do it, and the p is RECOMPUTED in check_arithmetic rather than typed here.
+    "m3_blind2_gained":           29,   # STEPS=2 indexed, STEPS=8 did not
+    "m3_blind2_lost":             54,   # ...and the other way; p = 0.008
+    "m3_hybrid2_gained":          10,
+    "m3_hybrid2_lost":            29,   # p = 0.003
+    "m3_blind4_gained":           29,   # the saturation arm: 29/27 is as null as a split gets
+    "m3_blind4_lost":             27,   # p = 0.894
+    "m3_blind80_gained":          32,   # ten times the work
+    "m3_blind80_lost":            21,   # p = 0.169 -- not significant
     # Batched vs per-frame known-cell, at the gate. The paper used to call these "rate-identical in
     # aggregate" on the strength of the n=120 split being EXACTLY 9-9. That symmetry is the sample,
     # not the algorithm: at n=480 it is 23-29. The totals agree only to within the discordant noise.
@@ -791,14 +804,40 @@ def check_arithmetic() -> list[str]:
     # real replay gives, because a refused stream keeps running and can lock later. The estimate
     # was written here while the measurement was still going and never re-read against the table
     # it sits beside, which is this file's own failure mode reproduced inside this file.
-    # The M3 block's whole claim is "the knob is inert above 4". Two orderings encode it, so an
-    # edit that quietly reintroduces a step-count dependence fails here.
-    if not (F["m3_blind_steps4_of480"] >= F["m3_blind_steps8_of480"] - 5):
-        bad.append("  FACTS: m3_blind_steps4 was MEASURED level with steps8 (284 vs 282); a table "
-                   "where 4 is far below 8 has reintroduced the retired 'saturates >= 8' claim")
-    if F["m3_blind_steps2_of480"] >= F["m3_blind_steps8_of480"]:
-        bad.append("  FACTS: STEPS=2 is the one arm measured WORSE than the default (257 vs 282, "
-                   "p = 0.008); the table now says otherwise")
+    # The M3 block's claim is "the knob is inert above 4, and only STEPS=2 is worse". That is a
+    # statement about exact-McNemar p-values, so it is checked as one: recompute each from its
+    # stored discordant split instead of asserting the totals and hoping.
+    def _mcnemar_p(a: int, b: int) -> float:
+        m = a + b
+        return 1.0 if m == 0 else min(1.0, 2.0 * sum(comb(m, k) for k in range(min(a, b) + 1)) / 2.0 ** m)
+
+    for _tag, _g, _l, _want_sig in (("blind STEPS=2", "m3_blind2_gained", "m3_blind2_lost", True),
+                                    ("hybrid STEPS=2", "m3_hybrid2_gained", "m3_hybrid2_lost", True),
+                                    ("blind STEPS=4", "m3_blind4_gained", "m3_blind4_lost", False),
+                                    ("blind STEPS=80", "m3_blind80_gained", "m3_blind80_lost", False)):
+        _p = _mcnemar_p(int(F[_g]), int(F[_l]))
+        if _want_sig and _p > 0.05:
+            bad.append(f"  FACTS: {_tag} vs the default was MEASURED significant (p = 0.008/0.003); "
+                       f"the stored split {F[_g]}/{F[_l]} now gives p = {_p:.3g}, so glint_fast's "
+                       "'exactly one arm differs, and it is worse' no longer holds")
+        if not _want_sig and _p <= 0.05:
+            bad.append(f"  FACTS: {_tag} vs the default was MEASURED null; the stored split "
+                       f"{F[_g]}/{F[_l]} now gives p = {_p:.3g}, which would mean the step count "
+                       "is NOT inert above 4 -- the whole point of the block")
+    # The splits must also reconcile with the totals they came from: gained - lost = the difference
+    # in indexed frames. Without this the two halves of the block could drift apart unnoticed.
+    for _tag, _g, _l, _arm, _base in (
+            ("blind STEPS=2", "m3_blind2_gained", "m3_blind2_lost",
+             "m3_blind_steps2_of480", "m3_blind_steps8_of480"),
+            ("blind STEPS=4", "m3_blind4_gained", "m3_blind4_lost",
+             "m3_blind_steps4_of480", "m3_blind_steps8_of480"),
+            ("blind STEPS=80", "m3_blind80_gained", "m3_blind80_lost",
+             "m3_blind_steps80_of480", "m3_blind_steps8_of480"),
+            ("hybrid STEPS=2", "m3_hybrid2_gained", "m3_hybrid2_lost",
+             "m3_hybrid_steps2_of480", "m3_hybrid_steps8_of480")):
+        if int(F[_g]) - int(F[_l]) != int(F[_arm]) - int(F[_base]):
+            bad.append(f"  FACTS: {_tag}: discordant split {F[_g]}-{F[_l]} does not reconcile with "
+                       f"the totals {F[_arm]}-{F[_base]}")
     if F["poolgate_clean_maxpool"] != F["poolgate_bad_minpool"]:
         bad.append("  FACTS: poolgate_clean_maxpool and poolgate_bad_minpool were MEASURED equal "
                    "(54); moving one without the other erases the overlap the claim rests on")

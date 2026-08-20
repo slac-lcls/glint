@@ -27,11 +27,16 @@ starts measuring a different question.
   python steps_sweep.py <q480.txt> <out.npz> [STEPS_LIST]
 """
 import os, sys, time
+from pathlib import Path
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 
-WT = "/sdf/home/s/smarches/glint_streamfix_wt"
-sys.path.insert(0, WT); sys.path.insert(0, WT + "/experiments")
+# Resolve the checkout from THIS FILE, so a vendored copy always measures the tree it ships in.
+# A hard-coded path made the harness import whichever worktree happened to exist on the author's
+# box -- i.e. not necessarily the code under review, and nothing at all for anyone else.
+# GLINT_ROOT overrides it, which is what a copy living outside experiments/ needs.
+ROOT = os.environ.get("GLINT_ROOT") or str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, "experiments"))
 import glint.glint_fast as gf
 from glint.glint_fast import matched, index_blind_fast
 from glint.multishot import same_lattice
@@ -79,16 +84,22 @@ for s in STEPS_LIST:
           f"| first-120 blind {gb[:120].sum():3d} hybrid {gh[:120].sum():3d}   "
           f"| {1000*t_blind/n:5.1f} ms/frame blind", flush=True)
 
+# The control, CHECKED BEFORE ANYTHING IS WRITTEN. A harness that prints "this measured the wrong
+# setup" and then exits 0 hands an unattended runner a result it has itself disowned.
+d = dict((r[0], r) for r in rows)
+if 8 in d:
+    b120, h120 = d[8][3], d[8][4]
+    ok = (h120 == 92)                             # check_numbers FACTS glint1_strict_of120
+    print(f"\nCONTROL STEPS=8 first-120: blind {b120} (expect 78, strict bar), "
+          f"hybrid {h120} (expect 92)  -> {'OK' if ok else 'MISMATCH'}", flush=True)
+    if not ok:
+        raise SystemExit(f"control failed: first-120 hybrid {h120} != 92; this sweep is measuring "
+                         f"something other than the published pipeline, so {OUT} was NOT written")
+else:
+    print("\n!! STEPS=8 not in the arm list -- no control was checked", flush=True)
+
 np.savez(OUT, steps=np.array([r[0] for r in rows]),
          blind=np.array([r[1] for r in rows]), hybrid=np.array([r[2] for r in rows]),
          blind120=np.array([r[3] for r in rows]), hybrid120=np.array([r[4] for r in rows]),
          ms_per_frame=np.array([r[5] for r in rows]), n=n, **gates)
-print(f"\nwrote {OUT}", flush=True)
-
-# The control, stated rather than assumed.
-d = dict((r[0], r) for r in rows)
-if 8 in d:
-    print(f"\nCONTROL STEPS=8 first-120: blind {d[8][3]} (expect 78, strict bar), "
-          f"hybrid {d[8][4]} (expect 92)"
-          f"  -> {'OK' if d[8][4] == 92 else 'MISMATCH -- this sweep is measuring something else'}",
-          flush=True)
+print(f"wrote {OUT}", flush=True)

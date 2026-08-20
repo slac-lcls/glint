@@ -83,7 +83,8 @@ KEEP = int(os.environ.get("KEEP", "44"))                    # distinct_maxima re
 # depends on it.
 #
 # RE-MEASURED at n=480 (experiments/steps_sweep.py, 13 arms 2->80, strict bar, exact McNemar
-# against this default). The plateau starts at 4 and does not end:
+# against this default). The plateau starts at 4 and runs to 80, the largest arm tested -- what
+# happens beyond 80 was not measured and is not claimed:
 #   STEPS      2     3     4     5     6     8    10    12    16    24    32    48    80
 #   blind    257   268   284   276   279   282   280   285   288   290   289   281   293
 #   hybrid   342   354   361   360   363   361   355   355   358   359   366   365   362

@@ -16,6 +16,10 @@ lands on; the measured rate is 0 over thousands, and the geometric probability i
 Also checks the guard: a caller passing DIFFERENT panels than the grid was built for must fall back
 to the plain gate + host project_q rather than silently projecting onto the wrong detector.
 
+NEEDS A GPU. HKLGrid(gpu=True) degrades SILENTLY to the numpy path when cupy or the device is
+missing, so without one there is nothing here to test -- see gpu_unavailable() below, which says so
+and skips rather than letting the run die on a GPU-only attribute a hundred lines in.
+
   python test_gate_project.py       # needs a GPU
 """
 import os, sys, time
@@ -79,7 +83,45 @@ def same(a, b):
     return True, f"{len(a)} reflections, integer fields exact, floats <= {d:.2e}", d
 
 
+def gpu_unavailable():
+    """Why this test cannot run here, or None if it can.
+
+    `HKLGrid.gpu` is `bool(gpu) and _HAVE_CP`, so asking for gpu=True on a machine without cupy is
+    not an error -- the grid quietly takes the numpy branch. Two things then break at once:
+
+      * the comparison is VACUOUS. Both grids under test run the identical host code, so "fused
+        kernel == host path" is checking numpy against itself.
+      * the GPU-only buffers exist only under `if self.gpu`, so the cull counters this test reads
+        (`_gcnt`) were never allocated, and the run dies mid-loop on
+        `AttributeError: 'HKLGrid' object has no attribute '_gcnt'` -- an error that points at
+        glint/ and invites a hunt for a removal that never happened. The attribute is present and
+        in use (stream_driver.HKLGrid); the machine just has no GPU.
+
+    So state the precondition up front. Probe for a usable DEVICE, not merely an importable cupy:
+    a login node with the DRP GPU env activated imports cupy fine and has nothing to run it on.
+    """
+    try:
+        import cupy as cp
+    except Exception as e:
+        return f"cupy is not importable ({type(e).__name__})"
+    try:
+        if cp.cuda.runtime.getDeviceCount() < 1:
+            return "cupy is installed but reports no CUDA device"
+        int(cp.zeros(1, cp.int32).sum())                     # a real allocation + launch + readback
+    except Exception as e:
+        return f"cupy is installed but the device is unusable ({type(e).__name__}: {e})"
+    return None
+
+
 def main():
+    why = gpu_unavailable()
+    if why is not None:
+        print(f"SKIP {os.path.basename(__file__)} -- {why}.\n"
+              f"     This test pins the fused gate+project KERNEL against the host path; with no\n"
+              f"     device both sides collapse to the same numpy branch, so there is nothing to\n"
+              f"     compare. Run it on a GPU node.")
+        return 0
+
     rng = np.random.default_rng(5)
     Rs = [recip_from_M(rot(rng) @ LYSO) for _ in range(60)]
 

@@ -55,6 +55,18 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_lock_probe.py
 
+      # SKIPS here, deliberately. A green check on this step is NOT coverage of the fused
+      # gate+project kernel: the skip returns before a single HKLGrid is built, so everything
+      # inside main() is untested on this runner and has to be run on a GPU node by hand.
+      # What it does buy is IMPORT-time cover -- the module body still resolves HKLGrid,
+      # _panel_geom, recip_from_M and cell_to_Ar, and still evaluates the module-level
+      # cell_to_Ar call -- so a rename or removal in glint/ fails here instead of lying in
+      # wait. That is worth a step because the file sat broken on main for exactly one reason:
+      # nothing ever executed it. It exits 0 when it skips, so it fails the job only on real rot.
+      - name: experiments/test_gate_project.py (skips without a GPU)
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_gate_project.py
+
       # The xtc_bridge tests are plain scripts, not pytest test functions: they
       # print their own results and sys.exit(1) on failure. They insert their own
       # directory on sys.path and import sibling modules, so each is run from

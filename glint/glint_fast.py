@@ -131,7 +131,37 @@ STEPS = int(os.environ.get("STEPS", "8"))
 QDIST = os.environ.get("QDIST", "0") == "1"                  # D2: reciprocal-distance inlier (sigma-matched)
 QDTOL = float(os.environ.get("QDTOL", "0.004"))             # inlier radius in 1/A (q-space)
 DETREJ = os.environ.get("DETREJ", "0") == "1"               # D1: reject degenerate cell (OFF: regressed deflate)
-QPOW = float(os.environ.get("QPOW", "1.0"))                 # M2 weight w_i=|q_i|^-QPOW (GLINT 1; xgandalf paper 2)
+# M2/M3 peak weight, w_i = |q_i|^-QPOW (GLINT 1; xgandalf paper 2). Purely GEOMETRIC: peak
+# INTENSITY does not enter, so a 110k-count reflection and a 500-count one at the same |q| have
+# equal say. Every method in this family binarises this way -- xgandalf, TORO, ffbidx -- and none
+# appears to have published a test of it, so: MEASURED, n=480, cxidb-17, pf8 intensities, w scaled
+# by f(I) and renormalised so only the SHAPE of the weighting varies (experiments/weight_sweep.py).
+#
+#   f(I)        n_eff/N   blind   hybrid       n_eff/N = Kish effective sample size, 1.0 = uniform
+#   1 (binary)    1.000     282      361       <- the control, and the winner outright
+#   (I/med)^.25   0.907     253      351
+#   rank          0.754     227      331
+#   sqrt(I/med)   0.693     200      327
+#   log1p(I/med)  0.631     192      329
+#   med/I         0.526     251      356       <- the falsifier arm; see below
+#   I/med         0.336     116      319
+#
+# EVERY soft weighting is significantly worse at blind indexing (exact McNemar vs binary, all
+# p <= 0.003; the gentlest, ^0.25, still costs 29 frames). Hybrid is more forgiving -- consensus
+# and rescue absorb a bad blind cell -- but never better.
+#
+# WHY, and this is the part worth keeping: across the arms that up-weight strong peaks the blind
+# rate is an almost perfect linear function of the effective sample size (Pearson r = +0.997).
+# The weighting is not extracting information, it is discarding peaks. `med/I` was included as a
+# falsifier -- if up-weighting strong peaks helped, down-weighting them had to hurt -- and it is
+# the one arm off that line, costing 31 frames at n_eff 0.526 where sqrt costs 82 at a HIGHER
+# 0.693. So direction matters too, the way geometry suggests: strong peaks are the low-order
+# minority, and concentrating a 9-parameter lattice fit on them costs coverage as well as count.
+#
+# Scope: one dataset, one peak finder, one intensity definition (pf8's integrated count, not a
+# background-subtracted I/sigma). It says binarisation is right here, not that no intensity
+# estimate could ever help.
+QPOW = float(os.environ.get("QPOW", "1.0"))
 TOL = float(os.environ.get("TOL", "0.18"))                  # M2/M3 hard inlier window |q.v-round|<TOL (xgandalf eps)
 QHI = float(os.environ.get("QHI", "0"))                     # erf^2 high-q apodize: taper edge / qmax (0=off)
 QLO = float(os.environ.get("QLO", "0"))                     # erf^2 low-q (beamstop) apodize: edge / qmax (0=off)

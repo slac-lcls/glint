@@ -150,6 +150,35 @@ FACTS: dict[str, float | str] = {
                                          # test is trivially satisfied (2% of 54 = 1.08 < 3), so
                                          # neither scale-free test protects the small-pool tail
     "poolgate_bad_wrong_removed":  192,  # = 194 - 2
+    # Binary vs weighted peaks, n=480 (experiments/weight_sweep.py). The family binarises before
+    # the transform; this measured whether a soft intensity weight beats it. It does not -- every
+    # arm is significantly worse at blind, and the damage across the up-weighting arms is a linear
+    # function of the Kish effective sample size (r = +0.997), i.e. reweighting discards peaks
+    # rather than extracting information. `inverse` is the falsifier arm and the one point off
+    # that line, which is what shows DIRECTION matters on top of variance.
+    "pw_blind_binary_of480":     282,  # the control; == the STEPS=8 arm of steps_sweep, exactly
+    "pw_hybrid_binary_of480":    361,
+    "pw_blind_quarter_of480":    253,  # gentlest weighting, still -29 (p < 0.001)
+    "pw_blind_sqrt_of480":       200,
+    "pw_blind_linear_of480":     116,  # -166; intensity-proportional is catastrophic
+    "pw_blind_inverse_of480":    251,  # falsifier: DOWN-weights strong peaks, -31 at n_eff 0.526
+    "pw_neff_sqrt":            0.693,  # ...vs sqrt's -82 at a HIGHER n_eff of 0.693
+    "pw_neff_inverse":         0.526,
+    "pw_r_neff_upweighting":   0.997,  # Pearson r(n_eff, blind delta), excluding the falsifier
+    "pw_qpow_default":           1.0,  # the shipped |q|^-QPOW exponent the "binary" control IS.
+                                       # Read from glint_fast.py below, not just described: if the
+                                       # default moves, the control is no longer the shipped weight
+                                       # and every arm is measured against something nobody runs.
+    # DISCORDANT splits, because "significantly worse" is a p-value, not a margin. Same reason the
+    # M3 block stores them: totals cannot decide an exact McNemar. Recomputed in check_arithmetic.
+    "pw_quarter_gained":          18,  # the gentlest weighting, and still p = 4.2e-4
+    "pw_quarter_lost":            47,
+    "pw_sqrt_gained":             22,
+    "pw_sqrt_lost":              104,
+    "pw_linear_gained":           10,
+    "pw_linear_lost":            176,
+    "pw_inverse_gained":          35,  # the falsifier is significantly worse TOO -- that both
+    "pw_inverse_lost":            66,  # directions hurt is half the argument (p = 2.7e-3)
     # M3 ascent steps, re-measured at n=480 (experiments/steps_sweep.py, 13 arms 2->80, strict bar,
     # exact McNemar vs the shipped default). What the block records is that NO arm from 4 to 80
     # shows a detectable difference, and how large an undetected one could still be -- not that the
@@ -834,6 +863,57 @@ def check_arithmetic() -> list[str]:
     # real replay gives, because a refused stream keeps running and can lock later. The estimate
     # was written here while the measurement was still going and never re-read against the table
     # it sits beside, which is this file's own failure mode reproduced inside this file.
+    # The "binary" control is the SHIPPED weight, w = |q|^-QPOW at QPOW=1.0 -- so tie the fact to
+    # the source rather than to a comment about the source. Same defect the M3 block had: a fact
+    # nothing reads is a comment, and this one silently defines what "binary" even means here.
+    _gf_p = Path(__file__).resolve().parent.parent / "glint" / "glint_fast.py"
+    _gf_s = _gf_p.read_text(encoding="utf-8") if _gf_p.exists() else ""
+    _qm = re.search(r'QPOW = float\(os\.environ\.get\("QPOW", "([\d.]+)"\)\)', _gf_s)
+    if not _gf_s:
+        bad.append(f"  FACTS: {_gf_p} unreadable, so pw_qpow_default is unchecked and the peak-"
+                   "weight control is defined by nothing")
+    elif _qm is None:
+        bad.append("  FACTS: the QPOW default could not be located in glint/glint_fast.py -- the "
+                   "pw_qpow_default check is dead; fix the pattern rather than dropping it")
+    elif float(_qm.group(1)) != float(F["pw_qpow_default"]):
+        bad.append(f"  FACTS: pw_qpow_default is {F['pw_qpow_default']} but glint_fast ships "
+                   f"{_qm.group(1)}; the 'binary' arm is no longer the shipped weight, so every "
+                   "weighting comparison is against a baseline nobody runs")
+
+    # The peak-weight block's headline is "every soft weighting is SIGNIFICANTLY worse", which is a
+    # claim about p-values; check them as such, from the stored splits, and require the reconciling
+    # margin so the splits and the totals cannot drift apart.
+    for _tag, _g, _l, _arm in (("quarter", "pw_quarter_gained", "pw_quarter_lost",
+                                "pw_blind_quarter_of480"),
+                               ("sqrt", "pw_sqrt_gained", "pw_sqrt_lost", "pw_blind_sqrt_of480"),
+                               ("linear", "pw_linear_gained", "pw_linear_lost",
+                                "pw_blind_linear_of480"),
+                               ("inverse", "pw_inverse_gained", "pw_inverse_lost",
+                                "pw_blind_inverse_of480")):
+        _m = int(F[_g]) + int(F[_l])
+        _p = 1.0 if _m == 0 else min(1.0, 2.0 * sum(comb(_m, _k)
+                                                    for _k in range(min(int(F[_g]), int(F[_l])) + 1))
+                                     / 2.0 ** _m)
+        if _p > 0.05:
+            bad.append(f"  FACTS: blind {_tag} vs binary was MEASURED significantly worse; the "
+                       f"stored split {F[_g]}/{F[_l]} now gives p = {_p:.3g}, so glint_fast's "
+                       "'EVERY soft weighting is significantly worse' no longer holds")
+        if int(F[_g]) - int(F[_l]) != int(F[_arm]) - int(F["pw_blind_binary_of480"]):
+            bad.append(f"  FACTS: blind {_tag}: discordant split {F[_g]}-{F[_l]} does not reconcile "
+                       f"with the totals {F[_arm]}-{F['pw_blind_binary_of480']}")
+
+    # The peak-weight block. Two claims carry it, and both are orderings rather than values, so a
+    # later edit cannot flip the conclusion while leaving the table looking plausible.
+    if F["pw_blind_binary_of480"] <= max(F["pw_blind_quarter_of480"], F["pw_blind_sqrt_of480"],
+                                         F["pw_blind_linear_of480"], F["pw_blind_inverse_of480"]):
+        bad.append("  FACTS: binary was MEASURED the best blind arm (282); a table where some "
+                   "weighting beats it has inverted the result this block exists to record")
+    # The falsifier: LOWER n_eff than sqrt, yet a BETTER rate. That inequality is the whole
+    # evidence that direction matters and not just variance.
+    if not (F["pw_neff_inverse"] < F["pw_neff_sqrt"]
+            and F["pw_blind_inverse_of480"] > F["pw_blind_sqrt_of480"]):
+        bad.append("  FACTS: the inverse arm must sit BELOW sqrt in n_eff and ABOVE it in rate "
+                   "(0.526 < 0.693, 251 > 200); without that the variance story is unfalsified")
     # The M3 block. It does NOT claim equivalence -- failing to reject is not evidence of no
     # difference -- so what is guarded is what was measured: no arm from 4 to 80 reaches
     # significance in either channel, STEPS=2 does, and the interval bounding any true effect stays
@@ -999,7 +1079,6 @@ def check_arithmetic() -> list[str]:
         bad.append(f"  FACTS: m3_steps_default is {F['m3_steps_default']} but glint_fast ships "
                    f"{_m.group(1)}; every M3 comparison is against a baseline that is no longer "
                    "the default, so the block describes a setting nobody runs")
-
     if F["poolgate_clean_maxpool"] != F["poolgate_bad_minpool"]:
         bad.append("  FACTS: poolgate_clean_maxpool and poolgate_bad_minpool were MEASURED equal "
                    "(54); moving one without the other erases the overlap the claim rests on")

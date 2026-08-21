@@ -71,3 +71,4 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"FAIL  {t.__name__}: {type(e).__name__}: {e}")
     print(f"{ok}/{len(tests)} passed")
+    raise SystemExit(0 if ok == len(tests) else 1)

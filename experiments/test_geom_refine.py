@@ -82,3 +82,4 @@ if __name__ == "__main__":
         except AssertionError as e:
             print(f"FAIL  {t.__name__}: {e}")
     print(f"{ok}/2 passed")
+    raise SystemExit(0 if ok == 2 else 1)

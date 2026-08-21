@@ -67,6 +67,57 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_lock_gate_wiring.py
 
+      # Script-contract fixes: each of these swallowed its own assertion failures and exited 0,
+      # so none could have failed a CI step before now. Exit codes verified by deliberately
+      # breaking an assertion in each. All five run on numpy+scipy alone -- numba, torch and
+      # cupy are import-guarded, and the driver tests inject their own blind indexer/fan-out
+      # rather than reaching for a GPU, so nothing here degrades silently on the CPU runner.
+      - name: experiments/test_multilattice.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_multilattice.py
+
+      - name: experiments/test_warmup_batch.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_warmup_batch.py
+
+      - name: experiments/test_missbuf_rescue.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_missbuf_rescue.py
+
+      - name: experiments/test_geom_bridge.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_geom_bridge.py
+
+      # ~50s, by far the slowest step here: it refines over 540 synthetic frames. Kept because
+      # it is the only cover of the geometry-refinement solver, but it is the first candidate
+      # to trim if this job gets tight.
+      - name: experiments/test_geom_refine.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_geom_refine.py
+
+      # THE GUARD ITSELF. Until now check_numbers.py ran only in a local pre-push hook, so every
+      # FACTS assertion in it -- the M3 splits, the pool-gate block, the retired-value rules --
+      # was enforced on one machine and not in CI. Editing a stored split left CI green.
+      #
+      # What runs HERE is check_arithmetic() in full (which is where those assertions live) plus
+      # the three in-repo docs, now resolved from the checkout instead of ~/git/glint. The paper
+      # and the decks live outside the repo and are reported as SKIP -- 3 checked, 6 skipped on a
+      # bare runner. That is the honest scope: this step cannot catch a number drifting in
+      # glint.tex, and the pre-push hook still has to.
+      - name: experiments/check_numbers.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/check_numbers.py
+
+      # ...and the statistics that guard uses. check_numbers.py imports nothing third-party, so
+      # its Tango score interval for the paired difference is written out by hand; this pins the
+      # closed-form MLE against brute force and the interval against its COVERAGE. Two earlier
+      # hand-written versions passed inspection while being wrong -- one with swapped bounds, one
+      # conditioning on the discordant count and reporting a marginal claim.
+      - name: experiments/test_check_numbers_ci.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_check_numbers_ci.py
+
+
       # SKIPS here, deliberately. A green check on this step is NOT coverage of the fused
       # gate+project kernel: the skip returns before a single HKLGrid is built, so everything
       # inside main() is untested on this runner and has to be run on a GPU node by hand.

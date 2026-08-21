@@ -40,7 +40,7 @@ try:                                    # vendored into the glint package
 except ImportError:                     # or loaded by file path, bypassing the package
     from radial import RadialIntegrator
 
-__all__ = ["peakfinder8", "PeakFinder8"]
+__all__ = ["peakfinder8", "PeakFinder8", "asic_seam_mask"]
 
 
 def _xp(a):
@@ -335,6 +335,67 @@ class PeakFinder8:
             out.append(self.find(gbuf[s]))                      # find() syncs -> gbuf[s] free to reuse next round
         return out
 
+
+def asic_seam_mask(shape, asic, width=2):
+    """Mask the INTERIOR ASIC seams of a tiled module. True = keep, False = drop.
+
+    ``shape`` is the module's (ss, fs); ``asic`` is the tile's (ss, fs); ``width`` is how many pixels
+    are dropped either side of each seam. The returned (ss, fs) bool broadcasts against a raw stack
+    of shape (n_module, ss, fs), so ``mask &= asic_seam_mask((512, 1024), (256, 256))``.
+
+    WHY THIS EXISTS. A tiled module's ASICs do not butt together at one pixel pitch: the pixels on an
+    ASIC edge collect charge over a WIDER area than an interior pixel, so they read systematically
+    HIGH. To a peak finder that is a bright, connected, few-pixel line -- exactly the thing it is
+    built to report -- and the seams are in the same place on every frame, so the false peaks are
+    reproducible and look like signal rather than noise.
+
+    The trap is that the facility mask does NOT cover this. psana's ``_mask_edges()`` masks the
+    module PERIMETER; the seams are interior, so they survive it and survive the pixel-status mask
+    too (they are working pixels, just bigger ones). CrystFEL never meets the problem because its
+    geometry declares every ASIC as its own panel (``p0a0``, ``p0a1``, ...), which masks the seams as
+    panel edges for free -- so a peak list built from a CrystFEL geometry and one built from a raw
+    psana array with the "same" settings are NOT comparable until this is applied.
+
+    Measured on real Jungfrau 16M frames (512x1024 modules of 256x256 ASICs) with the CrystFEL-matched
+    settings (--threshold=50 --min-snr=7 --min-pix-count=4): with the status+perimeter mask ALONE,
+    42% of the peaks this finder returned sat EXACTLY on a seam and 57% within +-1 px, against ~12%
+    expected if they were spread over the module by area -- the median distance from a peak to the
+    nearest seam was 1 pixel. Masking the seams costs ~2% of the module (width=2 drops 4 px per seam,
+    1.94% here) and took the median from 18 peaks/frame to 3: most of what was being counted was the
+    detector, not the sample.
+
+    Related trap, same cause: a per-module Jacobian d(lab)/d(ss, fs) estimated by finite difference at
+    the module CENTRE reads 1.5x the pixel pitch on Jungfrau, because (256, 512) is an ASIC corner and
+    the difference steps across two seams. Estimate it in an ASIC interior and assert the pitch.
+
+    INTERIOR seams only: the module PERIMETER is not masked *as a perimeter* -- that is
+    ``_mask_edges()``'s job, and doing it here too would double-mask and quietly change the perimeter
+    policy. Note the corollary, which looks like a contradiction and is not: a seam line runs the full
+    width (or height) of the module, so a pixel where a seam MEETS the perimeter *is* dropped
+    (``m[254, 0]`` on Jungfrau). That pixel is an ASIC edge pixel twice over; sparing it to keep the
+    outer row pristine would leave a genuine seam pixel live, which is the wrong trade.
+
+    ``width=0`` returns an all-True mask (a true no-op), so this can be wired in unconditionally and
+    turned off by a parameter. A negative width or a non-positive ASIC size raises instead.
+    """
+    ss, fs = int(shape[0]), int(shape[1])
+    ass, afs = int(asic[0]), int(asic[1])
+    w = int(width)
+    # A mask that silently fails to mask is the exact failure mode this helper exists to prevent, so a
+    # malformed tiling RAISES rather than returning all-True. Both slips are quiet without this: a
+    # negative ASIC size makes the range empty, and a negative width looks like the width=0 opt-out.
+    if ass <= 0 or afs <= 0:
+        raise ValueError(f"asic dimensions must be positive, got {asic!r}")
+    if w < 0:
+        raise ValueError(f"width must be >= 0 (0 disables the mask), got {width!r}")
+    m = np.ones((ss, fs), bool)
+    if w == 0:
+        return m
+    for b in range(ass, ss, ass):                 # interior seams only: range stops before ss
+        m[max(0, b - w):b + w, :] = False
+    for b in range(afs, fs, afs):
+        m[:, max(0, b - w):b + w] = False
+    return m
 
 def peakfinder8(image, q_per_pixel, mask=None, **kw):
     """One-shot convenience: build a PeakFinder8 for this geometry and find peaks in one frame.

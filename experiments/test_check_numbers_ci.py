@@ -10,8 +10,9 @@ out by hand -- and hand-written statistics is where this file family has already
      that number. Measured coverage 93.6% at one of the real splits and 59.3% at (2,0), with
      (0,0) coming out as the zero-width [0, 0] -- certainty from no information.
 
-Neither was caught by eye. So this checks the thing that actually matters, coverage, by simulation
-against the multinomial the data come from, and not merely that the numbers look reasonable.
+Neither was caught by eye. So this checks the thing that actually matters -- coverage -- by
+ENUMERATING the multinomial the counts come from, not by sampling it: an earlier version simulated
+4000 trials and could not separate 93.6% from 95%.
 
 Run: `python experiments/test_check_numbers_ci.py` or `pytest`.
 """
@@ -39,7 +40,12 @@ CASES = [(29, 54), (31, 45), (29, 27), (18, 24), (24, 27), (18, 20), (21, 18), (
 
 
 def _brute_p10(n01, n10, n, d, steps=200000):
-    """Constrained MLE by direct maximisation -- the closed form must agree with it."""
+    """Constrained MLE by direct maximisation -- the closed form must agree with it.
+
+    A grid search, deliberately, not a library call: scipy has no Tango implementation, so there is
+    no independent reference for the interval itself. The MLE is the piece that CAN be checked
+    against something that shares none of its algebra, and the coverage test below checks the rest.
+    """
     r = n - n01 - n10
     lo, hi = max(0.0, -d) + 1e-9, (1 - d) / 2 - 1e-9
     best = None

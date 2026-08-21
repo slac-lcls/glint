@@ -63,10 +63,15 @@ n = len(frames)
 # prefix. This benchmark has a live dataset trap (q480_fix.txt is the stream-derived set;
 # frames480.txt is a DIFFERENT dataset with ~5x the peaks per frame), so the identity of the input
 # is checked before any arm runs, not inferred from the result afterwards.
-_EXPECT_N, _EXPECT_DIGEST = 480, "c88021"          # q480_fix.txt; the run prints the digest
+# The digest covers each frame's LENGTH as well as its bytes. Hashing the concatenated bytes alone
+# is framing-blind: moving a peak row across a frame boundary leaves the total byte stream and the
+# frame COUNT identical while changing which peaks every per-frame result is computed from.
+_EXPECT_N, _EXPECT_DIGEST = 480, "bf3422"         # q480_fix.txt; the run prints the digest
 _h = hashlib.sha256()
 for _q in frames:
-    _h.update(np.ascontiguousarray(np.asarray(_q, np.float64)).tobytes())
+    _a = np.ascontiguousarray(np.asarray(_q, np.float64))
+    _h.update(b"%d," % _a.shape[0])
+    _h.update(_a.tobytes())
 _digest = _h.hexdigest()[:6]
 print(f"# {n} frames from {QFILE}; digest {_digest}; STEPS arms: {STEPS_LIST}", flush=True)
 if n != _EXPECT_N:

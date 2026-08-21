@@ -39,6 +39,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+import math
 from math import comb
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -856,6 +857,14 @@ def check_arithmetic() -> list[str]:
     # [-0.79%, +0.79%]. experiments/test_check_numbers_ci.py pins both the closed-form MLE and the
     # coverage.
     # --- BEGIN paired-difference interval (lifted verbatim by experiments/test_check_numbers_ci.py) ---
+    def _zq(p: float) -> float:
+        """Phi^-1 by bisection on math.erf -- no third-party import, and the only quantile needed."""
+        lo, hi = 0.0, 10.0
+        for _ in range(200):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if 0.5 * (1 + math.erf(mid / math.sqrt(2))) < p else (lo, mid)
+        return (lo + hi) / 2
+
     _Z975 = 1.959963984540054
 
     def _p10_mle(n01: int, n10: int, n: int, d: float) -> float:
@@ -909,7 +918,9 @@ def check_arithmetic() -> list[str]:
                    "is in the table")
 
     _N480 = 480
-    _bounds = {"blind": [0.0, 0.0], "hybrid": [0.0, 0.0]}
+    _bounds = {"blind": [0.0, 0.0], "hybrid": [0.0, 0.0]}     # pointwise, per arm
+    _sim = {"blind": [0.0, 0.0], "hybrid": [0.0, 0.0]}        # simultaneous over all 24
+    _Z_SIM = _zq(1 - 0.05 / (2 * 24))
     for (_arm, _ch), (_g, _l) in sorted(M3_SPLITS.items()):
         _p = _mcnemar_p(_g, _l)
         if _arm == 2 and _p > 0.05:
@@ -934,6 +945,12 @@ def check_arithmetic() -> list[str]:
             _lo, _hi = _ci_diff(_g, _l, _N480)
             _bounds[_ch][0] = min(_bounds[_ch][0], _lo)
             _bounds[_ch][1] = max(_bounds[_ch][1], _hi)
+            # ...and the SIMULTANEOUS version. glint_fast's sentence is about ANY arm, which is a
+            # familywise claim; the min/max of pointwise 95% intervals is not one, however natural
+            # it looks. Bonferroni over the 24 arm x channel comparisons the block presents.
+            _slo, _shi = _ci_diff(_g, _l, _N480, _Z_SIM)
+            _sim[_ch][0] = min(_sim[_ch][0], _slo)
+            _sim[_ch][1] = max(_sim[_ch][1], _shi)
     # ...and the SIZE the data still admit, which is the honest version of "no difference".
     # glint_fast quotes this interval verbatim; if it widens, that sentence is wrong.
     # ...and the SIZE the data still admit, PER CHANNEL and at the bound glint_fast actually
@@ -956,13 +973,16 @@ def check_arithmetic() -> list[str]:
                        f"against a default of {_base} gives {int(_base) + _g - _l}. One of the two "
                        "was edited without the other")
 
-    for _ch, (_want_lo, _want_hi) in (("blind", (-0.040, 0.054)), ("hybrid", (-0.037, 0.034))):
-        _lo, _hi = _bounds[_ch]
+    for _ch, _tab, _kind, (_want_lo, _want_hi) in (
+            ("blind",  _bounds, "per-arm 95%",      (-0.040, 0.054)),
+            ("hybrid", _bounds, "per-arm 95%",      (-0.037, 0.034)),
+            ("blind",  _sim,    "simultaneous 95%", (-0.058, 0.074)),
+            ("hybrid", _sim,    "simultaneous 95%", (-0.053, 0.050))):
+        _lo, _hi = _tab[_ch]
         if _lo < _want_lo - 0.0005 or _hi > _want_hi + 0.0005:
-            bad.append(f"  FACTS: across 4..80 the {_ch} 95% CI on the rate difference now spans "
-                       f"[{100*_lo:+.2f}%, {100*_hi:+.2f}%], outside the "
-                       f"[{100*_want_lo:+.1f}%, {100*_want_hi:+.1f}%] glint_fast states as the "
-                       "bound on any undetected effect in that channel")
+            bad.append(f"  FACTS: across 4..80 the {_ch} {_kind} interval on the rate difference "
+                       f"now spans [{100*_lo:+.2f}%, {100*_hi:+.2f}%], outside the "
+                       f"[{100*_want_lo:+.1f}%, {100*_want_hi:+.1f}%] glint_fast states")
 
     # m3_steps_default must BE the shipped default, not a description of it -- a fact nothing reads
     # is a comment (cf. the glint_blind_rate_pct drift above). Read it out of the source.

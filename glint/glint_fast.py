@@ -94,9 +94,16 @@ KEEP = int(os.environ.get("KEEP", "44"))                    # distinct_maxima re
 # That is deliberately NOT phrased as "the step count is inert". Failing to reject is not evidence
 # of no difference, and 12 arms per channel were compared without correction -- under Bonferroni
 # (0.05/12 = 0.0042) even STEPS=2 survives in hybrid only. What the data DO bound is the SIZE of
-# any effect that went undetected: across 4..80 the 95% CI on the rate difference against STEPS=8
-# lies within [-4.0%, +5.4%] blind and [-3.7%, +3.4%] hybrid -- at most about 26 of 480 frames
-# either way, with the widest interval at STEPS=80 ([-0.7%, +5.4%]).
+# any effect that went undetected, and that comes in two flavours which must not be conflated:
+#
+#   per arm, 95%          blind [-4.0%, +5.4%]   hybrid [-3.7%, +3.4%]
+#   ANY arm, 95% jointly  blind [-5.8%, +7.4%]   hybrid [-5.3%, +5.0%]
+#
+# The second row is the one that licenses a sentence about "any" arm. The first is a set of
+# pointwise intervals, and the min/max of twelve of those is not a simultaneous bound however
+# natural it looks to read it as one -- the joint row is Bonferroni over the 24 arm x channel
+# comparisons this block presents. Widest single interval: blind STEPS=4 (6.3 points), hybrid
+# STEPS=6 (5.2). STEPS=80 and 32 have the highest UPPER endpoints, which is a different thing.
 #
 # Those are Tango (1998) SCORE intervals for the paired difference -- asymptotic, not exact; the
 # word "exact" belongs to the McNemar p-values above and not to these. The first version of this
@@ -104,9 +111,11 @@ KEEP = int(os.environ.get("KEEP", "44"))                    # distinct_maxima re
 # randomness in how many discordant pairs there are: coverage 93.6% at one of these splits and
 # 59.3% in the sparse regime several hybrid arms sit in. It called itself exact and was neither.
 #
-# So the engineering conclusion stands without needing equivalence: an effect that could not be
-# detected at n=480 and is bounded below ~5% is not worth 1.62x the front-end cost (6.1 -> 9.8
-# ms/frame). A tighter claim needs a larger n or a pre-registered equivalence margin; neither was
+# The engineering conclusion does not need equivalence, only the absence of a reason to pay: no
+# arm is detectably better than 8, and the joint bound on how much better the best of them could
+# secretly be is +7.4% blind (~35 of 480 frames) for 1.62x the front-end cost (6.1 -> 9.8
+# ms/frame). Nothing in the data argues for spending that. A positive claim -- that some arm IS
+# better, or that they are equivalent -- needs a larger n or a pre-registered margin; neither was
 # run, and "inert" would be asserting the null.
 #
 # This RETIRES three claims the previous comment made from an n=120 sweep, all of them sample noise

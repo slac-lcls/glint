@@ -39,11 +39,13 @@ import re
 import subprocess
 import sys
 import unicodedata
+import math
 from math import comb
 from dataclasses import dataclass, field
 from pathlib import Path
 
 HOME = Path.home()
+REPO = Path(__file__).resolve().parent.parent   # the checkout this file ships in
 
 # --------------------------------------------------------------------------------------- the facts
 # Measured, and the single source of truth. Provenance in the trailing comment: PR number where
@@ -148,6 +150,24 @@ FACTS: dict[str, float | str] = {
                                          # test is trivially satisfied (2% of 54 = 1.08 < 3), so
                                          # neither scale-free test protects the small-pool tail
     "poolgate_bad_wrong_removed":  192,  # = 194 - 2
+    # M3 ascent steps, re-measured at n=480 (experiments/steps_sweep.py, 13 arms 2->80, strict bar,
+    # exact McNemar vs the shipped default). What the block records is that NO arm from 4 to 80
+    # shows a detectable difference, and how large an undetected one could still be -- not that the
+    # knob is inert, which would assert the null. See the CI bound checked below.
+    "m3_steps_default":            8,   # shipped; a throughput choice, not an accuracy one
+    "m3_blind_steps8_of480":     282,
+    "m3_blind_steps4_of480":     284,   # p = 0.894: no difference DETECTED vs 8. Not
+                                        # "saturation is at 4" -- that reads a null as a
+                                        # finding, which is the error this block avoids.
+    "m3_blind_steps80_of480":    293,   # p = 0.169 vs 8 -- 10x the work, no detectable gain
+    "m3_blind_steps2_of480":     257,   # p = 0.008 vs 8 -- the ONLY significant arm, and it is worse
+    "m3_hybrid_steps8_of480":    361,
+    "m3_hybrid_steps2_of480":    342,   # p = 0.003 vs 8
+    "m3_hybrid_steps32_of480":   366,   # the observed max; p = 0.458 vs 8, so not shown better
+    "m3_ms_steps8":              6.1,   # ms/frame blind, A100
+    "m3_ms_steps80":             9.8,   # = 1.62x, for no rate change anyone can detect
+    # Discordant splits live in M3_SPLITS below -- every arm, both channels. Four hand-picked
+    # endpoints were not enough: null endpoints say nothing about a non-monotonic interior.
     # Batched vs per-frame known-cell, at the gate. The paper used to call these "rate-identical in
     # aggregate" on the strength of the n=120 split being EXACTLY 9-9. That symmetry is the sample,
     # not the algorithm: at n=480 it is 23-29. The totals agree only to within the discordant noise.
@@ -381,6 +401,38 @@ FACTS: dict[str, float | str] = {
     "ffbidx_speedup":      12.0,    # = ffbidx_pipelined_ms / fused_b120_ms (throughput vs throughput)
 }
 
+# Every arm-vs-default discordant split from the n=480 M3 sweep, both channels: (arm-only,
+# default-only) -- frames this STEPS indexed and 8 did not, and the reverse. Its own table rather
+# than 48 flat FACTS keys, and COMPLETE rather than sampled: the claim is about the whole 4..80
+# range and the sweep is non-monotonic, so checking endpoints would leave the interior unguarded
+# while looking rigorous. check_arithmetic recomputes every p and every interval from these.
+M3_SPLITS = {
+    (  2, "blind"): ( 29,  54),
+    (  3, "blind"): ( 31,  45),
+    (  4, "blind"): ( 29,  27),
+    (  5, "blind"): ( 18,  24),
+    (  6, "blind"): ( 24,  27),
+    ( 10, "blind"): ( 18,  20),
+    ( 12, "blind"): ( 21,  18),
+    ( 16, "blind"): ( 30,  24),
+    ( 24, "blind"): ( 27,  19),
+    ( 32, "blind"): ( 30,  23),
+    ( 48, "blind"): ( 22,  23),
+    ( 80, "blind"): ( 32,  21),
+    (  2, "hybrid"): ( 10,  29),
+    (  3, "hybrid"): ( 16,  23),
+    (  4, "hybrid"): ( 16,  16),
+    (  5, "hybrid"): ( 14,  15),
+    (  6, "hybrid"): ( 20,  18),
+    ( 10, "hybrid"): ( 12,  18),
+    ( 12, "hybrid"): ( 10,  16),
+    ( 16, "hybrid"): ( 14,  17),
+    ( 24, "hybrid"): ( 14,  16),
+    ( 32, "hybrid"): ( 17,  12),
+    ( 48, "hybrid"): ( 16,  12),
+    ( 80, "hybrid"): ( 19,  18),
+}
+
 DEFAULT_TARGETS = [
     HOME / "git/papers/glint/glint.tex",
     # source of truth for the Confluence "epixUHR 4M -- DRP per-event processing time" comment;
@@ -394,9 +446,13 @@ DEFAULT_TARGETS = [
     # README.md kept claiming "~550x the throughput" (11542/21.3, the retired blind figure) long after
     # the paper and the decks had been corrected to ~340x. The guard watched the deliverables we
     # publish and missed the three files a new collaborator opens first.
-    HOME / "git/glint/README.md",
-    HOME / "git/glint/ROADMAP.md",
-    HOME / "git/glint/GLINT_REPORT.md",
+    # ...resolved from THIS CHECKOUT, not from a fixed clone path. These three live in the repo, so
+    # keying them to ~/git/glint meant a worktree, a CI runner or anyone else's clone silently
+    # checked a different copy or none at all -- which is why the guard had never run in CI on the
+    # files it is most able to check.
+    REPO / "README.md",
+    REPO / "ROADMAP.md",
+    REPO / "GLINT_REPORT.md",
 ]
 PDF_TARGETS = [
     HOME / "git/slides/glint/glint_summary.pdf",
@@ -778,6 +834,172 @@ def check_arithmetic() -> list[str]:
     # real replay gives, because a refused stream keeps running and can lock later. The estimate
     # was written here while the measurement was still going and never re-read against the table
     # it sits beside, which is this file's own failure mode reproduced inside this file.
+    # The M3 block. It does NOT claim equivalence -- failing to reject is not evidence of no
+    # difference -- so what is guarded is what was measured: no arm from 4 to 80 reaches
+    # significance in either channel, STEPS=2 does, and the interval bounding any true effect stays
+    # where glint_fast quotes it. EVERY arm is checked, both channels: the sweep is non-monotonic,
+    # so endpoint checks would leave the interior unguarded while looking thorough.
+    def _mcnemar_p(a: int, b: int) -> float:
+        m = a + b
+        return 1.0 if m == 0 else min(1.0, 2.0 * sum(comb(m, k) for k in range(min(a, b) + 1)) / 2.0 ** m)
+
+    # Tango (1998) score interval for the paired rate difference d = p01 - p10.
+    #
+    # The first version of this was Clopper-Pearson on the conditional share n01/(n01+n10),
+    # rescaled by the OBSERVED discordance rate m/n. That conditions on m and then reports the
+    # result as an interval for the marginal difference, which ignores the randomness in m.
+    # Measured coverage: 93.6% at the (10,29)-matching probabilities, and 59.3% at (2,0) -- and
+    # (0,0) came out as the zero-width [0, 0], i.e. certainty from no information. It read as an
+    # exact interval and was not one.
+    #
+    # Tango's score interval inverts the score test for d, using the constrained MLE of p10 under
+    # p01 - p10 = d. Measured coverage on the same configurations: 95.0%, 98.3%, and (0,0) gives
+    # [-0.79%, +0.79%]. experiments/test_check_numbers_ci.py pins both the closed-form MLE and the
+    # coverage.
+    # --- BEGIN paired-difference interval (lifted verbatim by experiments/test_check_numbers_ci.py) ---
+    def _zq(p: float) -> float:
+        """Phi^-1 by bisection on math.erf -- no third-party import, and the only quantile needed."""
+        lo, hi = 0.0, 10.0
+        for _ in range(200):
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if 0.5 * (1 + math.erf(mid / math.sqrt(2))) < p else (lo, mid)
+        return (lo + hi) / 2
+
+    _Z975 = 1.959963984540054
+
+    def _p10_mle(n01: int, n10: int, n: int, d: float) -> float:
+        """Constrained MLE of p10 given p01 - p10 = d. Maximising
+             L(p) = n01*ln(p+d) + n10*ln(p) + r*ln(1-2p-d),  r = n - n01 - n10
+        and clearing denominators gives 2n*p^2 - [n01+n10 - d*(n01+3*n10+2r)]*p - n10*d*(1-d) = 0;
+        the positive root is the MLE. (Checked against brute-force maximisation, agrees to 9e-7.)"""
+        r = n - n01 - n10
+        B = n01 + n10 - d * (n01 + 3 * n10 + 2 * r)
+        C = -n10 * d * (1 - d)
+        p = (B + max(B * B - 8 * n * C, 0.0) ** 0.5) / (4 * n)
+        return min(max(p, max(0.0, -d)), (1.0 - d) / 2)
+
+    def _score(n01: int, n10: int, n: int, d: float) -> float:
+        p10 = _p10_mle(n01, n10, n, d)
+        var = n * (2 * p10 + d * (1 - d))
+        if var <= 0:
+            k = n01 - n10 - n * d
+            return 0.0 if k == 0 else (1e18 if k > 0 else -1e18)
+        return (n01 - n10 - n * d) / var ** 0.5
+
+    def _ci_diff(n01: int, n10: int, n: int, z: float = _Z975):
+        """95% CI on the RATE difference (arm - default) = {d : |Z(d)| <= z}.
+
+        This is what turns "not significant" into a statement with a SIZE attached, which is the
+        point: the block quotes an interval instead of claiming a parameter is inert. Z is
+        decreasing in d, so each end is a single bisection.
+        """
+        point = (n01 - n10) / n
+        a, b = -1.0 + 1e-12, point
+        for _ in range(60):
+            mid = (a + b) / 2
+            a, b = (mid, b) if _score(n01, n10, n, mid) > z else (a, mid)
+        low = (a + b) / 2
+        a, b = point, 1.0 - 1e-12
+        for _ in range(60):
+            mid = (a + b) / 2
+            a, b = (a, mid) if _score(n01, n10, n, mid) < -z else (mid, b)
+        return low, (a + b) / 2
+
+    # --- END paired-difference interval ---
+
+    # The table must be COMPLETE before anything is concluded from it: deleting an entry would
+    # otherwise quietly narrow "every arm, both channels" to "the arms that are left".
+    _M3_ARMS = (2, 3, 4, 5, 6, 10, 12, 16, 24, 32, 48, 80)
+    _want_keys = {(a, c) for a in _M3_ARMS for c in ("blind", "hybrid")}
+    if set(M3_SPLITS) != _want_keys:
+        _missing = sorted(_want_keys - set(M3_SPLITS)); _extra = sorted(set(M3_SPLITS) - _want_keys)
+        bad.append(f"  FACTS: M3_SPLITS is not the full sweep -- missing {_missing}, unexpected "
+                   f"{_extra}. The block claims every arm in both channels; it can only claim what "
+                   "is in the table")
+
+    _N480 = 480
+    _bounds = {"blind": [0.0, 0.0], "hybrid": [0.0, 0.0]}     # pointwise, per arm
+    _sim = {"blind": [0.0, 0.0], "hybrid": [0.0, 0.0]}        # simultaneous over all 24
+    _Z_SIM = _zq(1 - 0.05 / (2 * 24))
+    for (_arm, _ch), (_g, _l) in sorted(M3_SPLITS.items()):
+        _p = _mcnemar_p(_g, _l)
+        if _arm == 2 and _p > 0.05:
+            bad.append(f"  FACTS: M3 STEPS=2/{_ch} was MEASURED significantly worse; the stored "
+                       f"split {_g}/{_l} now gives p = {_p:.3g}, so glint_fast's 'the only arm that "
+                       "differs is the shortest, and it is worse' no longer holds")
+        # ...and WORSE, which the p-value alone cannot say: McNemar is symmetric, so swapping the
+        # split to (54, 29) leaves p = 0.008 untouched while turning STEPS=2 into significantly
+        # BETTER than the default. The direction is half the claim, so check it explicitly.
+        if _arm == 2 and _g >= _l:
+            bad.append(f"  FACTS: M3 STEPS=2/{_ch} split {_g}/{_l} says the SHORT arm gained at "
+                       "least as many frames as it lost, i.e. fewer steps are as good or better. "
+                       "That inverts the block, and p cannot catch it -- McNemar is symmetric")
+        # EVERY arm but 2, not just >= 4. Arm 3 fell through both branches and was unguarded, so
+        # the "only significant arm is 2" invariant did not actually cover the arm most likely to
+        # move next -- it is the one adjacent to the significant one.
+        if _arm != 2 and _p <= 0.05:
+            bad.append(f"  FACTS: M3 STEPS={_arm}/{_ch} now reaches significance (split {_g}/{_l}, "
+                       f"p = {_p:.3g}). The block says STEPS=2 is the only arm that differs -- that "
+                       "IS the result, so rewrite the claim rather than the table")
+        if _arm >= 4:
+            _lo, _hi = _ci_diff(_g, _l, _N480)
+            _bounds[_ch][0] = min(_bounds[_ch][0], _lo)
+            _bounds[_ch][1] = max(_bounds[_ch][1], _hi)
+            # ...and the SIMULTANEOUS version. glint_fast's sentence is about ANY arm, which is a
+            # familywise claim; the min/max of pointwise 95% intervals is not one, however natural
+            # it looks. Bonferroni over the 24 arm x channel comparisons the block presents.
+            _slo, _shi = _ci_diff(_g, _l, _N480, _Z_SIM)
+            _sim[_ch][0] = min(_sim[_ch][0], _slo)
+            _sim[_ch][1] = max(_sim[_ch][1], _shi)
+    # ...and the SIZE the data still admit, which is the honest version of "no difference".
+    # glint_fast quotes this interval verbatim; if it widens, that sentence is wrong.
+    # ...and the SIZE the data still admit, PER CHANNEL and at the bound glint_fast actually
+    # prints. A single merged extremum let the hybrid claim drift up to the blind allowance, and a
+    # slack threshold (-4.5/+6.0) permitted numbers the prose does not support. These are the
+    # displayed values with one rounding step of slack, no more.
+    # The headline totals are DERIVED, not independent: arm_total = default_total + gained - lost.
+    # They were added as flat facts and then orphaned when the splits moved into M3_SPLITS, which
+    # is the failure this file documents twice over -- a fact nothing reads is a comment, and here
+    # the comment was a number the prose quotes. Tie each one to the split it came from.
+    for _ch, _arm, _key in (("blind", 2, "m3_blind_steps2_of480"),
+                            ("blind", 4, "m3_blind_steps4_of480"),
+                            ("blind", 80, "m3_blind_steps80_of480"),
+                            ("hybrid", 2, "m3_hybrid_steps2_of480"),
+                            ("hybrid", 32, "m3_hybrid_steps32_of480")):
+        _base = F["m3_blind_steps8_of480"] if _ch == "blind" else F["m3_hybrid_steps8_of480"]
+        _g, _l = M3_SPLITS[(_arm, _ch)]
+        if int(F[_key]) != int(_base) + _g - _l:
+            bad.append(f"  FACTS: {_key} = {F[_key]} but the {_ch} STEPS={_arm} split {_g}/{_l} "
+                       f"against a default of {_base} gives {int(_base) + _g - _l}. One of the two "
+                       "was edited without the other")
+
+    for _ch, _tab, _kind, (_want_lo, _want_hi) in (
+            ("blind",  _bounds, "per-arm 95%",      (-0.040, 0.054)),
+            ("hybrid", _bounds, "per-arm 95%",      (-0.037, 0.034)),
+            ("blind",  _sim,    "simultaneous 95%", (-0.058, 0.074)),
+            ("hybrid", _sim,    "simultaneous 95%", (-0.053, 0.050))):
+        _lo, _hi = _tab[_ch]
+        if _lo < _want_lo - 0.0005 or _hi > _want_hi + 0.0005:
+            bad.append(f"  FACTS: across 4..80 the {_ch} {_kind} interval on the rate difference "
+                       f"now spans [{100*_lo:+.2f}%, {100*_hi:+.2f}%], outside the "
+                       f"[{100*_want_lo:+.1f}%, {100*_want_hi:+.1f}%] glint_fast states")
+
+    # m3_steps_default must BE the shipped default, not a description of it -- a fact nothing reads
+    # is a comment (cf. the glint_blind_rate_pct drift above). Read it out of the source.
+    _gf_path = Path(__file__).resolve().parent.parent / "glint" / "glint_fast.py"
+    _gf = _gf_path.read_text(encoding="utf-8") if _gf_path.exists() else ""
+    _m = re.search(r'STEPS = int\(os\.environ\.get\("STEPS", "(\d+)"\)\)', _gf)
+    if not _gf:
+        bad.append(f"  FACTS: {_gf_path} unreadable, so m3_steps_default is unchecked and the "
+                   "whole M3 block is stated against a baseline nothing verifies")
+    elif _m is None:
+        bad.append("  FACTS: the STEPS default could not be located in glint/glint_fast.py, so "
+                   "the m3_steps_default check is dead -- fix the pattern, do not drop the check")
+    elif int(_m.group(1)) != int(F["m3_steps_default"]):
+        bad.append(f"  FACTS: m3_steps_default is {F['m3_steps_default']} but glint_fast ships "
+                   f"{_m.group(1)}; every M3 comparison is against a baseline that is no longer "
+                   "the default, so the block describes a setting nobody runs")
+
     if F["poolgate_clean_maxpool"] != F["poolgate_bad_minpool"]:
         bad.append("  FACTS: poolgate_clean_maxpool and poolgate_bad_minpool were MEASURED equal "
                    "(54); moving one without the other erases the overlap the claim rests on")

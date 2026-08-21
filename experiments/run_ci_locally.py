@@ -46,6 +46,8 @@ STEPS = [
     # Skips without a GPU and exits 0 (glint#123). Running it here is still worth the second it
     # costs: the module body resolves HKLGrid/_panel_geom/recip_from_M/cell_to_Ar at import, so a
     # rename in glint/ fails here rather than waiting for someone with a GPU.
+    "experiments/check_numbers.py",
+    "experiments/test_check_numbers_ci.py",
     "experiments/test_gate_project.py",
 ]
 
@@ -68,7 +70,11 @@ class _Block(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, _Block())
 for _m in [m for m in sys.modules if m.split(".")[0] in BLOCKED]:
     del sys.modules[_m]
-runpy.run_path(sys.argv[1], run_name="__main__")
+_target = sys.argv[1]
+sys.argv = [_target]        # a script that reads argv[1:] would otherwise see its own path as an
+                            # argument -- check_numbers.py took it as a TARGET and checked itself,
+                            # reporting 64 problems that were its own rule patterns
+runpy.run_path(_target, run_name="__main__")
 """.format(blocked=BLOCKED)
 
 

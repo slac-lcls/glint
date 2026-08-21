@@ -78,7 +78,56 @@ from glint.multishot import same_lattice
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 NTOP = int(os.environ.get("NTOP", "30"))                    # ② candidate-pool size (M4 width)
 KEEP = int(os.environ.get("KEEP", "44"))                    # distinct_maxima retained
-STEPS = int(os.environ.get("STEPS", "8"))                   # M3 ascent steps. Default 8 = blind saturation (same_lattice 84/120, the ceiling; hybrid 117/120) and blind-SAFE; still 4x faster than the old 80 default (front-end 10.8 vs 83ms) at equal-or-better rate. STEPS=5 ties hybrid (118, rescue-buffered) + ~10% faster but blind-standalone drops to 77 -> not blind-safe. Sweep 2026-07-12: blind saturates >=8, 16-80 flat within +-3-frame noise.
+# M3 ascent steps. 8 is a THROUGHPUT choice: no arm from 4 to 80 is measurably better, and the
+# longer ones cost real time. See below for what that does and does not license as a claim.
+#
+# RE-MEASURED at n=480 (experiments/steps_sweep.py, 13 arms 2->80, strict bar, exact McNemar
+# against this default):
+#   STEPS      2     3     4     5     6     8    10    12    16    24    32    48    80
+#   blind    257   268   284   276   279   282   280   285   288   290   289   281   293
+#   hybrid   342   354   361   360   363   361   355   355   358   359   366   365   362
+#
+# NO SIGNIFICANT DIFFERENCE IS DETECTED anywhere from 4 to 80, in either channel (blind p >= 0.17,
+# hybrid p >= 0.32). The one arm that does differ is STEPS=2, and it is WORSE (blind p = 0.008,
+# hybrid p = 0.003).
+#
+# That is deliberately NOT phrased as "the step count is inert". Failing to reject is not evidence
+# of no difference, and 12 arms per channel were compared without correction -- under Bonferroni
+# (0.05/12 = 0.0042) even STEPS=2 survives in hybrid only. What the data DO bound is the SIZE of
+# any effect that went undetected, and that comes in two flavours which must not be conflated:
+#
+#   per arm, 95%          blind [-4.0%, +5.4%]   hybrid [-3.7%, +3.4%]
+#   ANY arm, 95% jointly  blind [-5.8%, +7.4%]   hybrid [-5.3%, +5.0%]
+#
+# The second row is the one that licenses a sentence about "any" arm. The first is a set of
+# pointwise intervals, and the min/max of twelve of those is not a simultaneous bound however
+# natural it looks to read it as one -- the joint row is Bonferroni over the 24 arm x channel
+# comparisons this block presents. Widest single interval: blind STEPS=4 (6.3 points), hybrid
+# STEPS=6 (5.2). STEPS=80 and 32 have the highest UPPER endpoints, which is a different thing.
+#
+# Those are Tango (1998) SCORE intervals for the paired difference -- asymptotic, not exact; the
+# word "exact" belongs to the McNemar p-values above and not to these. The first version of this
+# comment quoted a Clopper-Pearson interval on the conditional discordant share, which ignores the
+# randomness in how many discordant pairs there are: coverage 93.6% at one of these splits and
+# 59.3% in the sparse regime several hybrid arms sit in. It called itself exact and was neither.
+#
+# The engineering conclusion does not need equivalence, only the absence of a reason to pay: no
+# arm is detectably better than 8, and the joint bound on how much better the best of them could
+# secretly be is +7.4% blind (~35 of 480 frames) for 1.62x the front-end cost (6.1 -> 9.8
+# ms/frame). Nothing in the data argues for spending that. A positive claim -- that some arm IS
+# better, or that they are equivalent -- needs a larger n or a pre-registered margin; neither was
+# run, and "inert" would be asserting the null.
+#
+# This RETIRES three claims the previous comment made from an n=120 sweep, all of them sample noise
+# read as structure:
+#   "blind saturates >=8"          -- 284 at STEPS=4 vs 282 at 8, p = 0.894.
+#   "16-80 flat within +-3 frames" -- that range spans 281-293 at n=480.
+#   "STEPS=5 ... drops to 77, not  -- 276 vs 282, p = 0.441. No such cliff.
+#    blind-safe"
+# It also does NOT bear on the wider claim that M3 rests on under-optimising: that came from
+# CG/BB/Newton/LM scoring lower, and a different OPTIMISER is not more steps of the same one.
+# Untested here.
+STEPS = int(os.environ.get("STEPS", "8"))
 QDIST = os.environ.get("QDIST", "0") == "1"                  # D2: reciprocal-distance inlier (sigma-matched)
 QDTOL = float(os.environ.get("QDTOL", "0.004"))             # inlier radius in 1/A (q-space)
 DETREJ = os.environ.get("DETREJ", "0") == "1"               # D1: reject degenerate cell (OFF: regressed deflate)

@@ -20,8 +20,14 @@ pixel. Masking the seams costs ~2% of the module and took the median from 18 pea
 The properties worth pinning, in the order they would hurt if broken:
   * width=0 IS A TRUE NO-OP (all True), so the mask can be wired in unconditionally and disabled by a
     parameter rather than by an `if` at every call site.
-  * It masks INTERIOR seams only, never the module perimeter -- that is `_mask_edges()`'s job, and a
-    helper that silently did both would double-mask and quietly change the perimeter policy.
+  * It masks INTERIOR seams only and never the perimeter AS A PERIMETER -- that is `_mask_edges()`'s
+    job, and a helper that silently did both would double-mask and change the perimeter policy. The
+    corollary looks like a contradiction and is not: a seam runs the full width of the module, so the
+    pixel where a seam MEETS the perimeter is dropped. It is an ASIC edge pixel twice over, and
+    sparing it to keep the outer row pristine would leave a genuine seam pixel live.
+  * A malformed tiling RAISES rather than returning an all-True mask. A mask that silently fails to
+    mask is the precise failure this exists to prevent, and a negative ASIC size (empty range) or a
+    negative width (looks like the width=0 opt-out) would both be silent without an explicit check.
   * It broadcasts against a raw (n_module, ss, fs) stack, because that is the shape psana hands you.
   * The point of the whole thing: a seam artifact IS found by the finder without the mask and is NOT
     found with it, while a real peak away from the seam survives both.
@@ -59,11 +65,28 @@ masked_cols = np.where(~m[5, :])[0]
 check("row seams at the interior ASIC boundary", list(masked_rows) == [254, 255, 256, 257], masked_rows)
 check("col seams at every interior ASIC boundary",
       list(masked_cols) == [254, 255, 256, 257, 510, 511, 512, 513, 766, 767, 768, 769], masked_cols)
-check("perimeter is NOT masked (that is _mask_edges' job)",
+check("perimeter is not masked AS A PERIMETER (that is _mask_edges' job)",
       bool(m[0, 5]) and bool(m[511, 5]) and bool(m[5, 0]) and bool(m[5, 1023]))
+# The corollary, pinned so it does not get "fixed" later: a seam runs the FULL width of the module, so
+# the pixel where a seam meets the perimeter IS dropped. It is an ASIC edge pixel twice over, and
+# sparing it to keep the outer row pristine would leave a genuine seam pixel live.
+check("a seam still reaches the module edge",
+      (not m[254, 0]) and (not m[254, 1023]) and (not m[0, 255]) and (not m[511, 255]),
+      (m[254, 0], m[254, 1023], m[0, 255], m[511, 255]))
 check("cost is a couple of percent", 0.01 < 1 - m.mean() < 0.04, 1 - m.mean())
 check("broadcasts against a raw (n_module, ss, fs) stack",
       (np.ones((4, 512, 1024), bool) & m).shape == (4, 512, 1024))
+
+# A malformed tiling must RAISE, not return an all-True mask: silently not masking is the exact
+# failure this helper exists to prevent, and both slips below are quiet without an explicit check.
+for bad_asic, bad_w, why in [((-256, 256), 2, "negative asic size"),
+                             ((0, 256), 2, "zero asic size"),
+                             ((256, 256), -3, "negative width")]:
+    try:
+        asic_seam_mask((512, 1024), bad_asic, bad_w)
+        check(f"{why} raises rather than silently not masking", False, "returned a mask")
+    except ValueError:
+        check(f"{why} raises rather than silently not masking", True)
 
 # A module that is NOT an exact multiple of the ASIC size still only gets interior seams.
 m2 = asic_seam_mask((300, 300), (256, 256), width=1)

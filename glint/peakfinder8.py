@@ -368,14 +368,28 @@ def asic_seam_mask(shape, asic, width=2):
     the module CENTRE reads 1.5x the pixel pitch on Jungfrau, because (256, 512) is an ASIC corner and
     the difference steps across two seams. Estimate it in an ASIC interior and assert the pitch.
 
+    INTERIOR seams only: the module PERIMETER is not masked *as a perimeter* -- that is
+    ``_mask_edges()``'s job, and doing it here too would double-mask and quietly change the perimeter
+    policy. Note the corollary, which looks like a contradiction and is not: a seam line runs the full
+    width (or height) of the module, so a pixel where a seam MEETS the perimeter *is* dropped
+    (``m[254, 0]`` on Jungfrau). That pixel is an ASIC edge pixel twice over; sparing it to keep the
+    outer row pristine would leave a genuine seam pixel live, which is the wrong trade.
+
     ``width=0`` returns an all-True mask (a true no-op), so this can be wired in unconditionally and
-    turned off by a parameter.
+    turned off by a parameter. A negative width or a non-positive ASIC size raises instead.
     """
     ss, fs = int(shape[0]), int(shape[1])
     ass, afs = int(asic[0]), int(asic[1])
-    m = np.ones((ss, fs), bool)
     w = int(width)
-    if w <= 0:
+    # A mask that silently fails to mask is the exact failure mode this helper exists to prevent, so a
+    # malformed tiling RAISES rather than returning all-True. Both slips are quiet without this: a
+    # negative ASIC size makes the range empty, and a negative width looks like the width=0 opt-out.
+    if ass <= 0 or afs <= 0:
+        raise ValueError(f"asic dimensions must be positive, got {asic!r}")
+    if w < 0:
+        raise ValueError(f"width must be >= 0 (0 disables the mask), got {width!r}")
+    m = np.ones((ss, fs), bool)
+    if w == 0:
         return m
     for b in range(ass, ss, ass):                 # interior seams only: range stops before ss
         m[max(0, b - w):b + w, :] = False

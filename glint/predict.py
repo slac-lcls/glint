@@ -423,7 +423,13 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
         img = _load_image(os.path.join(image_dir, os.path.basename(str(r.get("image", "")))), data_path)
         pred = predict_spots(M, panels, clen, lam, dmin=dmin, tol=tol)
         I, sig, peak, bg = integrate_spots(img, pred)
-        keep = (I > 0) & np.isfinite(sig) & (sig > 0)
+        # Keep NON-POSITIVE intensities. Dropping them is a selection on the measured value of
+        # the quantity being measured: a reflection whose true I is ~0 measures negative about
+        # half the time, so discarding exactly those while keeping their positive counterparts
+        # biases the retained mean upward, worst where the data are weakest. partialator takes
+        # negatives, and the streaming path (stream_driver) already kept them and cut by SNR at
+        # merge time instead -- this line was the only place the two paths disagreed. glint#130.
+        keep = np.isfinite(I) & np.isfinite(sig) & (sig > 0)
         r.update(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=peak[keep], bg=bg[keep])
         n += 1; tot += int(keep.sum())
     return n, tot
@@ -493,7 +499,7 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
             dset = f[data_key]
             frame = np.asarray(dset[ev] if getattr(dset, "ndim", 0) >= 3 else dset, np.float32)
             I, sig, peak, bg = integrate_spots(frame, pred, half=half)
-            keep = (I > 0) & np.isfinite(sig) & (sig > 0)
+            keep = np.isfinite(I) & np.isfinite(sig) & (sig > 0)   # non-positive I kept: glint#130
             r.update(M=M, pred=pred[keep], I=I[keep], sigma=sig[keep], peak=peak[keep], bg=bg[keep])  # store canonical M so the stream cell matches the hkl
             n += 1; tot += int(keep.sum())
     finally:

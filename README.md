@@ -64,3 +64,18 @@ GLINT's blind sparse indexer is a gridless **multi-start optimizer + cross-frame
 FFT). The **3-D-FFT** method it grew out of (the *fftindex* prototype — a learned peakfinder + multi-shot
 consensus on the transform volume) is now the **dense-data** (rotation / many-peak) front end. That
 research write-up is preserved in [`docs/lineage.md`](docs/lineage.md).
+
+## Copyright
+
+COPYRIGHT (c) SLAC National Accelerator Laboratory. All rights reserved. This work is supported
+[in part] by the U.S. Department of Energy, Office of Basic Energy Sciences under contract
+DE-AC02-76SF00515.
+
+**Usage restrictions.** Neither the name of the Leland Stanford Junior University, SLAC National
+Accelerator Laboratory, U.S. Department of Energy nor the names of its contributors may be used to
+endorse or promote products derived from this software without specific prior written permission.
+
+**Licence.** GLINT is released under the terms in [`LICENSE.md`](LICENSE.md) (BSD 3-Clause with a
+SLAC Enhancements grant-back). Third-party material carrying its own terms is recorded in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). The notice above is also in
+[`COPYRIGHT`](COPYRIGHT) as a standalone file, which is where the DOE contract number lives.

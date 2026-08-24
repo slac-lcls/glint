@@ -198,8 +198,10 @@ precomputed plane sets from psana's own `gain_maps_epix10ka_any`.
 The **common mode** warning does NOT stand as written, on two counts. It is not per-ASIC: groups are
 bounded by the **bank** — panel (352,384) splits at row 176 into two ASIC rows, each into 8 banks of
 (176,48) — and it is a masked median over H/M-gain pixels only, applied banks→rows→cols per the
-`mode` bitmask. It is implemented and verified bit-exact against a transcription of psana's routines
-over modes 2/1/4/3/7 (`experiments/xtc_bridge/test_gpu_calib_cm.py`, numpy-only, no GPU needed).
+`mode` bitmask. It is implemented and verified against psana's own routines over modes 2/1/4/3/7
+(`experiments/xtc_bridge/test_gpu_calib_cm.py`, numpy-only, no GPU needed) — to a tolerance of
+2e-3, against the live library where psana is importable and against checked-in golden outputs
+generated from it otherwise.
 
 And on this run it does **nothing at all** — for psana as much as for us (job 34277169). The run's
 `common_mode` constants are the default `(7,2,10,10)`, so `cormax` = 10 ADU, while the actual

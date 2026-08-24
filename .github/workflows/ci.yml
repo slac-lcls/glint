@@ -162,6 +162,11 @@ jobs:
         run: python test_geom_provenance.py
         working-directory: experiments/xtc_bridge
 
+      # Compares GpuCalibrator._common_mode against golden outputs generated once from real psana
+      # (common_mode_golden.npz). This runner has no psana, but the check is NOT a no-op: all five
+      # modes, the bank split and the npix_min boundary are exercised against those goldens. Where
+      # psana IS available the same test additionally compares at full detector size and verifies
+      # the golden file still reproduces, so a stale golden cannot go unnoticed.
       - name: experiments/xtc_bridge/test_gpu_calib_cm.py
         if: ${{ !cancelled() }}
         run: python test_gpu_calib_cm.py

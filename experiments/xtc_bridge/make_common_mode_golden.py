@@ -3,6 +3,7 @@
 CASES and make_inputs are lifted verbatim from test_gpu_calib_cm.py so the generator cannot drift
 from the test; the test's own staleness check re-verifies this whenever psana is present.
 """
+import os
 import numpy as np
 from Detector.UtilsCommonMode import (
     common_mode_rows, common_mode_cols, common_mode_2d,
@@ -51,7 +52,8 @@ def make_inputs(nseg, ncol):
 out = {}
 for key, arrf, gmask, mode, cormax in make_inputs(1, 64):
     out[key] = (psana_reference(arrf, gmask, mode, cormax, 10) - arrf).astype(np.float32)
-np.savez_compressed("common_mode_golden.npz",
-                    psana_release="ana-4.0.59-py3-minipytorch", **out)
-import os
-print("cases:", len(out), " bytes:", os.path.getsize("common_mode_golden.npz"))
+# beside this script, so regeneration updates the file the test actually loads no matter
+# which directory it is invoked from
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "common_mode_golden.npz")
+np.savez_compressed(OUT, psana_release="ana-4.0.59-py3-minipytorch", **out)
+print("wrote", OUT, "cases:", len(out), " bytes:", os.path.getsize(OUT))

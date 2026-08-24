@@ -33,6 +33,14 @@ five modes, the bank split and the `npix_min` boundary. Where psana *is* availab
 additionally compares at full detector size and re-derives the goldens, so a stale golden file is
 caught rather than trusted.
 
+---
+
+## 2. Original code written with reference to third-party source
+
+No upstream code is present in these files. They are GLINT's own implementations, written while
+reading the upstream source rather than from published descriptions alone, and are recorded here for
+that reason.
+
 ### fast-feedback-indexer (ffbidx) — BSD-3-Clause
 
 `glint/replica_gpu.py` and `glint/replica_gpu_batch.py` implement the fast-feedback cell-assembly

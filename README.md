@@ -52,15 +52,19 @@ today. GLINT fills that gap, emitting a CrystFEL `.stream` the downstream stages
 > Set one of these in the `IndexGLINT` config before running the DAG above:
 >
 > * `integrate: true` — GLINT predicts and box-integrates its own reflections and writes real
->   I/sigma, so the stream goes directly to `PartialatorMerger`; or
-> * `tofile:` — hand the orientations to an `indexamajig --indexing=file` step, whose prediction
->   refinement imposes the lattice symmetry. This gives the **better merge**.
+>   I/sigma, so the stream goes directly to `PartialatorMerger`. On the `PeakFinderSFX` path this
+>   also requires `image_dir`, since integration needs the image data; the config is rejected
+>   without it.
+> * `tofile:` — write a solution file and **add an `indexamajig --indexing=file` task between
+>   `GLINTIndexer` and `StreamFileConcatenator`**. CrystFEL's prediction refinement imposes the
+>   lattice symmetry, and this gives the **better merge**. Setting `tofile:` alone is not enough:
+>   the DAG above would still concatenate the placeholder stream.
 
 Install the Task into a LUTE tree with [`lute/install_into_lute.sh`](lute/install_into_lute.sh);
 [`lute/README.md`](lute/README.md) has the configuration, and
 [`lute/STATUS.md`](lute/STATUS.md) is the honest account of what is measured, what is assumed and
-what has never been run. All seven of its tracked readiness items are closed; it also lists work
-that remains beyond them.
+what has never been run. Check it for current readiness rather than relying on a count here — its
+summary and its per-item sections do not presently agree with each other.
 
 ## Library
 

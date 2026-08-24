@@ -45,16 +45,22 @@ for `CrystFELIndexer` in the LCLS SFX workflow:
 
 The reason it exists: none of LUTE's bundled CrystFEL builds are compiled with FFBIDX support, so
 `indexamajig --indexing=ffbidx` fails and GPU fast-feedback-style indexing is unavailable in LUTE
-today. GLINT fills that gap and emits the same CrystFEL `.stream` the rest of the DAG already
-consumes, so nothing downstream changes.
+today. GLINT fills that gap, emitting a CrystFEL `.stream` the downstream stages already understand.
+
+> ⚠️ **The default stream is orientation-only and is *not* mergeable.** Every reflection carries
+> placeholder `I=0.00 sigma(I)=0.00`, so feeding it straight to `PartialatorMerger` merges zeros.
+> Set one of these in the `IndexGLINT` config before running the DAG above:
+>
+> * `integrate: true` — GLINT predicts and box-integrates its own reflections and writes real
+>   I/sigma, so the stream goes directly to `PartialatorMerger`; or
+> * `tofile:` — hand the orientations to an `indexamajig --indexing=file` step, whose prediction
+>   refinement imposes the lattice symmetry. This gives the **better merge**.
 
 Install the Task into a LUTE tree with [`lute/install_into_lute.sh`](lute/install_into_lute.sh);
-[`lute/README.md`](lute/README.md) has the configuration.
-
-⚠️ **Read [`lute/STATUS.md`](lute/STATUS.md) before relying on it.** It is the honest account of
-what is measured, what is assumed, and what has never been run, and it tracks the remaining items
-between this and production — most are closed, not all.
-
+[`lute/README.md`](lute/README.md) has the configuration, and
+[`lute/STATUS.md`](lute/STATUS.md) is the honest account of what is measured, what is assumed and
+what has never been run. All seven of its tracked readiness items are closed; it also lists work
+that remains beyond them.
 
 ## Library
 

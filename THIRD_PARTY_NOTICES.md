@@ -21,10 +21,10 @@ functions — `common_mode_rows`, `common_mode_cols`, `common_mode_2d`,
 Upstream (`github.com/lcls-psana/Detector`) publishes no LICENSE, COPYING or NOTICE file, so no
 grant attached to that code and it could not be covered by this repository's licence.
 
-**The transcription has been deleted.** The test now imports those five names from psana at run
-time and exits 0 with a `SKIPPED` message when psana is unavailable. No psana code remains in this
-repository. Verified against psana `ana-4.0.59-py3-minipytorch`: all five modes and the `npix_min`
-boundary agree to `maxdiff 0.000e+00`.
+**The transcription has been deleted.** The test imports those five names from psana when it is
+available, and falls back to checked-in golden outputs when it is not. No psana code remains in
+this repository. Verified against psana `ana-4.0.59-py3-minipytorch`: all five modes and the
+`npix_min` boundary agree to `maxdiff 0.000e+00`.
 
 Coverage was preserved rather than lost. The test compares against **golden outputs generated once
 from real psana** (`experiments/xtc_bridge/common_mode_golden.npz`, `ana-4.0.59-py3-minipytorch`) —

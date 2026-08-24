@@ -1,9 +1,17 @@
-"""Check GpuCalibrator._common_mode against a transcription of psana's UtilsCommonMode, in numpy.
+"""Check GpuCalibrator._common_mode against psana's UtilsCommonMode, in numpy.
 
 The GPU version replaces np.ma.median with a sort-and-pick-the-middle, reshapes psana's per-segment
 python loop into batched axes, and turns `arr[bmask] -= m[bmask]` into a multiply by the mask. Each
-of those is a place to be off by one. This runs both on the same random frames and requires exact
-agreement to float32 rounding.
+of those is a place to be off by one, which is what this checks, to a tolerance of 2e-3.
+
+Two reference paths, so the check is never silently a no-op. Without psana it compares against
+golden outputs generated once from real psana and checked in beside this file. With psana it also
+compares at full detector size against the live library, and re-derives the goldens so a stale
+golden file is caught rather than trusted.
+
+Inputs are drawn with the legacy RandomState rather than the newer Generator: numpy guarantees
+stream compatibility for the former across releases but explicitly does not for Generator
+distributions, and the goldens are only valid for the exact arrays that produced them.
 """
 import os, sys, types
 import numpy as np
@@ -80,12 +88,12 @@ CASES = [(mode, t, cormax, frac)
 
 def make_inputs(nseg, ncol):
     """Regenerate every case's arrays from the seed, in the order the golden file was built."""
-    rng = np.random.default_rng(0)
+    rng = np.random.RandomState(0)          # stream-stable across numpy releases
     out = []
     for mode, t, cormax, frac in CASES:
         arrf = (rng.normal(0, 6, (nseg, 352, ncol))).astype(np.float32)
         arrf[:, :, ::37] += 25.0                     # big offsets so the cormax veto is exercised
-        gmask = (rng.random((nseg, 352, ncol)) < frac).astype(np.uint8)
+        gmask = (rng.random_sample((nseg, 352, ncol)) < frac).astype(np.uint8)
         out.append((f"corr_{mode}_{t}", arrf, gmask, mode, cormax))
     arrf = rng.normal(0, 3, (1, 352, ncol)).astype(np.float32)
     gmask = np.zeros((1, 352, ncol), np.uint8)

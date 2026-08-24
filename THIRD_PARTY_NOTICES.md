@@ -10,35 +10,24 @@ directory, no git submodule, and no third-party source file in the tree.
 
 ## 1. Third-party code incorporated
 
-### psana `Detector/UtilsCommonMode.py` — test oracle only
+### psana `Detector/UtilsCommonMode.py` — REMOVED 2026-08-24, no psana code remains
 
-`experiments/xtc_bridge/test_gpu_calib_cm.py` (lines 12–79) contains a verbatim transcription of five
+`experiments/xtc_bridge/test_gpu_calib_cm.py` previously contained a verbatim transcription of five
 functions — `common_mode_rows`, `common_mode_cols`, `common_mode_2d`,
 `common_mode_rows_hsplit_nbanks`, `common_mode_2d_hsplit_nbanks` — from psana's
 `Detector/UtilsCommonMode.py` (release `ana-4.0.58-py3`), created 2018-01-31 by **Mikhail Dubrovin**
-(SLAC/LCLS). They serve as the reference the GPU common-mode implementation is checked against.
+(SLAC/LCLS).
 
-This file is **not part of the distributed package** (`pyproject.toml` ships `glint` and `fftindex`
-only); it runs in CI.
+Upstream (`github.com/lcls-psana/Detector`) publishes no LICENSE, COPYING or NOTICE file, so no
+grant attached to that code and it could not be covered by this repository's licence.
 
-Upstream (`github.com/lcls-psana/Detector`) publishes no LICENSE, COPYING or NOTICE file. The only
-statement of terms is in the source file itself, reproduced here as required:
+**The transcription has been deleted.** The test now imports those five names from psana at run
+time and exits 0 with a `SKIPPED` message when psana is unavailable. No psana code remains in this
+repository. Verified against psana `ana-4.0.59-py3-minipytorch`: all five modes and the `npix_min`
+boundary agree to `maxdiff 0.000e+00`.
 
-> This software was developed for the LCLS project.
-> If you use all or part of it, please give an appropriate acknowledgment.
-
-**Status: unresolved.** Absence of a stated licence is not a grant. Redistribution of this block is
-pending either a written grant from the LCLS/psana maintainers or replacement of the transcription
-with an independently written oracle. Both GLINT and psana are published by SLAC; whether common
-copyright ownership under the DOE M&O contract settles the question is a determination for SLAC.
-
----
-
-## 2. Original code written with reference to third-party source
-
-No upstream code is present in these files. They are GLINT's own implementations, written while
-reading the upstream source rather than from published descriptions alone, and are recorded here for
-that reason.
+⚠️ Consequence for CI: the CPU-only CI job has no psana, so that step now skips and provides **no**
+regression coverage for `GpuCalibrator._common_mode`. The check has to be run where psana exists.
 
 ### fast-feedback-indexer (ffbidx) — BSD-3-Clause
 

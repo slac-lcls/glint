@@ -162,13 +162,12 @@ jobs:
         run: python test_geom_provenance.py
         working-directory: experiments/xtc_bridge
 
-      # NOTE: this step is a NO-OP on this runner. The reference implementation is psana's
-      # Detector.UtilsCommonMode, imported at run time -- it used to be transcribed into the test,
-      # but psana declares no licence so that copy could not live under our LICENSE. This job is
-      # CPU-only with no psana, so the test prints SKIPPED and exits 0. It is kept here so the
-      # invocation stays correct; the check itself has to be run where psana exists (an LCLS ana
-      # release on S3DF), where it passes with maxdiff 0.
-      - name: experiments/xtc_bridge/test_gpu_calib_cm.py (skips without psana)
+      # Compares GpuCalibrator._common_mode against golden outputs generated once from real psana
+      # (common_mode_golden.npz). This runner has no psana, but the check is NOT a no-op: all five
+      # modes, the bank split and the npix_min boundary are exercised against those goldens. Where
+      # psana IS available the same test additionally compares at full detector size and verifies
+      # the golden file still reproduces, so a stale golden cannot go unnoticed.
+      - name: experiments/xtc_bridge/test_gpu_calib_cm.py
         if: ${{ !cancelled() }}
         run: python test_gpu_calib_cm.py
         working-directory: experiments/xtc_bridge

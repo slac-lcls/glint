@@ -26,8 +26,12 @@ time and exits 0 with a `SKIPPED` message when psana is unavailable. No psana co
 repository. Verified against psana `ana-4.0.59-py3-minipytorch`: all five modes and the `npix_min`
 boundary agree to `maxdiff 0.000e+00`.
 
-⚠️ Consequence for CI: the CPU-only CI job has no psana, so that step now skips and provides **no**
-regression coverage for `GpuCalibrator._common_mode`. The check has to be run where psana exists.
+Coverage was preserved rather than lost. The test compares against **golden outputs generated once
+from real psana** (`experiments/xtc_bridge/common_mode_golden.npz`, `ana-4.0.59-py3-minipytorch`) —
+data, not code, so nothing licensable is stored. The CPU-only CI job runs those goldens across all
+five modes, the bank split and the `npix_min` boundary. Where psana *is* available the same test
+additionally compares at full detector size and re-derives the goldens, so a stale golden file is
+caught rather than trusted.
 
 ### fast-feedback-indexer (ffbidx) — BSD-3-Clause
 

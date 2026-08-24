@@ -75,4 +75,8 @@ DE-AC02-76SF00515.
 Accelerator Laboratory, U.S. Department of Energy nor the names of its contributors may be used to
 endorse or promote products derived from this software without specific prior written permission.
 
-See [`COPYRIGHT`](COPYRIGHT) for the same notice as a standalone file.
+**Licence.** GLINT is released under the BSD 3-Clause licence in [`LICENSE`](LICENSE). The same
+copyright notice is in [`COPYRIGHT`](COPYRIGHT) as a standalone file.
+
+⚠️ The grant in `LICENSE` covers this repository's own code and does not extend to the third-party
+material recorded in [`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES), which carries its own terms.

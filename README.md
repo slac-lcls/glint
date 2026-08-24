@@ -36,6 +36,26 @@ Options: `--cell "a b c al be ga"` (known cell, skip consensus) · `--nbest N` (
 consensus, default 3) · `--mode auto|sparse|dense` · `--integrate` (real I/σ) · `--tofile` (hand
 orientations to CrystFEL for the refined merge) · `--device cpu|auto` · `-N` (limit frames).
 
+## LUTE pipeline
+
+GLINT ships LUTE Task and DAG definitions in [`lute/`](lute/), so it runs as a drop-in replacement
+for `CrystFELIndexer` in the LCLS SFX workflow:
+
+    PeakFinderSFX -> [GLINTIndexer] -> StreamFileConcatenator -> PartialatorMerger -> HKLManipulator
+
+The reason it exists: none of LUTE's bundled CrystFEL builds are compiled with FFBIDX support, so
+`indexamajig --indexing=ffbidx` fails and GPU fast-feedback-style indexing is unavailable in LUTE
+today. GLINT fills that gap and emits the same CrystFEL `.stream` the rest of the DAG already
+consumes, so nothing downstream changes.
+
+Install the Task into a LUTE tree with [`lute/install_into_lute.sh`](lute/install_into_lute.sh);
+[`lute/README.md`](lute/README.md) has the configuration.
+
+⚠️ **Read [`lute/STATUS.md`](lute/STATUS.md) before relying on it.** It is the honest account of
+what is measured, what is assumed, and what has never been run, and it tracks the remaining items
+between this and production — most are closed, not all.
+
+
 ## Library
 
 ```python

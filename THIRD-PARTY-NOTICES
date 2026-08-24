@@ -5,12 +5,11 @@ The BSD 3-Clause grant in LICENSE covers this repository's own code. It does NOT
 extend to the material listed below, which originates elsewhere and carries its
 own terms. Anyone redistributing this repository must resolve these separately.
 
-1. experiments/xtc_bridge/test_gpu_calib_cm.py, lines 12-79
-   Five functions transcribed verbatim from psana `Detector/UtilsCommonMode.py`
-   (ana-4.0.58-py3, author M. Dubrovin). Declared in the file at line 11.
-   Status: psana carries no declared licence (NOASSERTION), so no grant is
-   attached to this code and it is NOT licensed under LICENSE. The file is a
-   test comparison only; it is not part of the installable package.
+1. (RESOLVED) experiments/xtc_bridge/test_gpu_calib_cm.py previously carried five functions
+   transcribed verbatim from psana `Detector/UtilsCommonMode.py`. psana declares no licence, so
+   no grant attached to that code. The copy has been removed; the test now imports those
+   functions from psana at run time and skips when psana is absent. No psana code remains in
+   this repository.
 
 2. glint/replica_gpu.py, glint/replica_gpu_batch.py
    Original lines, but written by reading PSI's fast-feedback-indexer (ffbidx)

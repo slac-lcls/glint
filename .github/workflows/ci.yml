@@ -162,7 +162,13 @@ jobs:
         run: python test_geom_provenance.py
         working-directory: experiments/xtc_bridge
 
-      - name: experiments/xtc_bridge/test_gpu_calib_cm.py
+      # NOTE: this step is a NO-OP on this runner. The reference implementation is psana's
+      # Detector.UtilsCommonMode, imported at run time -- it used to be transcribed into the test,
+      # but psana declares no licence so that copy could not live under our LICENSE. This job is
+      # CPU-only with no psana, so the test prints SKIPPED and exits 0. It is kept here so the
+      # invocation stays correct; the check itself has to be run where psana exists (an LCLS ana
+      # release on S3DF), where it passes with maxdiff 0.
+      - name: experiments/xtc_bridge/test_gpu_calib_cm.py (skips without psana)
         if: ${{ !cancelled() }}
         run: python test_gpu_calib_cm.py
         working-directory: experiments/xtc_bridge

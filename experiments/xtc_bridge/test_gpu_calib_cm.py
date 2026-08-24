@@ -8,75 +8,25 @@ agreement to float32 rounding.
 import os, sys, types
 import numpy as np
 
-# --- psana's Detector/UtilsCommonMode.py, transcribed verbatim (ana-4.0.58-py3) ----------------
-def common_mode_rows(arr, mask=None, cormax=None, npix_min=10):
-    rows, cols = arr.shape
-    if mask is None:
-        cmode = np.median(arr, axis=1)
-    else:
-        marr = np.ma.array(arr, mask=mask < 1)
-        cmode = np.ma.median(marr, axis=1)
-        npix = mask.sum(axis=1)
-        cmode = np.select((npix > npix_min,), (cmode,), default=0)
-    if cormax is not None:
-        cmode = np.select((np.fabs(cmode) < cormax,), (cmode,), default=0)
-    _, m2 = np.meshgrid(np.zeros(cols, dtype=np.int16), cmode)
-    if mask is None:
-        arr -= m2
-    else:
-        bmask = mask > 0
-        arr[bmask] -= m2[bmask]
-
-
-def common_mode_cols(arr, mask=None, cormax=None, npix_min=10):
-    rows, cols = arr.shape
-    if mask is None:
-        cmode = np.median(arr, axis=0)
-    else:
-        marr = np.ma.array(arr, mask=mask < 1)
-        cmode = np.ma.median(marr, axis=0)
-        npix = mask.sum(axis=0)
-        cmode = np.select((npix > npix_min,), (cmode,), default=0)
-    if cormax is not None:
-        cmode = np.select((np.fabs(cmode) < cormax,), (cmode,), default=0)
-    m1, _ = np.meshgrid(cmode, np.zeros(rows, dtype=np.int16))
-    if mask is None:
-        arr -= m1
-    else:
-        bmask = mask > 0
-        arr[bmask] -= m1[bmask]
-
-
-def common_mode_2d(arr, mask=None, cormax=None, npix_min=10):
-    if mask is None:
-        cmode = np.median(arr)
-        if cormax is None or abs(cmode) < cormax:
-            arr -= cmode
-    else:
-        arr1 = np.ones_like(arr, dtype=np.int16)
-        bmask = mask > 0
-        npix = arr1[bmask].sum()
-        if npix < npix_min:
-            return
-        cmode = np.median(arr[bmask])
-        if cormax is None or abs(cmode) < cormax:
-            arr[bmask] -= cmode
-
-
-def common_mode_rows_hsplit_nbanks(data, mask=None, nbanks=4, cormax=None, npix_min=10):
-    bdata = np.hsplit(data, nbanks)
-    bmask = np.hsplit(mask, nbanks)
-    for b, m in zip(bdata, bmask):
-        common_mode_rows(b, m, cormax, npix_min)
-    data[:] = np.hstack(bdata)[:]
-
-
-def common_mode_2d_hsplit_nbanks(data, mask=None, nbanks=4, cormax=None, npix_min=10):
-    bdata = np.hsplit(data, nbanks)
-    bmask = np.hsplit(mask, nbanks)
-    for b, m in zip(bdata, bmask):
-        common_mode_2d(b, m, cormax, npix_min)
-    data[:] = np.hstack(bdata)[:]
+# --- psana's common-mode routines, IMPORTED, not copied -----------------------------------------
+# These five functions were previously transcribed verbatim from psana
+# Detector/UtilsCommonMode.py (ana-4.0.58-py3, author M. Dubrovin). psana declares no licence, so
+# no grant attaches to that code and it cannot be covered by this repository's LICENSE. They are
+# imported at run time instead, which means THIS TEST ONLY RUNS WHERE PSANA IS INSTALLED. CI is
+# CPU-only with no psana, so it skips there and covers nothing -- see the note on the CI step.
+try:
+    from Detector.UtilsCommonMode import (          # noqa: F401
+        common_mode_rows,
+        common_mode_cols,
+        common_mode_2d,
+        common_mode_rows_hsplit_nbanks,
+        common_mode_2d_hsplit_nbanks,
+    )
+except ImportError:
+    print("SKIPPED: psana (Detector.UtilsCommonMode) is not importable, so there is no reference\n"
+          "         implementation to compare against. This check is a NO-OP here.\n"
+          "         Run it where psana is available -- e.g. an LCLS ana release on S3DF.")
+    sys.exit(0)
 
 
 def psana_reference(arrf, gmask, mode, cormax, npixmin):

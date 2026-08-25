@@ -9,7 +9,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 import cupy as cp
-from glint.predict import integrate_spots
+from glint.predict import BG_MODES, integrate_spots
 from glint.fused_integrate import integrate_fused
 
 rng = np.random.default_rng(0)
@@ -36,11 +36,15 @@ cases = [("uint16 (raw)", 800, 800, 300, np.uint16, False, False),
          ("dense 2000 spots", 4000, 4000, 2000, np.uint16, False, False)]
 for name, H, W, n, dt, edge, ni in cases:
     img, pred = mk(H, W, n, dt, edge, ni)
-    a = integrate_spots(img, pred); b = integrate_fused(cp.asarray(img), pred)
-    exact = all(np.array_equal(x, y) for x, y in zip(a, b))
-    rel = (np.abs(a[0] - b[0]) / np.maximum(np.abs(a[0]), 1e-12)).max()
-    print(f"  {name:22s} n={n:5d}  bit-exact={str(exact):5s}  max rel dI={rel:.2g}  "
-          f"bg-eq={np.array_equal(a[3], b[3])}  peak-eq={np.array_equal(a[2], b[2])}")
+    # EVERY bg_mode, not just the default: glint#131 changed the default estimator and put a second
+    # rank-count pass in the kernel, so a mode-specific divergence is exactly what can hide here.
+    for mode in BG_MODES:
+        a = integrate_spots(img, pred, bg_mode=mode)
+        b = integrate_fused(cp.asarray(img), pred, bg_mode=mode)
+        exact = all(np.array_equal(x, y) for x, y in zip(a, b))
+        rel = (np.abs(a[0] - b[0]) / np.maximum(np.abs(a[0]), 1e-12)).max()
+        print(f"  {name:22s} n={n:5d} {mode:9s} bit-exact={str(exact):5s}  max rel dI={rel:.2g}  "
+              f"bg-eq={np.array_equal(a[3], b[3])}  peak-eq={np.array_equal(a[2], b[2])}")
 
 print("\n=== timing (min-of-10) ===")
 

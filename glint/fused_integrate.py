@@ -4,28 +4,46 @@ One WARP per reflection: the 32 lanes cooperatively gather the (2R+1)^2 patch st
 detector image in its NATIVE dtype (no whole-image upcast), warp-reduce the box sum and box max, and
 stage the annulus values in shared memory.
 
-The background is np.median over the annulus -- a SELECTION, not a reduction, so it cannot be warp-
-reduced. Rather than sort, each lane rank-counts its own values against the whole annulus:
+The background needs a MEDIAN -- a SELECTION, not a reduction, so it cannot be warp-reduced. Rather
+than sort, each lane rank-counts its own values against the whole annulus:
     v is the k-th order statistic  <=>  count(<v) <= k < count(<v) + count(==v)
 which is EXACT and handles ties correctly. numpy's even-n median is the mean of sorted[(n-1)/2] and
 sorted[n/2]; both are found in the same pass (they coincide for odd n). All lanes that satisfy a
 condition hold the same value, so the shared-slot write races are benign.
 
+BG MODES, mirroring glint.predict.integrate_spots exactly (glint#131 changed the default from the
+median to a MAD-clipped mean; leaving this file behind would have put the GPU streaming path on a
+different estimator from the offline one, silently):
+  0 clipmean  the default. A SECOND rank-count pass -- the same routine over |v - med|, recomputed
+              on the fly so no extra shared buffer is needed -- gives the MAD; the surviving
+              |v - med| <= NSIG*max(1.4826*MAD, sqrt(max(med,1))) values are warp-reduced to a sum
+              and a count. Costs one more O(NA^2)/32 pass per reflection.
+  1 median    bit-for-bit what this kernel did before.
+  2 mean      the same masked reduction with an infinite window.
+
 Accumulation is float64 throughout, as in numpy.
 
-Measured agreement with integrate_spots (A100):
+Measured agreement with integrate_spots (A100), for bg_mode="median":
   uint16 / int32 / float32 input -- BIT-EXACT on all four outputs, including non-integer
     gain-corrected float32 and edge-straddling boxes. (float32 widened to double sums exactly for a
     49-pixel box regardless of order, so summation order cannot bite.)
   float64 input -- bg and peak are exact (a median is a selection and a max is order-independent),
     but I and sigma can differ by ~5e-12 relative, because the warp reduction sums the box in a
     different order than numpy's pairwise summation. Far below Poisson noise, but not zero.
+The clipmean default has NOT been re-measured on a GPU. What was checked instead, on CPU: this
+source compiles, and a lane-for-lane emulation of it (same 32-lane strides, same shfl tree, same
+operand order) reproduces integrate_spots BIT-EXACTLY for uint16 / float32-counting input in all
+three modes -- including a frame seeded with saturated pixels -- and to <=5e-13 absolute on
+non-integer float64, which is the tolerance the median already had. Run
+experiments/bench_integrate_fused.py on a GPU node to close it properly (glint#131).
 
 CAVEAT ON SPEED: the kernel is ~0.33 ms and nearly flat in frame size and spot count, but a
 host->device copy of a 16 Mpix frame costs ~3-5 ms -- an order of magnitude more than the kernel.
 This only pays when the frame is ALREADY GPU-resident, which is the live-DRP case (calibration and
 peakfinding already run on device). Called with a host array it is copy-bound, not compute-bound."""
 import numpy as np, cupy as cp
+
+from glint.predict import BG_MODES, BG_NSIG      # ONE definition of the estimator's constants
 
 _SRC = r"""
 extern "C" __global__ void integrate_fused(
@@ -34,7 +52,7 @@ extern "C" __global__ void integrate_fused(
     double* __restrict__ Iout, double* __restrict__ Sout,
     double* __restrict__ Pout, double* __restrict__ Bout,
     const int n, const int H, const int W,
-    const int half, const int gap, const int ring)
+    const int half, const int gap, const int ring, const int bgmode)
 {
     const int i = blockIdx.x;
     if (i >= n) return;
@@ -45,14 +63,14 @@ extern "C" __global__ void integrate_fused(
 
     extern __shared__ double ann[];              // annulus staging, >= nann doubles
     __shared__ int nann_s;
-    __shared__ double med1_s, med2_s;
+    __shared__ double med1_s, med2_s, mad1_s, mad2_s;
 
     const int c_s = cs[i], c_f = cf[i];
     if (c_s - R < 0 || c_s + R >= H || c_f - R < 0 || c_f + R >= W) {   // numpy `valid` gate
         if (lane == 0) { Iout[i] = 0.0; Sout[i] = 0.0; Pout[i] = 0.0; Bout[i] = 0.0; }
         return;
     }
-    if (lane == 0) { nann_s = 0; med1_s = 0.0; med2_s = 0.0; }
+    if (lane == 0) { nann_s = 0; med1_s = 0.0; med2_s = 0.0; mad1_s = 0.0; mad2_s = 0.0; }
     __syncwarp();
 
     double bsum = 0.0, bmax = -1.0e300;
@@ -84,10 +102,42 @@ extern "C" __global__ void integrate_fused(
         if (cl <= k2 && k2 < cl + ce) med2_s = v;
     }
     __syncwarp();
+    const double med = 0.5 * (med1_s + med2_s);
+
+    // --- background estimator (mirrors glint.predict.integrate_spots bg_mode) ---------------
+    double bg = med;
+    if (bgmode != 1) {
+        double thr = __longlong_as_double(0x7ff0000000000000LL);   // "mean": an infinite window
+        if (bgmode == 0) {                                    // "clipmean": MAD-clip, same rank-count
+            for (int j = lane; j < NA; j += 32) {
+                const double v = fabs(ann[j] - med);
+                int cl = 0, ce = 0;
+                for (int q = 0; q < NA; ++q) {
+                    const double w = fabs(ann[q] - med); cl += (w < v); ce += (w == v);
+                }
+                if (cl <= k1 && k1 < cl + ce) mad1_s = v;
+                if (cl <= k2 && k2 < cl + ce) mad2_s = v;
+            }
+            __syncwarp();
+            const double mad = 0.5 * (mad1_s + mad2_s);        // numpy's operand ORDER, so the
+            const double sc = 1.4826 * mad;                    // rounding matches bit for bit
+            const double flo = sqrt(med > 1.0 ? med : 1.0);   // Poisson floor: MAD is 0 on sparse data
+            thr = NSIG * (sc > flo ? sc : flo);
+        }
+        double asum = 0.0; int acnt = 0;
+        for (int j = lane; j < NA; j += 32) {
+            const double v = ann[j];
+            if (fabs(v - med) <= thr) { asum += v; acnt += 1; }
+        }
+        for (int off = 16; off; off >>= 1) {
+            asum += __shfl_down_sync(0xffffffff, asum, off);
+            acnt += __shfl_down_sync(0xffffffff, acnt, off);
+        }
+        if (acnt > 0) bg = asum / (double)acnt;               // lanes>0 hold partials; only lane 0 writes
+    }
 
     if (lane == 0) {
         const int NBOX = (2 * half + 1) * (2 * half + 1);
-        const double bg = 0.5 * (med1_s + med2_s);
         const double bgc = bg > 0.0 ? bg : 0.0;
         double s = bsum + (double)NBOX * bgc; if (s < 1.0) s = 1.0;
         Iout[i] = bsum - (double)NBOX * bg;
@@ -109,13 +159,19 @@ def _kern(dt):
     if k is None:
         if dt not in _DT:
             raise TypeError(f"unsupported detector dtype {dt}")
-        k = _CACHE[dt] = cp.RawKernel(f"#define DT_IN {_DT[dt]}\n" + _SRC, "integrate_fused")
+        k = _CACHE[dt] = cp.RawKernel(f"#define DT_IN {_DT[dt]}\n#define NSIG {BG_NSIG!r}\n" + _SRC,
+                                      "integrate_fused")
     return k
 
 
-def integrate_fused(data_gpu, pred, half=3, gap=2, ring=3):
+def integrate_fused(data_gpu, pred, half=3, gap=2, ring=3, bg_mode="clipmean"):
     """data_gpu: cupy (H,W) in the detector's native dtype. pred: numpy struct array with fs/ss.
-    Returns (I, sigma, peak, bg) as numpy float64, matching integrate_spots."""
+    Returns (I, sigma, peak, bg) as numpy float64, matching integrate_spots.
+
+    ``bg_mode`` is integrate_spots' and means the same thing; "median" reproduces what this kernel
+    computed before glint#131."""
+    if bg_mode not in BG_MODES:
+        raise ValueError(f"bg_mode must be one of {BG_MODES}, got {bg_mode!r}")
     H, W = data_gpu.shape
     n = len(pred)
     if n == 0:
@@ -134,6 +190,7 @@ def integrate_fused(data_gpu, pred, half=3, gap=2, ring=3):
     _kern(data_gpu.dtype)((n,), (32,),
                           (data_gpu, cs, cf, I, S, Pk, B,
                            np.int32(n), np.int32(H), np.int32(W),
-                           np.int32(half), np.int32(gap), np.int32(ring)),
+                           np.int32(half), np.int32(gap), np.int32(ring),
+                           np.int32(BG_MODES.index(bg_mode))),
                           shared_mem=nann * 8)
     return cp.asnumpy(I), cp.asnumpy(S), cp.asnumpy(Pk), cp.asnumpy(B)

@@ -30,10 +30,12 @@ Measured agreement with integrate_spots, ALL THREE bg modes (A100-SXM4-40GB, cup
     pixels in the annulus. (float32 widened to double sums exactly for a 49-pixel box regardless
     of order, so summation order cannot bite.)
   float64 non-integer input -- peak is exact (a max is order-independent) and bg is exact for the
-    median (a selection), but I, sigma, and the two mean-like backgrounds differ by up to 5.1e-13
-    counts, because the warp reduction sums in a different order than numpy's pairwise summation.
-    Quote that ABSOLUTELY: it is twelve orders below one photon, while the same difference on the
-    near-zero reflections reads ~1e-11 as a RATIO and means nothing.
+    median (a selection), but I, sigma, and the two mean-like backgrounds differ, because the warp
+    reduction sums in a different order than numpy's pairwise summation. Measured max|dI| 5.1e-13
+    counts on a lambda=6 frame and 3.6e-12 on a lambda=50 one -- it scales with the box sum, so it
+    is a rounding of the signal, not a constant. Quote it ABSOLUTELY: ~1e-12 counts is twelve
+    orders below one photon, while the same difference on the near-zero reflections reads ~1e-11
+    as a RATIO and means nothing.
 
 Getting there needed __dmul_rn/__dadd_rn/__dsub_rn on the final I and sigma expressions; see the
 comment at that line. Bit-exactness with a numpy reference is not something a CPU emulation of a

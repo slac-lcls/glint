@@ -1,0 +1,38 @@
+DRAFT -- not tested against the actual slac-lcls/lute source tree. GLINT does not vendor a copy of
+`install/bin/activate_installation`; this patch was reconstructed from the snippet quoted in
+glint#128 (which quoted the file as of `~/git/lute_new/lute` @ c457afc, `file_indexing`, v0.2.0-3).
+A GLINT maintainer should check this out against a real LUTE checkout, adjust the context lines and
+the exact PYTHONPATH-export shape to match, and only then propose it upstream (or the issue text in
+lute/upstream_activate_installation_ISSUE_DRAFT.md) against slac-lcls/lute. Nothing in this repo or
+this PR opens anything against slac-lcls/lute.
+
+Symptom this fixes: the install can carry several `lib/pythonX.Y/site-packages` trees side by side
+(e.g. 3.9, 3.11, 3.12) and only some of them are populated with `launch_scripts`. Deriving the tree
+from the AMBIENT `python3` means activation can silently select an empty one -- it reports success
+and exports a PYTHONPATH that resolves to nothing, so the failure (ModuleNotFoundError, or a bare
+subprocess return code 127 further down the launch chain) surfaces far from its actual cause. See
+glint#128 for the full symptom, including two smaller issues in the same launch path
+(`launch_scripts/activate_installation` not existing, and `python -m launch_scripts...` from inside
+the LUTE source tree picking up the wrong `launch_scripts` via CWD).
+
+--- a/install/bin/activate_installation
++++ b/install/bin/activate_installation
+@@ -1,3 +1,15 @@
+ PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+ LUTE_LIB_PATH=(${LUTE_INSTALL_PATH}lib/python${PY_VER}/site-packages)
++
++# Guard against silently selecting an unpopulated python tree. The install can carry several
++# lib/pythonX.Y trees side by side and leave some of them unpopulated with launch_scripts;
++# exporting a PYTHONPATH into one of the empty ones used to look identical to a working
++# activation until the first `import launch_scripts` failed, much later and far from here.
++# Fail here instead, where the cause (which python3 is ambient) is still in view.
++if [ ! -d "${LUTE_LIB_PATH}/launch_scripts" ]; then
++    echo "activate_installation: python${PY_VER}'s site-packages (${LUTE_LIB_PATH}) has no" \
++         "launch_scripts -- this LUTE install's lib/python${PY_VER} tree was never populated." >&2
++    echo "  Fix: put a python3 on PATH whose lib/pythonX.Y tree under" \
++         "${LUTE_INSTALL_PATH}lib IS populated (check for one containing launch_scripts)," \
++         "e.g. by activating a conda env pinned to that version, then re-source this script." >&2
++    return 1 2>/dev/null || exit 1
++fi
++
+ export PYTHONPATH="${LUTE_LIB_PATH}:${PYTHONPATH}"

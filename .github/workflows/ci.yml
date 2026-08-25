@@ -164,9 +164,12 @@ jobs:
 
       # Compares GpuCalibrator._common_mode against golden outputs generated once from real psana
       # (common_mode_golden.npz). This runner has no psana, but the check is NOT a no-op: all five
-      # modes, the bank split and the npix_min boundary are exercised against those goldens. Where
-      # psana IS available the same test additionally compares at full detector size and verifies
-      # the golden file still reproduces, so a stale golden cannot go unnoticed.
+      # modes, the bank split and the npix_min boundary run against those goldens, and the test
+      # ASSERTS each mode bit has a nonzero correction in the set -- at the original 64-column
+      # golden geometry the rows mode could never fire (8-px groups < npix_min) and a broken rows
+      # block passed CI; the 192-column goldens + that assert close the gap. Where psana IS
+      # available the same test additionally compares at full detector size and re-derives the
+      # goldens, so a stale golden cannot go unnoticed.
       - name: experiments/xtc_bridge/test_gpu_calib_cm.py
         if: ${{ !cancelled() }}
         run: python test_gpu_calib_cm.py

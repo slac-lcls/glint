@@ -89,9 +89,14 @@ def test_new_options_stay_at_the_end_of_the_signature():
     """They sit at the very end rather than beside the other lock_* options, and that is deliberate:
     this constructor is NOT keyword-only, so inserting a parameter mid-signature silently rebinds
     every positional argument after it (review of glint#122 caught exactly that -- adaptive_relock
-    onward had shifted a slot). A future tidy-up grouping them by topic would reintroduce it."""
+    onward had shifted a slot). A future tidy-up grouping them by topic would reintroduce it.
+
+    The expected tail GROWS as options are appended (retry_cascade/retry_nbest, glint#75) -- that is
+    the rule being obeyed, not broken. What must never happen is one of these moving inward, or a new
+    option landing anywhere but after them, and pinning the whole tail in order still catches both."""
     params = list(inspect.signature(StreamDriver.__init__).parameters)
-    assert params[-3:] == ["lock_frac", "lock_lead", "lock_pool_switch"], params[-3:]
+    tail = ["lock_frac", "lock_lead", "lock_pool_switch", "retry_cascade", "retry_nbest"]
+    assert params[-len(tail):] == tail, params[-len(tail):]
 
 
 if __name__ == "__main__":

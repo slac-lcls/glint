@@ -44,6 +44,7 @@ STEPS = [
     "experiments/test_multilattice.py",
     "experiments/test_warmup_batch.py",
     "experiments/test_missbuf_rescue.py",
+    "experiments/test_retry_cascade.py",
     "experiments/test_geom_bridge.py",
     "experiments/test_geom_refine.py",
     # Skips without a GPU and exits 0 (glint#123). Running it here is still worth the second it

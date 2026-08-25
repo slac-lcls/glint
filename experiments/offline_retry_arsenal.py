@@ -12,18 +12,29 @@ This runs each arm separately on the frames the batched known-cell pass rejects,
 one adds, and computes the ARSENAL CEILING -- for every frame, does ANY arm clear the gate -- which
 bounds what any ordering can reach on this data.
 
+The arms themselves now live in `glint.retry_cascade` and are IMPORTED here, because the streaming
+driver's opt-in `retry_cascade` (glint#75) runs the same functions: a second implementation over
+there would break the correspondence between what ships and the 94/120 measured here. This script
+stays the reference for the number; that module is the single implementation of it.
+
   python offline_retry_arsenal.py [frames.txt]
 """
 import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 
-WT = "/sdf/home/s/smarches/glint_streamfix_wt"
-sys.path.insert(0, WT); sys.path.insert(0, WT + "/experiments")
+# Resolve from THIS checkout by default (GLINT_WT overrides), the same rule
+# test_streamdriver_vs_offline.py uses. Defaulting to an absolute worktree made this script's whole
+# stated guarantee -- that it validates the SHIPPED arms -- conditional on being run from one
+# machine: anywhere else it either failed to import glint or, if that path happened to exist,
+# silently measured a stale tree's arms and reported them as the code under review.
+WT = os.environ.get("GLINT_WT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, WT); sys.path.insert(0, os.path.join(WT, "experiments"))
 import glint.glint_fast as gf
 from glint.glint_fast import index_blind_nbest, index_blind_fast
 from glint.multishot import same_lattice
 from glint.replica_gpu import index_known_gpu_cell
+from glint.retry_cascade import arm_blind_top1, arm_blind_nbest, arm_known_perframe
 from what_are_the_failures import strict_gate, LYSO
 import glint.replica_gpu_batch as rgb
 
@@ -64,51 +75,36 @@ def main():
           f"{len(ok)}/{N} pass, {len(failed)} fail\n")
 
     # --- each retry arm, run ONLY on the failures ---------------------------------------------
+    # The arms are glint.retry_cascade's, bound here to the STRICT research gate (same_lattice +
+    # >=25% matched + >=10 reflections). The live driver binds the same functions to its own accept
+    # gate instead; that is the only difference between what is measured here and what ships.
+    def gate_for(i, truth):
+        return lambda M: strict_gate(M, frames[i], truth)
+
     arms = {}
     t0 = time.time()
     arms["blind top-1"] = {i for i in failed
-                           if (lambda M: M is not None and strict_gate(np.asarray(M, float),
-                                                                       frames[i], Mc))(
-                               index_blind_fast(frames[i]))}
+                           if arm_blind_top1(frames[i], gate_for(i, Mc), index_blind_fast) is not None}
     t_top1 = time.time() - t0
 
     for nb in (3, 10):
         t0 = time.time()
-        got = set()
-        for i in failed:
-            try:
-                for c, _s in index_blind_nbest(frames[i], nb):
-                    if c is not None and strict_gate(np.asarray(c, float), frames[i], Mc):
-                        got.add(i)
-                        break            # <-- inside the test; the bug in #76 had it outside
-            except Exception:
-                pass
-        arms[f"blind N-best (k={nb})"] = got
+        arms[f"blind N-best (k={nb})"] = {
+            i for i in failed
+            if arm_blind_nbest(frames[i], gate_for(i, Mc), index_blind_nbest, nb) is not None}
         if nb == 3:
             t_nb3 = time.time() - t0
 
     t0 = time.time()
-    got = set()
-    for i in failed:
-        try:
-            M = index_known_gpu_cell(frames[i], Mc)
-            if M is not None and strict_gate(np.asarray(M, float), frames[i], Mc):
-                got.add(i)
-        except Exception:
-            pass
-    arms["known-cell, per-frame"] = got
+    arms["known-cell, per-frame"] = {
+        i for i in failed
+        if arm_known_perframe(frames[i], Mc, gate_for(i, Mc), index_known_gpu_cell) is not None}
     t_kc = time.time() - t0
 
     # exact reference cell rather than the voted one
-    got = set()
-    for i in failed:
-        try:
-            M = index_known_gpu_cell(frames[i], LYSO)
-            if M is not None and strict_gate(np.asarray(M, float), frames[i], LYSO):
-                got.add(i)
-        except Exception:
-            pass
-    arms["known-cell, exact LYSO"] = got
+    arms["known-cell, exact LYSO"] = {
+        i for i in failed
+        if arm_known_perframe(frames[i], LYSO, gate_for(i, LYSO), index_known_gpu_cell) is not None}
 
     print(f"{'retry arm (on the ' + str(len(failed)) + ' failures)':34s} {'recovers':>9s} "
           f"{'total yield':>12s}")

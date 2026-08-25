@@ -210,41 +210,62 @@ def _diag(a, b, c):
 
 
 def test_merge_repairs_split_vote():
-    """A true lattice whose votes FRAGMENT must still win over a tighter-clustered spurious one.
+    """STREAMING: the default must lock on the true lattice where first-match-wins locks spurious.
 
-    A and B are both inside rtol of the truth but NOT of each other, so first-match-wins keeps them
-    apart and a spurious group with fewer total votes than A+B outranks each half. This is the shape
-    of the real failure: on a refined-geometry run the true cell's 161+150 votes lost to a spurious
-    217. The merge witness is a cell lying between A and B, which is exactly what a real refine
-    produces and what proves the two groups are one lattice.
+    This drives verdict() after every add_frame -- the decide-after-every-frame behaviour the class
+    exists for -- not just the pooled partition at the end. The order matters: A and B (the two
+    halves of a split true lattice, each within rtol of truth but 5.8% from each other) arrive first
+    but neither reaches min_support alone, then the WITNESS lands, then the spurious group
+    accumulates. Without merge the halves stay apart and SPUR eventually wins the lock; with merge
+    the witness coalesces them and the true lattice locks immediately, on fewer frames.
     """
     TRUE = _diag(79.0, 79.0, 38.0)
-    A = _diag(79.0 * 0.972, 79.0 * 0.972, 38.0 * 0.972)      # -2.8% : within 5% of TRUE
-    B = _diag(79.0 * 1.028, 79.0 * 1.028, 38.0 * 1.028)      # +2.8% : within 5% of TRUE...
+    A = _diag(79.0 * 0.972, 79.0 * 0.972, 38.0 * 0.972)      # -2.8% : within rtol of TRUE
+    B = _diag(79.0 * 1.028, 79.0 * 1.028, 38.0 * 1.028)      # +2.8% : within rtol of TRUE...
     # ...but A and B are 5.8% apart, so they do NOT match each other -- tolerance is not transitive.
     rc = RunningConsensus(min_support=3, gap=2, merge=False)
-    la, ca = reduced_params(A); lb, cb = reduced_params(B)
-    lt, ct = reduced_params(TRUE)
-    assert rc._match(la, ca, abs(np.linalg.det(A)), [TRUE, lt, ct, abs(np.linalg.det(TRUE)), 1]), "A should match TRUE"
-    assert not rc._match(la, ca, abs(np.linalg.det(A)), [B, lb, cb, abs(np.linalg.det(B)), 1]), "A must NOT match B"
+    la, ca = reduced_params(A); lb, cb = reduced_params(B); lt, ct = reduced_params(TRUE)
+    assert rc._match(la, ca, abs(np.linalg.det(A)),
+                     [TRUE, lt, ct, abs(np.linalg.det(TRUE)), 1]), "premise: A matches TRUE"
+    assert not rc._match(la, ca, abs(np.linalg.det(A)),
+                         [B, lb, cb, abs(np.linalg.det(B)), 1]), "premise: A must NOT match B"
 
-    SPUR = _diag(61.0, 67.0, 73.0)                            # a distinct, tightly-clustered alias
-    frames = ([[A]] * 9) + ([[B]] * 9) + ([[SPUR]] * 12)      # A+B = 18 votes, SPUR = 12
-    witness = [[_diag(79.0, 79.0, 38.0)]]                     # one on-truth cell: matches A and B both
+    SPUR = _diag(61.0, 67.0, 73.0)                           # a distinct, tightly-clustered alias
+    WITNESS = _diag(79.0, 79.0, 38.0)                        # inside the tolerance of A and B both
+    stream = [[A], [B], [WITNESS]] + [[SPUR]] * 4
 
-    def winner(merge):
+    def run(merge):
         rc = RunningConsensus(min_support=3, gap=2, adaptive=False, merge=merge)
-        for f in frames + witness:
-            rc.add_frame(f)
-        top = max(rc.groups, key=lambda g: g[4])
-        return top, len(rc.groups)
+        for i, fr in enumerate(stream):
+            rc.add_frame(fr)
+            Mc, sup, _ = rc.verdict()                        # after EVERY frame, as the driver does
+            if Mc is not None:
+                return i + 1, Mc, sup
+        return None, None, None
 
-    top_off, n_off = winner(False)
-    top_on, n_on = winner(True)
-    assert not same_lattice(top_off[0], TRUE), "premise: without merge the split vote must LOSE"
-    assert same_lattice(top_on[0], TRUE), "with merge the true lattice must win"
-    assert top_on[4] >= 18, top_on[4]                        # the two halves, recombined
-    assert 1 < n_on < n_off, (n_on, n_off)                   # folds what it must, not everything
+    at_off, Mc_off, _ = run(False)
+    at_on, Mc_on, sup_on = run(True)
+    assert Mc_off is not None and not same_lattice(Mc_off, TRUE), \
+        "premise: first-match-wins must lock on the SPURIOUS lattice"
+    assert Mc_on is not None and same_lattice(Mc_on, TRUE), "the default must lock on the true lattice"
+    assert at_on < at_off, (at_on, at_off)                   # and sooner, not by waiting longer
+    assert sup_on >= 3, sup_on
+
+    # The merged group's representative must COVER the votes credited to it: the driver locks this
+    # matrix and its alias gate only collects candidates matching it, so a founder that excludes half
+    # its own voters would gate them away. The witness is inside the tolerance of every group it
+    # merged, which is what selected them, so it is the representative.
+    rc = RunningConsensus(min_support=3, gap=2, adaptive=False)
+    for fr in ([[A]] * 9) + ([[B]] * 9) + ([[SPUR]] * 12) + [[WITNESS]]:
+        rc.add_frame(fr)
+    top = max(rc.groups, key=lambda g: g[4])
+    assert same_lattice(top[0], TRUE), "pooled winner must be the true lattice"
+    assert top[4] >= 18, top[4]                              # the two halves, recombined
+    lr, cr = reduced_params(top[0]); dr = abs(np.linalg.det(top[0]))
+    for nm, M in (("A", A), ("B", B)):
+        lm, cm = reduced_params(M)
+        assert rc._match(lm, cm, abs(np.linalg.det(M)), [top[0], lr, cr, dr, 1]), \
+            f"counted voter {nm} must match the representative it is credited to"
 
 
 def test_merge_false_is_bit_identical_to_pre_fix():
@@ -336,6 +357,71 @@ def test_batch_equivalence_diverges_on_multi_match():
         importlib.reload(ms)
 
 
+def test_vectorised_filter_agrees_with_match():
+    """The merge path's vectorised group filter must be EXACTLY _match, group for group.
+
+    merge=False still calls _match in a Python loop; the default replaces it with one numpy
+    expression over the parallel fingerprint arrays. If the two ever disagree the two modes silently
+    partition differently for reasons unrelated to merging, so pin them against each other on a
+    population containing near-misses on each of the three tests (volume, lengths, angles).
+    """
+    rng = np.random.default_rng(11)
+    rc = RunningConsensus(min_support=3, gap=2, adaptive=False)
+    for _ in range(150):                                     # a varied population of groups
+        rc.add(np.diag(1.0 / rng.uniform(30.0, 250.0, 3)))
+    # Seed the POPULATION with the probe family too, or the probes match nothing and the volume
+    # term is never exercised. It is the term that discriminates a uniform rescale: at x1.049 every
+    # length is inside rtol=5% while the volume is off by 15.4%, past vtol=10%, so lengths+angles
+    # alone would accept a cell the real _match rejects.
+    base = np.diag(1.0 / np.array([79.0, 79.0, 38.0]))
+    for f in (1.0, 1.03, 1.049, 1.06):
+        rc.add(np.diag(1.0 / (np.array([79.0, 79.0, 38.0]) * f)))
+    probes = [base]
+    for f in (1.0, 1.02, 1.049, 1.051, 1.2, 0.95, 2 ** (1 / 3)):   # straddle rtol and the volume test
+        probes.append(np.diag(1.0 / (np.array([79.0, 79.0, 38.0]) * f)))
+    probes += [np.diag(1.0 / rng.uniform(30.0, 250.0, 3)) for _ in range(60)]
+
+    for M in probes:
+        l, c = reduced_params(np.asarray(M, float)); d = abs(np.linalg.det(np.asarray(M, float)))
+        vec = set(int(i) for i in rc._candidates(l, c, d))   # the MODULE's filter, not a copy
+        ref = {i for i, g in enumerate(rc.groups) if rc._match(l, c, d, g)}
+        assert vec == ref, (sorted(vec ^ ref), len(rc.groups))
+
+
+def test_fingerprint_arrays_stay_aligned_with_groups():
+    """The parallel fingerprint arrays must stay index-aligned with self.groups, including MERGES.
+
+    A merge removes groups from the list, so the arrays have to be re-derived; if they are not, _n
+    over-counts and _candidates() returns indices into a list that has shrunk -- silently selecting
+    the wrong group, or raising. Nothing else in this file exercises that, because a stale array
+    only misbehaves once a merge has actually removed something.
+    """
+    A = _diag(79.0 * 0.972, 79.0 * 0.972, 38.0 * 0.972)
+    B = _diag(79.0 * 1.028, 79.0 * 1.028, 38.0 * 1.028)
+    WITNESS = _diag(79.0, 79.0, 38.0)
+    rng = np.random.default_rng(5)
+    rc = RunningConsensus(min_support=3, gap=2, adaptive=False)
+
+    def invariant(where):
+        assert rc._n == len(rc.groups), (where, rc._n, len(rc.groups))
+        for i, g in enumerate(rc.groups):
+            assert abs(rc._dets[i] - g[3]) < 1e-12, (where, i)
+            assert np.allclose(rc._lens[i], g[1]) and np.allclose(rc._cos[i], g[2]), (where, i)
+
+    for _ in range(40):
+        rc.add(np.diag(1.0 / rng.uniform(30.0, 250.0, 3)))
+    invariant("after fills")
+    before = len(rc.groups)
+    rc.add(A); rc.add(B)
+    invariant("after A,B")
+    rc.add(WITNESS)                                          # forces a merge of the A and B groups
+    assert len(rc.groups) < before + 2, (len(rc.groups), before)   # a merge really happened
+    invariant("after merge")
+    for _ in range(20):                                      # keep going: a stale array breaks here
+        rc.add(np.diag(1.0 / rng.uniform(30.0, 250.0, 3)))
+    invariant("after post-merge fills")
+
+
 if __name__ == "__main__":
     tests = (test_batch_equivalence, test_early_stop_locks_clean,
              test_refuses_ambiguous_race, test_adaptive_gap_raises_when_slow,
@@ -343,7 +429,9 @@ if __name__ == "__main__":
              test_pool_switch_running_lock_unchanged_small_refuses_large,
              test_merge_repairs_split_vote, test_merge_false_is_bit_identical_to_pre_fix,
              test_merge_is_on_by_default,
-             test_batch_equivalence_diverges_on_multi_match)
+             test_batch_equivalence_diverges_on_multi_match,
+             test_vectorised_filter_agrees_with_match,
+             test_fingerprint_arrays_stay_aligned_with_groups)
     ok = 0
     for t in tests:
         try:

@@ -165,7 +165,7 @@ class RunningConsensus:
     """
 
     __slots__ = ("min_support", "base_gap", "gap", "rtol", "ctol", "vtol", "adaptive",
-                 "groups", "nframes", "npool", "min_frac", "min_lead", "pool_switch", "merge")
+                 "groups", "nframes", "npool", "min_frac", "min_lead", "pool_switch", "merge", "_dets", "_lens", "_cos", "_n")
 
     def __init__(self, min_support=3, gap=2, rtol=DEF_RTOL, ctol=DEF_CTOL, vtol=DEF_VTOL,
                  adaptive=True, min_frac=0.0, min_lead=1.0, pool_switch=0, merge=True):
@@ -179,6 +179,10 @@ class RunningConsensus:
         self.min_frac = float(min_frac); self.min_lead = float(min_lead)
         self.pool_switch = int(pool_switch)
         self.merge = bool(merge)                          # non-transitivity repair; see add()
+        # Parallel fingerprint arrays for the merge path's vectorised match: capacity-doubled so a
+        # per-hypothesis query is one numpy expression instead of a Python loop over every group.
+        self._n = 0
+        self._dets = np.empty(64); self._lens = np.empty((64, 3)); self._cos = np.empty((64, 3))
         self.groups = []                                  # each: [rep_M, lens, cos, det, weight]
         self.nframes = 0
         self.npool = 0                                    # hypotheses added, not frames
@@ -188,6 +192,49 @@ class RunningConsensus:
         return (abs(d - dg) <= self.vtol * dg
                 and bool(np.all(np.abs(l - lg) <= self.rtol * lg))
                 and bool(np.all(np.abs(c - cg) <= self.ctol)))
+
+    def _grow(self):
+        cap = self._dets.size
+        if self._n < cap:
+            return
+        self._dets = np.resize(self._dets, cap * 2)
+        self._lens = np.resize(self._lens, (cap * 2, 3))
+        self._cos = np.resize(self._cos, (cap * 2, 3))
+
+    def _push_fp(self, l, c, d):
+        """Append one group's fingerprint to the parallel arrays."""
+        self._grow()
+        i = self._n
+        self._dets[i] = d; self._lens[i] = l; self._cos[i] = c
+        self._n = i + 1
+
+    def _push(self, M, l, c, d):
+        self.groups.append([M, l, c, d, 1]); self._push_fp(l, c, d)
+
+    def _rebuild_fp(self):
+        """Re-derive the fingerprint arrays from self.groups (after a merge changed the set)."""
+        self._n = 0
+        for g in self.groups:
+            self._push_fp(g[1], g[2], g[3])
+
+    def _candidates(self, l, c, d):
+        """Indices of every group this fingerprint matches -- the vectorised form of ``_match``.
+
+        Must agree with ``_match`` group for group: ``merge=False`` still walks groups with
+        ``_match``, so a disagreement here would silently partition the two modes differently for
+        reasons that have nothing to do with merging. Pinned by
+        ``test_vectorised_filter_agrees_with_match``, which calls THIS method rather than
+        re-deriving the expression. Volume is first because it is the cheapest and most selective
+        term, and it is not redundant with the others: a uniform rescale of x1.049 leaves every
+        length inside rtol=5% while the volume moves 15.4%, past vtol=10%.
+        """
+        n = self._n
+        if not n:
+            return ()
+        dv = self._dets[:n]; lv = self._lens[:n]; cv = self._cos[:n]
+        return np.nonzero((np.abs(d - dv) <= self.vtol * dv)
+                          & np.all(np.abs(l - lv) <= self.rtol * lv, axis=1)
+                          & np.all(np.abs(c - cv) <= self.ctol, axis=1))[0]
 
     def add(self, M):
         """Add ONE candidate cell (3x3 basis, columns a,b,c) to the running histogram.
@@ -207,11 +254,15 @@ class RunningConsensus:
             for g in self.groups:
                 if self._match(l, c, d, g):
                     g[4] += 1; return
-            self.groups.append([M, l, c, d, 1])
+            self.groups.append([M, l, c, d, 1]); self._push_fp(l, c, d)
             return
-        hits = [g for g in self.groups if self._match(l, c, d, g)]
+        # Volume is the cheap half of _match and rejects almost every group, so gate on it inline
+        # before paying for the reduced-parameter comparisons. Without this the multi-match scan
+        # cannot short-circuit the way first-match-wins did, and the per-hypothesis cost on a
+        # thousand-group pool more than doubles on a path whose whole purpose is streaming latency.
+        hits = [self.groups[i] for i in self._candidates(l, c, d)]
         if not hits:
-            self.groups.append([M, l, c, d, 1]); return
+            self._push(M, l, c, d); return
         keep = max(hits, key=lambda g: g[4])
         drop = set()
         for g in hits:
@@ -219,6 +270,14 @@ class RunningConsensus:
                 keep[4] += g[4]; drop.add(id(g))
         if drop:                                          # by IDENTITY: `==` is ambiguous on arrays
             self.groups = [g for g in self.groups if id(g) not in drop]
+            # The WITNESS becomes the representative of the coalesced group. It is inside the
+            # tolerance of every group it merged -- that is what selected them -- whereas the
+            # heaviest group's founder need not cover the others, so keeping the founder would
+            # expose a combined support whose voters do not all match the matrix that gets locked.
+            # StreamDriver locks this matrix and its alias gate only collects candidates matching
+            # it, so an uncovered representative would gate away a chunk of its own voters.
+            keep[0] = M; keep[1] = l; keep[2] = c; keep[3] = d
+            self._rebuild_fp()
         keep[4] += 1
 
     def add_frame(self, cells):

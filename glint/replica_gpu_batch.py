@@ -9,7 +9,7 @@ so it sorts frames by peak count and routes each batch to the smallest of a few 
 is BIT-IDENTICAL to index_known_gpu_cell_batch (per-frame independence + masked padding) and ~1.3x
 faster on real cxidb / ~1.5x at deployment peak-caps. Enabled by the analytic solve/det (cuSOLVER
 is uncapturable and forces a stream sync)."""
-import os, sys
+import os, sys, warnings
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("CDIRS", "16384")
 import numpy as np, torch
 from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, AXIS0_DEDUP_COS, _axes_from_cell,
@@ -307,22 +307,39 @@ def index_fused(frames, Mc, B=32):
     Throughput scales with the batch B: each frame is one thread-block, so B sets GPU occupancy.
     B>=64 saturates an A100 (120 cxidb frames: B=32 -> 0.33/0.45 ms/fr fp32/fp64; B=64 -> 0.21/0.31;
     B=120 -> 0.16/0.26). Output is batch-invariant -- the kernels loop each frame's real peak count,
-    not Pmax, so a looser per-batch pad costs no work (fp64 bit-identical across B)."""
+    not Pmax, so a looser per-batch pad costs no work (fp64 bit-identical across B).
+
+    Each frame's peaks are staged in dynamic shared memory, so a frame with more peaks than the
+    device can hold in one block (fused_kernels.max_peaks(): ~6954 fp64 / 13909 fp32 on an A100)
+    cannot use the fused kernels. Such frames are split out and run ONE AT A TIME through the stock
+    torch path instead, which has no shared-memory limit -- same answer, just slower. Nothing about
+    an oversized frame raises: an indexer that dies on a dense frame takes StreamDriver.flush() with
+    it, so a frame that cannot be indexed is returned as a miss (None)."""
     if DEV != "cuda":
         return index_all_graph(frames, Mc, B)
     try:
         from glint import fused_kernels as _fk
     except Exception:
         return index_all_graph(frames, Mc, B)
+    cap = _fk.max_peaks()
     order = sorted(range(len(frames)), key=lambda i: len(frames[i]))   # tight per-batch Pmax
+    fits = [j for j in order if len(frames[j]) <= cap]
+    over = [j for j in order if len(frames[j]) > cap]
     out = [None] * len(frames)
     _fk.patch(anneal=True, obj=True, refine=True, cpu=True)
     try:
-        for s in range(0, len(order), B):
-            chunk = order[s:s + B]
+        for s in range(0, len(fits), B):
+            chunk = fits[s:s + B]
             res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc)
             for j, r in zip(chunk, res):
                 out[j] = r
     finally:
         _fk.unpatch()
+    for j in over:                     # unpatched: the stock ops, one frame at a time. The stock
+        try:                           # path materialises (F, NC*NANG, Pmax) tensors, so at these
+            out[j] = index_known_gpu_cell_batch([frames[j]], Mc)[0]   # peak counts F must stay 1.
+        except Exception as e:                                        # OOM, etc: a miss, not a death
+            warnings.warn(f"index_fused: frame with {len(frames[j])} peaks failed on the non-fused "
+                          f"fallback ({type(e).__name__}: {e}); returning it as a miss", RuntimeWarning)
+            out[j] = None
     return out

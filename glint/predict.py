@@ -394,12 +394,54 @@ def panels_from_geom(geom):
     return panels, clen
 
 
-def _load_image(path, data_path):
+def _event_index(event):
+    """CrystFEL ``Event://N`` value -> integer stack index.
+
+    ``geom.read_crystfel_peaks`` int()s what it can and keeps anything else as the raw STRING, so a
+    multi-dimensional event id (``entry_1//7``) arrives here as text. CrystFEL's own form puts the
+    frame number last, so take the trailing field; refuse rather than guess if there is no number in
+    it, because the alternative is silently integrating the wrong frame -- which is glint#136."""
+    if event is None or event == "":
+        return 0
+    try:
+        return int(event)
+    except (TypeError, ValueError):
+        pass
+    tail = str(event).strip().strip("/").rsplit("/", 1)[-1]
+    try:
+        return int(tail)
+    except ValueError:
+        raise ValueError(f"cannot read a frame index out of Event {event!r}") from None
+
+
+def _load_image(path, data_path, event=0):
+    """Read the frame for THIS event out of an image file at the geom ``data`` path.
+
+    EVENT-AWARE since glint#136. This used to end ``a = a[0] if a.shape[0] > 1 else a[0]`` -- both
+    branches index 0 -- so on a stacked multi-event ``.cxi`` every result in the run was handed
+    event 0's pixels, silently, and ``integrate_frames`` then produced real-looking I/sigma from the
+    wrong image.
+
+    A genuine per-file (legacy) detector is unaffected: its stack axis is length 1 (or absent), so
+    the event is not used to index it, and a peak stream whose ``Event://N`` numbers run across a
+    whole run of single-frame files still loads. Only a length>1 stack is addressed by event -- the
+    case that was wrong -- and an event past the end of one now RAISES instead of quietly falling
+    back to frame 0. Reads a single frame, not the whole stack."""
     import h5py
     with h5py.File(path, "r") as f:
-        a = np.asarray(f[data_path][()], np.float32)
-    if a.ndim == 3:                                  # (event|panel, ss, fs) -> single assembled 2D frame
-        a = a[0] if a.shape[0] > 1 else a[0]
+        d = f[data_path]
+        if getattr(d, "ndim", 0) >= 3 and d.shape[0] > 1:
+            ev = _event_index(event)
+            if not 0 <= ev < d.shape[0]:
+                raise IndexError(
+                    f"{path}:{data_path} is a stack of {d.shape[0]} frames but this result asks for "
+                    f"event {event!r}; for stacked multi-event .cxi use integrate_cxi (the --images "
+                    f"route), which reads per-event clen/energy as well (glint#136)")
+            a = np.asarray(d[ev], np.float32)        # ONE frame, not the whole stack
+        else:
+            a = np.asarray(d[()], np.float32)
+    if a.ndim == 3:                                  # (1, ss, fs) -> single assembled 2D frame
+        a = a[0]
     return a
 
 
@@ -409,8 +451,11 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
     frame image (``image_dir/<basename(image)>`` at the geom ``data`` path), predict on-detector spots,
     integrate. Attaches pred/I/sigma/peak/bg to each result in place. Returns (n_integrated, tot_refl).
 
-    This variant reads one image FILE per result (legacy per-file detectors). For a modern STACKED .cxi
-    (the ``--images`` front end, many events in one file) use ``integrate_cxi`` instead."""
+    This variant reads one image FILE per result (legacy per-file detectors) and takes the frame at
+    that result's own ``event`` when the file is a stack. It does NOT read per-event clen/energy: for
+    a modern STACKED .cxi (the ``--images`` front end, many events in one file) ``integrate_cxi`` is
+    still the better route. Until glint#136 this function ignored ``event`` entirely and integrated
+    every result against event 0 of its file."""
     panels, clen = panels_from_geom(geom)
     if data_path is None:
         data_path = geom.get("global", {}).get("data", "/data/data")
@@ -420,7 +465,8 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
         M = r.get("M")
         if M is None:
             continue
-        img = _load_image(os.path.join(image_dir, os.path.basename(str(r.get("image", "")))), data_path)
+        img = _load_image(os.path.join(image_dir, os.path.basename(str(r.get("image", "")))),
+                          data_path, r.get("event", 0))       # THIS result's event, not frame 0 (glint#136)
         pred = predict_spots(M, panels, clen, lam, dmin=dmin, tol=tol)
         I, sig, peak, bg = integrate_spots(img, pred)
         # Keep NON-POSITIVE intensities. Dropping them is a selection on the measured value of

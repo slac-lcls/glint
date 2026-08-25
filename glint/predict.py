@@ -486,6 +486,29 @@ def _event_index(event):
         raise ValueError(f"cannot read a frame index out of Event {event!r}") from None
 
 
+# PER-EVENT DATASETS. A stacked .cxi carries one row per EVENT in these alongside the images, so
+# their length is a positive statement of how many events the file holds -- unlike the image array's
+# leading axis, which is what we are trying to interpret. psocake/btx write `nPeaks` and the LCLS
+# block; `experiment_identifier` is the CXI standard's own per-entry field.
+_EVENT_COUNT_PATHS = ("/entry_1/result_1/nPeaks", "/entry_1/result_1/peakXPosRaw",
+                      "/LCLS/eventNumber", "/LCLS/fiducial", "/LCLS/timestamp",
+                      "/entry_1/experiment_identifier")
+
+
+def _event_count(f):
+    """Events in an open HDF5 file according to its own per-event metadata, or None if it says
+    nothing. Cheap: membership tests plus a shape read, no data."""
+    for p in _EVENT_COUNT_PATHS:
+        try:
+            d = f[p]
+        except (KeyError, OSError):
+            continue
+        shape = getattr(d, "shape", None)
+        if shape:                                    # a dataset with at least one axis
+            return int(shape[0])
+    return None
+
+
 def _load_image(path, data_path, event=0, n_panels=1, event_axis=None):
     """Read the frame for THIS event out of an image file at the geom ``data`` path.
 
@@ -495,21 +518,23 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None):
     wrong image.
 
     WHAT THE LEADING AXIS OF A 3-D DATASET MEANS is not decidable from the shape: the old docstring
-    called it ``(event|panel, ss, fs)`` and both readings occur. Deciding it by "length > 1 means
-    events" would silently turn a legacy per-file ``(panel, ss, fs)`` detector -- whose peak stream
-    still carries a run-global ``Event://N`` -- into panel-N-indexed nonsense. So the decision is
-    taken from the GEOMETRY, which is the thing that actually knows, and can be overridden:
+    called it ``(event|panel, ss, fs)`` and both readings occur. Nor is it decidable by comparing
+    that axis to the geometry's panel count, which was this function's first attempt and is wrong by
+    COINCIDENCE -- a 4-event .cxi under a 4-panel geometry matches, and every frame in the run would
+    silently load slab 0 again, which is glint#136 exactly. So the file is ASKED, and where it does
+    not answer the ambiguity is refused rather than guessed:
 
-      ``event_axis=None`` (default)   n_panels == 1  -> the leading axis is EVENTS. A one-panel
-                                      geometry cannot be describing a panel stack, so a stack of
-                                      length > 1 is a stack of frames. This is the LUTE
-                                      ``PeakFinderSFX`` .cxi, i.e. the case glint#136 was about.
-                                      n_panels > 1 and shape[0] == n_panels -> the leading axis is
-                                      PANELS. Returns slab 0 exactly as before, event untouched:
-                                      per-file behaviour is preserved, not reinterpreted.
-                                      n_panels > 1 and shape[0] != n_panels -> genuinely ambiguous,
-                                      so it RAISES rather than guessing.
-      ``event_axis=True/False``       say so explicitly and skip the inference entirely.
+      1. ``event_axis=True/False``  explicit, wins over everything.
+      2. per-event metadata          if the file carries a per-event dataset (``nPeaks``,
+                                     ``LCLS/eventNumber``, ``experiment_identifier``, ...) its length
+                                     is the event count. Equal to the leading axis -> EVENTS.
+                                     Different -> the file knows its event count and this axis is
+                                     not it, so PANELS.
+      3. one-panel geometry          -> EVENTS. A one-panel geometry cannot describe a panel stack.
+      4. leading axis != n_panels    -> EVENTS. It cannot be a panel stack either.
+      5. otherwise                   ``n_panels > 1`` and the axis matches it and the file said
+                                     nothing -> genuinely ambiguous, so RAISE, naming both readings
+                                     and the override. Never silently pick.
 
     An event past the end of an event stack RAISES instead of quietly falling back to frame 0 --
     that silence is what made the original defect invisible. Reads one frame, not the whole stack."""
@@ -519,15 +544,20 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None):
         stacked = getattr(d, "ndim", 0) >= 3 and d.shape[0] > 1
         is_event = event_axis
         if stacked and is_event is None:
-            if n_panels <= 1:
-                is_event = True
-            elif d.shape[0] == n_panels:
-                is_event = False                     # (panel, ss, fs): legacy, slab 0, as before
+            n_ev = _event_count(f)
+            if n_ev is not None:
+                is_event = (n_ev == d.shape[0])      # the file's own per-event metadata decides
+            elif n_panels <= 1 or d.shape[0] != n_panels:
+                is_event = True                      # cannot be a panel stack
             else:
                 raise ValueError(
-                    f"{path}:{data_path} has a leading axis of {d.shape[0]} but the geometry has "
-                    f"{n_panels} panels, so it is neither an obvious event stack nor a panel stack; "
-                    f"pass event_axis=True/False to say which it is (glint#136)")
+                    f"{path}:{data_path} has a leading axis of {d.shape[0]}, which equals the "
+                    f"geometry's panel count, and the file carries no per-event metadata "
+                    f"({', '.join(_EVENT_COUNT_PATHS)}) to settle it. It is either {d.shape[0]} "
+                    f"EVENTS of an assembled frame or {n_panels} PANELS of one event, and picking "
+                    f"wrong integrates the wrong pixels silently -- which is glint#136. Pass "
+                    f"event_axis=True (events) or event_axis=False (panels), or --event-axis "
+                    f"event|panel on the CLI, to say which it is.")
         if stacked and is_event:
             ev = _event_index(event)
             if not 0 <= ev < d.shape[0]:

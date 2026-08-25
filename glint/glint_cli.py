@@ -93,6 +93,13 @@ def main():
                     help="--integrate Ewald excitation-error gate in 1/A (stills partiality window; default 0.006)")
     # The escape hatch for glint#131. Without it "median" is reachable only from Python, which makes
     # every intensity GLINT produced before that change irreproducible through the shipped routes.
+    # Only the --peaks route can face this: --images goes through integrate_cxi, whose .cxi layout
+    # is (event, ss, fs) by definition of that front end.
+    ap.add_argument("--event-axis", choices=("auto", "event", "panel"), default="auto",
+                    help="--integrate --peaks: what the leading axis of a 3-D image dataset means. "
+                         "auto (default) asks the file's per-event metadata and refuses to guess "
+                         "when a multi-panel geometry makes it ambiguous; event|panel say so "
+                         "outright (glint#136)")
     ap.add_argument("--bg-mode", choices=("clipmean", "median", "mean"), default="clipmean",
                     help="--integrate annulus background estimator: clipmean (default, MAD-clipped "
                          "mean), median (what shipped before glint#131 -- use it to reproduce "
@@ -160,7 +167,9 @@ def main():
             from glint.geom import parse_geom
             geomd = parse_geom(args.geom); gg = geomd.get("global", {})
             nint, tot = integrate_frames(results, geomd, image_dir=args.image_dir,
-                                         dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode)
+                                         dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
+                                         event_axis={"auto": None, "event": True,
+                                                     "panel": False}[args.event_axis])
             write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
                                     photon_eV=float(gg.get("photon_energy", 9392.7)), clen_m=float(gg.get("clen", 0.15)))
     else:

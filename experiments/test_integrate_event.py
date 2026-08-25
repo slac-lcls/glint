@@ -163,7 +163,9 @@ with tempfile.TemporaryDirectory() as d:
     # The old loader documented its 3-D axis as "(event|panel, ss, fs)" and took index 0 for both.
     # Indexing a PANEL stack by the event would silently integrate panel N of a legacy per-file
     # detector whose peak stream carries a run-global Event://N -- a different wrong image, not a
-    # fixed one. The decision is taken from the GEOMETRY's panel count, not the array shape.
+    # fixed one. But matching the axis against the panel count does not DISAMBIGUATE it either
+    # (see THE COINCIDENCE below), so the file's own per-event metadata decides, and a case that
+    # nothing settles is refused instead of guessed.
     NP = 4
     panel_stack = np.stack([np.full((60, 60), 100.0 * (p + 1), np.float32) for p in range(NP)])
     pfile = os.path.join(d, "panelstack.h5")
@@ -181,7 +183,13 @@ with tempfile.TemporaryDirectory() as d:
     panels_p, _ = panels_from_geom(geom_p)
     check("the 4-panel geometry parses as 4 panels", len(panels_p) == NP, len(panels_p))
 
-    got = _load_image(pfile, DATA, event=2, n_panels=NP)
+    # a legacy panel stack that SAYS it is one -- per-event metadata of a different length -- is
+    # read as panels under a nonzero event, which is the pre-#136 behaviour this must preserve
+    pfile_meta = os.path.join(d, "panelstack_with_meta.h5")
+    with h5py.File(pfile_meta, "w") as f:
+        f.create_dataset(DATA, data=panel_stack)
+        f.create_dataset("/LCLS/eventNumber", data=np.array([5]))      # ONE event in this file
+    got = _load_image(pfile_meta, DATA, event=2, n_panels=NP)
     check("a (panel,ss,fs) stack with a nonzero event is NOT panel-indexed (returns slab 0)",
           np.array_equal(got, panel_stack[0]), float(got.flat[0]))
     check("...and specifically did NOT return the event-indexed slab",
@@ -193,14 +201,51 @@ with tempfile.TemporaryDirectory() as d:
     check("the same file under a 1-panel geometry IS event-indexed",
           np.array_equal(ev2, panel_stack[2]), float(ev2.flat[0]))
 
-    # ...and a leading axis that matches neither is refused rather than guessed
+    # ...and a leading axis that matches neither is EVENTS: it cannot be a panel stack
+    check("a leading axis matching neither the panel count nor 1 is treated as events",
+          np.array_equal(_load_image(pfile, DATA, event=1, n_panels=7), panel_stack[1]))
+
+    # --- THE COINCIDENCE. n_events == n_panels ---------------------------------------------
+    # Matching the leading axis against the panel count does not DISAMBIGUATE it: a 4-event .cxi
+    # under a 4-panel geometry matches too, and reading it as panels puts every frame in the run
+    # back on slab 0 -- glint#136 exactly, reintroduced by the fix for it. The file is asked
+    # instead, and where it does not answer the ambiguity is refused.
+    ev_file = os.path.join(d, "coincidence_events.cxi")
+    with h5py.File(ev_file, "w") as f:
+        f.create_dataset(DATA, data=panel_stack)                       # same 4 slabs...
+        f.create_dataset("/entry_1/result_1/nPeaks", data=np.array([12, 9, 31, 4]))  # ...+ 4 events
+    got_ev = _load_image(ev_file, DATA, event=2, n_panels=NP)
+    check("n_events == n_panels + per-event metadata -> EVENTS (event=2 gives slab 2)",
+          np.array_equal(got_ev, panel_stack[2]), float(got_ev.flat[0]))
+    check("...which is exactly the frame the panel reading would have got WRONG",
+          not np.array_equal(got_ev, panel_stack[0]))
+
     raised2 = None
     try:
-        _load_image(pfile, DATA, event=1, n_panels=7)
+        _load_image(pfile, DATA, event=1, n_panels=NP)     # same shape, NO per-event metadata
     except Exception as exc:                      # noqa: BLE001 - the message is the point
         raised2 = exc
-    check("a leading axis matching neither events nor panels RAISES",
+    check("n_events == n_panels and the file says nothing -> RAISES rather than picking",
           isinstance(raised2, ValueError) and "event_axis" in str(raised2), repr(raised2))
+    check("...and the message names BOTH readings so the user can choose",
+          raised2 is not None and "EVENTS" in str(raised2) and "PANELS" in str(raised2),
+          str(raised2)[:120])
+
+    # metadata that DISAGREES with the leading axis says the axis is not events
+    mism = os.path.join(d, "panels_with_one_event.h5")
+    with h5py.File(mism, "w") as f:
+        f.create_dataset(DATA, data=panel_stack)
+        f.create_dataset("/LCLS/eventNumber", data=np.array([7]))      # one event, four slabs
+    check("per-event metadata of a DIFFERENT length -> the axis is panels (slab 0)",
+          np.array_equal(_load_image(mism, DATA, event=3, n_panels=NP), panel_stack[0]))
+
+    # the override beats the metadata, in both directions
+    check("event_axis=False overrides per-event metadata that says events",
+          np.array_equal(_load_image(ev_file, DATA, event=2, n_panels=NP, event_axis=False),
+                         panel_stack[0]))
+    check("event_axis=True overrides metadata that says panels",
+          np.array_equal(_load_image(mism, DATA, event=3, n_panels=NP, event_axis=True),
+                         panel_stack[3]))
 
     # the explicit override wins over the inference, in both directions
     check("event_axis=True forces event indexing under a multi-panel geometry",
@@ -209,6 +254,26 @@ with tempfile.TemporaryDirectory() as d:
     check("event_axis=False forces slab 0 under a one-panel geometry",
           np.array_equal(_load_image(pfile, DATA, event=3, n_panels=1, event_axis=False),
                          panel_stack[0]))
+
+# --- the override has to be REACHABLE, or the raise above is a dead end ---------------------
+# _load_image now refuses an ambiguous stack. That is only an improvement if the user can then say
+# which reading they meant WITHOUT editing Python, so the flag has to exist on the route that can
+# hit it (--peaks + --integrate) and the task model that drives it.
+import pathlib                                                       # noqa: E402
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+cli = (ROOT / "glint/glint_cli.py").read_text()
+check("glint_cli exposes --event-axis and forwards it to integrate_frames",
+      "--event-axis" in cli and "event_axis=" in cli
+      and all(f'"{v}"' in cli for v in ("auto", "event", "panel")))
+check("the LUTE task model has an event_axis field rendering as --event-axis",
+      "event_axis:" in (ROOT / "lute/glint_index.py").read_text()
+      and 'rename_param="event-axis"' in (ROOT / "lute/glint_index.py").read_text())
+# ...and it must NOT be in the launcher's xtc whitelist: glint_xtc.py takes frames from psana, has
+# no such flag, and passing it there would be an argparse error rather than a no-op.
+launch = (ROOT / "lute/glint_launch.sh").read_text()
+whitelist = launch.split("XTC_FLAGS=", 1)[1].split('"')[1]
+check("--event-axis is NOT whitelisted for the xtc route (glint_xtc has no such flag)",
+      "--event-axis" not in whitelist and "--event-axis" in launch, whitelist[:60])
 
 print(f"\nFAILURES: {len(FAILS)}" + ("" if not FAILS else "  " + ", ".join(FAILS)))
 sys.exit(1 if FAILS else 0)

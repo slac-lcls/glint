@@ -88,13 +88,78 @@ def predict_spots(M_or_R, panels, clen_m, wavelength_A, dmin=2.0, tol=0.006, is_
     return out
 
 
-def integrate_spots(data, pred, half=3, gap=2, ring=3):
+BG_NSIG = 5.0                # MAD-clip half-width of the robust background mean; see _bg_clipmean
+BG_MODES = ("clipmean", "median", "mean")
+
+
+def _bg_clipmean(annpx, nsig=BG_NSIG):
+    """Per-row MAD-clipped MEAN of the annulus -- the robust mean a box SUM needs (glint#131).
+
+    The estimator: centre on the row median, scale by 1.4826*MAD, keep everything within
+    ``nsig`` scales of the centre, average what is kept. Outliers (a neighbouring spot, a hot or
+    saturated pixel) fall outside the window and are dropped; the surviving sample is the background
+    itself, so its MEAN is what gets multiplied by nbox.
+
+    THE FLOOR IS LOAD-BEARING. On counting data the MAD is quantised and is exactly 0 whenever more
+    than half the annulus shares one value -- routine at low counts, universal below ~1 count/px.
+    With scale 0 the window collapses onto the median and the estimator becomes the median again,
+    which is the bug. So the scale is floored at the Poisson sigma of the median level,
+    sqrt(max(med,1)), matching the counting model `sigma` already assumes one line below.
+
+    Measured on 2209 pure-background boxes (Poisson, 49-px box, 168-px annulus), mean I where the
+    true answer is 0 -- the plain mean is the unbiased reference:
+
+        lambda      6.0      2.0      0.3     0.05
+        median    +3.79    +0.62   +14.73   +2.49      <- shipped before this
+        mean      -0.07    +0.15    -0.02   +0.05
+        nsig=3    +0.93    +1.39    +0.04   +0.05      <- clips real background at high counts
+        nsig=4    +0.05    +0.51    -0.01   +0.05
+        nsig=5    -0.06    +0.17    -0.02   +0.05      <- chosen
+        nsig=6    -0.07    +0.16    -0.02   +0.05
+
+    and with the SAME background contaminated (box untouched, so the truth is still 0):
+
+        contaminant                      median      mean     nsig=5
+        9-px neighbouring spot, 800/px    -1.91  -2785.21      -0.10
+        one saturated pixel (65535)       +2.89 -19112.70      -0.07
+
+    i.e. nsig=5 is unbiased like the mean and more robust than the median. A symmetric 10% trimmed
+    mean was also measured and is NOT a substitute (+4.72 at lambda=6, +4.98 at lambda=0.3):
+    trimming both tails of a right-skewed count distribution biases the background low and I high.
+    """
+    med = np.median(annpx, axis=1)
+    dev = np.abs(annpx - med[:, None])
+    mad = np.median(dev, axis=1)
+    scale = np.maximum(1.4826 * mad, np.sqrt(np.maximum(med, 1.0)))
+    inlier = dev <= nsig * scale[:, None]        # NOT a `keep`: this selects PIXELS, never reflections
+    cnt = inlier.sum(1)
+    tot = np.where(inlier, annpx, 0.0).sum(1)
+    return np.where(cnt > 0, tot / np.maximum(cnt, 1), med)      # cnt==0 cannot happen; guard anyway
+
+
+def integrate_spots(data, pred, half=3, gap=2, ring=3, bg_mode="clipmean"):
     """Box integrate a predicted reflection list against an assembled detector array `data` (ss,fs).
 
     Signal = sum over a (2*half+1)^2 box; background = robust mean of a surrounding annulus
     (gap..gap+ring) scaled to the box; I = signal - nbox*bg; sigma = sqrt(signal + nbox*bg)  (Poisson,
     gain=1). Returns (I, sigma, peak, bg_per_px) arrays aligned with `pred`. Out-of-frame -> 0.
+
+    ``bg_mode`` picks the annulus estimator:
+      ``"clipmean"``  MAD-clipped mean (default) -- the robust mean this docstring has always
+                      claimed. See ``_bg_clipmean``.
+      ``"median"``    the plain median, which is what shipped up to glint#131. It is a robust
+                      LOCATION, but the quantity a box SUM must subtract is a MEAN, and on discrete
+                      counts the median sits below it, so I comes out high by nbox*(mean - median)
+                      on every reflection. Measured on pure Poisson background at lambda=6, 49-px
+                      box: mean I = +3.79 +/- 0.46 where the truth is 0 (8.3 SE), against -0.07 for
+                      the mean; the gap grows as the data get sparser (+14.7 at lambda=0.3). Kept
+                      because every intensity GLINT produced before this change used it, so it is
+                      the only way to reproduce those numbers.
+      ``"mean"``      the plain mean: unbiased, and destroyed by one hot pixel in the annulus.
+                      Diagnostic only -- it is the reference the other two are measured against.
     """
+    if bg_mode not in BG_MODES:
+        raise ValueError(f"bg_mode must be one of {BG_MODES}, got {bg_mode!r}")
     data = np.asarray(data)                              # NOT upcast: see the gather below
     H, W = data.shape
     n = len(pred)
@@ -115,7 +180,14 @@ def integrate_spots(data, pred, half=3, gap=2, ring=3):
         # and ~105x faster (4 Mpix: 2.5x). Accumulation stays float64, so results are unchanged.
         patch = data[cs[vi, None, None] + dy[None], cf[vi, None, None] + dx[None]].astype(float, copy=False)
         boxpx = patch[:, box]; annpx = patch[:, ann]
-        bg = np.median(annpx, axis=1) if ann.any() else np.zeros(len(vi))
+        if not ann.any():
+            bg = np.zeros(len(vi))
+        elif bg_mode == "clipmean":
+            bg = _bg_clipmean(annpx)
+        elif bg_mode == "median":
+            bg = np.median(annpx, axis=1)
+        else:
+            bg = annpx.mean(1)
         sig_sum = boxpx.sum(1)
         I[vi] = sig_sum - nbox * bg
         sig[vi] = np.sqrt(np.maximum(sig_sum + nbox * np.maximum(bg, 0.0), 1.0))
@@ -394,23 +466,69 @@ def panels_from_geom(geom):
     return panels, clen
 
 
-def _load_image(path, data_path):
+def _event_index(event):
+    """CrystFEL ``Event://N`` value -> integer stack index.
+
+    ``geom.read_crystfel_peaks`` int()s what it can and keeps anything else as the raw STRING, so a
+    multi-dimensional event id (``entry_1//7``) arrives here as text. CrystFEL's own form puts the
+    frame number last, so take the trailing field; refuse rather than guess if there is no number in
+    it, because the alternative is silently integrating the wrong frame -- which is glint#136."""
+    if event is None or event == "":
+        return 0
+    try:
+        return int(event)
+    except (TypeError, ValueError):
+        pass
+    tail = str(event).strip().strip("/").rsplit("/", 1)[-1]
+    try:
+        return int(tail)
+    except ValueError:
+        raise ValueError(f"cannot read a frame index out of Event {event!r}") from None
+
+
+def _load_image(path, data_path, event=0):
+    """Read the frame for THIS event out of an image file at the geom ``data`` path.
+
+    EVENT-AWARE since glint#136. This used to end ``a = a[0] if a.shape[0] > 1 else a[0]`` -- both
+    branches index 0 -- so on a stacked multi-event ``.cxi`` every result in the run was handed
+    event 0's pixels, silently, and ``integrate_frames`` then produced real-looking I/sigma from the
+    wrong image.
+
+    A genuine per-file (legacy) detector is unaffected: its stack axis is length 1 (or absent), so
+    the event is not used to index it, and a peak stream whose ``Event://N`` numbers run across a
+    whole run of single-frame files still loads. Only a length>1 stack is addressed by event -- the
+    case that was wrong -- and an event past the end of one now RAISES instead of quietly falling
+    back to frame 0. Reads a single frame, not the whole stack."""
     import h5py
     with h5py.File(path, "r") as f:
-        a = np.asarray(f[data_path][()], np.float32)
-    if a.ndim == 3:                                  # (event|panel, ss, fs) -> single assembled 2D frame
-        a = a[0] if a.shape[0] > 1 else a[0]
+        d = f[data_path]
+        if getattr(d, "ndim", 0) >= 3 and d.shape[0] > 1:
+            ev = _event_index(event)
+            if not 0 <= ev < d.shape[0]:
+                raise IndexError(
+                    f"{path}:{data_path} is a stack of {d.shape[0]} frames but this result asks for "
+                    f"event {event!r}; for stacked multi-event .cxi use integrate_cxi (the --images "
+                    f"route), which reads per-event clen/energy as well (glint#136)")
+            a = np.asarray(d[ev], np.float32)        # ONE frame, not the whole stack
+        else:
+            a = np.asarray(d[()], np.float32)
+    if a.ndim == 3:                                  # (1, ss, fs) -> single assembled 2D frame
+        a = a[0]
     return a
 
 
-def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol=0.006):
+def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol=0.006,
+                     bg_mode="clipmean"):
     """Native predict + box-integrate (the fast, self-contained QC path; for the best MERGE use
     ``glint --fromfile`` -> CrystFEL refine). For each result carrying an orientation ``M``: load the
     frame image (``image_dir/<basename(image)>`` at the geom ``data`` path), predict on-detector spots,
     integrate. Attaches pred/I/sigma/peak/bg to each result in place. Returns (n_integrated, tot_refl).
 
-    This variant reads one image FILE per result (legacy per-file detectors). For a modern STACKED .cxi
-    (the ``--images`` front end, many events in one file) use ``integrate_cxi`` instead."""
+    This variant reads one image FILE per result (legacy per-file detectors) and takes the frame at
+    that result's own ``event`` when the file is a stack. It does NOT read per-event clen/energy: for
+    a modern STACKED .cxi (the ``--images`` front end, many events in one file) ``integrate_cxi`` is
+    still the better route. Until glint#136 this function ignored ``event`` entirely and integrated
+    every result against event 0 of its file."""
     panels, clen = panels_from_geom(geom)
     if data_path is None:
         data_path = geom.get("global", {}).get("data", "/data/data")
@@ -420,9 +538,10 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
         M = r.get("M")
         if M is None:
             continue
-        img = _load_image(os.path.join(image_dir, os.path.basename(str(r.get("image", "")))), data_path)
+        img = _load_image(os.path.join(image_dir, os.path.basename(str(r.get("image", "")))),
+                          data_path, r.get("event", 0))       # THIS result's event, not frame 0 (glint#136)
         pred = predict_spots(M, panels, clen, lam, dmin=dmin, tol=tol)
-        I, sig, peak, bg = integrate_spots(img, pred)
+        I, sig, peak, bg = integrate_spots(img, pred, bg_mode=bg_mode)
         # Keep NON-POSITIVE intensities. Dropping them is a selection on the measured value of
         # the quantity being measured: a reflection whose true I is ~0 measures negative about
         # half the time, so discarding exactly those while keeping their positive counterparts
@@ -436,7 +555,7 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
 
 
 def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, half=3, clen_scale=None,
-                  sym_refine=None, sym_refine_tol=0.02):
+                  sym_refine=None, sym_refine_tol=0.02, bg_mode="clipmean"):
     """Self-contained native integrate for a STACKED .cxi -- the ``--images`` merge path, no CrystFEL.
 
     sym_refine (default None -> OFF, nothing changes): if set to a Bravais system name (e.g.
@@ -455,6 +574,11 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
     self-consistent; a wrong orientation would look off the real spots and merge worse, not better). Attaches
     pred/I/sigma/peak/bg to each result carrying an orientation ``M`` in place; returns (n_integrated,
     tot_refl). Frame data are read once per file (h5 handles cached, closed on return).
+
+    ``bg_mode`` is handed to ``integrate_spots``; the default changed from the annulus median to a
+    MAD-clipped mean in glint#131, so the merge numbers below -- and every intensity GLINT produced
+    before that -- were measured with ``bg_mode="median"``, which is still available for reproducing
+    them. They have NOT been re-measured under the new default.
 
     On real lysozyme stills (Jungfrau-4M, 1476 frames) this self-merges to CC*=0.90 / Rsplit=39% at 2.1 A --
     on par with a CrystFEL/xgandalf run on the same frames -- with peak search, indexing AND integration all
@@ -498,7 +622,7 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
             pred = predict_spots(M, panels, clen_m, wl, dmin=dmin, tol=tol)
             dset = f[data_key]
             frame = np.asarray(dset[ev] if getattr(dset, "ndim", 0) >= 3 else dset, np.float32)
-            I, sig, peak, bg = integrate_spots(frame, pred, half=half)
+            I, sig, peak, bg = integrate_spots(frame, pred, half=half, bg_mode=bg_mode)
             keep = np.isfinite(I) & np.isfinite(sig) & (sig > 0)   # non-positive I kept: glint#130
             r.update(M=M, pred=pred[keep], I=I[keep], sigma=sig[keep], peak=peak[keep], bg=bg[keep])  # store canonical M so the stream cell matches the hkl
             n += 1; tot += int(keep.sum())

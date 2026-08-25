@@ -63,11 +63,14 @@ today. GLINT fills that gap, emitting a CrystFEL `.stream` the downstream stages
 >   reflections and writes real I/sigma, and the stream flows through the concatenator to the
 >   merger with no CrystFEL step.
 >
-> ⚠️ Do **not** combine `integrate: true` with the `PeakFinderSFX` peaks path on stacked
-> multi-event `.cxi`: that route's integrator is not event-aware and silently integrates every
-> frame against event 0 of its file ([#136](https://github.com/slac-lcls/glint/issues/136)).
-> (`image_dir` is also required there — the config is rejected without it — but supplying it does
-> not fix the event addressing.)
+> ⚠️ `integrate: true` on the `PeakFinderSFX` **peaks** path with stacked multi-event `.cxi` used to
+> integrate every frame against event 0 of its file, silently
+> ([#136](https://github.com/slac-lcls/glint/issues/136)). That is fixed — the integrator now reads
+> each result's own event — but **any stream produced by that combination before the fix carries
+> intensities measured off the wrong images** and has to be re-integrated. The peaks route still
+> takes a single run-level `clen`/`photon_energy` where `integrate_cxi` reads them per event, so the
+> raw-images route above remains the validated one. (`image_dir` is required on the peaks route; the
+> config is rejected without it.)
 
 Install the Task into a LUTE tree with [`lute/install_into_lute.sh`](lute/install_into_lute.sh);
 [`lute/README.md`](lute/README.md) has the configuration, and

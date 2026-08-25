@@ -23,7 +23,11 @@ jobs:
         # scipy is what importing the glint package itself needs -- cupy and numba
         # are both guarded by try/except, but scipy is a hard import in multishot,
         # seed and localize, so without it none of the glint/ tests below can run.
-        run: python -m pip install --upgrade pip numpy scipy pytest pydantic
+        # h5py is needed by test_integrate_event.py, which has to WRITE a stacked
+        # multi-event .cxi to test that integration reads the right event out of it
+        # (glint#136). That test skips and exits 0 without h5py, so leaving it out
+        # here would make the step green while testing nothing.
+        run: python -m pip install --upgrade pip numpy scipy pytest pydantic h5py
 
       - name: lute/test_glint_index.py
         run: python -m pytest test_glint_index.py -q
@@ -47,6 +51,13 @@ jobs:
       - name: experiments/test_negative_intensities.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_negative_intensities.py
+
+      # The peaks-route integrator's event addressing (glint#136). It builds a 3-event .cxi and
+      # checks the three frames integrate to three DIFFERENT intensities -- which is exactly what
+      # the shipped code could not do, and nothing else here would have noticed.
+      - name: experiments/test_integrate_event.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_integrate_event.py
 
       - name: experiments/test_consensus_degenerate.py
         if: ${{ !cancelled() }}

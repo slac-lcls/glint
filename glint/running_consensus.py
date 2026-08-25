@@ -56,8 +56,13 @@ protect the small-pool tail, and only ``gap`` is doing work down there.
 
 MERGE-ON-MULTI-MATCH (``merge=True``, the default) is the cheap repair that does not need the pool.
 When an arriving cell falls inside the tolerance of SEVERAL groups it is a WITNESS that those groups
-are one lattice the arrival order split, so they are folded together. It costs nothing extra -- the
-match loop already runs -- and it fixes the failure this path was losing to. Measured on a real
+are one lattice the arrival order split, so they are folded together. It is NOT free: finding every
+match cannot short-circuit the way first-match-wins did, so ``_candidates`` scans the whole group
+set. The scan is one vectorised numpy expression over parallel fingerprint arrays rather than a
+Python loop, which is what keeps the cost bounded -- 147 us/hypothesis against 121 for the
+short-circuit path at ~700 groups, most of the remaining gap being the ``reduced_params`` call both
+paths already pay (it was 328 us before the arrays). What it does NOT cost is memory: the witness is
+the arriving cell, so nothing is retained. It fixes the failure this path was losing to. Measured on a real
 refined-geometry run (small-molecule cell, 665 frames, 3325 hypotheses): the true lattice's votes
 FRAGMENTED across two groups, each within 5% of truth but 5.5-5.9% from EACH OTHER, so neither
 absorbed the other and a spurious group outranked both halves. Shipped grouping locked at frame 31
@@ -241,11 +246,15 @@ class RunningConsensus:
 
         A cell inside the tolerance of SEVERAL groups is direct evidence that those groups are one
         lattice which arrival-order grouping split (tolerance matching is not transitive -- see
-        GROUPING ORDER above), so they are folded together and the heaviest keeps the representative.
-        This is the cheap repair for non-transitivity on THIS path: the merge witness is the arriving
-        cell itself, so it needs no hypothesis pool and no periodic re-grouping, which is the cost
-        that kept glint#102's densest-neighbourhood seeding in the batch path only. ``merge=False``
-        restores the pre-fix first-match-wins behaviour exactly.
+        GROUPING ORDER above), so they are folded together. The HEAVIEST group survives as the object
+        that carries the combined weight, but its representative is REPLACED by the arriving witness:
+        the witness is inside the tolerance of every group it merged, whereas the heaviest group's
+        founder need not cover the others, and the representative is what gets locked and gated on.
+        This is the repair for non-transitivity that fits THIS path: the witness is the arriving cell,
+        so it needs no hypothesis pool and no periodic re-grouping, which is the cost that kept
+        glint#102's densest-neighbourhood seeding in the batch path only. It is not free in time --
+        see MERGE-ON-MULTI-MATCH above for the measured scan cost. ``merge=False`` restores the
+        pre-fix first-match-wins behaviour exactly.
         """
         M = np.asarray(M, float)
         l, c = reduced_params(M); d = abs(np.linalg.det(M))

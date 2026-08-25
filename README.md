@@ -36,6 +36,45 @@ Options: `--cell "a b c al be ga"` (known cell, skip consensus) · `--nbest N` (
 consensus, default 3) · `--mode auto|sparse|dense` · `--integrate` (real I/σ) · `--tofile` (hand
 orientations to CrystFEL for the refined merge) · `--device cpu|auto` · `-N` (limit frames).
 
+## LUTE pipeline
+
+GLINT ships LUTE Task and DAG definitions in [`lute/`](lute/), so it runs as a drop-in replacement
+for `CrystFELIndexer` in the LCLS SFX workflow:
+
+    PeakFinderSFX -> [GLINTIndexer] -> StreamFileConcatenator -> PartialatorMerger -> HKLManipulator
+
+The reason it exists: none of LUTE's bundled CrystFEL builds are compiled with FFBIDX support, so
+`indexamajig --indexing=ffbidx` fails and GPU fast-feedback-style indexing is unavailable in LUTE
+today. GLINT fills that gap, emitting a CrystFEL `.stream` the downstream stages already understand.
+
+> ⚠️ **The default stream is orientation-only and is *not* mergeable.** Every reflection carries
+> placeholder `I=0.00 sigma(I)=0.00`, so feeding it through the concatenator to `PartialatorMerger`
+> merges zeros. To get a real dataset:
+>
+> * **`tofile:` + an added `indexamajig --indexing=file` task between `GLINTIndexer` and
+>   `StreamFileConcatenator`.** CrystFEL's prediction refinement imposes the lattice symmetry, and
+>   this gives the **better merge**. Setting `tofile:` alone is not enough — the DAG above would
+>   still concatenate the placeholder stream. Two measured traps: the added task must reuse the
+>   stored peaks (`peaks: cxi`), or `indexamajig` validates the solutions against its own re-found
+>   peaks and rejects them; and CrystFEL **0.12.0's** `--indexing=file` is broken ("Failed to
+>   prepare indexing method" before any frame) — use 0.11.1.
+> * **`integrate: true` on the raw-images route** (`--images`, GLINT's event-aware `integrate_cxi`
+>   path — the configuration of the validated end-to-end run): GLINT box-integrates its own
+>   reflections and writes real I/sigma, and the stream flows through the concatenator to the
+>   merger with no CrystFEL step.
+>
+> ⚠️ Do **not** combine `integrate: true` with the `PeakFinderSFX` peaks path on stacked
+> multi-event `.cxi`: that route's integrator is not event-aware and silently integrates every
+> frame against event 0 of its file ([#136](https://github.com/slac-lcls/glint/issues/136)).
+> (`image_dir` is also required there — the config is rejected without it — but supplying it does
+> not fix the event addressing.)
+
+Install the Task into a LUTE tree with [`lute/install_into_lute.sh`](lute/install_into_lute.sh);
+[`lute/README.md`](lute/README.md) has the configuration, and
+[`lute/STATUS.md`](lute/STATUS.md) is the honest account of what is measured, what is assumed and
+what has never been run. Check it for current readiness rather than relying on a count here — its
+summary and its per-item sections do not presently agree with each other.
+
 ## Library
 
 ```python

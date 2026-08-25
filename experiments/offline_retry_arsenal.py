@@ -23,8 +23,13 @@ import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 
-WT = os.environ.get("GLINT_WT", "/sdf/home/s/smarches/glint_streamfix_wt")
-sys.path.insert(0, WT); sys.path.insert(0, WT + "/experiments")
+# Resolve from THIS checkout by default (GLINT_WT overrides), the same rule
+# test_streamdriver_vs_offline.py uses. Defaulting to an absolute worktree made this script's whole
+# stated guarantee -- that it validates the SHIPPED arms -- conditional on being run from one
+# machine: anywhere else it either failed to import glint or, if that path happened to exist,
+# silently measured a stale tree's arms and reported them as the code under review.
+WT = os.environ.get("GLINT_WT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, WT); sys.path.insert(0, os.path.join(WT, "experiments"))
 import glint.glint_fast as gf
 from glint.glint_fast import index_blind_nbest, index_blind_fast
 from glint.multishot import same_lattice

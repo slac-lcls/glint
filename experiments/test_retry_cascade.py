@@ -238,6 +238,44 @@ def test_watchdog_reuses_the_cascade_blind_solve():
         f"one blind solve per frame per flush, got {solved} for {len(frames)} frames: {calls}"
 
 
+def test_one_blind_solve_even_when_the_fanout_raises():
+    """The failure path must not smuggle the double solve back in. When `_fanout` raises, the
+    cascade falls back to solving each frame serially -- and if that result is not written back into
+    `nbs` it is invisible to the cache, so `_watchdog_nbest` solves the frame AGAIN. Exactly one
+    blind solve per frame, fan-out working or not.
+
+    The fan-out raises only on its FIRST call so the assertion below measures the SOLVE COUNT rather
+    than tripping over a second exception: a permanently dead fan-out also takes the watchdog down,
+    which is pre-existing behaviour this PR does not change."""
+    rng = np.random.default_rng(SEED + 9)
+    frames = [frame_on(A, rng) for _ in range(4)]
+    drv = _driver(True, adaptive_relock=True, min_inliers=6)
+    solves, fan_calls = [], []
+
+    def blind(q, k):
+        solves.append(k)                                        # every ACTUAL blind solve, wherever from
+        return _nbest_with(B, 0, rng, k)                        # fits, wrong lattice -> never rescued
+    drv._blind_index = blind
+    drv._known_index = lambda qs, Mn, B=1: [None] * len(qs)
+
+    def flaky_fanout(Q, k):
+        fan_calls.append(k)
+        if len(fan_calls) == 1:
+            raise RuntimeError("fan-out worker died")           # the cascade's call
+        return [blind(q, k) for q in Q]                         # a later call would work fine
+    drv._fanout = flaky_fanout
+
+    _load(drv, frames)
+    drv.flush()
+    assert drv.stats()["n_cascade_rescued"] == 0, "premise: nothing is rescuable here"
+    assert len(solves) == len(frames), \
+        f"one blind solve per frame despite the failed fan-out, got {len(solves)}: {solves}"
+    assert all(k == drv.retry_nbest for k in solves), \
+        f"the surviving solves should be the cascade's, at retry_nbest: {solves}"
+    assert len(fan_calls) == 1, \
+        f"the watchdog must not fan out again for frames the cascade already solved: {fan_calls}"
+
+
 def test_reused_candidates_still_drive_the_watchdog_relock():
     """The saving must not cost the watchdog its consensus. index_blind_nbest's N only truncates the
     final dedup loop, so top-`warmup_nbest` is a verbatim prefix of top-`retry_nbest` -- the watchdog
@@ -322,6 +360,7 @@ TESTS = (test_fixture_is_a_real_gate_failure, test_flag_off_frame_is_missed,
          test_flag_on_frame_indexed_exactly_once, test_arms_are_complementary,
          test_wrong_lattice_candidate_is_refused, test_unrescued_frame_still_reaches_the_miss_buffer,
          test_watchdog_reuses_the_cascade_blind_solve,
+         test_one_blind_solve_even_when_the_fanout_raises,
          test_reused_candidates_still_drive_the_watchdog_relock,
          test_reuse_is_identical_to_a_fresh_solve,
          test_larger_warmup_nbest_falls_back_rather_than_truncating,

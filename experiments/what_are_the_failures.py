@@ -17,9 +17,12 @@ import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 
-# GLINT_WT overrides, so a different checkout can import strict_gate/LYSO from here (the retry
-# arsenal does) without silently pulling glint out of one hard-coded worktree.
-WT = os.environ.get("GLINT_WT", "/sdf/home/s/smarches/glint_streamfix_wt")
+# Default to THIS checkout (GLINT_WT overrides), same rule as test_streamdriver_vs_offline.py. The
+# retry arsenal imports strict_gate/LYSO from here, so a hard-coded default would have pulled glint
+# out of one worktree no matter which one the caller meant to measure.
+WT = os.environ.get("GLINT_WT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# XG stays absolute by default: it is external CACHED DATA (xgandalf/ffbidx per-frame outputs), not
+# code, so there is no in-checkout copy to fall back to. GLINT_XG points it elsewhere.
 XG = os.environ.get("GLINT_XG", "/sdf/home/s/smarches/git/glint/experiments/xgandalf")
 sys.path.insert(0, WT)
 sys.path.insert(0, WT + "/experiments")
@@ -32,7 +35,7 @@ import glint.stream_driver as sd
 
 LYSO = gf.LYSO
 GATE_FRAC, GATE_MIN, TOL = 0.25, 10, 0.15
-FRAMES_PATH = WT + "/experiments/frames_cxidb_clean.txt"
+FRAMES_PATH = os.environ.get("GLINT_FRAMES", os.path.join(WT, "experiments", "frames_cxidb_clean.txt"))
 
 
 def strict_gate(M, q, truth=None):

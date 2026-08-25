@@ -1179,15 +1179,23 @@ class StreamDriver:
         qs = [self._q[i] for i in slots]
         self.n_cascade_retried += len(slots)
         try:                                                 # ONE blind index per frame, shared by
-            nbs = self._fanout(qs, self.retry_nbest)         # every active cell below
-        except Exception:                                    # pragma: no cover - a dead blind indexer
-            nbs = [None] * len(slots)                        # must not take the miss path down with it
-        arm1 = f"blind_nbest_k{self.retry_nbest}"
+            nbs = list(self._fanout(qs, self.retry_nbest))   # every active cell below
+        except Exception:                                    # a dead/partial fan-out must not take the
+            nbs = [None] * len(slots)                        # miss path down with it -- solved per frame
+        arm1 = f"blind_nbest_k{self.retry_nbest}"            # below, and cached like any other result
         still = []
-        for i, q, nb in zip(slots, qs, nbs):
+        for j, (i, q) in enumerate(zip(slots, qs)):
             if q is None:                                    # pragma: no cover - flush() filters these
                 still.append(i)
                 continue
+            nb = nbs[j]
+            if nb is None:
+                # The fan-out raised, or declined this one frame. Solve it HERE and write the result
+                # back, rather than letting arm_blind_nbest solve it privately with candidates=None:
+                # that result would be discarded, the slot would be missing from the cache below, and
+                # _watchdog_nbest would blind-solve the frame a SECOND time -- the exact ~26 ms double
+                # solve this reuse exists to remove, surviving in the failure path.
+                nb = nbs[j] = self._blind_candidates(q)
             hit = {}
 
             def blind_gate(c, q=q, hit=hit):
@@ -1199,10 +1207,12 @@ class StreamDriver:
                         return True
                 return False
 
-            # arm 1: blind N-best at k=retry_nbest. Candidates come from the fan-out above when it
-            # succeeded; passing None lets the arm index the frame itself (the offline arm's own
-            # behaviour), so a custom fan-out that declines a frame still gets a retry.
-            M = arm_blind_nbest(q, blind_gate, self._blind_index, self.retry_nbest, candidates=nb)
+            # arm 1: blind N-best at k=retry_nbest. `candidates` is ALWAYS a concrete list by now
+            # (fanned out, or solved just above), so the arm never runs a blind index of its own --
+            # which is what keeps every solve visible to the cache. A frame whose blind indexer is
+            # genuinely broken arrives here as [], and the arm simply finds nothing.
+            M = arm_blind_nbest(q, blind_gate, self._blind_index, self.retry_nbest,
+                                candidates=nb if nb is not None else [])
             arm = arm1
             if M is None and self._known_perframe is not None:
                 arm = "known_perframe"                       # arm 2: PER-FRAME known-cell registration
@@ -1221,11 +1231,26 @@ class StreamDriver:
             self.n_cascade_rescued += 1
             self.n_cascade_by_arm[arm] = self.n_cascade_by_arm.get(arm, 0) + 1
         # Only the UNRESCUED slots can reach the watchdog, so only their candidates are worth
-        # carrying. A None entry (the fan-out declined the frame) is kept out, so the reuse path
-        # cannot mistake "no candidates cached" for "no candidates exist".
+        # carrying. A None entry survives just one way now -- the blind indexer itself ERRORED, so we
+        # do not know what its candidates would have been. Those stay out of the cache and the
+        # watchdog re-attempts them, exactly as it would have before. An empty LIST is a real answer
+        # ("this frame yielded no candidates") and IS cached, so it is not re-solved.
         keep = set(still)
         cache = {i: nb for i, nb in zip(slots, nbs) if i in keep and nb is not None}
         return still, cache
+
+    def _blind_candidates(self, q):
+        """One frame's blind N-best at `retry_nbest`, or None if the indexer errored.
+
+        The None/[] distinction is load-bearing for the cache above: [] means "solved, found
+        nothing" (cacheable, do not re-solve), None means "we never got an answer" (not cacheable).
+        """
+        if self._blind_index is None:
+            return None
+        try:
+            return list(self._blind_index(q, self.retry_nbest))
+        except Exception:                                    # pragma: no cover - a dead blind indexer
+            return None
 
     def _watchdog_nbest(self, missed, cached):
         """N-best candidates for the watchdog's missed frames, reusing the retry cascade's blind

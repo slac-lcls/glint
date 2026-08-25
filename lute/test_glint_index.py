@@ -251,7 +251,38 @@ def test_launcher_forwards_integrate_as_a_bare_switch(tmp_path):
     assert "--zdist" in argv and "0.1027" in argv, f"the switch swallowed the next flag: {argv}"
 
 
-@pytest.mark.parametrize("flag,value", [("--int-dmin", "2.0"), ("--int-tol", "0.006")])
+@pytest.mark.parametrize("flag,value", [("--int-dmin", "2.0"), ("--int-tol", "0.006"),
+                                        ("--bg-mode", "median")])
 def test_launcher_forwards_integration_tuning(tmp_path, flag, value):
     argv, err = _run_launcher(tmp_path, ["--exp", "e", "--run", "1", flag, value])
     assert flag in argv and value in argv, err
+
+
+def test_event_axis_field_renders_as_the_cli_flag():
+    """The loader REFUSES an ambiguous 3-D stack (glint#136 round 2). That is only an improvement if
+    the user can then say which reading they meant from config, so the field has to exist and reject
+    a typo. It is deliberately NOT in the launcher's xtc whitelist -- glint_xtc.py reads frames from
+    psana and has no such flag -- so the launcher drops and REPORTS it there, which the
+    dropped-flag test above already covers as a class."""
+    f = P.__fields__["event_axis"]
+    assert f.field_info.extra["rename_param"] == "event-axis"
+    assert f.field_info.extra["flag_type"] == "--"
+    assert P(**XTC).event_axis is None
+    for v in ("auto", "event", "panel"):
+        assert P(**dict(XTC, event_axis=v)).event_axis == v
+    with pytest.raises(Exception):
+        P(**dict(XTC, event_axis="events"))          # near-miss must not silently mean auto
+
+
+def test_bg_mode_field_renders_as_the_cli_flag():
+    """`bg_mode="median"` is the only way to reproduce intensities from a pre-glint#131 run, so it
+    has to survive the whole chain: task model -> flag name -> launcher whitelist. It was reachable
+    only from Python when it landed, which is an escape hatch that rescues nobody."""
+    f = P.__fields__["bg_mode"]
+    assert f.field_info.extra["rename_param"] == "bg-mode"
+    assert f.field_info.extra["flag_type"] == "--"
+    assert P(**XTC).bg_mode is None, "must default to GLINT's own default, not pin one here"
+    for m in ("clipmean", "median", "mean"):
+        assert P(**dict(XTC, bg_mode=m)).bg_mode == m
+    with pytest.raises(Exception):                          # a typo must not silently mean default
+        P(**dict(XTC, bg_mode="mediann"))

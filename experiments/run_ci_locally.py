@@ -53,6 +53,7 @@ STEPS = [
     "experiments/check_numbers.py",
     "experiments/test_check_numbers_ci.py",
     "experiments/test_gate_project.py",
+    "experiments/bench_integrate_fused.py",
 ]
 
 # Runs in the child via `python -c`, with the target script passed as argv[1] -- embedding the

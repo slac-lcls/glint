@@ -48,7 +48,7 @@ fi
 # Everything glint_xtc.py accepts. Each takes a value; LUTE emits no bare switches on this route.
 XTC_SWITCHES="--integrate"    # value-less flags
 XTC_FLAGS=" --exp --run --det --zdist --wavelength --psana --geom --calib-dir --cell --nbest \
---min-peaks --max-events --peakfinder --min-pix --son-min --thr-high --thr-low --pf8-min-snr --int-dmin --int-tol --reader-env --energy-det -o --out "
+--min-peaks --max-events --peakfinder --min-pix --son-min --thr-high --thr-low --pf8-min-snr --int-dmin --int-tol --bg-mode --reader-env --energy-det -o --out "
 args=(); dropped=()
 i=1
 while [ $i -le $# ]; do
@@ -63,7 +63,7 @@ while [ $i -le $# ]; do
     i=$((i + 2))
 done
 # Report what was dropped. These are glint_cli-only options with no meaning for raw xtc (--peaks,
-# --images, --peakfinder, --top-peaks, --integrate, --tofile, --image-dir, -N ...). Staying silent
+# --images, --peakfinder, --top-peaks, --integrate, --tofile, --image-dir, --event-axis, -N ...). Staying silent
 # would let a run look as though it had honoured a setting the indexer never received.
 if [ ${#dropped[@]} -gt 0 ]; then
     echo "glint_launch: xtc route; dropped flags that do not apply to glint_xtc.py: ${dropped[*]}" >&2

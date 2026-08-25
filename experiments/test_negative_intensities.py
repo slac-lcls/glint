@@ -175,6 +175,33 @@ check("no keep-rule in predict.py selects on the sign of I",
       all("(I > 0)" not in l and "I>0" not in l for l in keeps), keeps)
 check("both integration entry points were updated, not just one", len(keeps) == 2, len(keeps))
 
+# --- the escape hatch has to be REACHABLE, not just implemented -----------------------
+# `bg_mode="median"` is the ONLY way to reproduce any intensity GLINT produced before #131.
+# A parameter that no shipped route passes is an API-only promise: it reads as an escape hatch
+# in review and does nothing for the person holding a pre-#131 dataset. Each route below owns
+# one integrate call; every one of them must forward the mode.
+ROOT = src.parent.parent
+routes = {
+    "glint_cli.py --peaks/--images": ("glint/glint_cli.py", "bg_mode=args.bg_mode", 2),
+    "stream_driver.py (CPU + GPU)": ("glint/stream_driver.py", "bg_mode=self.bg_mode", 2),
+    "glint_xtc.py (raw xtc route)": ("experiments/xtc_bridge/glint_xtc.py", "bg_mode=args.bg_mode", 1),
+}
+for label, (rel, needle, want) in routes.items():
+    got = (ROOT / rel).read_text().count(needle)
+    check(f"{label} forwards bg_mode to its integrator", got == want, f"{got} of {want} call sites")
+
+cli = (ROOT / "glint/glint_cli.py").read_text()
+check("the CLI exposes --bg-mode with every mode and defaults to clipmean",
+      "--bg-mode" in cli and all(f'"{m}"' in cli for m in BG_MODES)
+      and 'default="clipmean"' in cli)
+
+lute_model = (ROOT / "lute/glint_index.py").read_text()
+check("the LUTE task model has a bg_mode field rendering as --bg-mode",
+      "bg_mode:" in lute_model and 'rename_param="bg-mode"' in lute_model)
+# ...and the launcher's xtc whitelist, which is where --pf8-min-snr was silently dropped before
+check("the LUTE launcher whitelists --bg-mode (else the xtc route drops it)",
+      "--bg-mode" in (ROOT / "lute/glint_launch.sh").read_text())
+
 # --- real spots must survive ----------------------------------------------------------
 spot_fs = np.array([150.0, 300.0, 450.0])
 spot_ss = np.array([150.0, 300.0, 450.0])

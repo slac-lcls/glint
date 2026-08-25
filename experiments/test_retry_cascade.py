@@ -18,6 +18,7 @@ mix the real and reciprocal conventions because they never exercise the two test
 
 Dual mode: `pytest experiments/test_retry_cascade.py`, or `python experiments/...` for PASS/FAIL.
 """
+import inspect
 import numpy as np
 
 import glint.stream_driver as sd
@@ -374,7 +375,15 @@ def test_default_off_touches_nothing():
     """Off: no per-frame known-cell indexer is even resolved, and the stats key set is unchanged."""
     off, on = _driver(False), _driver(True)
     assert off.retry_cascade is False and on.retry_cascade is True
-    assert StreamDriver.__init__.__defaults__[-2:] == (False, None), "flag must default OFF"
+    # BY NAME, not by tail position. `__defaults__[-2:]` pinned these to the last two slots of the
+    # signature, which breaks the moment anything else is appended -- and appending is the
+    # documented policy for this constructor (it is not keyword-only, so inserting mid-signature
+    # rebinds positional arguments; see test_lock_gate_wiring). glint#131's `bg_mode` landed after
+    # these two and turned this into a false failure. The claim being made is about the DEFAULTS of
+    # these two parameters, so say that.
+    _sig = inspect.signature(StreamDriver.__init__).parameters
+    assert _sig["retry_cascade"].default is False, "flag must default OFF"
+    assert _sig["retry_nbest"].default is None, "retry_nbest must default to 'inherit nbest'"
     plain = StreamDriver(A, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
                          use_gpu=False)
     assert plain._known_perframe is None, "the per-frame indexer must not be resolved when off"

@@ -115,6 +115,9 @@ def build_parser():
                     help="resolution limit for prediction, A (default 2.0)")
     ig.add_argument("--int-tol", type=float, default=0.006,
                     help="Ewald excitation-error half-width, 1/A (default 0.006)")
+    ig.add_argument("--bg-mode", choices=("clipmean", "median", "mean"), default="clipmean",
+                    help="annulus background estimator: clipmean (default), median (pre-glint#131 "
+                         "behaviour, for reproducing older intensities), mean (diagnostic)")
     ap.add_argument("--cell", nargs="+", metavar="V",
                     help='known cell "a b c al be ga" (skip consensus); omit for fully-blind')
     ap.add_argument("--nbest", type=int, default=3)
@@ -235,7 +238,7 @@ def integrate_and_write(results, args, out_path, report=True):
                              dmin=args.int_dmin, tol=args.int_tol)
         if not len(pred):
             continue
-        I, sig, peak, bg = integrate_spots(frame, pred)
+        I, sig, peak, bg = integrate_spots(frame, pred, bg_mode=args.bg_mode)
         out.append({"image": r["image"], "event": ev, "M": r["M"],
                     "pred": pred, "I": I, "sigma": sig, "peak": peak, "bg": bg})
 

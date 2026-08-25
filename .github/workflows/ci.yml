@@ -145,6 +145,15 @@ jobs:
         run: PYTHONPATH=. python experiments/test_check_numbers_ci.py
 
 
+      # The GPU comparison itself cannot run here, but its PASS/FAIL RULES can: without cupy this
+      # runs compare_outputs' sabotage self-test (NaN/inf in each of the four outputs, tolerance
+      # boundaries, the exactness rules) and exits 0 on the device half. Those rules shipped
+      # NaN-blind -- `worst > ATOL` reads False on a NaN, so an invalid intensity passed -- and
+      # nothing executed them off a GPU node.
+      - name: experiments/bench_integrate_fused.py (checker self-test, skips the GPU half)
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/bench_integrate_fused.py
+
       # SKIPS here, deliberately. A green check on this step is NOT coverage of the fused
       # gate+project kernel: the skip returns before a single HKLGrid is built, so everything
       # inside main() is untested on this runner and has to be run on a GPU node by hand.

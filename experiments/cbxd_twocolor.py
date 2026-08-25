@@ -1,30 +1,58 @@
-"""Two-color convergent-beam CBXD: two Ewald spheres crack the blind wall.
+"""Convergent-beam CBXD: the convergence cone is the lever; a second colour is a bonus term.
 
-Extends cbxd_joint.py (single-color Kossel-arc overlay) to a TWO-COLOR convergent beam.
-Physics: two photon energies E1,E2 -> two Ewald radii K1,K2. A lattice reflection G can be
-Kossel-excited at EITHER colour; each excitation is an arc (convergence cone half-angle NA).
-A two-colour beam therefore lays down ~2x as many arcs as single colour -> the orientation
-objective tower is ~2x taller -> recoverable at LOW NA / more noise, where single colour is
-under-determined (one thin Ewald slice, too few arcs).
+Extends cbxd_joint.py (single-colour Kossel-arc overlay) to a convergent beam that may carry one or
+two photon energies. This file was originally written the other way round -- "two Ewald spheres crack
+the blind wall" -- and the `cover` mode added later shows why that headline was too strong. What
+thickens the Ewald slice is CONVERGENCE: tilting k_in over a cone of half-angle NA sweeps the sphere
+through a shell of radial width ~K*NA, and every reflection inside that shell is reached, each along
+an ARC whose direction carries the out-of-plane constraint a parallel beam cannot supply. A second
+photon energy adds a second, DISCRETE sphere at dK/K = dE/E, which buys new reflections only once it
+lands outside the shell convergence has already swept -- that is, once dE/E > NA.
 
-The two-Ewald accumulator: score orientation R by voting every observed k_out against the
-predicted Kossel PLANE of every lattice node (the plane residual |k_out.Ghat - |G|/2| is
-COLOUR-FREE) AND the convergence cone at EITHER radius K1 or K2, requiring |k_in| == that K.
-A point excited at colour 2 is explained only by the K2 cone; indexing two-colour data with
-ONE sphere leaves the other colour's arcs unexplained (they act like ~50% extra spurious) ->
-the two-sphere test is NECESSARY, not merely 'more data'.
+Measured (`cover`, pure geometry, median over 16 crystals) as the extra distinct reflections a second
+colour reaches, against what a step in NA reaches on its own:
+
+    NA      2-colour gain at dE/E=15.4%     NA step        single-colour gain
+    14 mrad         1.63x                   14 -> 20 mrad        1.75x
+    20 mrad         1.37x                   20 -> 28 mrad        1.43x
+    28 mrad         1.23x                   28 -> 40 mrad        1.60x
+    40 mrad         1.17x
+
+A ~1.4x step in convergence beats a 2.5 keV energy split at every NA, and the two-colour gain SHRINKS
+as NA grows, because a wider shell has already swallowed the second sphere. By dE/E = 1% the gain is
+exactly 1.00x at every NA tested.
+
+The accumulator: score orientation R by voting every observed k_out against the predicted Kossel
+PLANE of every lattice node (the plane residual |k_out.Ghat - |G|/2| is COLOUR-FREE) AND the
+convergence cone at EITHER radius K1 or K2, requiring |k_in| == that K. A point excited at colour 2
+is explained only by the K2 cone; indexing two-colour data with ONE sphere leaves the other colour's
+arcs unexplained (they act like ~50% extra spurious) -> the two-sphere test is NECESSARY to BOOK the
+points, which is not the same as its being informative.
+
+That distinction is the trap this file walked into and `split` now exposes. The cone gate kz > K*cosNA
+is K-scaled, so it keeps telling the two radii apart all the way down to dE/E ~ 1-cos(NA) ~ NA^2/2 --
+2e-4 at NA = 20 mrad, a HUNDRED times below the dE/E ~ NA where the second sphere stops adding
+coverage. In between, the accumulator still labels every point by colour and still reports twice the
+votes at truth (23 vs the one-sphere 11 at dE/E = 0.002) while `cover` says the second colour reaches
+1.00x the reflections. Vote count cannot see the difference. Coverage can.
 
 Unlike a difference-vector approach that emits each peak at both q's (which locks a SUPERCELL
 ghost from the wrong-lambda copies), the arc accumulator never emits ghost points: colour is
 assigned implicitly by which cone/|k_in| fits. No wrong-lambda copies -> no supercell bias.
 
-Money result (3-way, swept over NA):
+Three configs, held from the original write-up because the comparison is still the right one -- only
+its headline changed:
   (1) 1-colour data, 1-sphere index  = single-colour baseline
   (2) 2-colour data, 1-sphere index  = naive: ignore the 2nd colour -> its arcs are pure noise
   (3) 2-colour data, 2-sphere index  = the two-Ewald accumulator
-Expect a low-NA band where (1),(2) fail and (3) recovers the blind orientation = the wall moves.
-(3) also assigns each peak to lambda1/lambda2 (which cone fits) = the within-shot XTCAV-labelled
-consistency check = cross-frame consensus INSIDE one shot.
+At a WIDE split (3) beats (1) and (2), and that result stands -- see CBXD_TWOCOLOR_STEP1.md. What
+does not stand is reading it as a general two-colour win: it is a dE/E = 15.4% win, and 15.4% is a
+wide split for a hard-X-ray source. Sources that make their second pulse by splitting and DELAYING
+rather than by retuning deliver dE/E orders of magnitude smaller, and there the second sphere is
+inside the convergence shell and (3) reduces to (1).
+(3) also assigns each peak to lambda1/lambda2 (which cone fits) = the within-shot consistency check.
+That label is only measurable while dE/E stays above the bookkeeping limit above; below it
+assign_colour still returns a label and the label means nothing.
 
 This file is STEP 1 only: the forward sim + accumulator testbed. The measured results, the two
 evaluation traps, and the step-2 spec item (the centroid seeder's parallel-beam assumption breaks
@@ -34,12 +62,20 @@ Steps 2-4 are Yuan Ni's:
   (2) replace the placeholder random-SO(3) seeder with a real arc-Hough orientation accumulator
       over SO(3) -- the money figure: blind-recovery-vs-single-colour at matched candidate budget
       across (NA, noise).
-  (3) real per-shot XTCAV energies -> per-peak lambda assignment + within-shot consistency filter
-      (assign_colour here is the stub showing the mechanism).
+  (3) per-peak lambda assignment + within-shot consistency filter (assign_colour here is the stub
+      showing the mechanism) -- but FIRST establish that the source's dE/E is above 1-cos(NA), or
+      there is no label to assign and the step is moot.
   (4) run on the real Chapman two-colour frames (337 TB), which needs full BayFAI-style geometry
       refinement + peakfinder8 first -- on that data geometry, not the beam, is the barrier.
 
 modes:  contrast [na]     fast landscape diagnostic: truth-vs-decoy tower height, 3 configs
+        split [na] [ncry] sweep the ENERGY SPLIT at fixed convergence -- how much dE/E the
+                          two-Ewald win actually needs, and where the three configs converge
+        splitcap [na] [n] the same sweep scored on CAPTURE RADIUS, which duplicated points
+                          cannot inflate the way they inflate the vote count
+        cover [na] [ncry] pure geometry: distinct reflections reached by one colour vs two, as the
+                          split closes -- the coverage claim, measured without a noisy statistic
+        coverna [_] [n]   the same measure against CONVERGENCE at one colour: what NA buys
         blind [na] [ncry] full blind recovery sweep over NA, 3 configs
 """
 import os
@@ -48,7 +84,11 @@ import time
 import numpy as np
 
 # --- two-colour beam (LCLS hard-X two-colour; ~2.5 keV split) ---
-E1_keV, E2_keV = 17.5, 15.0
+# The split is the SWEPT variable, not a constant of the problem: `set_beam` rebinds it and the
+# `split` mode sweeps it, because the two-Ewald win is a function of dE/E and the default 17.5/15.0
+# is a 15.4% split -- far wider than a beamline that separates its two pulses in TIME will deliver.
+# Defaults are unchanged so every number already reported reproduces.
+E1_keV, E2_keV = float(os.environ.get("TC_E1", 17.5)), float(os.environ.get("TC_E2", 15.0))
 LAM1 = 12.398 / E1_keV; K1 = 1.0 / LAM1
 LAM2 = 12.398 / E2_keV; K2 = 1.0 / LAM2
 KMAX = max(K1, K2)
@@ -63,6 +103,25 @@ SPUR = 0.30                                     # spurious fraction (of real poi
 
 KS_1 = [K1]                                      # single-colour index
 KS_2 = [K1, K2]                                  # two-colour index
+
+
+def set_beam(e1_keV, e2_keV):
+    """Rebind the beam to a new pair of energies, recomputing everything derived from them.
+
+    K = E/hc, so dK/K = dE/E: the two Ewald radii are separated by exactly the fractional energy
+    split. The reflection list depends on KMAX and the index/sim colour sets on K1,K2, so all of
+    them are rebuilt here -- CONFIGS included, since it CAPTURES the two lists by reference.
+    """
+    global E1_keV, E2_keV, LAM1, LAM2, K1, K2, KMAX, HS, KS_1, KS_2, CONFIGS
+    E1_keV, E2_keV = float(e1_keV), float(e2_keV)
+    LAM1 = 12.398 / E1_keV; K1 = 1.0 / LAM1
+    LAM2 = 12.398 / E2_keV; K2 = 1.0 / LAM2
+    KMAX = max(K1, K2)
+    HS = hkl_grid()
+    KS_1 = [K1]; KS_2 = [K1, K2]
+    CONFIGS = [("1-col data / 1-sphere", KS_1, KS_1),
+               ("2-col data / 1-sphere", KS_2, KS_1),
+               ("2-col data / 2-sphere", KS_2, KS_2)]
 
 
 def cell_to_B(a, b, c, al, be, ga):
@@ -354,6 +413,197 @@ def run_blind(na, ncry=6, seed=2):
               f"{100*np.median(fr):>8.0f}%{la:>11}")
 
 
+def run_split(na, ncry=6, seed=1, ndec=3000):
+    """How much energy SPLIT does the two-Ewald win actually require?
+
+    The headline result was measured at one split, 17.5/15.0 keV = dE/E 15.4%, and reported as
+    though two colours were the lever. But K = E/hc, so the two Ewald radii are separated by exactly
+    dE/E -- shrink it and the second sphere slides into the first. Two thresholds govern that, they
+    are far apart, and the gap between them is the trap:
+
+      COVERAGE.  Convergence already smears each sphere into a shell: tilting k_in over a cone of
+      half-angle NA moves the sphere surface by ~K*NA. A second sphere adds reciprocal-space
+      coverage only once it sits OUTSIDE that shell, i.e. once dE/E > NA -- 2% at NA = 20 mrad.
+      Below it the two shells overlap and the second colour contributes duplicate points.
+
+      BOOKKEEPING.  The accumulator separates the colours with the K-scaled direction gate
+      kz > K cos(NA), which keeps working until K2 > K1 cos(NA), i.e. down to dE/E ~ NA^2/2 --
+      2e-4 at the same NA, a HUNDRED times smaller.
+
+    So between dE/E ~ NA^2/2 and dE/E ~ NA the accumulator still labels every point by colour and
+    still reports twice the votes, while the second sphere has stopped adding anything. Vote count
+    cannot see the difference; `splitcap` scores the same sweep on capture radius, which can.
+
+    The mean energy is held fixed (16.25 keV, so the widest split reproduces the original 17.5/15.0
+    exactly) to keep the reflection list and arc statistics comparable across the sweep.
+    """
+    e1_0, e2_0 = E1_keV, E2_keV
+    Ec = 16.25
+    fracs = tuple(float(v) for v in os.environ["TC_SPLITS"].split(",")) \
+        if os.environ.get("TC_SPLITS") else (0.15385, 0.08, 0.04, 0.02, 0.01, 0.005, 0.002, 0.0)
+    print(f"SPLIT SWEEP  na={na:.3f} rad ({na*1e3:.0f} mrad)  ncry={ncry}  decoys={ndec}")
+    print(f"  coverage threshold  dE/E ~ NA      = {na:.2e}   "
+          f"(below this the 2nd sphere sits inside the convergence-thickened shell)")
+    print(f"  bookkeeping limit   dE/E ~ 1-cos(NA) = {1 - np.cos(na):.2e}   "
+          f"(below this the cone gate can no longer label the two radii at all)")
+    print(f"  {'dE/E':>8}  {'E1/E2 keV':>13}  " +
+          "".join(f"{lab.split(' data ')[0] + lab.split('/')[-1]:>17}" for lab, _, _ in CONFIGS))
+    print(f"  {'':>8}  {'':>13}  " + "".join(f"{'arcs truth decoy':>17}" for _ in CONFIGS))
+    try:
+        for f in fracs:
+            set_beam(Ec * (1 + f / 2), Ec * (1 - f / 2))
+            rng0 = np.random.default_rng(seed)
+            Rts = [rand_rot(rng0) for _ in range(ncry)]      # identical crystals at every split
+            cells = []
+            for label, Ksim, Kidx in CONFIGS:
+                rng = np.random.default_rng(seed + 100)
+                tru, dec, arcs = [], [], []
+                for Rt in Rts:
+                    kobs, lab, col, cents, _ = simulate(Rt, rng, 2e-4, na, Ksim)
+                    arcs.append(int(lab.sum()))
+                    st = score(Rt, kobs, 0.0025, na, Kidx)
+                    decoys = np.array([score(rand_rot(rng), kobs, 0.0025, na, Kidx)
+                                       for _ in range(ndec)])
+                    tru.append(st); dec.append(int(decoys.max()))
+                cells.append(f"{int(np.median(arcs)):>5}{int(np.median(tru)):>6}"
+                             f"{int(np.median(dec)):>6}")
+            print(f"  {f:>8.5f}  {E1_keV:6.3f}/{E2_keV:6.3f}  " +
+                  "".join(f"{c:>17}" for c in cells), flush=True)
+    finally:
+        set_beam(e1_0, e2_0)                                  # never leave the module retuned
+    print("  (truth = accumulator votes at the true orientation; decoy = best of the random pool)")
+
+
+def excited(R, na, Ks, nchi=720):
+    """Which reflections does each colour actually excite? Returns a list of hkl-index sets, one per
+    colour. This is the geometry alone -- no noise, no scoring, no refinement -- so it answers the
+    coverage question without a recovery statistic's counting noise in the way."""
+    chi = np.linspace(0, 2 * np.pi, nchi, endpoint=False)
+    cc, ss = np.cos(chi), np.sin(chi)
+    cosa, sina = np.cos(na), np.sin(na)
+    sets = [set() for _ in Ks]
+    for j, h in enumerate(HS):
+        G = R @ (B @ h)
+        for ci, K in enumerate(Ks):
+            a, b = kossel_basis(G, K)
+            if a is None:
+                continue
+            kout = G / 2 + cc[:, None] * a + ss[:, None] * b
+            kin = kout - G
+            m = (kin[:, 2] > K * cosa) & (np.hypot(kin[:, 0], kin[:, 1]) < K * sina) & (kout[:, 2] > 0)
+            if m.sum() >= 2:
+                sets[ci].add(j)
+    return sets
+
+
+def run_cover(na, ncry=12, seed=1):
+    """Does the second colour excite DIFFERENT reflections, or the same ones twice?
+
+    This is the claim the whole two-colour argument rests on, and it is pure geometry, so measure it
+    as geometry. `arcs` counts excitations and is what the original write-up reported doubling; the
+    honest quantity is the UNION of distinct reflections reached. Convergence smears each Ewald
+    sphere into a shell of radial width ~K*NA, so a second sphere only reaches past it once
+    dE/E > NA. Below that the two colours light up the same reflections and 'twice the arcs' is
+    twice the bookkeeping.
+    """
+    e1_0, e2_0 = E1_keV, E2_keV
+    Ec = 16.25
+    fracs = tuple(float(v) for v in os.environ["TC_SPLITS"].split(",")) \
+        if os.environ.get("TC_SPLITS") else (0.15385, 0.08, 0.04, 0.02, 0.01, 0.005, 0.002, 0.001, 0.0)
+    print(f"COVERAGE  na={na:.3f} rad ({na*1e3:.0f} mrad)  ncry={ncry}   "
+          f"coverage threshold dE/E ~ NA = {na:.3f}")
+    print(f"  {'dE/E':>8}  {'col1':>6}{'col2':>6}{'union':>7}{'both':>6}"
+          f"{'union/col1':>12}{'arcs/col1':>11}")
+    try:
+        for f in fracs:
+            set_beam(Ec * (1 + f / 2), Ec * (1 - f / 2))
+            rng = np.random.default_rng(seed)
+            n1, n2, nu, nb = [], [], [], []
+            for _ in range(ncry):
+                s1, s2 = excited(rand_rot(rng), na, [K1, K2])
+                n1.append(len(s1)); n2.append(len(s2))
+                nu.append(len(s1 | s2)); nb.append(len(s1 & s2))
+            n1 = np.array(n1, float); n2 = np.array(n2, float)
+            nu = np.array(nu, float); nb = np.array(nb, float)
+            keep = n1 > 0                                     # ratios PER CRYSTAL then median:
+            gain = np.median(nu[keep] / n1[keep])             # medians of numerator and denominator
+            arcr = np.median((n1[keep] + n2[keep]) / n1[keep])  # separately are not a ratio
+            print(f"  {f:>8.5f}  {np.median(n1):>6.0f}{np.median(n2):>6.0f}{np.median(nu):>7.0f}"
+                  f"{np.median(nb):>6.0f}{gain:>12.2f}{arcr:>11.2f}", flush=True)
+    finally:
+        set_beam(e1_0, e2_0)
+    print("  union/col1 = the real coverage gain;  arcs/col1 = what counting excitations reports")
+
+
+def run_coverna(ncry=12, seed=1):
+    """The other lever, measured the same way: what does CONVERGENCE buy, at a single colour?
+
+    Tilting k_in over a cone of half-angle NA sweeps the Ewald sphere through a shell of radial
+    width ~K*NA, and unlike a second discrete sphere that shell is continuous -- every reflection
+    inside it is reached, and each is reached along an ARC whose direction carries the out-of-plane
+    constraint. This is the quantity to put a two-colour gain next to.
+    """
+    e1_0, e2_0 = E1_keV, E2_keV
+    set_beam(16.25, 16.25)                                    # single colour, so NA is the only lever
+    nas = tuple(float(v) for v in os.environ["TC_NAS"].split(",")) \
+        if os.environ.get("TC_NAS") else (0.004, 0.008, 0.014, 0.020, 0.028, 0.040, 0.056)
+    print(f"COVERAGE vs CONVERGENCE  single colour at {16.25} keV  ncry={ncry}  nodes={len(HS)}")
+    print(f"  {'NA (mrad)':>10}{'reflections':>13}{'per mrad':>10}{'vs previous':>13}")
+    try:
+        prev = None
+        for na in nas:
+            rng = np.random.default_rng(seed)
+            m = float(np.median([len(excited(rand_rot(rng), na, [K1])[0]) for _ in range(ncry)]))
+            # below a threshold NA the cone reaches no reflection at all, so there is no ratio to
+            # take -- print a dash rather than a number divided by zero
+            rat = "-" if not prev else f"{m / prev:.2f}"
+            print(f"  {na*1e3:>10.0f}{m:>13.0f}{m / (na * 1e3):>10.2f}{rat:>13}", flush=True)
+            prev = m if m > 0 else prev
+    finally:
+        set_beam(e1_0, e2_0)
+
+
+def run_splitcap(na, ncry=8, seed=3):
+    """The split sweep again, scored on CAPTURE RADIUS rather than vote count.
+
+    The contrast tower is the wrong instrument for the small-split end and it took a while to see
+    why. Votes are counts of indexed points, and as dE/E -> 0 the second colour's Kossel arc for a
+    given reflection slides onto the first colour's, so the point count doubles by DUPLICATION. The
+    tower can therefore keep doubling while no new reciprocal-space coverage arrives at all. What
+    cannot be faked that way is the width of the basin the refiner has to find: a genuinely better
+    objective is one a more distant seed still falls into.
+    """
+    e1_0, e2_0 = E1_keV, E2_keV
+    Ec = 16.25
+    fracs = tuple(float(v) for v in os.environ["TC_SPLITS"].split(",")) \
+        if os.environ.get("TC_SPLITS") else (0.15385, 0.04, 0.01, 0.002, 0.0)
+    perts = [3, 6, 10]
+    print(f"SPLIT x CAPTURE  na={na:.3f} rad ({na*1e3:.0f} mrad)  ncry={ncry}  noise=2e-4")
+    print(f"  recovery (<1 deg) vs seed perturbation, per config, as the energy split closes")
+    hdr = "".join(f"{lab.split(' data ')[0] + '/' + lab.split('/')[-1].strip():>26}"
+                  for lab, _, _ in CONFIGS)
+    print(f"  {'dE/E':>8}  " + hdr)
+    print(f"  {'':>8}  " + "".join(f"{'  '.join(str(p) + 'd' for p in perts):>26}" for _ in CONFIGS))
+    try:
+        for f in fracs:
+            set_beam(Ec * (1 + f / 2), Ec * (1 - f / 2))
+            rng0 = np.random.default_rng(seed)
+            Rts = [rand_rot(rng0) for _ in range(ncry)]
+            cells = []
+            for label, Ksim, Kidx in CONFIGS:
+                rng = np.random.default_rng(seed + 100)
+                rec = {p: 0 for p in perts}
+                for Rt in Rts:
+                    kobs, lab, col, cents, _ = simulate(Rt, rng, 2e-4, na, Ksim)
+                    for p in perts:
+                        Rh = refine(kobs, Rt @ small_rot(rng, np.radians(p)), na, Kidx)
+                        rec[p] += ang_between(Rt, Rh) < 1.0
+                cells.append("  ".join(f"{rec[p]}/{ncry}" for p in perts))
+            print(f"  {f:>8.5f}  " + "".join(f"{c:>26}" for c in cells), flush=True)
+    finally:
+        set_beam(e1_0, e2_0)
+
+
 def run_capture(na, ncry=8, seed=3):
     """Capture-radius: how far from truth can refinement START and still return to it?
     A wider/deeper basin => the coarse seeder needs fewer candidates to hit it => the wall
@@ -389,6 +639,14 @@ if __name__ == "__main__":
         run_contrast(na, ncry)
     elif mode == "capture":
         run_capture(na, ncry)
+    elif mode == "split":                                     # contrast across the ENERGY SPLIT
+        run_split(na, ncry)
+    elif mode == "splitcap":                                  # capture radius across the split
+        run_splitcap(na, ncry)
+    elif mode == "cover":                                     # reciprocal-space coverage vs split
+        run_cover(na, ncry)
+    elif mode == "coverna":                                   # coverage vs convergence, 1 colour
+        run_coverna(ncry)
     elif mode == "sweep":                                     # contrast across an NA band
         for na in (0.008, 0.012, 0.018, 0.028):
             run_contrast(na, ncry); print()

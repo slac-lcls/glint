@@ -117,6 +117,12 @@ the DAG loses its 73-core CPU peak-finding node. `glint_dag_images.yaml` is that
 
     images: "{{ work_dir }}/run.cxi"
     peakfinder: "stored"   # v4 | pf9 | stored -- `stored` reuses the .cxi's own peakfinder8 peaks
-    top_peaks: 100         # images only; ~100 strongest is the measured sweet spot
+    # top_peaks: 200        # images only -- OPTIONAL, and NOT a speedup: it is a guard against a
+                             # finder over-finding on background. Leave UNSET by default. Measured on
+                             # 120 real cxidb frames (glint#137): top_peaks 200 costs ~2 points of
+                             # correct-lattice, 100 costs ~11, 50 collapses the rate -- see the field
+                             # doc in glint_index.py. The earlier "~100 is the sweet spot" claim here
+                             # predates #35/#33, which fixed top_peaks to actually truncate on this
+                             # (now-default) `stored` path; on this corpus it no longer holds.
 
 `peaks` and `images` are mutually exclusive (the model rejects both, or neither, at config time).

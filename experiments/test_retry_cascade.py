@@ -208,6 +208,104 @@ def test_unrescued_frame_still_reaches_the_miss_buffer():
     assert drv.stats()["n_cascade_rescued"] == 1
 
 
+def _counting_fanout(drv):
+    """Wrap the default serial fan-out and record how many frames each call blind-solves."""
+    calls = []
+
+    def fan(Q, k):
+        calls.append((len(Q), k))
+        return [drv._blind_index(q, k) for q in Q]
+    drv._fanout = fan
+    return calls
+
+
+def test_watchdog_reuses_the_cascade_blind_solve():
+    """glint#145 review: with adaptive_relock AND retry_cascade on, an unrescued frame used to be
+    blind-indexed TWICE -- once by the cascade at retry_nbest, once by the watchdog at warmup_nbest.
+    The blind solve is the ~26 ms that dominates the retry, so the frames the cascade cannot help
+    were the ones paying double for it. Exactly one solve per frame per flush now."""
+    rng = np.random.default_rng(SEED + 5)
+    frames = [frame_on(A, rng) for _ in range(4)]
+    drv = _driver(True, adaptive_relock=True, min_inliers=6)
+    drv._blind_index = lambda q, k: _nbest_with(B, 0, rng, k)   # fits, but wrong lattice -> no rescue
+    drv._known_index = lambda qs, Mn, B=1: [None] * len(qs)
+    calls = _counting_fanout(drv)
+    _load(drv, frames)
+    drv.flush()
+    assert drv.stats()["n_cascade_rescued"] == 0, "premise: no frame is rescuable here"
+    solved = sum(n for n, _ in calls)
+    assert solved == len(frames), \
+        f"one blind solve per frame per flush, got {solved} for {len(frames)} frames: {calls}"
+
+
+def test_reused_candidates_still_drive_the_watchdog_relock():
+    """The saving must not cost the watchdog its consensus. index_blind_nbest's N only truncates the
+    final dedup loop, so top-`warmup_nbest` is a verbatim prefix of top-`retry_nbest` -- the watchdog
+    votes on identical candidates and must still discover the new cell."""
+    rng = np.random.default_rng(SEED + 6)
+    frames = [frame_on(B, rng) for _ in range(5)]               # a recurring SECOND lattice
+    drv = _driver(True, adaptive_relock=True, min_inliers=6)
+    drv._blind_index = lambda q, k: [(B.copy(), 0.9)][:k]
+    drv._known_index = lambda qs, Mn, B_=1: [None] * len(qs)
+    calls = _counting_fanout(drv)
+    _load(drv, frames)
+    drv.flush()
+    assert sum(n for n, _ in calls) == len(frames), "still one solve per frame"
+    assert drv.n_relock == 1 and len(drv.extra) == 1, \
+        f"the watchdog must still relock on the reused candidates ({drv.n_relock} relocks)"
+    got = np.sort(np.linalg.norm(drv.extra[0]["Mc"], axis=0))
+    assert np.allclose(got, np.sort(np.linalg.norm(B, axis=0)), rtol=0.05), got.tolist()
+
+
+def test_reuse_is_identical_to_a_fresh_solve():
+    """THE equivalence the reuse rests on, asserted directly rather than argued: what the watchdog
+    gets from the cache must equal, element for element, what a fresh `_fanout(q, warmup_nbest)`
+    would have handed it. That is only true because the cached list is SLICED back to warmup_nbest;
+    handing over all retry_nbest candidates would give the consensus more cells per frame to vote on
+    than it would ever have seen, which is a changed vote, not a saved solve."""
+    rng = np.random.default_rng(SEED + 8)
+    drv = _driver(True, adaptive_relock=True, min_inliers=6)
+    ranked = {}
+
+    def blind(q, k):
+        """Mirrors index_blind_nbest's contract: one ranked list per frame, top-k is a PREFIX."""
+        ranked.setdefault(id(q), _nbest_with(B, 0, rng, 10))
+        return ranked[id(q)][:k]
+    drv._blind_index = blind
+    _counting_fanout(drv)
+    slots = [0, 1, 2]
+    for i in slots:
+        drv._q[i] = frame_on(A, rng)
+    cache = {i: blind(drv._q[i], drv.retry_nbest) for i in slots}
+
+    reused = drv._watchdog_nbest(slots, cache)
+    fresh = drv._watchdog_nbest(slots, None)
+    assert len(reused) == len(fresh) == len(slots)
+    for j, (r, f) in enumerate(zip(reused, fresh)):
+        assert len(r) == drv.warmup_nbest, \
+            f"slot {j}: watchdog got {len(r)} candidates, not warmup_nbest={drv.warmup_nbest}"
+        assert len(r) == len(f), (len(r), len(f))
+        for (cr, sr), (cf, sf) in zip(r, f):
+            assert np.array_equal(cr, cf) and sr == sf, f"slot {j}: reused candidate != fresh one"
+
+
+def test_larger_warmup_nbest_falls_back_rather_than_truncating():
+    """warmup_nbest > retry_nbest: the cache is a prefix but too SHORT, and N is the only thing the
+    truncation controls -- so 'topping up the delta' means re-running the whole solve anyway. This
+    falls back to the ordinary fan-out for those frames instead: no saving in that configuration,
+    but the watchdog's candidate set is preserved exactly, which is the property worth keeping."""
+    rng = np.random.default_rng(SEED + 7)
+    frames = [frame_on(A, rng) for _ in range(3)]
+    drv = _driver(True, adaptive_relock=True, min_inliers=6, warmup_nbest=12, retry_nbest=3)
+    drv._blind_index = lambda q, k: _nbest_with(B, 0, rng, k)
+    drv._known_index = lambda qs, Mn, B=1: [None] * len(qs)
+    calls = _counting_fanout(drv)
+    _load(drv, frames)
+    drv.flush()
+    assert [k for _, k in calls] == [3, 12], f"cascade at 3, then a full watchdog solve at 12: {calls}"
+    assert sum(n for n, _ in calls) == 2 * len(frames), "deliberately two solves in this regime"
+
+
 def test_default_off_touches_nothing():
     """Off: no per-frame known-cell indexer is even resolved, and the stats key set is unchanged."""
     off, on = _driver(False), _driver(True)
@@ -223,6 +321,10 @@ def test_default_off_touches_nothing():
 TESTS = (test_fixture_is_a_real_gate_failure, test_flag_off_frame_is_missed,
          test_flag_on_frame_indexed_exactly_once, test_arms_are_complementary,
          test_wrong_lattice_candidate_is_refused, test_unrescued_frame_still_reaches_the_miss_buffer,
+         test_watchdog_reuses_the_cascade_blind_solve,
+         test_reused_candidates_still_drive_the_watchdog_relock,
+         test_reuse_is_identical_to_a_fresh_solve,
+         test_larger_warmup_nbest_falls_back_rather_than_truncating,
          test_default_off_touches_nothing)
 
 if __name__ == "__main__":

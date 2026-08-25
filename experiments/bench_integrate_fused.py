@@ -3,10 +3,12 @@ integrate_spots, across detector dtypes and edge cases. GPU node + cupy.
 
   python experiments/bench_integrate_fused.py      # exit 0 = the agreement contract holds
 
-THE CONTRACT, asserted here and not merely printed: on a COUNTING dtype (uint16/int32/float32
-holding integers) the kernel is BIT-EXACT with integrate_spots in every bg_mode, saturated pixels
-in the annulus included; on non-integer float64 it agrees to ATOL_F64 counts ABSOLUTE, because the
-warp reduction sums in a different order than numpy's pairwise summation.
+THE CONTRACT, asserted here and not merely printed, over ALL FOUR outputs (I, sigma, peak, bg):
+on a COUNTING dtype (uint16/int32/float32 holding integers) the kernel is BIT-EXACT with
+integrate_spots in every bg_mode, saturated pixels in the annulus included; on non-integer float64
+I/sigma/bg agree to ATOL_F64 counts ABSOLUTE, because the warp reduction sums in a different order
+than numpy's pairwise summation. Two outputs are held EXACT unconditionally, whatever the dtype,
+because no summation reaches them: `peak` is a max, and `bg` in median mode is a selection.
 
 The float64 bound is absolute, not relative, because I is a photon count and the thing it has to
 be small against is one photon -- a relative bound is meaningless on the reflections that matter
@@ -70,17 +72,29 @@ for name, H, W, n, dt, edge, ni, sat in cases:
         a = integrate_spots(img, pred, bg_mode=mode)
         b = integrate_fused(g, pred, bg_mode=mode)
         exact = all(np.array_equal(x, y) for x, y in zip(a, b))
-        adI = float(np.max(np.abs(a[0] - b[0])))
-        rel = (np.abs(a[0] - b[0]) / np.maximum(np.abs(a[0]), 1e-12)).max()
+        # ALL FOUR outputs, not just I. This change moved the background and therefore sigma too, so
+        # a check that reads a[0] alone exits 0 on a bg- or sigma-only regression.
+        d = {nm: float(np.max(np.abs(a[j] - b[j])))          # (I, sigma, peak, bg) -> the 3 summed
+             for nm, j in (("I", 0), ("sigma", 1), ("bg", 3))}
+        peak_eq = np.array_equal(a[2], b[2])
         counting = not (ni and dt == np.float64)   # exactly-summable input, whatever the container
-        ok = exact if counting else adI <= ATOL_F64
-        print(f"  {name:22s} n={n:5d} {mode:9s} bit-exact={str(exact):5s}  max|dI|={adI:9.3g}  "
-              f"max rel dI={rel:8.2g}  bg-eq={np.array_equal(a[3], b[3])}  "
-              f"peak-eq={np.array_equal(a[2], b[2])}{'' if ok else '   <- CONTRACT VIOLATED'}")
-        if not ok:
-            FAILS.append(f"{name}/{mode}: "
-                         + (f"not bit-exact on exactly-summable data (max|dI|={adI:.3g})" if counting
-                            else f"max|dI|={adI:.3g} > ATOL_F64={ATOL_F64:g} counts"))
+        worst = max(d.values())
+        why = []
+        if counting and not exact:
+            why.append(f"not bit-exact on exactly-summable data (worst |d|={worst:.3g} counts)")
+        if not counting and worst > ATOL_F64:
+            why.append(f"worst |d|={worst:.3g} > ATOL_F64={ATOL_F64:g} counts "
+                       + "(" + ", ".join(f"{k} {v:.3g}" for k, v in d.items()) + ")")
+        # peak is a MAX: order-independent, so it is exact for every dtype and mode, always.
+        if not peak_eq:
+            why.append("peak differs -- a max is order-independent, so this is a real bug")
+        # ...and a median is a SELECTION, so median-mode bg is exact for every dtype too.
+        if mode == "median" and d["bg"] != 0.0:
+            why.append(f"median-mode bg differs by {d['bg']:.3g} -- a selection cannot round")
+        print(f"  {name:22s} n={n:5d} {mode:9s} bit-exact={str(exact):5s}  "
+              + "  ".join(f"max|d{k}|={v:9.3g}" for k, v in d.items())
+              + f"  peak-eq={peak_eq}{'' if not why else '   <- CONTRACT VIOLATED'}")
+        FAILS.extend(f"{name}/{mode}: {w}" for w in why)
     del g
     cp.get_default_memory_pool().free_all_blocks()
 

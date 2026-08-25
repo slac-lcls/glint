@@ -44,15 +44,20 @@ def make_inputs(nseg, ncol):
 
 
 def assert_modes_fire(corrs, tol=1e-6):
-    """corrs: {key: correction array}. Fail loudly if any mode bit has NO case with a real,
-    nonzero correction -- the exact silent regression the 64-column goldens shipped with."""
+    """corrs: {key: correction array}. Fail loudly if any common-mode variant has NO case with a
+    real, nonzero correction -- the exact silent regression the 64-column goldens shipped with.
+
+    PURE modes only (1, 2, 4), never the composites (3, 7): in a composite case the other passes
+    keep the aggregate correction nonzero even when the pass under test never fires, so scanning
+    composites would have accepted the very 64-column geometry this guard exists to reject."""
     fails = []
     for bit in (1, 2, 4):
         peak = max(float(np.abs(a).max())
                    for k, a in corrs.items()
-                   if k.startswith("corr_") and k != "corr_boundary" and int(k.split("_")[1]) & bit)
+                   if k.startswith("corr_") and k != "corr_boundary"
+                   and int(k.split("_")[1]) == bit)
         ok = peak > tol
-        print(f"[meta ] mode bit {bit}: max |correction| across its cases = {peak:.3f} "
+        print(f"[meta ] pure mode {bit}: max |correction| across its cases = {peak:.3f} "
               f"{'OK' if ok else 'NEVER FIRES -- goldens check nothing for this mode'}")
         if not ok:
             fails.append(bit)

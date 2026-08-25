@@ -161,6 +161,25 @@ def max_peaks():
     return _smem_cap() // (3 * _IB)
 
 
+def _fallback(call, F, chunk=1):
+    """Run a stock op over `chunk`-frame slices and concatenate along the frame axis.
+
+    The stock ops materialise (F, K, Pmax) intermediates -- _stage_compute calls obj_b with thousands
+    of candidates -- so at the peak counts that send us here a whole padded batch is tens of GB and
+    OOMs, which is the F-scaled allocation index_fused's own over-lane avoids by passing one frame at
+    a time.  The wrappers cannot see their caller's batching (run_fused / a direct patch() user hands
+    them the full batch), so they slice it themselves.  Frames index INDEPENDENTLY -- the kernels are
+    grid=(F,), one block per frame, and F is a pure batch axis in the stock ops too -- so this changes
+    nothing but the allocation.  chunk=1 deliberately: this path only runs in the rare oversized
+    regime, where not dying matters more than throughput."""
+    if F <= chunk:
+        return call(0, F)
+    outs = [call(i, min(i + chunk, F)) for i in range(0, F, chunk)]
+    if isinstance(outs[0], tuple):
+        return tuple(torch.cat([o[j] for o in outs], 0) for j in range(len(outs[0])))
+    return torch.cat(outs, 0)
+
+
 def _stream():
     return cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream)
 
@@ -168,7 +187,8 @@ def _stream():
 def anneal_fused(M0, Q, m, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02, block=128):
     F, K = M0.shape[0], M0.shape[1]; Pmax = Q.shape[1]
     if Pmax > max_peaks():                                   # will not fit in shared memory
-        return _ORIG["anneal_b"](M0, Q, m, thr0, contract, max_iter, min_thr)
+        return _fallback(lambda a, b: _ORIG["anneal_b"](M0[a:b], Q[a:b], m[a:b],
+                                                        thr0, contract, max_iter, min_thr), F)
     npk = m.sum(1).to(torch.int32).contiguous()
     M0f = M0.reshape(F, K, 9).contiguous(); Mout = torch.empty_like(M0f)
     with _stream():
@@ -181,7 +201,7 @@ def anneal_fused(M0, Q, m, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02, 
 def obj_fused(V, Q, m, block=128):
     F, K = V.shape[0], V.shape[1]; Pmax = Q.shape[1]
     if Pmax > max_peaks():
-        return _ORIG["obj_b"](V, Q, m)
+        return _fallback(lambda a, b: _ORIG["obj_b"](V[a:b], Q[a:b], m[a:b]), F)
     npk = m.sum(1).to(torch.int32).contiguous()
     Vc = V.contiguous()
     inl = torch.empty(F, K, dtype=torch.int32, device=V.device)
@@ -195,7 +215,7 @@ def obj_fused(V, Q, m, block=128):
 def refine_fused(V, Q, m, steps=30, block=128):
     F, K = V.shape[0], V.shape[1]; Pmax = Q.shape[1]
     if Pmax > max_peaks():
-        return _ORIG["refine_b"](V, Q, m, steps)
+        return _fallback(lambda a, b: _ORIG["refine_b"](V[a:b], Q[a:b], m[a:b], steps), F)
     npk = m.sum(1).to(torch.int32).contiguous()
     qmax = (Q.norm(dim=2) * m).amax(1).clamp(min=1e-9); npkf = m.sum(1).clamp(min=1)
     lr = (1.0 / (4 * PI**2 * npkf * qmax**2)).to(V.dtype).contiguous()

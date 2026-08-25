@@ -12,9 +12,10 @@ own geometry provenance at startup instead of failing silently; and CI now runs 
 layer on every push (glint#107). Item 6's answer, measured on raw Jungfrau **16M** images
 (`mfx101555026` r0013) against the beamline's own event-mapped hit list: **the calibrated object is
 the pair (`threshold`, `min_snr`), not `min_snr` alone** — the floor-less Epix10ka2M ladder below is
-not comparable to any practitioner setting. That ladder ran with the detector's interior ASIC seams
-live, and the 2026-08-25 re-measurement (glint#139) found **94.6% of its peaks sitting on a seam**:
-masked, precision saturates at `min_snr` 10 and the corrected pair is (110, 8). `PF8_MIN_SNR` stays
+not comparable to any practitioner setting. The 16M ladder itself ran with the detector's interior
+ASIC seams live, and the 2026-08-25 re-measurement (glint#139) found the seams carrying its low
+rungs (**94.6% of returned peaks on a seam at `min_snr` 3–6**; 18.7% at the shipped 15): masked,
+precision saturates at `min_snr` 10 and the corrected pair is (110, 8). `PF8_MIN_SNR` stays
 at 15 until `asic_seam_mask` is wired, because the two knobs only move together — see item 6.
 
 ---
@@ -575,7 +576,8 @@ workflow. What remains is beyond the seven, not blocking them:
    as two stages with an npz handoff for exactly this reason; anything productized for current MFX
    data inherits the same split until an env carries all three.
 3. **`asic_seam_mask` is not wired into any ingest path** (glint#127, glint#139). On Jungfrau 16M
-   that leaves 94.6% of the peaks the offline stacked pf8 returns sitting on an interior ASIC seam.
+   the offline stacked pf8 therefore returns seam-dominated peak lists at low rungs (94.6% of
+   peaks on an interior ASIC seam at `min_snr` 3–6; 18.7% at the shipped default of 15).
    Wiring it is what unblocks the corrected `(110, 8)` operating point in item 6 — and it must land
    WITH that default change, never before or after it, because neither knob is safe on its own.
    `width=1` is the measured-sufficient setting.

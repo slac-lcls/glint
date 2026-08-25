@@ -159,5 +159,56 @@ with tempfile.TemporaryDirectory() as d:
                               dmin=5.0, tol=0.004)
     check("integrate_frames still works on the legacy per-file route", n2 == 1 and t2 > 0, (n2, t2))
 
+    # --- (panel, ss, fs) MUST NOT be read as (event, ss, fs) --------------------------------
+    # The old loader documented its 3-D axis as "(event|panel, ss, fs)" and took index 0 for both.
+    # Indexing a PANEL stack by the event would silently integrate panel N of a legacy per-file
+    # detector whose peak stream carries a run-global Event://N -- a different wrong image, not a
+    # fixed one. The decision is taken from the GEOMETRY's panel count, not the array shape.
+    NP = 4
+    panel_stack = np.stack([np.full((60, 60), 100.0 * (p + 1), np.float32) for p in range(NP)])
+    pfile = os.path.join(d, "panelstack.h5")
+    with h5py.File(pfile, "w") as f:
+        f.create_dataset(DATA, data=panel_stack)
+    # a 4-panel geometry: the leading axis matches the panel count, so it is panels
+    gp = "\n".join([f"photon_energy = {12398.419843320026 / LAM:.2f}", "clen = 0.1", "res = 10000",
+                    "coffset = 0.0", f"data = {DATA}"]
+                   + [f"p{p}/min_fs = 0\np{p}/max_fs = 59\np{p}/min_ss = {60*p}\n"
+                      f"p{p}/max_ss = {60*p+59}\np{p}/corner_x = -30\np{p}/corner_y = {-30+60*p}\n"
+                      f"p{p}/fs = +1.0x +0.0y\np{p}/ss = +0.0x +1.0y" for p in range(NP)]) + "\n"
+    gppath = os.path.join(d, "panels.geom")
+    open(gppath, "w").write(gp)
+    geom_p = parse_geom(gppath)
+    panels_p, _ = panels_from_geom(geom_p)
+    check("the 4-panel geometry parses as 4 panels", len(panels_p) == NP, len(panels_p))
+
+    got = _load_image(pfile, DATA, event=2, n_panels=NP)
+    check("a (panel,ss,fs) stack with a nonzero event is NOT panel-indexed (returns slab 0)",
+          np.array_equal(got, panel_stack[0]), float(got.flat[0]))
+    check("...and specifically did NOT return the event-indexed slab",
+          not np.array_equal(got, panel_stack[2]), float(got.flat[0]))
+
+    # ...while the SAME file under a one-panel geometry is an event stack, because a one-panel
+    # geometry cannot be describing a panel stack
+    ev2 = _load_image(pfile, DATA, event=2, n_panels=1)
+    check("the same file under a 1-panel geometry IS event-indexed",
+          np.array_equal(ev2, panel_stack[2]), float(ev2.flat[0]))
+
+    # ...and a leading axis that matches neither is refused rather than guessed
+    raised2 = None
+    try:
+        _load_image(pfile, DATA, event=1, n_panels=7)
+    except Exception as exc:                      # noqa: BLE001 - the message is the point
+        raised2 = exc
+    check("a leading axis matching neither events nor panels RAISES",
+          isinstance(raised2, ValueError) and "event_axis" in str(raised2), repr(raised2))
+
+    # the explicit override wins over the inference, in both directions
+    check("event_axis=True forces event indexing under a multi-panel geometry",
+          np.array_equal(_load_image(pfile, DATA, event=3, n_panels=NP, event_axis=True),
+                         panel_stack[3]))
+    check("event_axis=False forces slab 0 under a one-panel geometry",
+          np.array_equal(_load_image(pfile, DATA, event=3, n_panels=1, event_axis=False),
+                         panel_stack[0]))
+
 print(f"\nFAILURES: {len(FAILS)}" + ("" if not FAILS else "  " + ", ".join(FAILS)))
 sys.exit(1 if FAILS else 0)

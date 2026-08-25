@@ -17,8 +17,10 @@ import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 
-WT = "/sdf/home/s/smarches/glint_streamfix_wt"
-XG = "/sdf/home/s/smarches/git/glint/experiments/xgandalf"
+# GLINT_WT overrides, so a different checkout can import strict_gate/LYSO from here (the retry
+# arsenal does) without silently pulling glint out of one hard-coded worktree.
+WT = os.environ.get("GLINT_WT", "/sdf/home/s/smarches/glint_streamfix_wt")
+XG = os.environ.get("GLINT_XG", "/sdf/home/s/smarches/git/glint/experiments/xgandalf")
 sys.path.insert(0, WT)
 sys.path.insert(0, WT + "/experiments")
 import glint.glint_fast as gf

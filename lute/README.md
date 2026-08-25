@@ -69,6 +69,23 @@ Copies `glint_index.py` -> `lute/io/models/`, exports it, and registers
     submit_launch_slurm.sh $(which launch_slurm) -e <exp> -r <run> \
         -W $(pwd)/glint_dag.yaml -c $(pwd)/glint_config.yaml --partition=ampere
 
+> **Trap: `activate_installation` can silently point at an empty python tree (glint#128).**
+> It derives `PYTHONPATH` from whatever `python3` is ambient on `$PATH`, not a pinned one. A LUTE
+> install can carry several `install/lib/pythonX.Y` trees side by side (e.g. 3.9, 3.11, 3.12) and
+> leave some unpopulated -- if the ambient `python3` resolves to one of those, activation reports
+> nothing wrong and exports a `PYTHONPATH` into the void. Every LUTE task then dies later with
+> `ModuleNotFoundError: No module named 'launch_scripts'` or a bare subprocess return code `127`,
+> far from this cause -- `install/bin/launch_slurm` and `install/bin/submit_slurm` also bake in a
+> shebang pinned to a specific ana release, so which python3 is ambient in *your* shell may not
+> even be the one that matters. **Before sourcing `activate_installation`**, confirm the tree it
+> will pick actually contains `launch_scripts`:
+>     python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
+>     ls "$LUTE/install/lib/python<that version>/site-packages/launch_scripts"   # must exist
+> `./install_into_lute.sh` now runs this check automatically against `$LUTE` and refuses to install
+> (exit 3) if it finds the trap -- pass `--skip-activation-check` if you already have a workaround
+> (e.g. the shim noted in glint#128) or want to install anyway. This cannot be fixed from the GLINT
+> side; `lute/upstream_activate_installation.patch` is a draft fix to propose upstream.
+
 ## Best merge: hand CrystFEL the refined solution
 Set `tofile:` (+ `lattice: tPc` for tetragonal) in the `IndexGLINT` config; GLINT emits a
 `--indexing=file` solution, then:

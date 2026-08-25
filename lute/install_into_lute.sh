@@ -1,7 +1,7 @@
 #!/bin/bash
 # Install the GLINT LUTE task (IndexGLINT / GLINTIndexer) into a LUTE clone.
 #
-#   ./install_into_lute.sh [/path/to/lute_new/lute] [--force]
+#   ./install_into_lute.sh [/path/to/lute_new/lute] [--force] [--skip-activation-check]
 #
 # The repo is authoritative, but the DEPLOYED copy can drift. On 2026-07-20 the installed
 # glint_index.py matched NO committed version: it was a hand-rolled variant carrying an `-N`
@@ -16,14 +16,27 @@
 #   no                   -> DIVERGED: stop and say what to diff. --force overrides, but fold the
 #                           differences back into the repo first or the next install loses them again.
 # A timestamped backup is always taken before the copy.
+#
+# ACTIVATION-TRAP CHECK (glint#128). Upstream LUTE's `install/bin/activate_installation` derives
+# its PYTHONPATH from the AMBIENT python3, not a pinned one. A LUTE install can carry several
+# lib/pythonX.Y trees side by side and leave some of them unpopulated, so activation exports a
+# PYTHONPATH into an empty tree and reports nothing wrong -- every LUTE task, GLINT included, then
+# dies later with `ModuleNotFoundError: No module named 'launch_scripts'` or a bare subprocess
+# return code 127, far from the actual cause. This script cannot fix upstream LUTE (see
+# lute/upstream_activate_installation.patch for a DRAFT that could), so instead it checks the
+# target LUTE install right here, where $LUTE is already in hand, and refuses to proceed if the
+# trap is present. Override with --skip-activation-check if you already have a workaround (e.g.
+# the shim described in glint#128) or want to install anyway.
 set -e
 
 FORCE=0
+SKIP_ACTIVATION_CHECK=0
 POSITIONAL=()
 for a in "$@"; do
     case "$a" in
         --force|-f) FORCE=1 ;;
-        -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+        --skip-activation-check) SKIP_ACTIVATION_CHECK=1 ;;
+        -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
         *) POSITIONAL+=("$a") ;;
     esac
 done
@@ -33,6 +46,57 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SRC="$HERE/glint_index.py"
 TARGET="$LUTE/lute/io/models/glint_index.py"
 [ -d "$LUTE/lute/io/models" ] || { echo "not a LUTE repo: $LUTE"; exit 1; }
+
+# --- activation-trap check (glint#128) -----------------------------------------------------------
+_check_lute_activation() {
+    # $1 = LUTE root. Prints a loud diagnostic and returns nonzero if upstream LUTE's
+    # activate_installation would silently select a python tree with no launch_scripts in it.
+    local lute="$1" activation py_ver site populated=() d
+    activation="$lute/install/bin/activate_installation"
+    [ -f "$activation" ] || return 0   # install/ not built yet here -- nothing to check
+
+    py_ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)" || true
+    if [ -z "$py_ver" ]; then
+        echo "warning: could not determine the ambient python3 version -- skipping the" >&2
+        echo "  activate_installation sanity check (glint#128). Verify by hand before relying on it." >&2
+        return 0
+    fi
+
+    site="$lute/install/lib/python${py_ver}/site-packages"
+    [ -d "$site/launch_scripts" ] && return 0   # populated -- activation would work
+
+    for d in "$lute"/install/lib/python*/site-packages; do
+        [ -d "$d/launch_scripts" ] && populated+=("$(basename "$(dirname "$d")")")
+    done
+
+    echo "*** activate_installation TRAP DETECTED (glint#128) ***" >&2
+    echo "    ambient python3 is ${py_ver} -> $activation would export" >&2
+    echo "        PYTHONPATH=${site}" >&2
+    echo "    but that tree has no launch_scripts -- it was never populated when $lute/install" >&2
+    echo "    was built. Every LUTE task submitted this way (GLINTIndexer included) will die" >&2
+    echo "    later with ModuleNotFoundError or a bare subprocess return code 127, far from" >&2
+    echo "    this cause." >&2
+    if [ ${#populated[@]} -gt 0 ]; then
+        echo "    populated tree(s) found instead: ${populated[*]}" >&2
+        echo "    FIX: put a python3 from one of those on PATH (e.g. activate a conda env pinned" >&2
+        echo "    to it) BEFORE sourcing install/bin/activate_installation or calling launch_slurm" >&2
+        echo "    / submit_slurm, then retry." >&2
+    else
+        echo "    no lib/python*/site-packages tree under $lute/install contains launch_scripts --" >&2
+        echo "    this LUTE install looks broken beyond the version mismatch; rebuild it." >&2
+    fi
+    echo "    see lute/upstream_activate_installation.patch for a draft fix to propose upstream." >&2
+    return 1
+}
+
+if ! _check_lute_activation "$LUTE"; then
+    if [ "$SKIP_ACTIVATION_CHECK" -eq 1 ]; then
+        echo "    --skip-activation-check given: proceeding anyway." >&2
+    else
+        echo "    refusing to install without --skip-activation-check" >&2
+        exit 3
+    fi
+fi
 
 _sha() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
 

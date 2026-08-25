@@ -117,12 +117,21 @@ def self_test():
                 (x if side == 0 else y)[j][3] = val
                 expect(f"{tag} in {nm} ({'spots' if side == 0 else 'fused'}) is REJECTED",
                        compare_outputs(x, y, False, "clipmean")[0], True)
-    x = ok(); x[0][2] += 1e-3
-    expect("a real over-tolerance difference is REJECTED",
-           compare_outputs(x, ok(), False, "clipmean")[0], True)
-    x = ok(); x[0][2] += 1e-12
-    expect("a difference inside ATOL_F64 passes",
-           compare_outputs(x, ok(), False, "clipmean")[0], False)
+    # EACH summed output gets BOTH tolerance sabotages. Only `I` used to, so dropping `sigma` or
+    # `bg` from the tolerance dict -- the exact regression this self-test exists to prevent -- left
+    # it green. `bg` is checked in clipmean mode: median-mode bg has its own exactness rule below.
+    for nm, j in (("I", 0), ("sigma", 1), ("bg", 3)):
+        x = ok(); x[j][2] += 1e-3
+        expect(f"an over-tolerance {nm} difference is REJECTED",
+               compare_outputs(x, ok(), False, "clipmean")[0], True)
+        x = ok(); x[j][2] += 1e-12
+        expect(f"a {nm} difference inside ATOL_F64 passes",
+               compare_outputs(x, ok(), False, "clipmean")[0], False)
+        # ...and on COUNTING input the same difference must fail, because the rule there is
+        # bit-exactness, not a tolerance
+        x = ok(); x[j][2] += 1e-12
+        expect(f"...but on counting input that same {nm} difference is REJECTED (bit-exact rule)",
+               compare_outputs(x, ok(), True, "clipmean")[0], True)
     x = ok(); x[2][1] += 1.0
     expect("a peak difference is REJECTED in any mode",
            compare_outputs(x, ok(), False, "clipmean")[0], True)

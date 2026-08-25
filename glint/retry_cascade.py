@@ -88,22 +88,8 @@ def arm_known_perframe(q, Mc, gate, index_known_gpu_cell):
     return M if gate(M) else None
 
 
-def cascade(q, Mc, gate, index_blind_nbest=None, index_known_gpu_cell=None,
-            nbest=DEFAULT_NBEST, candidates=None):
-    """Run the measured cascade on one frame. Returns (M, arm_name) or (None, None).
-
-    Order is the measured-best available pair: blind N-best (k=`nbest`) then per-frame known-cell.
-    An arm whose indexer is None is skipped, so a caller with no per-frame known-cell path degrades
-    to the blind-only union (11 of 42) instead of failing.
-    """
-    if q is None or len(q) < 6:
-        return None, None
-    if index_blind_nbest is not None or candidates is not None:
-        M = arm_blind_nbest(q, gate, index_blind_nbest, nbest, candidates)
-        if M is not None:
-            return M, f"blind_nbest_k{nbest}"
-    if index_known_gpu_cell is not None:
-        M = arm_known_perframe(q, Mc, gate, index_known_gpu_cell)
-        if M is not None:
-            return M, "known_perframe"
-    return None, None
+# There is deliberately no `cascade(...)` convenience wrapper here composing the two arms. The
+# ORDER is the finding (blind N-best k=10, then per-frame known-cell), but the composition is not
+# reusable: StreamDriver has to try each candidate against every ACTIVE cell and remember which one
+# accepted, so it can integrate the frame into that cell's accumulator. A wrapper would only serve
+# the single-cell case and would sit uncalled and untested. The arms are the shared unit.

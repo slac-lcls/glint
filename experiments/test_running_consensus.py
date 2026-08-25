@@ -30,7 +30,13 @@ def _rp_eq(A, B, rtol=1e-6):
 
 
 def test_batch_equivalence():
-    """Fed all frames, verdict(gap=0) == batch consensus_cell (same lattice fingerprint + support)."""
+    """Fed all frames, verdict(gap=0) == batch consensus_cell (same lattice fingerprint + support).
+
+    merge=False is REQUIRED: the equivalence is to the LEGACY arrival-order batch grouper, which
+    assigns a multi-match witness to the first group it matches and leaves the rest un-coalesced.
+    The default coalesces, so it deliberately diverges -- see
+    test_batch_equivalence_diverges_on_multi_match, which pins the divergence and its direction.
+    """
     rng = np.random.default_rng(3)
     frames = []                                                 # each frame: a few candidate bases
     for f in range(6):
@@ -51,7 +57,7 @@ def test_batch_equivalence():
     # founder anyway. Add any scatter to the group and it would break for the wrong reason.
     rep_b, sup_b = consensus_cell(pooled, min_support=3, medoid=False)
 
-    rc = RunningConsensus(min_support=3, adaptive=False)
+    rc = RunningConsensus(min_support=3, adaptive=False, merge=False)
     for fr in frames:
         rc.add_frame(fr)
     rep_r, sup_r, _ = rc.verdict(gap=0)
@@ -284,13 +290,60 @@ def test_merge_is_on_by_default():
     assert same_lattice(top[0], TRUE), "default grouping must recover the true lattice"
 
 
+def test_batch_equivalence_diverges_on_multi_match():
+    """The default MUST diverge from the legacy batch grouper, and must diverge by being right.
+
+    The pool contains a witness cell inside the tolerance of BOTH halves of a split true lattice --
+    the case test_batch_equivalence's pool happens not to contain, which is why that test passed
+    unchanged when the default flipped. Legacy batch and merge=False both hand the win to the
+    spurious group; the default coalesces the halves and recovers the truth.
+    """
+    import os
+    prev = os.environ.get("GLINT_CONSENSUS_STABLE")
+    os.environ["GLINT_CONSENSUS_STABLE"] = "0"                  # legacy arrival-order batch grouping
+    try:
+        import importlib
+        import glint.multishot as ms
+        importlib.reload(ms)
+        TRUE = _diag(79.0, 79.0, 38.0)
+        A = _diag(79.0 * 0.972, 79.0 * 0.972, 38.0 * 0.972)
+        B = _diag(79.0 * 1.028, 79.0 * 1.028, 38.0 * 1.028)
+        SPUR = _diag(61.0, 67.0, 73.0)
+        pool = [A] * 9 + [B] * 9 + [SPUR] * 12 + [_diag(79.0, 79.0, 38.0)]   # last matches A and B both
+
+        rep_b, sup_b = ms.consensus_cell(pool, min_support=3, medoid=False)
+        assert not ms.same_lattice(rep_b, TRUE), "premise: legacy batch must pick the spurious group"
+
+        rc_off = RunningConsensus(min_support=3, gap=2, adaptive=False, merge=False)
+        for M in pool:
+            rc_off.add_frame([M])
+        rep_off, sup_off, _ = rc_off.verdict(gap=0)
+        assert _rp_eq(rep_off, rep_b) and sup_off == sup_b, (sup_off, sup_b)   # merge=False still equivalent
+
+        rc_on = RunningConsensus(min_support=3, gap=2, adaptive=False)         # the DEFAULT
+        for M in pool:
+            rc_on.add_frame([M])
+        rep_on, sup_on, _ = rc_on.verdict(gap=0)
+        assert ms.same_lattice(rep_on, TRUE), "default must recover the true lattice"
+        assert sup_on > sup_b, (sup_on, sup_b)                                 # and on more votes
+    finally:
+        if prev is None:
+            os.environ.pop("GLINT_CONSENSUS_STABLE", None)
+        else:
+            os.environ["GLINT_CONSENSUS_STABLE"] = prev
+        import importlib
+        import glint.multishot as ms
+        importlib.reload(ms)
+
+
 if __name__ == "__main__":
     tests = (test_batch_equivalence, test_early_stop_locks_clean,
              test_refuses_ambiguous_race, test_adaptive_gap_raises_when_slow,
              test_pool_switch_keys_scale_tests_on_pool_size,
              test_pool_switch_running_lock_unchanged_small_refuses_large,
              test_merge_repairs_split_vote, test_merge_false_is_bit_identical_to_pre_fix,
-             test_merge_is_on_by_default)
+             test_merge_is_on_by_default,
+             test_batch_equivalence_diverges_on_multi_match)
     ok = 0
     for t in tests:
         try:

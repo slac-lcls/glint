@@ -13,11 +13,20 @@ rescue path (~0.26 ms/frame).
 
 Equivalence, and its EXPIRY DATE: feed every frame, then ``verdict(gap=0)`` returns the same
 max-weight group as ``consensus_cell`` -- same ``reduced_params`` fingerprint, same (rtol, ctol,
-vtol) tolerances -- but only while the batch path also groups in arrival order, i.e. under
-``GLINT_CONSENSUS_STABLE=0``. Under the default the batch path seeds from the densest
-neighbourhood (glint#102) and the two can return DIFFERENT winners on the same hypotheses; see
-GROUPING ORDER below, where they do. The claim held unconditionally when it was written and has
-been conditional since #102 landed.
+vtol) tolerances -- but only under BOTH ``GLINT_CONSENSUS_STABLE=0`` (so the batch path also groups
+in arrival order) AND ``merge=False`` (so this path does too). Under the default the batch path
+seeds from the densest neighbourhood (glint#102) and the two can return DIFFERENT winners on the
+same hypotheses; see GROUPING ORDER below, where they do. The claim held unconditionally when it
+was written, became conditional on STABLE=0 when #102 landed, and became conditional on
+``merge=False`` as well when MERGE-ON-MULTI-MATCH landed.
+
+That second condition is not a regression, it is the point. The legacy batch grouper assigns a
+multi-match witness to the FIRST group it matches and leaves the others un-coalesced, so on a pool
+containing such a witness it reproduces the split-vote failure. Measured on the synthetic pool in
+``test_batch_equivalence_diverges_on_multi_match``: legacy batch and ``merge=False`` both return the
+SPURIOUS group at support 12, while the default returns the TRUE lattice at 19. Equivalence to a
+partition that is known-broken is worth exactly what it costs to keep, which is why ``merge=False``
+retains it for audit rather than the default preserving it.
 
 GROUPING ORDER -- a real difference from the batch path. This module groups greedily in the order
 hypotheses ARRIVE (first tolerance match wins), which is what ``consensus_cell`` also did until

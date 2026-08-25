@@ -108,11 +108,15 @@ so symmetry has to be supplied downstream. And the reflection rows carry the pla
 
 ## The seven things that stand between this and production
 
-**Progress: 6 of 7 struck through** — item 1 only partly (its tests exist, CI does not), and item 6
-is the one still open. A struck-through item carries the commit that closed it and how it was
-verified. Item 6 was re-measured on 2026-08-06 against a real indexing reference on a run the
-beamline kept; it stays open because the true `min_snr` ladder needs raw images from a good Jungfrau
-run, and the one it was originally measured on had been discarded by its own experiment.
+**Progress: all 7 struck through.** A struck-through item carries the commit that closed it and how
+it was verified. Item 1's CI half landed after its tests did (glint#107). Item 6 took three passes:
+2026-08-06 against an indexing reference on a run the beamline kept, 2026-08-13 on raw Jungfrau 16M
+images with the ADU floor (the pass that closed it), and a 2026-08-25 re-measurement (glint#139) that
+leaves the item closed but **replaces the operating point it recommended** — read its section to the
+end before taking a number out of it.
+
+(This paragraph previously said "6 of 7 ... item 6 is the one still open", contradicting both the
+header and the "What is left" footer, which have said all seven since 2026-08-13.)
 
 **1. ~~The LUTE task model has no test.~~ TESTS DONE (`bdbe67b`), CI STILL OPEN.**
 `lute/test_glint_index.py` covers all eight validators and the launcher's per-destination flag
@@ -308,7 +312,8 @@ repeated that claim ("4.0.59 can, with the same torch+cupy") until this round.
 Still carrying the same latent `torch.backends.mps` line, but NOT on the LUTE path and so left
 alone: `experiments/paper_xg_gpu.py`, `experiments/bench_h2h.py`, `experiments/powder_ml/train.py`.
 
-**6. `PF8_MIN_SNR = 15` is detector-specific, and that is measured.** Same ladder on Jungfrau4M
+**~~6. `PF8_MIN_SNR = 15` is detector-specific, and that is measured.~~ MEASURED — AND THE NUMBER
+THEN MOVED (glint#139); read to the end of this item.** Same ladder on Jungfrau4M
 (`cxilu8823` r0226, 8x512x1024, 75 um), job 34224833, `thr_snr=5`/`min_pix=3`:
 
 | min_snr | Epix10ka2M | Jungfrau4M |

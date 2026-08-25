@@ -2,6 +2,11 @@
 integrate_spots, across detector dtypes and edge cases. GPU node + cupy.
 
   python experiments/bench_integrate_fused.py      # exit 0 = the agreement contract holds
+  python experiments/bench_integrate_fused.py --self-test   # checker only, no GPU needed
+
+WITHOUT CUPY it runs --self-test and exits 0 on the GPU half, the way test_gate_project.py skips:
+that keeps `compare_outputs` -- which is where the pass/fail rules actually live -- covered by the
+CPU CI job, instead of only ever executing on a GPU node.
 
 THE CONTRACT, asserted here and not merely printed, over ALL FOUR outputs (I, sigma, peak, bg):
 on a COUNTING dtype (uint16/int32/float32 holding integers) the kernel is BIT-EXACT with
@@ -28,9 +33,11 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
-import cupy as cp
+try:                                   # so the checker below is importable/testable without a GPU
+    import cupy as cp
+except ImportError:
+    cp = None
 from glint.predict import BG_MODES, integrate_spots
-from glint.fused_integrate import integrate_fused
 
 rng = np.random.default_rng(0)
 ATOL_F64 = 1e-9          # counts; see the docstring -- a ceiling on "negligible", not a fitted line
@@ -51,9 +58,94 @@ def mk(H, W, n, dtype, edge=False, noninteger=False, saturate=0):
     return img, pred
 
 
+def compare_outputs(a, b, counting, mode, atol=ATOL_F64):
+    """(I, sigma, peak, bg) from integrate_spots vs integrate_fused -> list of contract violations.
+
+    Pure numpy and free of cupy on purpose: this is where the pass/fail rules live, so it has to be
+    runnable -- and sabotage-testable -- on the CPU CI job rather than only on a GPU node."""
+    why = []
+    # NON-FINITE FIRST, and never as part of the tolerance comparison. `nan > atol` is False, so a
+    # NaN anywhere in I/sigma/bg used to make the bound PASS: the check was blind to exactly the
+    # regression it most needs to catch. np.max propagates a NaN, but relying on that would still
+    # end in a False comparison, so the guard is explicit and separate.
+    for nm, j in (("I", 0), ("sigma", 1), ("peak", 2), ("bg", 3)):
+        for side, arr in (("integrate_spots", a[j]), ("integrate_fused", b[j])):
+            bad = int(np.count_nonzero(~np.isfinite(np.asarray(arr, float))))
+            if bad:
+                why.append(f"{side} returned {bad} non-finite {nm} value(s) -- invalid, not merely "
+                           f"out of tolerance")
+    d = {nm: float(np.max(np.abs(np.asarray(a[j], float) - np.asarray(b[j], float))))
+         for nm, j in (("I", 0), ("sigma", 1), ("bg", 3))}      # (I, sigma, peak, bg) -> the 3 summed
+    peak_eq = np.array_equal(a[2], b[2])
+    exact = all(np.array_equal(x, y) for x, y in zip(a, b))
+    if why:                                   # a non-finite d is meaningless; report it and stop
+        return why, d, peak_eq, exact
+    worst = max(d.values())
+    if counting and not exact:
+        why.append(f"not bit-exact on exactly-summable data (worst |d|={worst:.3g} counts)")
+    if not counting and not worst <= atol:    # NOT `worst > atol`: that reads False on a NaN
+        why.append(f"worst |d|={worst:.3g} > ATOL_F64={atol:g} counts "
+                   + "(" + ", ".join(f"{k} {v:.3g}" for k, v in d.items()) + ")")
+    # peak is a MAX: order-independent, so it is exact for every dtype and mode, always.
+    if not peak_eq:
+        why.append("peak differs -- a max is order-independent, so this is a real bug")
+    # ...and a median is a SELECTION, so median-mode bg is exact for every dtype too.
+    if mode == "median" and d["bg"] != 0.0:
+        why.append(f"median-mode bg differs by {d['bg']:.3g} -- a selection cannot round")
+    return why, d, peak_eq, exact
+
+
+def self_test():
+    """Sabotage the checker: it must REJECT what it is supposed to reject. Runs without a GPU."""
+    n = 8
+    base = [np.arange(n, dtype=float) + 1.0 for _ in range(4)]
+    ok = lambda: [x.copy() for x in base]
+    bad = 0
+
+    def expect(label, why, want):
+        nonlocal bad
+        got = bool(why)
+        print(f"  {'ok  ' if got == want else 'FAIL'}  {label}"
+              + ("" if got == want else f"  <- wanted flagged={want}, got {why}"))
+        bad += got != want
+
+    expect("identical outputs pass", compare_outputs(ok(), ok(), True, "clipmean")[0], False)
+    for nm, j in (("I", 0), ("sigma", 1), ("peak", 2), ("bg", 3)):
+        for side in (0, 1):
+            for val, tag in ((np.nan, "NaN"), (np.inf, "inf")):
+                x, y = ok(), ok()
+                (x if side == 0 else y)[j][3] = val
+                expect(f"{tag} in {nm} ({'spots' if side == 0 else 'fused'}) is REJECTED",
+                       compare_outputs(x, y, False, "clipmean")[0], True)
+    x = ok(); x[0][2] += 1e-3
+    expect("a real over-tolerance difference is REJECTED",
+           compare_outputs(x, ok(), False, "clipmean")[0], True)
+    x = ok(); x[0][2] += 1e-12
+    expect("a difference inside ATOL_F64 passes",
+           compare_outputs(x, ok(), False, "clipmean")[0], False)
+    x = ok(); x[2][1] += 1.0
+    expect("a peak difference is REJECTED in any mode",
+           compare_outputs(x, ok(), False, "clipmean")[0], True)
+    x = ok(); x[3][1] += 1e-13
+    expect("median-mode bg must be EXACT (a selection cannot round)",
+           compare_outputs(x, ok(), False, "median")[0], True)
+    print(f"  self-test failures: {bad}")
+    return bad
+
+
+if "--self-test" in sys.argv or cp is None:
+    print("=== checker self-test (no GPU needed) ===")
+    rc = self_test()
+    if cp is None:
+        print("SKIP: cupy unavailable -- the device comparison below needs a GPU node.")
+    if "--self-test" in sys.argv or cp is None:
+        raise SystemExit(1 if rc else 0)
+
 props = cp.cuda.runtime.getDeviceProperties(cp.cuda.Device(0).id)
 print(f"=== fused GPU integration vs numpy integrate_spots ({props['name'].decode()}, "
       f"cupy {cp.__version__}) ===")
+if self_test():                          # the checker itself, before trusting it on the device
+    FAILS.append("checker self-test failed -- the pass/fail rules are broken, not the kernel")
 cases = [("uint16 (raw)", 800, 800, 300, np.uint16, False, False, 0),
          ("int32", 800, 800, 300, np.int32, False, False, 0),
          ("float32", 800, 800, 300, np.float32, False, False, 0),
@@ -63,6 +155,7 @@ cases = [("uint16 (raw)", 800, 800, 300, np.uint16, False, False, 0),
          ("float64 non-integer", 1500, 1500, 500, np.float64, False, True, 0),
          ("edge-straddling", 400, 400, 400, np.float32, True, False, 0),
          ("dense 2000 spots", 4000, 4000, 2000, np.uint16, False, False, 0)]
+from glint.fused_integrate import integrate_fused
 for name, H, W, n, dt, edge, ni, sat in cases:
     img, pred = mk(H, W, n, dt, edge, ni, sat)
     g = cp.asarray(img)
@@ -71,26 +164,8 @@ for name, H, W, n, dt, edge, ni, sat in cases:
     for mode in BG_MODES:
         a = integrate_spots(img, pred, bg_mode=mode)
         b = integrate_fused(g, pred, bg_mode=mode)
-        exact = all(np.array_equal(x, y) for x, y in zip(a, b))
-        # ALL FOUR outputs, not just I. This change moved the background and therefore sigma too, so
-        # a check that reads a[0] alone exits 0 on a bg- or sigma-only regression.
-        d = {nm: float(np.max(np.abs(a[j] - b[j])))          # (I, sigma, peak, bg) -> the 3 summed
-             for nm, j in (("I", 0), ("sigma", 1), ("bg", 3))}
-        peak_eq = np.array_equal(a[2], b[2])
         counting = not (ni and dt == np.float64)   # exactly-summable input, whatever the container
-        worst = max(d.values())
-        why = []
-        if counting and not exact:
-            why.append(f"not bit-exact on exactly-summable data (worst |d|={worst:.3g} counts)")
-        if not counting and worst > ATOL_F64:
-            why.append(f"worst |d|={worst:.3g} > ATOL_F64={ATOL_F64:g} counts "
-                       + "(" + ", ".join(f"{k} {v:.3g}" for k, v in d.items()) + ")")
-        # peak is a MAX: order-independent, so it is exact for every dtype and mode, always.
-        if not peak_eq:
-            why.append("peak differs -- a max is order-independent, so this is a real bug")
-        # ...and a median is a SELECTION, so median-mode bg is exact for every dtype too.
-        if mode == "median" and d["bg"] != 0.0:
-            why.append(f"median-mode bg differs by {d['bg']:.3g} -- a selection cannot round")
+        why, d, peak_eq, exact = compare_outputs(a, b, counting, mode)
         print(f"  {name:22s} n={n:5d} {mode:9s} bit-exact={str(exact):5s}  "
               + "  ".join(f"max|d{k}|={v:9.3g}" for k, v in d.items())
               + f"  peak-eq={peak_eq}{'' if not why else '   <- CONTRACT VIOLATED'}")

@@ -25,13 +25,15 @@ Accumulation is float64 throughout, as in numpy.
 
 Measured agreement with integrate_spots, ALL THREE bg modes (A100-SXM4-40GB, cupy 13.6.0, driver
 12090; experiments/bench_integrate_fused.py, which exits nonzero if any of this stops holding):
-  uint16 / int32 / float32 counting input -- BIT-EXACT on all four outputs, including edge-
-    straddling boxes and frames seeded with saturated pixels in the annulus. (float32 widened to
-    double sums exactly for a 49-pixel box regardless of order, so summation order cannot bite.)
+  uint16 / int32 / float32 input -- BIT-EXACT on all four outputs, in all three modes, including
+    NON-INTEGER gain-corrected float32, edge-straddling boxes, and frames seeded with saturated
+    pixels in the annulus. (float32 widened to double sums exactly for a 49-pixel box regardless
+    of order, so summation order cannot bite.)
   float64 non-integer input -- peak is exact (a max is order-independent) and bg is exact for the
-    median (a selection), but I, sigma, and the two mean-like backgrounds differ by ~1e-11
-    relative at worst, because the warp reduction sums in a different order than numpy's pairwise
-    summation. Far below Poisson noise, but not zero.
+    median (a selection), but I, sigma, and the two mean-like backgrounds differ by up to 5.1e-13
+    counts, because the warp reduction sums in a different order than numpy's pairwise summation.
+    Quote that ABSOLUTELY: it is twelve orders below one photon, while the same difference on the
+    near-zero reflections reads ~1e-11 as a RATIO and means nothing.
 
 Getting there needed __dmul_rn/__dadd_rn/__dsub_rn on the final I and sigma expressions; see the
 comment at that line. Bit-exactness with a numpy reference is not something a CPU emulation of a

@@ -5,8 +5,15 @@ integrate_spots, across detector dtypes and edge cases. GPU node + cupy.
 
 THE CONTRACT, asserted here and not merely printed: on a COUNTING dtype (uint16/int32/float32
 holding integers) the kernel is BIT-EXACT with integrate_spots in every bg_mode, saturated pixels
-in the annulus included; on non-integer float64 it agrees to <=1e-11 relative, because the warp
-reduction sums the box in a different order than numpy's pairwise summation.
+in the annulus included; on non-integer float64 it agrees to ATOL_F64 counts ABSOLUTE, because the
+warp reduction sums in a different order than numpy's pairwise summation.
+
+The float64 bound is absolute, not relative, because I is a photon count and the thing it has to
+be small against is one photon -- a relative bound is meaningless on the reflections that matter
+here, the ones whose I is near zero, and on those it reads ~1e-11 while the absolute difference is
+~5e-13 counts. ATOL_F64 is set at a nanocount: nine orders below the Poisson floor, and the
+measured difference sits three orders below IT. It is a ceiling on "physically nothing", not a
+line fitted to what the device happened to produce.
 
 A saturated-pixel case is here because it is the one that separates the failure modes: it drives
 the background estimators apart (a clipmean rejects the pixel, a mean does not), so a per-mode
@@ -24,6 +31,7 @@ from glint.predict import BG_MODES, integrate_spots
 from glint.fused_integrate import integrate_fused
 
 rng = np.random.default_rng(0)
+ATOL_F64 = 1e-9          # counts; see the docstring -- a ceiling on "negligible", not a fitted line
 FAILS = []
 
 
@@ -62,16 +70,17 @@ for name, H, W, n, dt, edge, ni, sat in cases:
         a = integrate_spots(img, pred, bg_mode=mode)
         b = integrate_fused(g, pred, bg_mode=mode)
         exact = all(np.array_equal(x, y) for x, y in zip(a, b))
+        adI = float(np.max(np.abs(a[0] - b[0])))
         rel = (np.abs(a[0] - b[0]) / np.maximum(np.abs(a[0]), 1e-12)).max()
-        counting = not ni                       # integer-valued input, whatever the container type
-        ok = exact if counting else rel <= 1e-11
-        print(f"  {name:22s} n={n:5d} {mode:9s} bit-exact={str(exact):5s}  max rel dI={rel:.2g}  "
-              f"bg-eq={np.array_equal(a[3], b[3])}  peak-eq={np.array_equal(a[2], b[2])}"
-              f"{'' if ok else '   <- CONTRACT VIOLATED'}")
+        counting = not (ni and dt == np.float64)   # exactly-summable input, whatever the container
+        ok = exact if counting else adI <= ATOL_F64
+        print(f"  {name:22s} n={n:5d} {mode:9s} bit-exact={str(exact):5s}  max|dI|={adI:9.3g}  "
+              f"max rel dI={rel:8.2g}  bg-eq={np.array_equal(a[3], b[3])}  "
+              f"peak-eq={np.array_equal(a[2], b[2])}{'' if ok else '   <- CONTRACT VIOLATED'}")
         if not ok:
             FAILS.append(f"{name}/{mode}: "
-                         + (f"not bit-exact on counting data (max rel dI={rel:.2g})" if counting
-                            else f"max rel dI={rel:.2g} > 1e-11"))
+                         + (f"not bit-exact on exactly-summable data (max|dI|={adI:.3g})" if counting
+                            else f"max|dI|={adI:.3g} > ATOL_F64={ATOL_F64:g} counts"))
     del g
     cp.get_default_memory_pool().free_all_blocks()
 

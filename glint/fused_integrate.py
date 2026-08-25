@@ -23,19 +23,20 @@ different estimator from the offline one, silently):
 
 Accumulation is float64 throughout, as in numpy.
 
-Measured agreement with integrate_spots (A100), for bg_mode="median":
-  uint16 / int32 / float32 input -- BIT-EXACT on all four outputs, including non-integer
-    gain-corrected float32 and edge-straddling boxes. (float32 widened to double sums exactly for a
-    49-pixel box regardless of order, so summation order cannot bite.)
-  float64 input -- bg and peak are exact (a median is a selection and a max is order-independent),
-    but I and sigma can differ by ~5e-12 relative, because the warp reduction sums the box in a
-    different order than numpy's pairwise summation. Far below Poisson noise, but not zero.
-The clipmean default has NOT been re-measured on a GPU. What was checked instead, on CPU: this
-source compiles, and a lane-for-lane emulation of it (same 32-lane strides, same shfl tree, same
-operand order) reproduces integrate_spots BIT-EXACTLY for uint16 / float32-counting input in all
-three modes -- including a frame seeded with saturated pixels -- and to <=5e-13 absolute on
-non-integer float64, which is the tolerance the median already had. Run
-experiments/bench_integrate_fused.py on a GPU node to close it properly (glint#131).
+Measured agreement with integrate_spots, ALL THREE bg modes (A100-SXM4-40GB, cupy 13.6.0, driver
+12090; experiments/bench_integrate_fused.py, which exits nonzero if any of this stops holding):
+  uint16 / int32 / float32 counting input -- BIT-EXACT on all four outputs, including edge-
+    straddling boxes and frames seeded with saturated pixels in the annulus. (float32 widened to
+    double sums exactly for a 49-pixel box regardless of order, so summation order cannot bite.)
+  float64 non-integer input -- peak is exact (a max is order-independent) and bg is exact for the
+    median (a selection), but I, sigma, and the two mean-like backgrounds differ by ~1e-11
+    relative at worst, because the warp reduction sums in a different order than numpy's pairwise
+    summation. Far below Poisson noise, but not zero.
+
+Getting there needed __dmul_rn/__dadd_rn/__dsub_rn on the final I and sigma expressions; see the
+comment at that line. Bit-exactness with a numpy reference is not something a CPU emulation of a
+kernel can establish -- the emulation of THIS kernel said "bit-exact" while the device did not,
+because the divergence was introduced by the compiler, not by the algorithm (glint#131).
 
 CAVEAT ON SPEED: the kernel is ~0.33 ms and nearly flat in frame size and spot count, but a
 host->device copy of a 16 Mpix frame costs ~3-5 ms -- an order of magnitude more than the kernel.
@@ -139,8 +140,18 @@ extern "C" __global__ void integrate_fused(
     if (lane == 0) {
         const int NBOX = (2 * half + 1) * (2 * half + 1);
         const double bgc = bg > 0.0 ? bg : 0.0;
-        double s = bsum + (double)NBOX * bgc; if (s < 1.0) s = 1.0;
-        Iout[i] = bsum - (double)NBOX * bg;
+        // ROUND THE PRODUCT, THEN ADD -- numpy's two roundings, not one. Written `bsum - NBOX*bg`
+        // the compiler contracts this into an FMA (nvrtc defaults to -fmad=true), which rounds
+        // ONCE and lands up to half an ulp away from `sig_sum - nbox * bg`. That was invisible
+        // while the background was a median: a median of integer counts is an integer or a
+        // half-integer, so NBOX*bg is EXACT and the two agree bit for bit. A clipmean (or mean)
+        // background is asum/acnt, generally non-terminating, so the product is inexact and the
+        // contraction shows up -- measured on an A100 as max|dI| 2.8e-14 on uint16/int32/float32
+        // and 2.3e-10 with saturated pixels in the annulus, on otherwise IDENTICAL bg. Physically
+        // nothing; but it broke this file's bit-exactness contract, and a CPU emulation cannot
+        // see it, which is how it got past review.
+        double s = __dadd_rn(bsum, __dmul_rn((double)NBOX, bgc)); if (s < 1.0) s = 1.0;
+        Iout[i] = __dsub_rn(bsum, __dmul_rn((double)NBOX, bg));
         Sout[i] = sqrt(s);
         Pout[i] = bmax;
         Bout[i] = bg;

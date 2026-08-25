@@ -656,6 +656,20 @@ class StreamDriver:
         # arm is not redundant with the batched pass that already rejected these frames: the two
         # disagree on 18 of 120 at the same cell and gate, 9 each way (batched_vs_perframe.py).
         #
+        # THE CASCADE'S YIELD IS SET BY THE LIVE GATE AS MUCH AS BY THE ARMS, and this is the part
+        # that is easy to get wrong. The cascade fires on _fits failures, and the shipped _fits
+        # (min_inlier_frac=0.15) is deliberately far looser than the strict research bar -- so a
+        # badly-registered frame is ACCEPTED live, never fails, and is never retried, even though the
+        # strict rescore will not count it. Measured on the real cxidb-120 set, cold-started, with
+        # the driver unmocked (experiments/test_streamdriver_vs_offline.py, A100):
+        #     gate                       cascade OFF   cascade ON   retried/rescued
+        #     shipped (frac 0.15)          78/120       79/120         4 / 2
+        #     research (10, frac 0.25)     78/120     * 94/120 *      42 / 16   (11 blind + 5 known)
+        # The 94 -- which beats offline's shipped 91 on the same frames -- needs BOTH flags:
+        # retry_cascade=True AND min_inliers=10, min_inlier_frac=0.25. The 16/42 split reproduces the
+        # offline arsenal frame for frame. Turning the cascade on at the default gate is nearly free
+        # and nearly pointless; the pairing is the result.
+        #
         # DEFAULT OFF. It trades latency for yield -- a retried frame costs a blind index (~26 ms)
         # plus a per-frame registration, against ~0.26 ms for its share of the batched pass -- and
         # the cost model at DAQ rates is unmeasured. Off, nothing here is constructed or called and
@@ -1162,11 +1176,11 @@ class StreamDriver:
         cells = self._all_cells()
         qs = [self._q[i] for i in slots]
         self.n_cascade_retried += len(slots)
-        try:
-            nbs = self._fanout(qs, self.retry_nbest)         # ONE blind index per frame, shared by
-        except Exception:                                    # every active cell below
-            nbs = [None] * len(slots)                        # pragma: no cover - a dead blind indexer
-        arm1 = f"blind_nbest_k{self.retry_nbest}"            # must not take the miss path down with it
+        try:                                                 # ONE blind index per frame, shared by
+            nbs = self._fanout(qs, self.retry_nbest)         # every active cell below
+        except Exception:                                    # pragma: no cover - a dead blind indexer
+            nbs = [None] * len(slots)                        # must not take the miss path down with it
+        arm1 = f"blind_nbest_k{self.retry_nbest}"
         still = []
         for i, q, nb in zip(slots, qs, nbs):
             if q is None:                                    # pragma: no cover - flush() filters these

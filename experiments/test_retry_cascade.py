@@ -276,6 +276,32 @@ def test_one_blind_solve_even_when_the_fanout_raises():
         f"the watchdog must not fan out again for frames the cascade already solved: {fan_calls}"
 
 
+def _scattered(rng, k):
+    """N-best of nothing but junk: no two frames agree, so no consensus can form."""
+    return [(_rot(*rng.uniform(0, 3, 3)) @ cell_to_Ar(*rng.uniform(45, 95, 3), 90, 90, 90), 0.5)
+            for _ in range(k)]
+
+
+def test_short_fanout_return_is_padded_not_dropped():
+    """A fan-out that returns FEWER results than frames must not lose the tail. The original zip
+    silently dropped those slots -- neither retried, nor integrated, nor returned to the miss path,
+    just gone. The miss buffer is the direct witness: every frame must still arrive there."""
+    rng = np.random.default_rng(SEED + 10)
+    frames = [frame_on(A, rng) for _ in range(4)]
+    drv = _driver(True, adaptive_relock=True, min_inliers=6, rescue_buffer=64)
+    drv._blind_index = lambda q, k: _scattered(rng, k)          # junk -> nothing rescues, nothing relocks
+    drv._known_index = lambda qs, Mn, B=1: [None] * len(qs)
+    drv._fanout = lambda Q, k: [drv._blind_index(Q[0], k)]      # ONE result for four frames
+    _load(drv, frames)
+    drv.flush()
+    s = drv.stats()
+    assert s["n_cascade_retried"] == len(frames), \
+        f"every frame must go through the cascade, got {s['n_cascade_retried']}"
+    assert s["n_cascade_rescued"] == 0 and drv.n_relock == 0, (s, drv.n_relock)
+    assert len(drv._missbuf) == len(frames), \
+        f"all {len(frames)} frames must reach the miss path, only {len(drv._missbuf)} did"
+
+
 def test_reused_candidates_still_drive_the_watchdog_relock():
     """The saving must not cost the watchdog its consensus. index_blind_nbest's N only truncates the
     final dedup loop, so top-`warmup_nbest` is a verbatim prefix of top-`retry_nbest` -- the watchdog
@@ -361,6 +387,7 @@ TESTS = (test_fixture_is_a_real_gate_failure, test_flag_off_frame_is_missed,
          test_wrong_lattice_candidate_is_refused, test_unrescued_frame_still_reaches_the_miss_buffer,
          test_watchdog_reuses_the_cascade_blind_solve,
          test_one_blind_solve_even_when_the_fanout_raises,
+         test_short_fanout_return_is_padded_not_dropped,
          test_reused_candidates_still_drive_the_watchdog_relock,
          test_reuse_is_identical_to_a_fresh_solve,
          test_larger_warmup_nbest_falls_back_rather_than_truncating,

@@ -1181,8 +1181,13 @@ class StreamDriver:
         try:                                                 # ONE blind index per frame, shared by
             nbs = list(self._fanout(qs, self.retry_nbest))   # every active cell below
         except Exception:                                    # a dead/partial fan-out must not take the
-            nbs = [None] * len(slots)                        # miss path down with it -- solved per frame
-        arm1 = f"blind_nbest_k{self.retry_nbest}"            # below, and cached like any other result
+            nbs = []                                         # miss path down with it -- solved per frame
+        if len(nbs) < len(slots):                            # below, and cached like any other result
+            # A fan-out that returns SHORT is padded rather than zipped away: the old zip silently
+            # dropped those slots, so they were neither retried nor returned to the miss path -- they
+            # just vanished. Padding sends them through the per-frame fallback like any other miss.
+            nbs += [None] * (len(slots) - len(nbs))
+        arm1 = f"blind_nbest_k{self.retry_nbest}"
         still = []
         for j, (i, q) in enumerate(zip(slots, qs)):
             if q is None:                                    # pragma: no cover - flush() filters these

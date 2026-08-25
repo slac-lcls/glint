@@ -18,8 +18,11 @@ import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 
-sys.path.insert(0, "/sdf/home/s/smarches/glint_streamfix_wt")
-sys.path.insert(0, "/sdf/home/s/smarches/glint_streamfix_wt/experiments")
+# Resolve from THIS checkout by default (GLINT_WT overrides), so the script runs wherever the branch
+# is cloned instead of only out of one hard-coded worktree.
+WT = os.environ.get("GLINT_WT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, WT)
+sys.path.insert(0, os.path.join(WT, "experiments"))
 import glint.glint_fast as gf
 from glint.glint_fast import matched
 from glint.multishot import same_lattice
@@ -28,7 +31,8 @@ import glint.stream_driver as sd
 LYSO = gf.LYSO
 GATE_FRAC = 0.25
 GATE_MIN = 10
-FRAMES_PATH = "/sdf/home/s/smarches/glint_streamfix_wt/experiments/frames_cxidb_clean.txt"
+FRAMES_PATH = os.environ.get("GLINT_FRAMES",
+                             os.path.join(WT, "experiments", "frames_cxidb_clean.txt"))
 
 
 def strict_gate(M, q, truth):
@@ -53,15 +57,23 @@ def push_blind_q(driver, qq):
         driver._lock(Mc, sup, standardize=True)
 
 
-def run_stream(frames, adaptive_relock, warmup_rescue, tag):
+def run_stream(frames, adaptive_relock, warmup_rescue, tag, retry_cascade=False, tight_gate=False):
+    """`tight_gate` raises the driver's LIVE accept gate (_fits) to the strict research bar it is
+    rescored against below. It matters for the retry cascade specifically: the cascade fires on
+    _fits failures, and the shipped _fits (frac >= 0.15) is deliberately far looser than the strict
+    gate -- so at the default a badly-registered frame is ACCEPTED live, never fails, and is never
+    retried, even though the strict rescore will not count it. The two rows are the honest pair."""
     N = 400; pix_mm = 0.1; dist_mm = 100.0; wave_A = 1.0
     panels = [dict(name="p0", fs=np.array([1.0, 0, 0]), ss=np.array([0, 1.0, 0]),
                    res=1.0 / (pix_mm / 1000.0), cx=-(N / 2.0 - 0.5), cy=-(N / 2.0 - 0.5),
                    coffset=0.0, min_fs=0, max_fs=N - 1, min_ss=0, max_ss=N - 1)]
     clen = dist_mm / 1000.0
-    kw = dict(B=20, dmin=2.0, tol=0.002, warmup_nbest=3, warmup_rescue=warmup_rescue)
+    kw = dict(B=20, dmin=2.0, tol=0.002, warmup_nbest=3, warmup_rescue=warmup_rescue,
+              retry_cascade=retry_cascade)
     if adaptive_relock:
         kw.update(adaptive_relock=True, min_inliers=GATE_MIN)
+    if tight_gate:
+        kw.update(min_inliers=GATE_MIN, min_inlier_frac=GATE_FRAC)
     drv = sd.StreamDriver(None, panels, clen, wave_A, (N, N), dtype=np.uint16, **kw)
 
     # --- instrumentation: capture every M the driver actually settles on ---
@@ -114,6 +126,9 @@ def run_stream(frames, adaptive_relock, warmup_rescue, tag):
     print(f"  driver's own counters: n_indexed={s.get('indexed')}  "
           f"n_warmup_rescued={s.get('n_warmup_rescued', 'n/a')}  "
           f"n_watchdog_rescued={s.get('n_watchdog_rescued', 'n/a')}  n_relock={s.get('n_relock', 'n/a')}")
+    print(f"  gate_rejected={s.get('gate_rejected')}  "
+          f"cascade retried/rescued={s.get('n_cascade_retried', 'n/a')}/"
+          f"{s.get('n_cascade_rescued', 'n/a')}  by_arm={s.get('n_cascade_by_arm', 'n/a')}")
 
     n_postlock_ok = sum(1 for gi, M in postlock_capture.items() if strict_gate(M, frames[gi], drv.Mc))
     n_warmup_ok = sum(1 for q, M in warmup_capture if strict_gate(M, q, drv.Mc))
@@ -142,6 +157,17 @@ def main():
     run_stream(frames, adaptive_relock=False, warmup_rescue=True, tag="warmup_rescue ONLY")
     run_stream(frames, adaptive_relock=True, warmup_rescue=False, tag="adaptive_relock ONLY (watchdog rescue)")
     run_stream(frames, adaptive_relock=True, warmup_rescue=True, tag="BOTH new mechanisms")
+
+    # glint#75, the retry cascade. Four rows, because the cascade's yield is a function of the LIVE
+    # gate as much as of the arms: at the shipped loose _fits almost nothing fails, so almost nothing
+    # is retried; at the strict gate the frames the offline arsenal measured are the frames that fail.
+    run_stream(frames, adaptive_relock=False, warmup_rescue=True, tag="cascade OFF, loose gate")
+    run_stream(frames, adaptive_relock=False, warmup_rescue=True, tag="cascade ON,  loose gate",
+               retry_cascade=True)
+    run_stream(frames, adaptive_relock=False, warmup_rescue=True, tag="cascade OFF, strict live gate",
+               tight_gate=True)
+    run_stream(frames, adaptive_relock=False, warmup_rescue=True, tag="cascade ON,  strict live gate",
+               retry_cascade=True, tight_gate=True)
 
     print(f"\nDONE elapsed={time.time()-t0:.1f}s")
 

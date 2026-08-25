@@ -91,12 +91,15 @@ def test_new_options_stay_at_the_end_of_the_signature():
     every positional argument after it (review of glint#122 caught exactly that -- adaptive_relock
     onward had shifted a slot). A future tidy-up grouping them by topic would reintroduce it.
 
-    The list GROWS BY APPENDING. If you add an option and this fails, the fix is to add its name to
-    the END here -- and if the name you added is not last in `params`, that is the bug this test is
-    for. `bg_mode` (glint#131) was appended, not filed next to the other integration options where
-    `half`/`gap`/`ring` live, for exactly the reason above."""
+    The expected tail GROWS as options are appended (retry_cascade/retry_nbest from glint#75,
+    bg_mode from glint#131) -- that is the rule being obeyed, not broken. What must never happen is
+    one of these moving inward, or a new option landing anywhere but after them, and pinning the
+    whole tail in order still catches both. If you add an option and this fails, the fix is to add
+    its name to the END here; if the name you added is not last in `params`, that is the bug this
+    test is for. `bg_mode` was appended rather than filed next to the other integration options
+    where `half`/`gap`/`ring` live, for exactly the reason above."""
     params = list(inspect.signature(StreamDriver.__init__).parameters)
-    tail = ["lock_frac", "lock_lead", "lock_pool_switch", "bg_mode"]
+    tail = ["lock_frac", "lock_lead", "lock_pool_switch", "retry_cascade", "retry_nbest", "bg_mode"]
     assert params[-len(tail):] == tail, params[-len(tail):]
 
 

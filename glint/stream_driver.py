@@ -45,6 +45,7 @@ from glint.peakfinder_v4 import PeakFinderV4
 from glint.running_consensus import RunningConsensus
 from glint.multishot import same_lattice
 from glint.multilattice import deflate_peaks
+from glint.retry_cascade import DEFAULT_NBEST, arm_blind_nbest, arm_known_perframe
 try:
     import glint.replica_gpu_batch as rgb                     # the q-only batch indexer (needs torch)
 except Exception:                                            # pragma: no cover - CPU-only unit env (no torch)
@@ -486,7 +487,8 @@ class StreamDriver:
                  # APPENDED, not inserted next to the other lock_* options where they belong
                  # by topic: this constructor is not keyword-only, so adding a parameter anywhere
                  # but the end silently rebinds every positional argument after it.
-                 lock_frac=0.02, lock_lead=1.5, lock_pool_switch=72):
+                 lock_frac=0.02, lock_lead=1.5, lock_pool_switch=72,
+                 retry_cascade=False, retry_nbest=None):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -633,12 +635,46 @@ class StreamDriver:
         # so read 0.15-vs-0.10 as indicative, not as a sharp threshold. Set 0.0 for the pure count gate.
         self.min_inlier_frac = float(min_inlier_frac)
         self.extra = []; self._watch = None; self.n_relock = 0
-        if self.adaptive_relock and not hasattr(self, "_blind_index"):
+        if (self.adaptive_relock or retry_cascade) and not hasattr(self, "_blind_index"):
             try:
                 from glint.glint_fast import index_blind_nbest
                 self._blind_index = index_blind_nbest
             except Exception:                                # pragma: no cover - CPU-only unit env (no torch)
                 self._blind_index = None                     # tests inject a fake _blind_index via the seam
+
+        # Retry CASCADE on gate-failing frames (opt-in, glint#75). Once locked, the driver runs
+        # known-cell ONLY: a frame the batched pass registers badly enough to fail the accept gate is
+        # never retried, it just goes to the miss path. Offline does better only because it runs a
+        # whole ARSENAL per frame. With retry_cascade=True, a frame that fits no ACTIVE cell gets the
+        # measured arm union (glint.retry_cascade) before the miss path claims it: blind N-best k=10,
+        # then the PER-FRAME known-cell indexer.
+        #
+        # Both arms, not one. On the 42 frames the batched pass rejects of the cxidb-120 set the arms
+        # recover 11 and 9 -- and 16 TOGETHER, because they fail on different frames
+        # (experiments/offline_retry_arsenal.py). That takes the streaming arrangement to 94/120
+        # against offline's shipped 91, at 47 blind solves instead of 120. The per-frame known-cell
+        # arm is not redundant with the batched pass that already rejected these frames: the two
+        # disagree on 18 of 120 at the same cell and gate, 9 each way (batched_vs_perframe.py).
+        #
+        # DEFAULT OFF. It trades latency for yield -- a retried frame costs a blind index (~26 ms)
+        # plus a per-frame registration, against ~0.26 ms for its share of the batched pass -- and
+        # the cost model at DAQ rates is unmeasured. Off, nothing here is constructed or called and
+        # the emitted stream is byte-identical.
+        self.retry_cascade = bool(retry_cascade)
+        self.retry_nbest = int(retry_nbest) if retry_nbest else DEFAULT_NBEST
+        self.n_cascade_retried = 0                           # frames the cascade was actually run on
+        self.n_cascade_rescued = 0                           # ...of which it recovered
+        self.n_cascade_by_arm = {}                           # which arm did it, so a dead arm is visible
+        # The PER-FRAME known-cell indexer, deliberately NOT self._known_index (which is the BATCHED
+        # rgb.index_fused -- the very pass that just rejected these frames). Resolved only when the
+        # cascade is on, so the default path takes no new import. Test seam, like _blind_index.
+        self._known_perframe = None
+        if self.retry_cascade:
+            try:
+                from glint.replica_gpu import index_known_gpu_cell
+                self._known_perframe = index_known_gpu_cell
+            except Exception:                                # pragma: no cover - CPU-only unit env (no torch)
+                self._known_perframe = None                  # tests inject a fake via the seam
 
         # Miss-buffer retroactive rescue (opt-in, INDEX-ONLY). Frames that fit NO active cell are the
         # "rose/unindexed" bars during a sample change; today they are dropped once the batch flushes.
@@ -1080,6 +1116,96 @@ class StreamDriver:
     def _all_cells(self):
         return [self.Mc] + [e["Mc"] for e in self.extra]
 
+    def _cell_sink(self, k):
+        """(grid, acc) for active cell k -- 0 is the primary, 1..n the adaptive-relock extras."""
+        return ((self.grid, self.acc) if k == 0
+                else (self.extra[k - 1]["grid"], self.extra[k - 1]["acc"]))
+
+    def _cascade_accept(self, q, M, Mk):
+        """Is candidate `M` an acceptable registration of frame `q` under ACTIVE cell `Mk`?
+
+        Three bars, and all three are needed:
+          * a non-degenerate matrix, as everywhere else in the batch path;
+          * `same_lattice(M, Mk)` -- the blind arm returns whatever cell fits BEST, which need not be
+            the cell whose accumulator we are about to add to. Without this a blind candidate for
+            some other lattice would be integrated into cell k's merge as if it were cell k, which is
+            corruption rather than a miss. (This is the same rule _watchdog's individual rescue
+            applies to its blind candidates, and it mirrors the strict research gate's own
+            same_lattice term.)
+          * `_fits` -- THE live accept gate, identical to the one the frame just failed. A retry that
+            accepted on a looser bar than the batch pass would not be recovering frames, it would be
+            lowering the gate.
+        """
+        if M is None:
+            return False
+        M = np.asarray(M, float)
+        if abs(np.linalg.det(M)) < 1.0:
+            return False
+        return same_lattice(M, Mk) and self._fits(q, M)
+
+    def _cascade_retry(self, slots):
+        """glint#75: run the measured retry arms on frames that fit NO active cell, integrating any
+        that a retry recovers. Returns the slots still unrecovered, which continue down the existing
+        miss path (miss buffer / watchdog / gate_rejected) untouched.
+
+        Called once per frame per flush, AFTER every active cell has had its ordinary batched pass --
+        so a rescued frame is integrated exactly once and never also counted as a miss, and a frame
+        the cascade cannot save behaves exactly as it does today.
+
+        The blind index is fanned out over the whole retry set through `self._fanout` (default: the
+        serial loop, which is what the offline measurement runs), because that call is by far the
+        expensive part and the watchdog already batches it the same way. Its N-best candidates are
+        then handed to the arm rather than recomputed.
+        """
+        if not slots:
+            return slots
+        cells = self._all_cells()
+        qs = [self._q[i] for i in slots]
+        self.n_cascade_retried += len(slots)
+        try:
+            nbs = self._fanout(qs, self.retry_nbest)         # ONE blind index per frame, shared by
+        except Exception:                                    # every active cell below
+            nbs = [None] * len(slots)                        # pragma: no cover - a dead blind indexer
+        arm1 = f"blind_nbest_k{self.retry_nbest}"            # must not take the miss path down with it
+        still = []
+        for i, q, nb in zip(slots, qs, nbs):
+            if q is None:                                    # pragma: no cover - flush() filters these
+                still.append(i)
+                continue
+            hit = {}
+
+            def blind_gate(c, q=q, hit=hit):
+                """Accept candidate `c` for WHICHEVER active cell it is a registration of, and
+                remember which -- so the frame lands in that cell's accumulator, not cell 0's."""
+                for k, Mk in enumerate(cells):
+                    if self._cascade_accept(q, c, Mk):
+                        hit["k"] = k
+                        return True
+                return False
+
+            # arm 1: blind N-best at k=retry_nbest. Candidates come from the fan-out above when it
+            # succeeded; passing None lets the arm index the frame itself (the offline arm's own
+            # behaviour), so a custom fan-out that declines a frame still gets a retry.
+            M = arm_blind_nbest(q, blind_gate, self._blind_index, self.retry_nbest, candidates=nb)
+            arm = arm1
+            if M is None and self._known_perframe is not None:
+                arm = "known_perframe"                       # arm 2: PER-FRAME known-cell registration
+                for k, Mk in enumerate(cells):
+                    M = arm_known_perframe(q, Mk, lambda c, Mk=Mk: self._cascade_accept(q, c, Mk),
+                                           self._known_perframe)
+                    if M is not None:
+                        hit["k"] = k
+                        break
+            if M is None:
+                still.append(i)
+                continue
+            k = hit.get("k", 0)
+            grid, acc = self._cell_sink(k)
+            self._integrate_one(i, M, grid, acc, cell_id=k)
+            self.n_cascade_rescued += 1
+            self.n_cascade_by_arm[arm] = self.n_cascade_by_arm.get(arm, 0) + 1
+        return still
+
     def _watchdog(self, missed):
         """Blind-index the frames that fit no active cell. Each frame's OWN N-best candidates are
         checked directly against every ALREADY-active cell first and integrated immediately if one
@@ -1204,7 +1330,14 @@ class StreamDriver:
             return
         slots = [i for i in range(self._n) if self._q[i] is not None]
         if slots and not self.adaptive_relock:
-            self._index_integrate(slots, self.Mc, self.grid, self.acc, gate=False)   # single cell: no fallback
+            # gate=self.retry_cascade, not gate=False: with the cascade OFF this is the historical
+            # single-cell call verbatim (rejects counted and dropped inside _index_integrate). With
+            # it ON the rejects are handed back so the cascade can retry them, and whatever it cannot
+            # save is counted in n_gate_rejected here -- the same frames, the same counter.
+            missed = self._index_integrate(slots, self.Mc, self.grid, self.acc,
+                                           gate=self.retry_cascade)
+            if missed:
+                self.n_gate_rejected += len(self._cascade_retry(missed))
         elif slots:
             remaining = self._index_integrate(slots, self.Mc, self.grid, self.acc, gate=True)
             for k, e in enumerate(self.extra, 1):               # try each additional active cell in turn
@@ -1212,6 +1345,8 @@ class StreamDriver:
                     break
                 remaining = self._index_integrate(remaining, e["Mc"], e["grid"], e["acc"], gate=True,
                                                   cell_id=k)
+            if remaining and self.retry_cascade:                # retry BEFORE the miss buffer claims them
+                remaining = self._cascade_retry(remaining)
             if remaining:                                       # fit no active cell -> blind watchdog
                 if self._missbuf is not None:                   # buffer q-only for retroactive rescue on lock
                     self._missbuf.extend((self.n_pushed, self._q[i].copy()) for i in remaining)
@@ -1237,6 +1372,12 @@ class StreamDriver:
                  gate_rejected=self.n_gate_rejected)
         if self.warmup_rescue:
             s["n_warmup_rescued"] = self.n_warmup_rescued         # warm-up frames recovered the instant the cell locked
+        if self.retry_cascade:                                   # glint#75, opt-in
+            s["n_cascade_retried"] = self.n_cascade_retried      # gate failures the cascade was run on
+            s["n_cascade_rescued"] = self.n_cascade_rescued      # ...INTEGRATED after a retry (not misses)
+            # per arm, because the whole finding is that the arms are complementary: an arm that
+            # stops contributing on live data is the signal that the cascade has become one arm.
+            s["n_cascade_by_arm"] = dict(self.n_cascade_by_arm)
         if self.qc_frac_threshold is not None:
             s["n_low_confidence"] = self.n_low_confidence          # integrated but below qc_frac_threshold -- sent, flagged
             s["low_conf_frac"] = self.n_low_confidence / max(self.n_integrated, 1)

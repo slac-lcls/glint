@@ -486,7 +486,7 @@ class StreamDriver:
                  # APPENDED, not inserted next to the other lock_* options where they belong
                  # by topic: this constructor is not keyword-only, so adding a parameter anywhere
                  # but the end silently rebinds every positional argument after it.
-                 lock_frac=0.02, lock_lead=1.5, lock_pool_switch=72):
+                 lock_frac=0.02, lock_lead=1.5, lock_pool_switch=72, bg_mode="clipmean"):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -494,6 +494,13 @@ class StreamDriver:
         self.shape, self.dtype = tuple(shape), np.dtype(dtype)
         self.B, self.dmin, self.tol = int(B), float(dmin), float(tol)
         self.half, self.gap, self.ring_w, self.min_peaks = half, gap, ring, int(min_peaks)
+        # Annulus background estimator, handed to whichever integrator runs below. Without it the
+        # streaming path could not reproduce pre-glint#131 intensities that the offline path can,
+        # which is the asymmetry #130 was about in the other direction.
+        from glint.predict import BG_MODES as _BG_MODES
+        if bg_mode not in _BG_MODES:
+            raise ValueError(f"bg_mode must be one of {_BG_MODES}, got {bg_mode!r}")
+        self.bg_mode = bg_mode
         self.warmup_nbest = int(warmup_nbest)
         self.warm_topk, self.warm_floor = int(warm_topk), int(warm_floor)                              # warmup_batch triage
         self.double_hit = bool(double_hit); self.n_double = 0                                          # deflate-and-reindex 2nd lattice
@@ -978,9 +985,11 @@ class StreamDriver:
             self._grefiner.add_frame(recip_from_M(Mcan), self._pk[i], pred)
         if self.gpu:
             from glint.fused_integrate import integrate_fused
-            I, sig, pkI, bg = integrate_fused(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
+            I, sig, pkI, bg = integrate_fused(self._ring[i], pred, half=self.half, gap=self.gap,
+                                              ring=self.ring_w, bg_mode=self.bg_mode)
         else:
-            I, sig, pkI, bg = integrate_spots(self._ring[i], pred, half=self.half, gap=self.gap, ring=self.ring_w)
+            I, sig, pkI, bg = integrate_spots(self._ring[i], pred, half=self.half, gap=self.gap,
+                                              ring=self.ring_w, bg_mode=self.bg_mode)
         hkl = np.stack([pred["h"], pred["k"], pred["l"]], 1)
         keep = I != 0.0                                     # off-frame boxes integrate to exactly 0
         if keep.any():

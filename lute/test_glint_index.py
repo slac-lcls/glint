@@ -251,7 +251,22 @@ def test_launcher_forwards_integrate_as_a_bare_switch(tmp_path):
     assert "--zdist" in argv and "0.1027" in argv, f"the switch swallowed the next flag: {argv}"
 
 
-@pytest.mark.parametrize("flag,value", [("--int-dmin", "2.0"), ("--int-tol", "0.006")])
+@pytest.mark.parametrize("flag,value", [("--int-dmin", "2.0"), ("--int-tol", "0.006"),
+                                        ("--bg-mode", "median")])
 def test_launcher_forwards_integration_tuning(tmp_path, flag, value):
     argv, err = _run_launcher(tmp_path, ["--exp", "e", "--run", "1", flag, value])
     assert flag in argv and value in argv, err
+
+
+def test_bg_mode_field_renders_as_the_cli_flag():
+    """`bg_mode="median"` is the only way to reproduce intensities from a pre-glint#131 run, so it
+    has to survive the whole chain: task model -> flag name -> launcher whitelist. It was reachable
+    only from Python when it landed, which is an escape hatch that rescues nobody."""
+    f = P.__fields__["bg_mode"]
+    assert f.field_info.extra["rename_param"] == "bg-mode"
+    assert f.field_info.extra["flag_type"] == "--"
+    assert P(**XTC).bg_mode is None, "must default to GLINT's own default, not pin one here"
+    for m in ("clipmean", "median", "mean"):
+        assert P(**dict(XTC, bg_mode=m)).bg_mode == m
+    with pytest.raises(Exception):                          # a typo must not silently mean default
+        P(**dict(XTC, bg_mode="mediann"))

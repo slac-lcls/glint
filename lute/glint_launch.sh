@@ -48,7 +48,7 @@ fi
 # Everything glint_xtc.py accepts. Each takes a value; LUTE emits no bare switches on this route.
 XTC_SWITCHES="--integrate"    # value-less flags
 XTC_FLAGS=" --exp --run --det --zdist --wavelength --psana --geom --calib-dir --cell --nbest \
---min-peaks --max-events --peakfinder --min-pix --son-min --thr-high --thr-low --pf8-min-snr --int-dmin --int-tol --reader-env --energy-det -o --out "
+--min-peaks --max-events --peakfinder --min-pix --son-min --thr-high --thr-low --pf8-min-snr --int-dmin --int-tol --bg-mode --reader-env --energy-det -o --out "
 args=(); dropped=()
 i=1
 while [ $i -le $# ]; do

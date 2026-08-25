@@ -91,6 +91,12 @@ def main():
     ap.add_argument("--int-dmin", type=float, default=2.0, help="--integrate resolution limit in A (default 2.0)")
     ap.add_argument("--int-tol", type=float, default=0.006,
                     help="--integrate Ewald excitation-error gate in 1/A (stills partiality window; default 0.006)")
+    # The escape hatch for glint#131. Without it "median" is reachable only from Python, which makes
+    # every intensity GLINT produced before that change irreproducible through the shipped routes.
+    ap.add_argument("--bg-mode", choices=("clipmean", "median", "mean"), default="clipmean",
+                    help="--integrate annulus background estimator: clipmean (default, MAD-clipped "
+                         "mean), median (what shipped before glint#131 -- use it to reproduce "
+                         "pre-#131 intensities), mean (unbiased but not robust; diagnostic)")
     ap.add_argument("--tofile", metavar="SOL",
                     help="WRITE a CrystFEL --indexing=file solution file (the refined-merge handoff): "
                          "run 'indexamajig --indexing=file --fromfile-input-file=SOL --tolerance=10,10,10,3' "
@@ -140,7 +146,7 @@ def main():
             from glint.predict import integrate_cxi
             from glint.lute_bridge import parse_geom as _pg
             nint, tot = integrate_cxi(results, args.geom, wavelength_A=args.wavelength,
-                                      dmin=args.int_dmin, tol=args.int_tol)
+                                      dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode)
             _, _g = _pg(args.geom)
             def _f(v, d):
                 try:
@@ -154,7 +160,7 @@ def main():
             from glint.geom import parse_geom
             geomd = parse_geom(args.geom); gg = geomd.get("global", {})
             nint, tot = integrate_frames(results, geomd, image_dir=args.image_dir,
-                                         dmin=args.int_dmin, tol=args.int_tol)
+                                         dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode)
             write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
                                     photon_eV=float(gg.get("photon_energy", 9392.7)), clen_m=float(gg.get("clen", 0.15)))
     else:

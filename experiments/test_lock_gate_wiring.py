@@ -89,9 +89,15 @@ def test_new_options_stay_at_the_end_of_the_signature():
     """They sit at the very end rather than beside the other lock_* options, and that is deliberate:
     this constructor is NOT keyword-only, so inserting a parameter mid-signature silently rebinds
     every positional argument after it (review of glint#122 caught exactly that -- adaptive_relock
-    onward had shifted a slot). A future tidy-up grouping them by topic would reintroduce it."""
+    onward had shifted a slot). A future tidy-up grouping them by topic would reintroduce it.
+
+    The list GROWS BY APPENDING. If you add an option and this fails, the fix is to add its name to
+    the END here -- and if the name you added is not last in `params`, that is the bug this test is
+    for. `bg_mode` (glint#131) was appended, not filed next to the other integration options where
+    `half`/`gap`/`ring` live, for exactly the reason above."""
     params = list(inspect.signature(StreamDriver.__init__).parameters)
-    assert params[-3:] == ["lock_frac", "lock_lead", "lock_pool_switch"], params[-3:]
+    tail = ["lock_frac", "lock_lead", "lock_pool_switch", "bg_mode"]
+    assert params[-len(tail):] == tail, params[-len(tail):]
 
 
 if __name__ == "__main__":

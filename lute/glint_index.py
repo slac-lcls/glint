@@ -266,6 +266,15 @@ class IndexGLINTParameters(ThirdPartyParameters):
                     "CC1/2 fell to 0.04, while 0.002 gave 641 reflections at <I/sigma> 30 and CC1/2 0.28.",
         flag_type="--", rename_param="int-tol",
     )
+    bg_mode: Optional[Literal["clipmean", "median", "mean"]] = Field(
+        None,
+        description="Annulus background estimator for `integrate`. Unset = GLINT default "
+                    "(`clipmean`, a MAD-clipped mean). `median` is what GLINT shipped before "
+                    "glint#131 and is biased upward by ~3.85 counts/reflection on a discrete "
+                    "background -- set it only to REPRODUCE intensities from a pre-#131 run. "
+                    "`mean` is unbiased but one hot pixel in the annulus destroys it; diagnostic.",
+        flag_type="--", rename_param="bg-mode",
+    )
 
     # Validators run in field-definition order and see only EARLIER fields in `values`, so each of
     # these is declared after everything it inspects. They exist because the corresponding failures

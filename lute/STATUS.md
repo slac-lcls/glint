@@ -11,9 +11,12 @@ wall and a byte-identical stream; it runs under an ana release that can see Jung
 own geometry provenance at startup instead of failing silently; and CI now runs the CPU-only test
 layer on every push (glint#107). Item 6's answer, measured on raw Jungfrau **16M** images
 (`mfx101555026` r0013) against the beamline's own event-mapped hit list: **the calibrated object is
-the pair (`threshold`, `min_snr`), not `min_snr` alone** — with the beamline's 110 ADU floor
-(`thr_adu`, glint#108) the shipped 15 sits near the knee on this detector, while the floor-less
-Epix10ka2M ladder below is not comparable to practitioner settings.
+the pair (`threshold`, `min_snr`), not `min_snr` alone** — the floor-less Epix10ka2M ladder below is
+not comparable to any practitioner setting. The 16M ladder itself ran with the detector's interior
+ASIC seams live, and the 2026-08-25 re-measurement (glint#139) found the seams carrying its low
+rungs (**94.6% of returned peaks on a seam at `min_snr` 3–6**; 18.7% at the shipped 15): masked,
+precision saturates at `min_snr` 10 and the corrected pair is (110, 8). `PF8_MIN_SNR` stays
+at 15 until `asic_seam_mask` is wired, because the two knobs only move together — see item 6.
 
 ---
 
@@ -108,11 +111,15 @@ so symmetry has to be supplied downstream. And the reflection rows carry the pla
 
 ## The seven things that stand between this and production
 
-**Progress: 6 of 7 struck through** — item 1 only partly (its tests exist, CI does not), and item 6
-is the one still open. A struck-through item carries the commit that closed it and how it was
-verified. Item 6 was re-measured on 2026-08-06 against a real indexing reference on a run the
-beamline kept; it stays open because the true `min_snr` ladder needs raw images from a good Jungfrau
-run, and the one it was originally measured on had been discarded by its own experiment.
+**Progress: all 7 struck through.** A struck-through item carries the commit that closed it and how
+it was verified. Item 1's CI half landed after its tests did (glint#107). Item 6 took three passes:
+2026-08-06 against an indexing reference on a run the beamline kept, 2026-08-13 on raw Jungfrau 16M
+images with the ADU floor (the pass that closed it), and a 2026-08-25 re-measurement (glint#139) that
+leaves the item closed but **replaces the operating point it recommended** — read its section to the
+end before taking a number out of it.
+
+(This paragraph previously said "6 of 7 ... item 6 is the one still open", contradicting both the
+header and the "What is left" footer, which have said all seven since 2026-08-13.)
 
 **1. ~~The LUTE task model has no test.~~ TESTS DONE (`bdbe67b`), CI STILL OPEN.**
 `lute/test_glint_index.py` covers all eight validators and the launcher's per-destination flag
@@ -308,7 +315,8 @@ repeated that claim ("4.0.59 can, with the same torch+cupy") until this round.
 Still carrying the same latent `torch.backends.mps` line, but NOT on the LUTE path and so left
 alone: `experiments/paper_xg_gpu.py`, `experiments/bench_h2h.py`, `experiments/powder_ml/train.py`.
 
-**6. `PF8_MIN_SNR = 15` is detector-specific, and that is measured.** Same ladder on Jungfrau4M
+**~~6. `PF8_MIN_SNR = 15` is detector-specific, and that is measured.~~ MEASURED — AND THE NUMBER
+THEN MOVED (glint#139); read to the end of this item.** Same ladder on Jungfrau4M
 (`cxilu8823` r0226, 8x512x1024, 75 um), job 34224833, `thr_snr=5`/`min_pix=3`:
 
 | min_snr | Epix10ka2M | Jungfrau4M |
@@ -434,6 +442,8 @@ Two findings, and the first reframes the item:
    on non-hits). The knee is between 10 and 15 — the opposite of the floor-less Epix10ka2M picture,
    and the low rungs still carried a median of 478 peaks/frame WITH the floor, which is why a bare
    snr number was never the knob anyone else was quoting.
+   **SUPERSEDED — this ladder ran with the detector's interior ASIC seams live; see the 2026-08-25
+   re-measurement below. The knee described here is the seams', not the sample's.**
 
 Method caveats, stated: the reference is Cheetah's hit definition (t100-s6), so precision/recall are
 consistency against the beamline's validated processing, not absolute truth; 250/3000 events had no
@@ -449,6 +459,57 @@ the default conda2 release has NO cupy; `conda activate xpp_drp_gpu_311` then **
 (psconda.sh pins the release psana ahead of the env, which fails as a circular import). Stage 2
 (indexing) needs torch — conda1 `ana-4.0.59-py3-minipytorch`, which cannot read xtc2. The two stages
 hand off q-vectors as an npz, which also makes re-scoring free.
+
+**RE-MEASURED 2026-08-25 (glint#139) — the ladder above was calibrating the detector, not the
+sample.** The finder on that route is the stacked pf8 of `xtc_core.py`, whose "panel seams masked"
+is a synthetic one-row separator between the 32 modules; the **interior** ASIC seams (row 256, cols
+256/512/768 within each 512x1024 module) were live, and psana's `_mask_edges()` masks perimeters
+only. The screen was re-run on the same 3000 events of `mfx101555026` r0013, from the same frozen
+checkout, in three arms differing ONLY by the mask handed to `prep_geometry(..., good=)`: none,
+`asic_seam_mask(width=1)`, `asic_seam_mask(width=2)` (glint#127). Jobs 35797915/16/17, indexing
+35800179; outputs `~/glint_16m/seams_{nomask,seam1,seam2}.json`. The no-mask arm reproduces
+`ladder_r0013.json` exactly at all eight rungs, so this is an A/B and not a re-derivation.
+
+**a. The peaks were the seams.** Fraction of returned peaks sitting on a seam pixel, against the
+0.97% expected if they were spread over the live area: **94.6% at min_snr 3-6 (97x)**, 78.5% at 10,
+**18.7% at the shipped 15 (19x)**, 6.2% at 20. Masking removes 92.6% of all returned peaks at the
+low rungs (1,460,404 -> 108,506). The contamination is a ONE-PIXEL line: the +-1 and +-2 bands add
+~0.1 points over d=0, so `width=1` suffices — its surviving d=1 ring is 0.3-0.8% against a 0.98%
+by-area expectation, i.e. at or below chance. `width=2` costs a further 1% of the module and moves
+no metric by more than 0.5 points.
+
+**b. The knee moves from "between 10 and 15" to between 6 and 8.** Masked (width=2), scored the same
+way: snr 6 = 81.2% recall / 55.6% precision / 843 pickup; **snr 8 = 66.8% / 98.1% / 17 pickup**;
+snr 10 = 58.2% / **100.0%** / 0; snr 15 = 50.1% / 100.0% / 0; snr 20 = 43.1% / 100.0% / 0. Precision
+SATURATES at 10, so the shipped 15 costs 8.1 points of recall for nothing and 20 costs 15.1. The
+corrected pair is **(`thr_adu` 110, `min_snr` 8)** for recall, or (110, 10) for zero pickup.
+
+**c. The two knobs are coupled, so DO NOT move the default alone.** (110, 8) is valid only WITH the
+mask. Unmasked at snr 8 the finder offers 2720 of 3000 frames at 47.8% precision — a pass-through,
+worse than the 15 it would replace. `asic_seam_mask` is still deliberately unwired into every ingest
+path (glint#127). And `PF8_MIN_SNR` (`xtc_core.py:59`) is ONE constant shared by both `pf8`
+(stacked) and `pf8-panel`, whose finders build separate masks — so the wiring must land where both
+inherit it, the shared `good` mask handed to `prep_geometry` (which is exactly how this
+re-measurement applied it), not inside `_StackedFinder` alone; wiring only the stacked path and then
+lowering the shared default would leave `pf8-panel` in the unmasked-at-8 configuration this section
+warns against (the alternative is splitting the default per path). `PF8_MIN_SNR` stays at 15 until
+then; the wiring and the default change belong together, in one change, re-verified against this
+table.
+
+**d. Cheetah does not absorb the artifact, so nothing cancelled.** Cheetah reports a median of 64
+peaks/frame on hits and a maximum of 30 on non-hits (its hit test is essentially ">30 peaks"), and
+its geometry declares every ASIC a panel, which masks the seams for free. The unmasked finder
+reported a median of 478 peaks/frame over ALL 3000 events. That is why unmasked recall read 100% at
+snr 3-10: it called 91% of events hits against Cheetah's 43% — a pass-through, not sensitivity. The
+masked arm's 45-55 peaks/frame is the number that lives in Cheetah's regime.
+
+**e. The consensus refusal is NOT the seams.** Blind consensus still REFUSES at every rung with the
+mask on. Masking roughly doubles the support fraction (0.3-2.7% -> 1.1-3.4%, and 0.30% -> 2.89% at
+snr 8) without clearing the gate, which leaves the large-cell explanation above intact: the limit is
+ClCRY4's ~667,000 A^3 cell, not the detector. One baseline number should be retired, though —
+unmasked known-cell indexing "succeeded" on 99.9% of frames at snr 3-6 while 94.6% of the peaks
+being indexed were seam pixels. A 500-peak list laid out along four straight lines fits almost
+anything; that row was never evidence of indexing quality.
 
 **~~7. Geometry provenance is load-bearing and silent when wrong.~~ NO LONGER SILENT.** On
 `mfxx49820` psana's deployed geometry is the unrefined 2021 starting calibration; blind indexing
@@ -503,7 +564,9 @@ along invisibly — which is exactly the `cxilu8823` r0226 situation.
 ## What is left
 
 All seven items are closed. Item 6 closed 2026-08-13 as a measurement on Jungfrau 16M (see its
-section: the calibrated object is the (`threshold`, `min_snr`) pair; `thr_adu` landed in glint#108).
+section: the calibrated object is the (`threshold`, `min_snr`) pair; `thr_adu` landed in glint#108),
+and was re-measured 2026-08-25 (glint#139) with the interior ASIC seams masked, which replaces the
+operating point that measurement recommended without reopening the item.
 CI closed via glint#107: six CPU-only test files run on every push and pull request
 (`lute/test_glint_index.py` — 44 tests — plus five `xtc_bridge` script tests), with the GPU
 (`test_core.py`) and MPI (`test_mpi_smoke.py`) tests excluded as unhostable and said so in the
@@ -518,3 +581,11 @@ workflow. What remains is beyond the seven, not blocking them:
    requires `unset PYTHONPATH` (the release psana is pinned ahead of the env). The item-6 ladder ran
    as two stages with an npz handoff for exactly this reason; anything productized for current MFX
    data inherits the same split until an env carries all three.
+3. **`asic_seam_mask` is not wired into any ingest path** (glint#127, glint#139). On Jungfrau 16M
+   the offline stacked pf8 therefore returns seam-dominated peak lists at low rungs (94.6% of
+   peaks on an interior ASIC seam at `min_snr` 3–6; 18.7% at the shipped default of 15).
+   Wiring it is what unblocks the corrected `(110, 8)` operating point in item 6 — at the shared
+   `good` mask in `prep_geometry`, so both `pf8` and `pf8-panel` inherit it (`PF8_MIN_SNR` is one
+   constant for both paths) — and it must land WITH that default change, never before or after it,
+   because neither knob is safe on its own.
+   `width=1` is the measured-sufficient setting.

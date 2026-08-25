@@ -85,6 +85,21 @@ Copies `glint_index.py` -> `lute/io/models/`, exports it, and registers
 > (exit 3) if it finds the trap -- pass `--skip-activation-check` if you already have a workaround
 > (e.g. the shim noted in glint#128) or want to install anyway. This cannot be fixed from the GLINT
 > side; `lute/upstream_activate_installation.patch` is a draft fix to propose upstream.
+>
+> **The check is install-time and best-effort, not a runtime guarantee.** It samples `python3` from
+> the shell running `install_into_lute.sh`, not the shell that later actually launches a job. The
+> `Run` recipe above sources `psconda.sh` *after* that point, which can select a different
+> interpreter -- and therefore a different, possibly empty, tree -- than whatever was ambient at
+> install time. GLINT's own scripts are never in that launch chain before the failure (see #128's
+> analysis), so we cannot check the true launch-time interpreter from here; the guard instead prints
+> a population map of every `lib/pythonX.Y` tree the install carries, so an empty tree a *different*
+> runtime `python3` could land on stays visible even when the install-time one happens to be fine.
+> **The interpreter active at LAUNCH time (i.e. right after `source install/bin/activate_installation`
+> in the recipe above) is what actually governs** -- verify that one directly with the `python3 -c ...`
+> / `ls ... launch_scripts` check a few lines up, immediately before `submit_launch_slurm.sh`.
+> The check also only fires when `activate_installation` still contains the ambient-derivation
+> pattern quoted above (`sys.version_info.major` interpolated into a `site-packages` path); a
+> patched upstream that no longer derives the tree from the ambient interpreter will not trip it.
 
 ## Best merge: hand CrystFEL the refined solution
 Set `tofile:` (+ `lattice: tPc` for tetragonal) in the `IndexGLINT` config; GLINT emits a

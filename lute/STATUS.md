@@ -487,8 +487,14 @@ corrected pair is **(`thr_adu` 110, `min_snr` 8)** for recall, or (110, 10) for 
 **c. The two knobs are coupled, so DO NOT move the default alone.** (110, 8) is valid only WITH the
 mask. Unmasked at snr 8 the finder offers 2720 of 3000 frames at 47.8% precision — a pass-through,
 worse than the 15 it would replace. `asic_seam_mask` is still deliberately unwired into every ingest
-path (glint#127), so `PF8_MIN_SNR` stays at 15 until it is wired into `_StackedFinder`'s mask; that
-wiring and the default change belong together, in one change, re-verified against this table.
+path (glint#127). And `PF8_MIN_SNR` (`xtc_core.py:59`) is ONE constant shared by both `pf8`
+(stacked) and `pf8-panel`, whose finders build separate masks — so the wiring must land where both
+inherit it, the shared `good` mask handed to `prep_geometry` (which is exactly how this
+re-measurement applied it), not inside `_StackedFinder` alone; wiring only the stacked path and then
+lowering the shared default would leave `pf8-panel` in the unmasked-at-8 configuration this section
+warns against (the alternative is splitting the default per path). `PF8_MIN_SNR` stays at 15 until
+then; the wiring and the default change belong together, in one change, re-verified against this
+table.
 
 **d. Cheetah does not absorb the artifact, so nothing cancelled.** Cheetah reports a median of 64
 peaks/frame on hits and a maximum of 30 on non-hits (its hit test is essentially ">30 peaks"), and
@@ -578,6 +584,8 @@ workflow. What remains is beyond the seven, not blocking them:
 3. **`asic_seam_mask` is not wired into any ingest path** (glint#127, glint#139). On Jungfrau 16M
    the offline stacked pf8 therefore returns seam-dominated peak lists at low rungs (94.6% of
    peaks on an interior ASIC seam at `min_snr` 3–6; 18.7% at the shipped default of 15).
-   Wiring it is what unblocks the corrected `(110, 8)` operating point in item 6 — and it must land
-   WITH that default change, never before or after it, because neither knob is safe on its own.
+   Wiring it is what unblocks the corrected `(110, 8)` operating point in item 6 — at the shared
+   `good` mask in `prep_geometry`, so both `pf8` and `pf8-panel` inherit it (`PF8_MIN_SNR` is one
+   constant for both paths) — and it must land WITH that default change, never before or after it,
+   because neither knob is safe on its own.
    `width=1` is the measured-sufficient setting.

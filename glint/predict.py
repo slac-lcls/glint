@@ -532,6 +532,10 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None):
                                      not it, so PANELS.
       3. one-panel geometry          -> EVENTS. A one-panel geometry cannot describe a panel stack.
       4. leading axis != n_panels    -> EVENTS. It cannot be a panel stack either.
+
+    A PANEL reading is only honoured for a ONE-PANEL geometry, where slab 0 is the whole detector.
+    Un-assembled multi-panel input is refused, because integration runs on one assembled frame and
+    a single slab is not one -- see the comment at the raise, and glint#148.
       5. otherwise                   ``n_panels > 1`` and the axis matches it and the file said
                                      nothing -> genuinely ambiguous, so RAISE, naming both readings
                                      and the override. Never silently pick.
@@ -567,7 +571,26 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None):
                     f"route), which reads per-event clen/energy as well (glint#136)")
             a = np.asarray(d[ev], np.float32)        # ONE frame, not the whole stack
         elif stacked:
-            a = np.asarray(d[0], np.float32)         # panel stack: slab 0, the pre-#136 behaviour
+            # PANEL STACK. Handing back slab 0 is what this function did before glint#136, and it
+            # was WRONG for any multi-panel geometry -- not a behaviour worth preserving. Measured
+            # on a 2-panel tiled geometry: predict_spots emits ASSEMBLED coordinates (project_q
+            # adds each panel's min_fs/min_ss), so a real 4500-count spot on panel 1 comes back
+            # I=0.0 sigma=0.0 peak=0.0 from a slab-0 frame -- silently zero, not missing. On a
+            # CrystFEL 3-D layout (dim0 selects the slab, every panel min_fs/min_ss = 0..N) it is
+            # worse: all panels occupy the SAME assembled window, so panel-1 reflections read
+            # panel-0 pixels. Assembling correctly needs a multi-panel data model in project_q and
+            # integrate_spots, not a reshape here -- glint#148. So: refuse.
+            if n_panels > 1:
+                raise NotImplementedError(
+                    f"{path}:{data_path} is being read as a stack of {d.shape[0]} PANELS, but the "
+                    f"geometry has {n_panels} panels and integration runs on ONE assembled frame: "
+                    f"predict_spots emits assembled fs/ss across all panels, so every reflection "
+                    f"outside panel 0 would integrate to exactly 0 (measured) or read another "
+                    f"panel's pixels. Un-assembled multi-panel input is not supported (glint#148). "
+                    f"Use the --images route (integrate_cxi) for stacked .cxi, or supply assembled "
+                    f"frames; if this file is really one frame per EVENT, pass event_axis=True / "
+                    f"--event-axis event.")
+            a = np.asarray(d[0], np.float32)         # single-panel geometry: slab 0 IS the frame
         else:
             a = np.asarray(d[()], np.float32)
     if a.ndim == 3:                                  # (1, ss, fs) -> single assembled 2D frame

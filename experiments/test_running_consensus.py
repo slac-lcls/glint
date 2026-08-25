@@ -194,11 +194,103 @@ def test_pool_switch_running_lock_unchanged_small_refuses_large():
     assert locks["pool-keyed"] is None, locks                   # the pool-keyed gate refuses it
 
 
+# ---------------------------------------------------------------------------------------------
+# Non-transitivity of tolerance matching, and the merge-on-multi-match repair (glint: streaming
+# path). Purely synthetic: the failure needs only three cells, so it reproduces with no data file.
+# ---------------------------------------------------------------------------------------------
+
+def _diag(a, b, c):
+    return np.diag([1.0 / a, 1.0 / b, 1.0 / c])
+
+
+def test_merge_repairs_split_vote():
+    """A true lattice whose votes FRAGMENT must still win over a tighter-clustered spurious one.
+
+    A and B are both inside rtol of the truth but NOT of each other, so first-match-wins keeps them
+    apart and a spurious group with fewer total votes than A+B outranks each half. This is the shape
+    of the real failure: on a refined-geometry run the true cell's 161+150 votes lost to a spurious
+    217. The merge witness is a cell lying between A and B, which is exactly what a real refine
+    produces and what proves the two groups are one lattice.
+    """
+    TRUE = _diag(79.0, 79.0, 38.0)
+    A = _diag(79.0 * 0.972, 79.0 * 0.972, 38.0 * 0.972)      # -2.8% : within 5% of TRUE
+    B = _diag(79.0 * 1.028, 79.0 * 1.028, 38.0 * 1.028)      # +2.8% : within 5% of TRUE...
+    # ...but A and B are 5.8% apart, so they do NOT match each other -- tolerance is not transitive.
+    rc = RunningConsensus(min_support=3, gap=2, merge=False)
+    la, ca = reduced_params(A); lb, cb = reduced_params(B)
+    lt, ct = reduced_params(TRUE)
+    assert rc._match(la, ca, abs(np.linalg.det(A)), [TRUE, lt, ct, abs(np.linalg.det(TRUE)), 1]), "A should match TRUE"
+    assert not rc._match(la, ca, abs(np.linalg.det(A)), [B, lb, cb, abs(np.linalg.det(B)), 1]), "A must NOT match B"
+
+    SPUR = _diag(61.0, 67.0, 73.0)                            # a distinct, tightly-clustered alias
+    frames = ([[A]] * 9) + ([[B]] * 9) + ([[SPUR]] * 12)      # A+B = 18 votes, SPUR = 12
+    witness = [[_diag(79.0, 79.0, 38.0)]]                     # one on-truth cell: matches A and B both
+
+    def winner(merge):
+        rc = RunningConsensus(min_support=3, gap=2, adaptive=False, merge=merge)
+        for f in frames + witness:
+            rc.add_frame(f)
+        top = max(rc.groups, key=lambda g: g[4])
+        return top, len(rc.groups)
+
+    top_off, n_off = winner(False)
+    top_on, n_on = winner(True)
+    assert not same_lattice(top_off[0], TRUE), "premise: without merge the split vote must LOSE"
+    assert same_lattice(top_on[0], TRUE), "with merge the true lattice must win"
+    assert top_on[4] >= 18, top_on[4]                        # the two halves, recombined
+    assert 1 < n_on < n_off, (n_on, n_off)                   # folds what it must, not everything
+
+
+def test_merge_false_is_bit_identical_to_pre_fix():
+    """merge=False must reproduce first-match-wins EXACTLY, so the fix is auditable against it."""
+    rng = np.random.default_rng(7)
+    cells = [_diag(*(79.0 + rng.normal(0, 3), 79.0 + rng.normal(0, 3), 38.0 + rng.normal(0, 2)))
+             for _ in range(60)]
+    rc = RunningConsensus(min_support=3, gap=2, adaptive=False, merge=False)
+    for c in cells:
+        rc.add_frame([c])
+    ref_w = sorted(g[4] for g in rc.groups)
+    # replicate the pre-fix loop by hand
+    groups = []
+    for M in cells:
+        l, c = reduced_params(np.asarray(M, float)); d = abs(np.linalg.det(np.asarray(M, float)))
+        for g in groups:
+            if rc._match(l, c, d, g):
+                g[4] += 1; break
+        else:
+            groups.append([M, l, c, d, 1])
+    assert ref_w == sorted(g[4] for g in groups), (ref_w, sorted(g[4] for g in groups))
+
+
+def test_merge_is_on_by_default():
+    """The DEFAULT must be the repaired grouping.
+
+    Both other merge tests pass ``merge=`` explicitly, so neither notices if the default flips back
+    to first-match-wins -- and the default is the entire point of the change: a caller who passes
+    nothing must not silently get the partition that locks on the wrong lattice.
+    """
+    assert RunningConsensus().merge is True, "merge must default to True"
+    assert RunningConsensus(merge=False).merge is False, "merge=False must remain available"
+
+    TRUE = _diag(79.0, 79.0, 38.0)
+    A = _diag(79.0 * 0.972, 79.0 * 0.972, 38.0 * 0.972)
+    B = _diag(79.0 * 1.028, 79.0 * 1.028, 38.0 * 1.028)
+    SPUR = _diag(61.0, 67.0, 73.0)
+    frames = ([[A]] * 9) + ([[B]] * 9) + ([[SPUR]] * 12) + [[_diag(79.0, 79.0, 38.0)]]
+    rc = RunningConsensus(min_support=3, gap=2, adaptive=False)      # NO merge= : the default
+    for f in frames:
+        rc.add_frame(f)
+    top = max(rc.groups, key=lambda g: g[4])
+    assert same_lattice(top[0], TRUE), "default grouping must recover the true lattice"
+
+
 if __name__ == "__main__":
     tests = (test_batch_equivalence, test_early_stop_locks_clean,
              test_refuses_ambiguous_race, test_adaptive_gap_raises_when_slow,
              test_pool_switch_keys_scale_tests_on_pool_size,
-             test_pool_switch_running_lock_unchanged_small_refuses_large)
+             test_pool_switch_running_lock_unchanged_small_refuses_large,
+             test_merge_repairs_split_vote, test_merge_false_is_bit_identical_to_pre_fix,
+             test_merge_is_on_by_default)
     ok = 0
     for t in tests:
         try:

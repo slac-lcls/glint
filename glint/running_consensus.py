@@ -45,6 +45,25 @@ The residual 2 are not a tuning failure. They lock at pools of 54-96, where a 2%
 for 1.08 votes and a support of 3 clears it without meaning anything: neither scale-free test can
 protect the small-pool tail, and only ``gap`` is doing work down there.
 
+MERGE-ON-MULTI-MATCH (``merge=True``, the default) is the cheap repair that does not need the pool.
+When an arriving cell falls inside the tolerance of SEVERAL groups it is a WITNESS that those groups
+are one lattice the arrival order split, so they are folded together. It costs nothing extra -- the
+match loop already runs -- and it fixes the failure this path was losing to. Measured on a real
+refined-geometry run (small-molecule cell, 665 frames, 3325 hypotheses): the true lattice's votes
+FRAGMENTED across two groups, each within 5% of truth but 5.5-5.9% from EACH OTHER, so neither
+absorbed the other and a spurious group outranked both halves. Shipped grouping locked at frame 31
+on the WRONG cell (pooled winner weight 217); with the merge it locks at frame 27 on the RIGHT one
+(pooled winner 312 = the two halves recombined), and the partition changes only where it must --
+1156 groups become 1119, 37 merges. That failure is the same shape as the recorded item-7 one but on
+REFINED geometry, so it is NOT confined to bad geometry as previously believed.
+
+The merge does not disturb the clean benchmark. Over 2000 random streaming orders on the cxidb
+frames, merge and shipped are INDISTINGUISHABLE: at n=120 both lock 2000/2000 with 0 false-locks
+(median 8 frames); at n=480 both lock 2000/2000 with 1 false-lock (0.05%, median 9 frames) -- and on
+the SAME alias, a doubled c axis, so n=480 exposes a pre-existing supercell false-lock in BOTH rather
+than a new one from the merge. ``merge=False`` restores first-match-wins exactly.
+
+
 Stop rule: lock when the leading group's support >= ``min_support`` AND it leads the runner-up by >=
 ``gap``. The gap is the specificity knob: gap=0 occasionally false-locks on the coincident sublattice
 aliases (real cxidb: the face-diagonal cell |q|=sqrt(a^2+c^2) recurs ~once/frame, a coherent ~2:1 rate
@@ -137,10 +156,10 @@ class RunningConsensus:
     """
 
     __slots__ = ("min_support", "base_gap", "gap", "rtol", "ctol", "vtol", "adaptive",
-                 "groups", "nframes", "npool", "min_frac", "min_lead", "pool_switch")
+                 "groups", "nframes", "npool", "min_frac", "min_lead", "pool_switch", "merge")
 
     def __init__(self, min_support=3, gap=2, rtol=DEF_RTOL, ctol=DEF_CTOL, vtol=DEF_VTOL,
-                 adaptive=True, min_frac=0.0, min_lead=1.0, pool_switch=0):
+                 adaptive=True, min_frac=0.0, min_lead=1.0, pool_switch=0, merge=True):
         self.min_support = int(min_support)
         self.base_gap = int(gap); self.gap = int(gap)
         self.rtol = rtol; self.ctol = ctol; self.vtol = vtol
@@ -150,6 +169,7 @@ class RunningConsensus:
         # enforced them while this one did not -- see consensus_accept.
         self.min_frac = float(min_frac); self.min_lead = float(min_lead)
         self.pool_switch = int(pool_switch)
+        self.merge = bool(merge)                          # non-transitivity repair; see add()
         self.groups = []                                  # each: [rep_M, lens, cos, det, weight]
         self.nframes = 0
         self.npool = 0                                    # hypotheses added, not frames
@@ -161,14 +181,36 @@ class RunningConsensus:
                 and bool(np.all(np.abs(c - cg) <= self.ctol)))
 
     def add(self, M):
-        """Add ONE candidate cell (3x3 basis, columns a,b,c) to the running histogram."""
+        """Add ONE candidate cell (3x3 basis, columns a,b,c) to the running histogram.
+
+        A cell inside the tolerance of SEVERAL groups is direct evidence that those groups are one
+        lattice which arrival-order grouping split (tolerance matching is not transitive -- see
+        GROUPING ORDER above), so they are folded together and the heaviest keeps the representative.
+        This is the cheap repair for non-transitivity on THIS path: the merge witness is the arriving
+        cell itself, so it needs no hypothesis pool and no periodic re-grouping, which is the cost
+        that kept glint#102's densest-neighbourhood seeding in the batch path only. ``merge=False``
+        restores the pre-fix first-match-wins behaviour exactly.
+        """
         M = np.asarray(M, float)
         l, c = reduced_params(M); d = abs(np.linalg.det(M))
         self.npool += 1                                   # the denominator min_frac needs
-        for g in self.groups:
-            if self._match(l, c, d, g):
-                g[4] += 1; return
-        self.groups.append([M, l, c, d, 1])
+        if not self.merge:
+            for g in self.groups:
+                if self._match(l, c, d, g):
+                    g[4] += 1; return
+            self.groups.append([M, l, c, d, 1])
+            return
+        hits = [g for g in self.groups if self._match(l, c, d, g)]
+        if not hits:
+            self.groups.append([M, l, c, d, 1]); return
+        keep = max(hits, key=lambda g: g[4])
+        drop = set()
+        for g in hits:
+            if g is not keep:
+                keep[4] += g[4]; drop.add(id(g))
+        if drop:                                          # by IDENTITY: `==` is ambiguous on arrays
+            self.groups = [g for g in self.groups if id(g) not in drop]
+        keep[4] += 1
 
     def add_frame(self, cells):
         """Add one frame's candidate cells (iterable of 3x3 bases; may be empty / contain None)."""

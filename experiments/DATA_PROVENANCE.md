@@ -73,8 +73,9 @@ are made available under the CC0 waiver to promote maximum reuse"
 Public Domain Dedication Waiver. Please give proper credit via citations according to established
 scientific practice." and embeds machine-readable metadata
 `"license": "http://creativecommons.org/about/cc0"`. (The pages also carry a site-template footer
-reading "© CXI DB. All rights reserved." — web-design boilerplate that contradicts, and is
-superseded by, both the stated deposition policy and the per-entry licence metadata.)
+reading "© CXI DB. All rights reserved." — recorded here for completeness. The deposition policy
+and per-entry licence metadata above are the statements specific to the deposited data; no legal
+reading of the footer's relationship to them is asserted here.)
 
 | Entry | URL | Dataset DOI | Depositor(s) | Publication |
 |---|---|---|---|---|
@@ -87,6 +88,12 @@ superseded by, both the stated deposition policy and the per-entry licence metad
 - `experiments/frames_cxidb_clean.txt` (and duplicates under `experiments/xgandalf/`) — peak lists
   derived by GLINT's own extraction from **entry 17** images. No deposited images are
   redistributed.
+- `experiments/nbest_120.npz` — derived from the **entry-17** peak lists above
+  (`frames_cxidb_clean.txt`) by GLINT's blind N-best indexing (top-3 hypotheses per frame; the
+  producing run's wall time is recorded in the file's own `index_s` key, see its section above).
+  The exact producing run predates this file's commit and no in-tree generator reproduces it —
+  the file is a recorded artifact, pinned by size and sha256 above. It contains only derived
+  lattice hypotheses; no deposited data are redistributed.
 - `experiments/prok_q.npz` — reciprocal-lattice points extracted from **entry 45** images
   (`dump_prok_q.py`, NERSC; see above). The extraction used a detector geometry file
   (`mpccd-optimized.geom`) that originates from the **entry 62** deposition — so entry 45's derived

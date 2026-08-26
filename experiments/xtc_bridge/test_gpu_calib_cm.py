@@ -6,8 +6,10 @@ ana-4.0.58-py3), created 2018-01-31 by Mikhail Dubrovin (SLAC/LCLS). Upstream
 covers that code. An earlier version of THIS file (lines 12-79, before 2026-08-24) contained a
 verbatim transcription of five of its functions — common_mode_rows, common_mode_cols,
 common_mode_2d, common_mode_rows_hsplit_nbanks, common_mode_2d_hsplit_nbanks; that transcription
-was DELETED because no grant covers it. Today the test imports those names from psana at run time
-when psana is available (common_mode_cases.psana_reference) and otherwise compares against
+was DELETED because no grant covers it. Today the test imports, at run time and only when psana is
+available, the three of those functions the reference path actually calls —
+common_mode_rows_hsplit_nbanks, common_mode_cols, common_mode_2d_hsplit_nbanks
+(common_mode_cases.psana_reference); the other two are not referenced. Otherwise it compares against
 checked-in golden OUTPUTS (data, not code). Do not paste upstream code back into this file; see
 THIRD_PARTY_NOTICES.md section 1.
 

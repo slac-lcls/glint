@@ -159,7 +159,8 @@ in-tree `lute/` directory is GLINT's own task package that installs *into* an ex
 checkout), **envbridge** (SLAC cross-conda bridge, used by `experiments/xtc_bridge/`),
 **radial_integration** (S3DF tool referenced by radial benchmarks), **krtc** (Kerberos ticket
 helper used by `experiments/elog_query.py`), and **peaknet** together with its pretrained weights
-(~673 MB, referenced by `experiments/peaknet/`; the weights carry their own, also unresolved,
+(`peaknet-673m.bin`, 2.69 GB — "673M" is the model's parameter scale, not the file size; recorded
+in `experiments/peaknet/build_peaknet.py`; the weights carry their own, also unresolved,
 terms). No published licence was verified for any of these; resolve before moving any of them
 into a distributed path.
 

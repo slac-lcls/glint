@@ -17,6 +17,7 @@ ENUMERATING the multinomial the counts come from, not by sampling it: an earlier
 Run: `python experiments/test_check_numbers_ci.py` or `pytest`.
 """
 import math
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -190,9 +191,25 @@ INJECTIONS = [
      # both bands, each against its OWN denominator -- the shape glint.tex already uses
      "read 61--65\\% (73--78 of 120) against 76\\% (91/120).\n"
      "At n=480 the same arms read 67--69\\% (323--331 of 480)."),
+    # ...and the SAME defect with an ordinary LaTeX hard wrap between the band and the count. The
+    # window was [^.\n] until #154's review, so this case -- a caption reflowed by anyone but its
+    # author -- walked straight past the rule. test_stream_band_rule_crosses_a_latex_hard_wrap
+    # below pins that the OLD pattern misses it, which is what makes this entry a regression test
+    # rather than one more example.
+    ("stream-band-120-at-480",
+     "\\caption{Streaming yield. The live path indexes 61--65\\%\n"
+     "of the 480-frame set, against 76\\% offline}",
+     # the correct two-band paragraph, wrapped the same way -- the period still ends the window
+     "read 61--65\\% (73--78 of 120)\nagainst 76\\% (91/120).\n"
+     "At n=480 the same arms\nread 67--69\\% (323--331 of 480)."),
+    # The negative is the CORRECTLY QUALIFIED form -- the same 117/120, with the bar and the arm
+    # named, which is precisely what the rule's own `instead` asks for. Until #154's review this
+    # rule rejected it, so it had no satisfiable output: the only way to clear it was to delete a
+    # true historical citation. The negative used to dodge that by renumbering to 115/120, which
+    # tested the pattern's digits and not the thing the rule is about.
     ("consensus-117-of-120",
      "Consensus rescues the weak frames: ~71% -> 97% (117/120) blind on the same peaks.",
-     "Consensus at the >=10-reflection gate, offline: 115 of 120 blind on the same peaks."),
+     "Consensus at the >=10-reflection gate, offline: 117 of 120 blind on the same peaks."),
     ("fps-29",
      "the blind pipeline sustains 29 frames/s on one A100",
      # the banner date that the first version of this pattern fired on
@@ -225,33 +242,258 @@ def test_rule_names_are_unique_and_carry_replacements():
         assert rule.instead, f"{name} has no `instead` text"
 
 
+def test_stream_band_rule_crosses_a_latex_hard_wrap():
+    """The window must stop at a SENTENCE, not at a line.
+
+    _normalize() folds spaces and tabs and deliberately keeps newlines (scan() maps match offsets
+    to line numbers off the normalized text), so `[^.\\n]{0,80}` made the rule a function of where
+    the editor's wrap landed. The defect it guards -- the Fig 9 caption pairing the 120-frame band
+    with 480-frame counts -- lives in a caption, i.e. exactly the text most likely to be rewrapped
+    by someone other than its author. This pins BOTH halves: the new pattern catches it, and the
+    old one demonstrably did not.
+    """
+    wrapped = ("\\caption{Streaming yield. The live path indexes 61--65\\%\n"
+               "of the 480-frame set, against 76\\% offline}")
+    assert _fires(wrapped, "stream-band-120-at-480"), "the wrapped defect is not caught"
+    old = re.compile(
+        r"61\s*-{1,2}\s*65\s*\\?%[^.\n]{0,80}?(?<![\d.])(?:480|323|331|357)(?![\d.])"
+        r"|(?<![\d.])(?:480|323|331|357)(?![\d.])[^.\n]{0,80}?61\s*-{1,2}\s*65\s*\\?%", re.I)
+    assert not old.search(_cn._normalize(wrapped)), (
+        "the OLD [^.\\n] window now catches this, so this case no longer tests the fix -- pick "
+        "one it misses, or retire the assertion honestly")
+
+
+def test_consensus_117_accepts_the_form_its_own_advice_requests():
+    """A guard whose advice its own pattern refuses has no correct output.
+
+    consensus-117-of-120 says "name the bar and the arm, e.g. '>=10-reflection gate, offline'" and
+    then fired on that sentence, so the only way to clear it was to delete a true, correctly
+    qualified historical citation. Each disambiguator is checked ALONE -- a `needs` tuple passes as
+    soon as any one of its entries is nearby, so testing them together would hide a dead entry.
+    """
+    assert _fires("Consensus indexes 117/120 frames blind.", "consensus-117-of-120")
+    for qualified in ("At the >=10-reflection gate the same pipeline reached 117/120.",
+                      "At the $\\geq$10-reflection gate the same pipeline reached 117/120.",
+                      "The offline hybrid reached 117 of 120 on that subset.",
+                      "Quoted at the loose bar, this is 117/120."):
+        assert not _fires(qualified, "consensus-117-of-120"), (
+            f"the rule rejects a correctly labelled citation: {qualified!r}")
+
+
 def test_guard_advice_is_not_itself_retired():
     """The `instead` of one rule must not be a value another rule retires.
 
     Not hypothetical: legacy-shots recommended "~29 shots/s", which is 1000/34 -- the reciprocal of
     the blind figure blind-34ms retires. Had it fired it would have walked an editor straight into
     a fresh violation. It now interpolates FACTS['blind_fps']; this keeps it that way.
+
+    ⚑ This used to SKIP every rule carrying an `exempt`, which silently exempted four of them --
+    legacy-shots among them, so the very defect the docstring describes could have come back as
+    "892 shots/s" unnoticed (found in review of #154). The fix is not to re-implement the
+    exemption logic here but to run the advice through the REAL scan(), which applies `exempt` and
+    `needs` with the same _near() semantics a deliverable gets. A rule matching its OWN advice is
+    still allowed: retiring a value means quoting it (see stream-band-120-at-480, whose advice
+    ends "or keep 61--65% and quote it against 120").
     """
     for rule in _cn.RETIRED:
         if not rule.instead:
             continue
-        for other in _cn.RETIRED:
-            if other is rule or other.exempt:      # an exempt rule needs context this text lacks
-                continue
-            assert not other._rx.search(_cn._normalize(rule.instead)), (
-                f"{rule.name}'s advice {rule.instead!r} trips {other.name}")
+        tripped = [f for f in _cn.scan(Path("advice.txt"), rule.instead)
+                   if "[RETIRED/" in f and f"/{rule.name}]" not in f]
+        assert not tripped, f"{rule.name}'s advice {rule.instead!r} trips:\n" + "".join(tripped)
 
 
-def test_jungfrau_facts_match_the_paper_rows():
-    """The three Jungfrau counts are RECORD-SOURCED, so nothing re-derives them -- but the two
-    percentages the paper prints must follow from them, and the subset relation must hold."""
+def test_advice_check_covers_the_exempt_rules():
+    """...and the skip is gone for good: the four rules that carry an `exempt` are now evaluated.
+
+    Pinned by construction rather than by inspection -- inject an advice string that only an
+    exempted rule refuses, and require the check above to catch it.
+    """
+    exempted = [r.name for r in _cn.RETIRED if r.exempt]
+    assert exempted, "no rule carries an exempt any more -- this test has nothing to protect"
+    assert "legacy-shots" in exempted
+    # scan() must still fire on the bare form. The real legacy-shots advice clears it through the
+    # word LEGACY sitting in the same sentence, which is the exemption working, not being skipped.
+    assert _fires("use ~892 shots/s instead", "legacy-shots")
+    assert not _fires("mark LEGACY, or use ~39 shots/s", "legacy-shots")
+
+
+# ------------------------------------------------------------------- REQUIRED (file invariants)
+# The merge-quality FACTS were DECORATIVE until #154's review: jungfrau_ccstar / _rsplit_pct /
+# _iovers and the pk45 trio sat in the table, commented at length, read by check_arithmetic's
+# ordering guards -- and by nothing that looks at a deliverable. scan() only hunts RETIRED
+# regexes, so tab:realmerge's cells could be edited to anything at all and every run stayed green.
+#
+# The probes below are BUILT FROM FACTS on both sides, so the tests move when the measurement
+# does. The rendering is the one thing that cannot come from the table: FACTS stores CC* as a
+# float, and 0.90 (cxidb-45, two decimals) round-trips through Python as "0.9" while 0.915
+# (Jungfrau, three) does not. The deliverables print the two rows at different widths, so the
+# widths live here and in the Required needles -- and the first test below is what keeps the two
+# in step rather than letting them drift into a needle nothing can satisfy.
+MERGE_RENDERED = {
+    "jungfrau_ccstar":        f"{_cn.FACTS['jungfrau_ccstar']:.3f}",
+    "jungfrau_rsplit_pct":    f"{_cn.FACTS['jungfrau_rsplit_pct']:g}",
+    "jungfrau_iovers":        f"{_cn.FACTS['jungfrau_iovers']:g}",
+    "jungfrau_blind_of1563":  f"{_cn.FACTS['jungfrau_blind_of1563']:d}",
+    "jungfrau_final_of1563":  f"{_cn.FACTS['jungfrau_final_of1563']:d}",
+    "jungfrau_frames_total":  f"{_cn.FACTS['jungfrau_frames_total']:d}",
+    "pk45_ccstar":            f"{_cn.FACTS['pk45_ccstar']:.2f}",
+    "pk45_rsplit_pct":        f"{_cn.FACTS['pk45_rsplit_pct']:g}",
+    "pk45_iovers":            f"{_cn.FACTS['pk45_iovers']:g}",
+}
+
+
+def _required_fires(text: str, name: str) -> bool:
+    """Does REQUIRED entry `name` fire on this text? Uses the real check_required()."""
+    return any(f"[REQUIRED/{name}]" in f for f in _cn.check_required(Path("probe.tex"), text))
+
+
+def _jungfrau_row(**edit) -> str:
+    v = dict(MERGE_RENDERED, **edit)
+    return (f"Jungfrau-4M lysozyme & {v['jungfrau_final_of1563']} & ${v['jungfrau_ccstar']}$ & "
+            f"${v['jungfrau_rsplit_pct']}\\%$ & ${v['jungfrau_iovers']}$ & $99\\%$ complete, "
+            f"$2.1$\\,\\AA \\\\")
+
+
+def _pk45_row(**edit) -> str:
+    v = dict(MERGE_RENDERED, **edit)
+    return (f"cxidb-45 Proteinase~K & 290 & ${v['pk45_ccstar']}$ & ${v['pk45_rsplit_pct']}\\%$ & "
+            f"${v['pk45_iovers']}$ & full lattice, $70.7\\times$ redundancy \\\\")
+
+
+def _jungfrau_prose(**edit) -> str:
+    v = dict(MERGE_RENDERED, **edit)
+    return (f"\\paragraph{{Jungfrau-4M lysozyme images.}} GLINT indexes ${{96}}\\%$ blind "
+            f"(${v['jungfrau_blind_of1563']}/{v['jungfrau_frames_total']}$); $95\\%$ final "
+            f"(${v['jungfrau_final_of1563']}/{v['jungfrau_frames_total']}$). The resulting "
+            f"{v['jungfrau_final_of1563']}-crystal set reaches $CC^{{*}}={v['jungfrau_ccstar']}$, "
+            f"$R_{{\\mathrm{{split}}}}={v['jungfrau_rsplit_pct']}\\%$, "
+            f"$\\langle I/\\sigma\\rangle={v['jungfrau_iovers']}$.")
+
+
+def test_every_merge_fact_is_read_by_a_required_rule():
+    """The finding itself: each of these nine FACTS must be something the guard can miss in a file.
+
+    If a key drops out of REQUIRED it becomes a comment again, and a comment cannot fail.
+    """
+    needles = [rx for r in _cn.REQUIRED for rx in r._needles]
+    for key, shown in MERGE_RENDERED.items():
+        probe = f"cell {shown}\\% end"          # covers the bare needles and the `...\\?%` ones
+        assert any(rx.search(probe) for rx in needles), (
+            f"no REQUIRED needle matches FACTS[{key!r}] as the deliverables render it ({shown!r})")
+
+
+def test_required_merge_rows_pass_on_the_measured_values():
+    """A document carrying both widths' worth of numbers must be clean end to end.
+
+    The rows are ALSO checked on their own against their own entry only -- a bare tab:realmerge
+    row legitimately trips the whole-file entry, because a row does not state the 1506/1563 blind
+    counts. That is the two widths doing different jobs, not a false positive.
+    """
+    assert not _required_fires(_jungfrau_row(), "jungfrau-merge-row")
+    assert not _required_fires(_pk45_row(), "pk45-merge-row")
+    for probe in (_pk45_row(), _jungfrau_prose(),
+                  _jungfrau_row() + "\n" + _pk45_row() + "\n" + _jungfrau_prose()):
+        assert not _cn.check_required(Path("probe.tex"), probe), (
+            f"REQUIRED fires on text stating the measured values:\n{probe}")
+
+
+def test_required_merge_rows_fire_on_an_edited_cell():
+    """One cell, edited in one row -- the case the whole-file form cannot see.
+
+    0.915 is written at three sites in the manuscript, so a whole-file "the value must appear
+    somewhere" check stayed green when tab:realmerge's CC* cell alone was changed. Verified against
+    the real file before the windowed entry was added.
+    """
+    for name, probe in (
+            ("jungfrau-merge-row", _jungfrau_row(jungfrau_ccstar="0.925")),
+            ("jungfrau-merge-row", _jungfrau_row(jungfrau_rsplit_pct="32.6")),
+            ("jungfrau-merge-row", _jungfrau_row(jungfrau_iovers="8.7")),
+            ("jungfrau-merge-row", _jungfrau_row(jungfrau_final_of1563="1483")),
+            ("pk45-merge-row", _pk45_row(pk45_ccstar="0.91")),
+            ("pk45-merge-row", _pk45_row(pk45_rsplit_pct="33")),
+            ("pk45-merge-row", _pk45_row(pk45_iovers="8.8"))):
+        assert _required_fires(probe, name), f"{name} did not fire on:\n{probe}"
+
+
+def test_required_whole_file_form_catches_a_value_leaving_the_file():
+    """...and the other width: a renumber that removes the value from the document entirely."""
+    assert _required_fires(_jungfrau_prose(jungfrau_ccstar="0.925"), "jungfrau-merge-facts")
+    assert _required_fires(_jungfrau_prose(jungfrau_blind_of1563="1500"), "jungfrau-merge-facts")
+    assert _required_fires("On 907 readable cxidb-45 Proteinase K frames GLINT merges to "
+                           "$CC^{*}=0.91$ with $R_{\\mathrm{split}}=31\\%$ and "
+                           "$\\langle I/\\sigma\\rangle=7.8$.", "pk45-merge-facts")
+
+
+def test_required_stays_silent_without_its_trigger():
+    """The scoping half. A deck that names the DETECTOR or the PROTEIN but merges nothing must not
+    be told to grow a merge table -- both near-misses are real lines from the real targets."""
+    for probe in (
+            # build_glint.py: the mfx r199 front-end card, and the DRP page's calib note
+            'statcard(s,6.74,2.0,"86%","real crystal end to end\\nmfx r199 - jungfrau-16M",GREEN)',
+            "`CalibGPUMultiGain` (bit-exact vs `det.calib`, max|D|=0, Jungfrau 1M/4M)",
+            # build_pitch.py: Proteinase K indexing, no merge anywhere in the deck
+            "Head-to-head on real Proteinase K: per frame classical DIALS leads (62%), but "
+            "GLINT's consensus turns that around.",
+            # the cover letter quotes the headline CC* without naming the dataset
+            "reaching crystallographic merge quality ($CC^{*}=0.90$) on public data"):
+        assert not _cn.check_required(Path("probe.tex"), probe), (
+            f"REQUIRED fired on a file that merges nothing:\n{probe}")
+
+
+# --------------------------------------------------------- arithmetic guards, by PERTURBATION
+# These used to be re-implemented predicates: the test asserted 1482 <= 1506 <= 1563 itself rather
+# than calling check_arithmetic(), so deleting the guard from check_numbers.py left the test green
+# (found in review of #154). Every case below drives the REAL function with FACTS temporarily
+# edited and requires the REAL message, so a deleted guard fails here.
+def _arith(**overrides):
+    """check_arithmetic() with FACTS perturbed, restored on the way out (including on failure)."""
     F = _cn.FACTS
-    assert F["jungfrau_final_of1563"] <= F["jungfrau_blind_of1563"] <= F["jungfrau_frames_total"]
-    assert round(100 * F["jungfrau_blind_of1563"] / F["jungfrau_frames_total"]) == F["jungfrau_blind_rate_pct"]
-    assert round(100 * F["jungfrau_final_of1563"] / F["jungfrau_frames_total"]) == F["jungfrau_final_rate_pct"]
-    # the mixed direction, both halves -- see the check_arithmetic block of the same name
-    assert F["jungfrau_ccstar"] < F["jungfrau_xg_ccstar"]
-    assert F["jungfrau_rsplit_pct"] < F["jungfrau_xg_rsplit_pct"]
+    saved = {k: F[k] for k in overrides}
+    try:
+        F.update(overrides)
+        return _cn.check_arithmetic()
+    finally:
+        F.update(saved)
+
+
+# (what a careless edit does, the substring the guard must answer with)
+ARITHMETIC_PERTURBATIONS = [
+    ({"jungfrau_final_of1563": 1520},                 "must nest"),
+    ({"jungfrau_blind_of1563": 1400},                 "jungfrau_blind_rate_pct"),
+    ({"jungfrau_final_rate_pct": 90},                 "jungfrau_final_rate_pct"),
+    ({"jungfrau_frames_total": 1600},                 "jungfrau_blind_rate_pct"),
+    ({"jungfrau_ccstar": 0.94},                       "Jungfrau CC*"),
+    ({"jungfrau_xg_ccstar": 0.900},                   "Jungfrau CC*"),
+    ({"jungfrau_rsplit_pct": 36.0},                   "Jungfrau R_split"),
+    ({"jungfrau_xg_rsplit_pct": 30.0},                "Jungfrau R_split"),
+    # THE COLLAPSE BRANCH, from both sides -- it had never been exercised at all. Neither edit
+    # trips any neighbouring guard (0.90 and 0.915 both still sit below xgandalf's 0.930), so each
+    # one reaches this check and nothing else.
+    ({"pk45_ccstar": 0.915},                          "collapsed into one number"),
+    ({"jungfrau_ccstar": 0.90},                       "collapsed into one number"),
+]
+
+
+def test_check_arithmetic_is_green_on_the_shipped_table():
+    bad, _ = _cn.check_arithmetic()
+    assert not bad, "the shipped FACTS table contradicts itself:\n" + "\n".join(bad)
+
+
+def test_each_arithmetic_guard_fires_when_its_facts_are_perturbed():
+    for edit, expect in ARITHMETIC_PERTURBATIONS:
+        bad, _ = _arith(**edit)
+        assert any(expect in b for b in bad), (
+            f"perturbing {edit} did not produce a failure mentioning {expect!r}; got:\n"
+            + ("\n".join(bad) or "  (nothing at all -- the guard is gone)"))
+
+
+def test_perturbations_are_restored():
+    """A leaked override would make every later test run against a table nobody measured."""
+    for edit, _ in ARITHMETIC_PERTURBATIONS:
+        _arith(**edit)
+    bad, _ = _cn.check_arithmetic()
+    assert not bad, "FACTS was left perturbed:\n" + "\n".join(bad)
 
 
 if __name__ == "__main__":
@@ -262,8 +504,18 @@ if __name__ == "__main__":
              test_every_new_rule_fires_on_its_own_trigger,
              test_no_new_rule_fires_on_corrected_text,
              test_rule_names_are_unique_and_carry_replacements,
+             test_stream_band_rule_crosses_a_latex_hard_wrap,
+             test_consensus_117_accepts_the_form_its_own_advice_requests,
              test_guard_advice_is_not_itself_retired,
-             test_jungfrau_facts_match_the_paper_rows)
+             test_advice_check_covers_the_exempt_rules,
+             test_every_merge_fact_is_read_by_a_required_rule,
+             test_required_merge_rows_pass_on_the_measured_values,
+             test_required_merge_rows_fire_on_an_edited_cell,
+             test_required_whole_file_form_catches_a_value_leaving_the_file,
+             test_required_stays_silent_without_its_trigger,
+             test_check_arithmetic_is_green_on_the_shipped_table,
+             test_each_arithmetic_guard_fires_when_its_facts_are_perturbed,
+             test_perturbations_are_restored)
     ok = 0
     for t in tests:
         try:

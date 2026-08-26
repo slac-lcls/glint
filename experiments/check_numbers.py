@@ -820,8 +820,8 @@ RETIRED = [
          f"row makes the same lever look like two different results",
          f"23x (from {FACTS['integ_after_ms']} to {FACTS['integ_fused_ms']} ms)"),
     Rule("stream-band-120-at-480",
-         r"61\s*-{1,2}\s*65\s*\\?%[^.\n]{0,80}?(?<![\d.])(?:480|323|331|357)(?![\d.])"
-         r"|(?<![\d.])(?:480|323|331|357)(?![\d.])[^.\n]{0,80}?61\s*-{1,2}\s*65\s*\\?%",
+         r"61\s*-{1,2}\s*65\s*\\?%[^.]{0,80}?(?<![\d.])(?:480|323|331|357)(?![\d.])"
+         r"|(?<![\d.])(?:480|323|331|357)(?![\d.])[^.]{0,80}?61\s*-{1,2}\s*65\s*\\?%",
          f"61--65% is the n=120 streaming band ({FACTS['stream_rate_of120']}--"
          f"{FACTS['stream_rate_rescue_of120']} of 120). At n=480 the same two arms give "
          f"{FACTS['stream_rate_of480']}--{FACTS['stream_rate_rescue_of480']} of 480, which is "
@@ -835,19 +835,43 @@ RETIRED = [
     # which states 61--65% against 120 counts on one line and 67--69% against 480 counts on another.
     # A rule that fires on nothing is still worth its lines when the defect it names has already
     # happened once.
-    # The window is [^.\n]{0,80} -- SAME SENTENCE -- and that is the second thing testing changed.
+    # The window is [^.]{0,80} -- SAME SENTENCE -- and that is the second thing testing changed.
     # A 160-char [\s\S] window fired on a paragraph that quotes BOTH bands correctly, each against
     # its own denominator ("61--65% (73--78 of 120) ... At n=480 the same arms read 67--69%
     # (323--331 of 480)"), which is exactly how glint.tex already writes it and how anyone would
     # write the comparison. The defect is 61--65% presented AS the 480 set's rate, so the proximity
     # that matters is within one clause, not within 160 characters.
+    # ⚑ THE SENTENCE, NOT THE LINE. This was [^.\n] until review of #154, and the newline was doing
+    # damage the period was not: _normalize() folds spaces and tabs but deliberately keeps line
+    # breaks (scan() maps offsets to line numbers off the normalized text), so in a hard-wrapped
+    # .tex an ORDINARY WRAP between "61--65%" and the count defeated the rule outright. The exact
+    # defect this rule exists for -- the Fig 9 caption pairing the 120-frame band with 480-frame
+    # counts -- is a caption, i.e. the text most likely to be wrapped by the editor rather than by
+    # the author. Same lesson as blind-rate-swap's note (2): where a line happens to break must
+    # never be a hiding place. A period still ends the window, so the two-bands-stated-correctly
+    # paragraph in the negative injection stays green whether it is wrapped or not.
+    #
+    # ⚑ `needs`, not a bare refusal, and this rule was WRONG without it (found in review of #154):
+    # its own `instead` asks the writer to "name the bar and the arm, e.g. '>=10-reflection gate,
+    # offline'", and the rule then fired on exactly that sentence. A guard whose advice its own
+    # pattern rejects has no correct output -- the only way to satisfy it was to delete a true,
+    # correctly qualified historical citation, which is trap (b) in the notes above (the guard
+    # trains you to delete the honest hedging) reproduced in a rule written to prevent it.
+    # The disambiguators are the words that make 117/120 mean what it is: the BAR (the paper writes
+    # it as `$\geq$10-reflection gate`, which _normalize() renders `\geq10-reflection gate`, so
+    # keying on "10-reflection" covers the LaTeX, the ASCII ">=10-reflection" and the prose "loose
+    # bar" spelling) and the ARM ("offline"). Window left at the default 240: the labelled forms in
+    # the manuscript put the qualifier within ~30 characters of the count, and 240 was checked
+    # against the real targets rather than assumed -- none of them carries a 117/120 at all today,
+    # so the width buys tolerance for a table cell without any measured false positive to trade.
     Rule("consensus-117-of-120", r"(?<![\d.])117\s*(?:of|/)\s*120(?![\d.])",
          "117/120 is the OFFLINE hybrid at the LOOSE (>=10-reflection) bar, and it is quoted as if "
          "it were the streaming or single-frame result. The bar is the whole difference: at the "
          f"strict bar the same pipeline gives {FACTS['glint1_strict_of120']}/120, and the driver's "
          f"own post-lock counter gives {FACTS['driver_accept_of115']} of 115. An unlabelled "
          "117/120 reads as a headline rate for a pipeline that was never measured at 97.5%",
-         "name the bar and the arm, e.g. '>=10-reflection gate, offline' -- do not renumber"),
+         "name the bar and the arm, e.g. '>=10-reflection gate, offline' -- do not renumber",
+         needs=("10-reflection", "loose bar", "loose gate", "offline")),
     Rule("legacy-shots", r"(?<![\d.])892(?![\d.])",
          "892 shots/s is the LEGACY FFT-volume micro-bench, not the current pipeline",
          # Interpolated, not hard-coded: this `instead` used to read "~29 shots/s", which is
@@ -927,21 +951,153 @@ AMBIGUOUS = [
 # Line-level rules cannot express "you may say this only if you also say that". The RTX case is
 # exactly that shape: quoting fp32 timings next to a card we have never run on is fine ONLY while
 # the page states outright that no number came from one.
+#
+# ENFORCEMENT COMES IN TWO WIDTHS, and BOTH are needed -- measured, not assumed. `window=0` is the
+# original whole-file form: the trigger scopes which files the invariant applies to, and each
+# `needed` pattern then has to appear SOMEWHERE in that file. That form catches a value LEAVING the
+# file (a renumber, a deleted row, a table dropped in an edit) and nothing finer, which was not
+# enough: 0.915 is written at THREE sites in the manuscript (the sec:realdata prose, the S12 note
+# and the tab:realmerge row), so editing the row's CC* cell alone left two copies behind and the
+# whole-file check green. Injection-tested exactly that way before this note was written.
+#
+# `window > 0` is the per-occurrence form and closes it: every occurrence of the trigger must carry
+# all of `needed` within that many characters. It is used with a trigger that matches the merge ROW
+# and only the row -- "Jungfrau-4M lysozyme &" is the tab:realmerge label; tab:realindex writes
+# "Jungfrau-4M & lysozyme (Jungfrau-4M) &" and the prose has no "&" at all -- so a single edited
+# cell in that row now fires while the three sentences that merely name the dataset stay silent.
+# Anchoring on a table cell is a structural dependency and the failure mode is stated rather than
+# hidden: reflow the row so the label no longer abuts an "&" and the windowed entry goes QUIET
+# (fail-open), which is why the whole-file entry is kept alongside it rather than replaced by it.
+#
+# The needles are REGEXES over _normalize()d text, not substrings, because the same number is
+# written differently in a .tex and in a deck builder -- `$31\%$` against `31%` -- and a substring
+# test would force one of the two to be excluded. They interpolate FACTS for the reason
+# blind-rate-swap's `instead` does: a hard-coded number here is a second copy of the measurement,
+# and second copies drift.
+def _lit(v: str) -> str:
+    """A FACTS value as a regex matching the number AS WRITTEN, not as a digit-run inside another.
+
+    Same trap (a) the RETIRED patterns document: \\b treats a decimal point as a boundary, so
+    `\\b1506\\b` happily matches inside `1506.4`, and a bare `31` matches the tail of `531`.
+    """
+    return rf"(?<![\d.]){re.escape(v)}(?![\d])"
+
+
+@dataclass
+class Required:
+    """If `trigger` appears in a file, every pattern in `needed` must appear in it too."""
+    name: str
+    trigger: str                       # regex; scopes the invariant to the files it is about
+    needed: tuple[str, ...]            # regexes, ALL of which must appear
+    why: str
+    window: int = 0                    # 0: anywhere in the file. >0: within this many chars of
+                                       # EVERY occurrence of the trigger
+    flags: int = re.I
+    _trx: re.Pattern = field(init=False, repr=False)
+    _needles: tuple[re.Pattern, ...] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._trx = re.compile(self.trigger, self.flags)
+        self._needles = tuple(re.compile(n, self.flags) for n in self.needed)
+
+
 REQUIRED = [
-    ("RTX", "no number here was measured on an RTX Blackwell",
-     "this file argues an RTX Blackwell case from datasheet fp32/$, but every GLINT timing on it is "
-     "an A100 (or H100) measurement. Without the blanket disclaimer a reader attributes the fp32 "
-     "figures to a card we have never benchmarked -- which is exactly what happened once."),
+    Required("rtx-disclaimer", r"RTX",
+             ("no number here was measured on an RTX Blackwell",),
+             "this file argues an RTX Blackwell case from datasheet fp32/$, but every GLINT timing "
+             "on it is an A100 (or H100) measurement. Without the blanket disclaimer a reader "
+             "attributes the fp32 figures to a card we have never benchmarked -- which is exactly "
+             "what happened once."),
+    # ⚑ The merge-quality FACTS were DECORATIVE until this entry existed (found in review of #154).
+    # jungfrau_ccstar / jungfrau_rsplit_pct / jungfrau_iovers were added to the table, commented at
+    # length, and read by check_arithmetic's ordering guards -- and by nothing that looks at a
+    # deliverable. So the arithmetic knew 0.915 had to sit below xgandalf's 0.930, and no code
+    # anywhere connected either number to the row tab:realmerge actually prints. Editing that row
+    # to any value at all left every run green. That is the same defect this file documents twice
+    # over in FACTS ("a fact nothing reads is a comment"), reproduced in the guard itself.
+    #
+    # THE TRIGGER IS THE DATASET, NOT THE DETECTOR, and the distinction is measured rather than
+    # stylistic: `Jungfrau` alone appears in the DRP projections page (the calib bit-exactness note,
+    # "Jungfrau 1M/4M") and four times in build_glint.py (mfx r199, "jungfrau-16M") -- files that
+    # have no business carrying a merge table and would be told to grow one. "Jungfrau-4M lysozyme"
+    # names the cxil1015922 r0033 dataset and occurs in the manuscript and nowhere else.
+    Required("jungfrau-merge-facts", r"Jungfrau-4M\s+lysozyme",
+             (_lit(f"{FACTS['jungfrau_ccstar']:.3f}"),
+              _lit(f"{FACTS['jungfrau_rsplit_pct']:g}") + r"\s*\\?%",
+              _lit(f"{FACTS['jungfrau_iovers']:g}"),
+              _lit(f"{FACTS['jungfrau_blind_of1563']:d}"),
+              _lit(f"{FACTS['jungfrau_final_of1563']:d}"),
+              _lit(f"{FACTS['jungfrau_frames_total']:d}")),
+             f"a file that reports the Jungfrau-4M lysozyme dataset must state the RECORD-SOURCED "
+             f"numbers it was measured at (job 35507050): CC* {FACTS['jungfrau_ccstar']}, R_split "
+             f"{FACTS['jungfrau_rsplit_pct']}%, <I/sigma> {FACTS['jungfrau_iovers']} on the "
+             f"{FACTS['jungfrau_final_of1563']}-crystal merge, out of "
+             f"{FACTS['jungfrau_blind_of1563']} blind of {FACTS['jungfrau_frames_total']} frames. "
+             "If a value here really moved, edit FACTS and re-run every target -- do not edit the "
+             "row. THE DENOMINATOR IS THE MEASUREMENT: the retired '93% (support 54/60)' is what a "
+             "merge row with no count behind it becomes"),
+    # ...and the SAME numbers again at row width, which is the half that catches a single edited
+    # cell. See the two-widths note above for why both entries exist and which one fails open.
+    Required("jungfrau-merge-row", r"Jungfrau-4M\s+lysozyme\s*&",
+             (_lit(f"{FACTS['jungfrau_final_of1563']:d}"),
+              _lit(f"{FACTS['jungfrau_ccstar']:.3f}"),
+              _lit(f"{FACTS['jungfrau_rsplit_pct']:g}") + r"\s*\\?%",
+              _lit(f"{FACTS['jungfrau_iovers']:g}")),
+             f"tab:realmerge's Jungfrau-4M row must read "
+             f"{FACTS['jungfrau_final_of1563']} crystals / CC* {FACTS['jungfrau_ccstar']} / "
+             f"R_split {FACTS['jungfrau_rsplit_pct']}% / <I/sigma> {FACTS['jungfrau_iovers']} -- "
+             "the partialator merge of job 35507050's gated subset, at the default 10 "
+             "scaling/post-refinement cycles the caption states. It is NOT the glint#129 A/B "
+             "protocol (unity scale, native), which reads R_split 33.0 vs 26.7 on this same r0033 "
+             "data and is not comparable with this row",
+             window=120),
+    # cxidb-45, and NOT "Proteinase K": build_pitch.py discusses Proteinase K indexing (the DIALS
+    # head-to-head) without ever merging it, so keying on the protein name would demand merge
+    # statistics from a deck that correctly does not quote any. `cxidb-45` names the serial set and
+    # appears in exactly the two files that do state them -- the manuscript and build_glint.py's
+    # "CC* Proteinase K / 0.90" panel. The cover letter quotes CC*=0.90 without naming the dataset,
+    # so it is out of scope here by construction; S12's "the CC*=0.90 row is Proteinase K" is the
+    # sentence that keeps the two headline CC* values apart, and check_arithmetic's collapse guard
+    # is what keeps them from being edited equal.
+    Required("pk45-merge-facts", r"cxidb-45",
+             (_lit(f"{FACTS['pk45_ccstar']:.2f}"),
+              _lit(f"{FACTS['pk45_rsplit_pct']:g}") + r"\s*\\?%",
+              _lit(f"{FACTS['pk45_iovers']:g}")),
+             f"a file that reports the cxidb-45 Proteinase K merge must state the values it was "
+             f"measured at: CC* {FACTS['pk45_ccstar']}, R_split {FACTS['pk45_rsplit_pct']:g}%, "
+             f"<I/sigma> {FACTS['pk45_iovers']}. This is the HEADLINE CC* -- the abstract and the "
+             "cover letter both lead with it -- and it is a DIFFERENT DATASET from the Jungfrau-4M "
+             f"row's {FACTS['jungfrau_ccstar']}, which is why S12 says so out loud"),
+    # `Proteinase~K` with the LaTeX tie, so `~?\s*` rather than a plain space: _normalize() leaves
+    # an ASCII "~" alone (it only folds the UNICODE approximation signs), and the row is written
+    # with the tie in the manuscript and without one anywhere a deck might grow such a table.
+    Required("pk45-merge-row", r"cxidb-45\s+Proteinase~?\s*K\s*&",
+             (_lit(f"{FACTS['pk45_ccstar']:.2f}"),
+              _lit(f"{FACTS['pk45_rsplit_pct']:g}") + r"\s*\\?%",
+              _lit(f"{FACTS['pk45_iovers']:g}")),
+             f"tab:realmerge's cxidb-45 row must read CC* {FACTS['pk45_ccstar']} / R_split "
+             f"{FACTS['pk45_rsplit_pct']:g}% / <I/sigma> {FACTS['pk45_iovers']} -- the 290-frame "
+             "partialator merge. The abstract, sec:realdata, the S12 note and the cover letter all "
+             "quote this CC*, so a cell edited here silently disagrees with four other sites",
+             window=120),
 ]
 
 
 def check_required(path: Path, text: str) -> list[str]:
     out = []
-    low = text.lower()
-    for trigger, needed, why in REQUIRED:
-        if trigger.lower() in low and needed.lower() not in low:
-            out.append(f"  {path.name}  [REQUIRED] mentions {trigger!r} without {needed!r}\n"
-                       f"      why:  {why}\n")
+    norm = _normalize(text)
+    for req in REQUIRED:
+        for m in req._trx.finditer(norm):
+            seg = (norm if not req.window
+                   else norm[max(0, m.start() - req.window): m.end() + req.window])
+            missing = [pat for pat, rx in zip(req.needed, req._needles) if not rx.search(seg)]
+            if missing:
+                where = "" if not req.window else f" within {req.window} chars of it"
+                out.append(f"  {path.name}  [REQUIRED/{req.name}] mentions {m.group(0).strip()!r} "
+                           f"but does not state {', '.join(repr(x) for x in missing)}{where}\n"
+                           f"      why:  {req.why}\n")
+            if not req.window:
+                break            # whole-file: one report per file, not one per mention
     return out
 
 

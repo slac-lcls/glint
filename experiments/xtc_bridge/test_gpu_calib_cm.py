@@ -1,5 +1,18 @@
 """Check GpuCalibrator._common_mode against psana's UtilsCommonMode, in numpy.
 
+PROVENANCE: the reference implementation is psana `Detector/UtilsCommonMode.py` (release
+ana-4.0.58-py3), created 2018-01-31 by Mikhail Dubrovin (SLAC/LCLS). Upstream
+(github.com/lcls-psana/Detector) publishes no LICENSE, COPYING or NOTICE file, so no licence grant
+covers that code. An earlier version of THIS file (lines 12-79, before 2026-08-24) contained a
+verbatim transcription of five of its functions — common_mode_rows, common_mode_cols,
+common_mode_2d, common_mode_rows_hsplit_nbanks, common_mode_2d_hsplit_nbanks; that transcription
+was DELETED because no grant covers it. Today the test imports, at run time and only when psana is
+available, the three of those functions the reference path actually calls —
+common_mode_rows_hsplit_nbanks, common_mode_cols, common_mode_2d_hsplit_nbanks
+(common_mode_cases.psana_reference); the other two are not referenced. Otherwise it compares against
+checked-in golden OUTPUTS (data, not code). Do not paste upstream code back into this file; see
+THIRD_PARTY_NOTICES.md section 1.
+
 The GPU version replaces np.ma.median with a sort-and-pick-the-middle, reshapes psana's per-segment
 python loop into batched axes, and turns `arr[bmask] -= m[bmask]` into a multiply by the mask. Each
 of those is a place to be off by one, which is what this checks, to a tolerance of 2e-3.

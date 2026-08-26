@@ -60,7 +60,7 @@ original write-up reported doubling (25 → 52). Median over 16 crystals.
 
 Two readings, both load-bearing:
 
-1. **Even at 15.4%, "twice the arcs" is 1.2–1.6× the reflections.** The arc count doubles at *every*
+1. **Even at 15.4%, "twice the arcs" is 1.1–1.5× the reflections.** The arc count doubles at *every*
    split down to and including zero, because a duplicate excitation is still an excitation. Arc count
    is not a coverage measure.
 2. **The two-colour gain shrinks as NA grows** — 1.46× at 14 mrad down to 1.14× at 40 mrad — exactly

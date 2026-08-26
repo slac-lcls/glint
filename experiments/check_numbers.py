@@ -508,7 +508,10 @@ M3_SPLITS = {
 }
 
 DEFAULT_TARGETS = [
-    HOME / "git/papers/glint/glint.tex",
+    # glint.tex RETIRED from the targets 2026-08-26: it is the SUPERSEDED draft (the submission is
+    # glint_rewrite_JAC_refined.tex below), and when the new rules landed it lit up with seven
+    # already-fixed-in-the-rewrite values. Fixing a dead document to satisfy the guard is the
+    # inverse of the guard's job; the file now carries a SUPERSEDED banner instead.
     # ...and the file that is actually being SUBMITTED, which had never been guarded (2026-08-26).
     # Same shape as the README note below, one step worse: README was an unguarded file, this was an
     # unguarded DELIVERABLE. `glint.tex` is the draft the rewrite superseded, so every correction

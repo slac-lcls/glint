@@ -544,7 +544,25 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None):
     that silence is what made the original defect invisible. Reads one frame, not the whole stack."""
     import h5py
     with h5py.File(path, "r") as f:
-        d = f[data_path]
+        try:
+            d = f[data_path]
+        except KeyError:
+            # The bare h5py KeyError names neither the file nor where the path came from -- and
+            # the path is usually not the user's own choice: it is the .geom's `data =` key
+            # (parse_geom forwards it since glint#143), or the /data/data fallback when the .geom
+            # has none. Name all of that, plus what the file actually holds.
+            cands = []
+            def _c(name, obj):
+                if isinstance(obj, h5py.Dataset) and getattr(obj, "ndim", 0) >= 2:
+                    cands.append("/" + name)
+                    if len(cands) >= 8:
+                        return True                  # any non-None return stops the visit
+            f.visititems(_c)
+            raise KeyError(
+                f"{path} has no dataset at '{data_path}'. That path comes from the .geom's "
+                f"`data = <path>` key when it has one, --data-path on the CLI, or the /data/data "
+                f"default -- set whichever applies to where this file keeps its frames. "
+                f"Image-like datasets found here: {', '.join(cands) if cands else 'none'}.") from None
         stacked = getattr(d, "ndim", 0) >= 3 and d.shape[0] > 1
         is_event = event_axis
         if stacked and is_event is None:
@@ -638,7 +656,7 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
 
 
 def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, half=3, clen_scale=None,
-                  sym_refine=None, sym_refine_tol=0.02, bg_mode="clipmean"):
+                  sym_refine=None, sym_refine_tol=0.02, bg_mode="clipmean", data_key=None):
     """Self-contained native integrate for a STACKED .cxi -- the ``--images`` merge path, no CrystFEL.
 
     sym_refine (default None -> OFF, nothing changes): if set to a Bravais system name (e.g.
@@ -671,7 +689,7 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
     panels, glob = _parse_geom(geom_path)
     clen_spec, en_spec = glob.get("clen"), glob.get("photon_energy")
     coff = float(glob.get("coffset", 0.0))
-    data_key = glob.get("data", "/entry_1/data_1/data")
+    data_key = data_key or glob.get("data", "/entry_1/data_1/data")   # explicit arg > .geom `data` key > default
     handles = {}
     def _h5(p):
         h = handles.get(p)

@@ -59,6 +59,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_integrate_event.py
 
+      # The .geom `data =` key must reach integration (glint#143). parse_geom used to drop it,
+      # so the peaks+--integrate route could never read a non-default dataset path; #142's test
+      # passed data_path explicitly, which is why CI stayed green through the defect.
+      - name: experiments/test_geom_data_key.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_geom_data_key.py
+
       - name: experiments/test_consensus_degenerate.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_consensus_degenerate.py

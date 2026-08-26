@@ -32,7 +32,7 @@ def _load_frames(args):
                 sys.exit("error: --ring-focus needs --cell \"a b c al be ga\"")
             rf = ([float(v) for v in cv[:6]], args.ring_qlow)
         frames, images = frames_from_cxi(args.images, args.geom, wavelength_A=args.wavelength,
-                                         n=args.N, min_peaks=args.min_peaks,
+                                         n=args.N, min_peaks=args.min_peaks, data_key=args.data_path,
                                          peakfinder=args.peakfinder, top_n=args.top_peaks, ring_focus=rf)
     else:
         geom = parse_geom(args.geom)
@@ -88,6 +88,9 @@ def main():
                          "With --images the frames are read straight from the stacked .cxi by event; with --peaks "
                          "supply the per-frame image files via --image-dir. For the best (refined) merge use --tofile")
     ap.add_argument("--image-dir", default=".", help="base directory for per-file frame images (--integrate with --peaks)")
+    ap.add_argument("--data-path", help="HDF5 dataset path of the frame images (overrides the .geom "
+                    "'data =' key; default: the .geom key, else /data/data with --peaks, "
+                    "/entry_1/data_1/data with --images)")
     ap.add_argument("--int-dmin", type=float, default=2.0, help="--integrate resolution limit in A (default 2.0)")
     ap.add_argument("--int-tol", type=float, default=0.006,
                     help="--integrate Ewald excitation-error gate in 1/A (stills partiality window; default 0.006)")
@@ -153,7 +156,8 @@ def main():
             from glint.predict import integrate_cxi
             from glint.lute_bridge import parse_geom as _pg
             nint, tot = integrate_cxi(results, args.geom, wavelength_A=args.wavelength,
-                                      dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode)
+                                      dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
+                                      data_key=args.data_path)
             _, _g = _pg(args.geom)
             def _f(v, d):
                 try:
@@ -167,6 +171,7 @@ def main():
             from glint.geom import parse_geom
             geomd = parse_geom(args.geom); gg = geomd.get("global", {})
             nint, tot = integrate_frames(results, geomd, image_dir=args.image_dir,
+                                         data_path=args.data_path,          # None -> the .geom 'data =' key (glint#143)
                                          dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
                                          event_axis={"auto": None, "event": True,
                                                      "panel": False}[args.event_axis])

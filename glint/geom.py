@@ -13,7 +13,10 @@ z = clen + coffset. Scattered unit s_hat = R/|R|; incident beam +z (s0=(0,0,1));
 import numpy as np
 
 _HC_eV_A = 12398.419843320026          # h*c in eV.A  ->  lambda_A = _HC_eV_A / E_eV
-_GLOBAL = ("photon_energy", "wavelength", "clen", "res", "coffset", "adu_per_eV")
+# `data` is the HDF5 dataset path of the frame images -- a string, consumed by
+# glint.predict.integrate_frames. It was missing from this tuple until glint#143, so a .geom's
+# `data = /some/path` line was silently dropped and integration always fell back to /data/data.
+_GLOBAL = ("photon_energy", "wavelength", "clen", "res", "coffset", "adu_per_eV", "data")
 _PANEL_INHERIT = ("res", "clen", "coffset")
 
 

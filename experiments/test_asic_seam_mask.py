@@ -12,10 +12,24 @@ ASIC its own panel (p0a0, p0a1, ...), so the seams are masked as panel edges for
 is the reason to care -- a peak list built from a raw psana array and one built from a CrystFEL
 geometry at nominally the SAME settings are not comparable until the seams are masked.
 
-Measured on real Jungfrau 16M frames with the CrystFEL-matched settings (--threshold=50 --min-snr=7
---min-pix-count=4): with the status+perimeter mask alone, 42% of returned peaks sat EXACTLY on a seam
-and 57% within +-1 px, against ~12% expected by area; the median peak-to-nearest-seam distance was 1
-pixel. Masking the seams costs ~2% of the module and took the median from 18 peaks/frame to 3.
+Measured on 400 raw Jungfrau 16M frames of mfx101555026 r0013, at the CrystFEL-matched settings
+(--threshold=50 --min-snr=7 --min-pix-count=4 --max-pix-count=200 --min-res=50 --max-res=3000), with
+the facility mask alone (psana `_mask_from_status()` & `_mask_edges(width=2)`). Of 8,009 returned
+peaks, **57% sat within half a pixel of an interior seam and 79% within one pixel, against 0.5% and
+1.5% of the unmasked area** -- an enrichment of 117x and 54x. The median peak-to-nearest-seam distance
+was 0.5 px. Masking the seams costs 2.44% of the module and removes 78% of the peaks, taking the mean
+from 20.0 to 4.4 per frame and the fraction of frames carrying any peak at all from 90% to 39%.
+
+The definitions are part of the claim, because the previous ones were lost. `interior seam` means
+ss = 256 (mod 512) and fs in {256, 512, 768}, EXCLUDING module perimeters -- those are
+`_mask_edges`' job and counting them would flatter the result. The chance figures are the fraction of
+UNMASKED pixels at the same distance, computed from the actual mask rather than asserted, which is
+why they can be checked: they match the analytic interior-seam area at +-0 and +-1 px exactly.
+`experiments/measure_asic_seams.py` is the script that produced all of it; run it on an LCLS analysis
+node to re-check. That file exists because the figure this paragraph used to quote -- "~12% expected
+by area" -- reconstructs from no natural definition of a seam (the interior-seam area fraction is
+0.49% at +-0 px, 1.5% at +-1, 2.4% at +-2, and reaches 10% only at +-10 px), and nothing had been
+kept that could be used to check it.
 
 The properties worth pinning, in the order they would hurt if broken:
   * width=0 IS A TRUE NO-OP (all True), so the mask can be wired in unconditionally and disabled by a

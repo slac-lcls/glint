@@ -135,11 +135,135 @@ def test_coverage_is_at_least_nominal():
         assert cov >= 0.945, f"coverage {100*cov:.2f}% at ({a},{b}) -- below nominal"
 
 
+# --------------------------------------------------------------------- rule injection regressions
+# A rule that does not fire on its own trigger is worse than no rule: it reports a file as checked.
+# Every rule added with the manuscript targets on 2026-08-26 was injection-tested by hand before it
+# was written down, and these pin that testing so it survives the next edit to a pattern.
+#
+# The NEGATIVE cases matter at least as much. Three of them are real near-misses found while tuning
+# these patterns against the actual files, not hypotheticals:
+#   * a 200-character Jungfrau window reaches past \bottomrule into tab:realindex's footnote and
+#     fires on the row that was just CORRECTED to 96%/1506/1563;
+#   * `5\.8\s*%` without a (?<![\d.]) guard fires inside the cxidb-83 cell "105.8/105.8/75.5 A";
+#   * `29` beside "throughput" fires on GLINT_REPORT.md's banner date "Snapshot: 2026-06-29."
+# Each is trap (a) or a window-width variant of it, and each would have shipped as a false positive.
+import importlib.util as _ilu
+import sys as _sys
+
+_spec = _ilu.spec_from_file_location("_cn", ROOT / "experiments" / "check_numbers.py")
+_cn = _ilu.module_from_spec(_spec)
+# Registered BEFORE exec: @dataclass resolves its own annotations through sys.modules[__module__],
+# so a module executed outside it dies with a bare AttributeError on NoneType. Importing the file is
+# safe -- only main() is guarded by __main__, and nothing at module scope runs the guard.
+_sys.modules["_cn"] = _cn
+_spec.loader.exec_module(_cn)
+
+
+def _fires(text: str, rule_name: str) -> bool:
+    """Does `rule_name` (and only rules at all) fire on this text? Uses the real scan()."""
+    return any(f"/{rule_name}]" in f for f in _cn.scan(Path("probe.tex"), text))
+
+
+# (rule name, text that MUST fire, text that must NOT)
+INJECTIONS = [
+    ("jungfrau-93pct",
+     r"Jungfrau-4M & lysozyme & tetragonal & $93\%$ blind (support $54/60$) & --- \\",
+     # the corrected row, plus enough trailing float to reach cxidb-45's legitimate 93% footnote
+     "Jungfrau-4M & lysozyme & tetragonal & $96\\%$ blind ($1506/1563$); $95\\%$ final "
+     "($1482/1563$) & --- \\\\\n\\bottomrule\n\\end{tabular}\n\n{\\footnotesize the $93\\%$ "
+     "blind rate is measured on GLINT's own uncapped peak lists.}"),
+    ("jungfrau-support-54-60",
+     r"(consensus support $54/60$) and indexes $93\%$.",
+     r"(consensus support $1506/1563$) and indexes $96\%$."),
+    ("compare3-346-at-480",
+     "480 frames of the same run leaves them indistinguishable (346 vs 350, p=0.70)",
+     # the DRP page's microsecond range: a bare 346 with no 480 anywhere near it
+     "cupy full path (346--1,136 us), 11-node captured graph (~22 us, flat)"),
+    ("warmup-5.8pct",
+     r"swept from 120 to 3000 frames the warm-up falls from $5.8\%$ of the run",
+     r"cxidb-83: a $105.8/105.8/75.5$~\AA\ cell, warm-up a fixed five frames"),
+    ("integ-fused-6-32x",
+     r"fused GPU box-integration (frame resident) & 7.6 & 0.33 & 6--32$\times$ \\",
+     r"fused GPU box-integration (frame resident) & 7.6 & 0.33 & 23$\times$ \\"),
+    ("stream-band-120-at-480",
+     r"the live path indexes 61--65\% of the 480-frame set",
+     # both bands, each against its OWN denominator -- the shape glint.tex already uses
+     "read 61--65\\% (73--78 of 120) against 76\\% (91/120).\n"
+     "At n=480 the same arms read 67--69\\% (323--331 of 480)."),
+    ("consensus-117-of-120",
+     "Consensus rescues the weak frames: ~71% -> 97% (117/120) blind on the same peaks.",
+     "Consensus at the >=10-reflection gate, offline: 115 of 120 blind on the same peaks."),
+    ("fps-29",
+     "the blind pipeline sustains 29 frames/s on one A100",
+     # the banner date that the first version of this pattern fired on
+     "**Snapshot: 2026-06-29. The throughput figures here are superseded.**"),
+    ("legacy-shots",
+     "GPU + numba + coarse peak-finding: 4 -> 892 shots / s on one A100",
+     # \b892\b would have accepted neither of these; (?<![\d.])892(?![\d.]) refuses both for the
+     # stated reason. The run ID is the case that passed by luck for months.
+     "runs mfxl1038923 r0278 and r0058, and a rate of 892.5 shots/s on the LEGACY bench"),
+]
+
+
+def test_every_new_rule_fires_on_its_own_trigger():
+    for name, bad_text, _ in INJECTIONS:
+        assert _fires(bad_text, name), f"{name} did NOT fire on its own retired value"
+
+
+def test_no_new_rule_fires_on_corrected_text():
+    for name, _, good_text in INJECTIONS:
+        assert not _fires(good_text, name), f"{name} fired on text that is CORRECT -- false positive"
+
+
+def test_rule_names_are_unique_and_carry_replacements():
+    """A duplicate name would make the injection tests above check one rule twice and miss another;
+    an empty `instead` leaves the reader with a complaint and no action."""
+    names = [r.name for g in (_cn.RETIRED, _cn.OVERCLAIM, _cn.AMBIGUOUS) for r in g]
+    assert len(names) == len(set(names)), f"duplicate rule name(s): {sorted({n for n in names if names.count(n) > 1})}"
+    for name, _, _ in INJECTIONS:
+        rule = next(r for r in _cn.RETIRED if r.name == name)
+        assert rule.instead, f"{name} has no `instead` text"
+
+
+def test_guard_advice_is_not_itself_retired():
+    """The `instead` of one rule must not be a value another rule retires.
+
+    Not hypothetical: legacy-shots recommended "~29 shots/s", which is 1000/34 -- the reciprocal of
+    the blind figure blind-34ms retires. Had it fired it would have walked an editor straight into
+    a fresh violation. It now interpolates FACTS['blind_fps']; this keeps it that way.
+    """
+    for rule in _cn.RETIRED:
+        if not rule.instead:
+            continue
+        for other in _cn.RETIRED:
+            if other is rule or other.exempt:      # an exempt rule needs context this text lacks
+                continue
+            assert not other._rx.search(_cn._normalize(rule.instead)), (
+                f"{rule.name}'s advice {rule.instead!r} trips {other.name}")
+
+
+def test_jungfrau_facts_match_the_paper_rows():
+    """The three Jungfrau counts are RECORD-SOURCED, so nothing re-derives them -- but the two
+    percentages the paper prints must follow from them, and the subset relation must hold."""
+    F = _cn.FACTS
+    assert F["jungfrau_final_of1563"] <= F["jungfrau_blind_of1563"] <= F["jungfrau_frames_total"]
+    assert round(100 * F["jungfrau_blind_of1563"] / F["jungfrau_frames_total"]) == F["jungfrau_blind_rate_pct"]
+    assert round(100 * F["jungfrau_final_of1563"] / F["jungfrau_frames_total"]) == F["jungfrau_final_rate_pct"]
+    # the mixed direction, both halves -- see the check_arithmetic block of the same name
+    assert F["jungfrau_ccstar"] < F["jungfrau_xg_ccstar"]
+    assert F["jungfrau_rsplit_pct"] < F["jungfrau_xg_rsplit_pct"]
+
+
 if __name__ == "__main__":
     tests = (test_closed_form_mle_matches_brute_force,
              test_bounds_ordered_and_bracket_the_estimate,
              test_zero_discordant_pairs_is_not_certainty,
-             test_coverage_is_at_least_nominal)
+             test_coverage_is_at_least_nominal,
+             test_every_new_rule_fires_on_its_own_trigger,
+             test_no_new_rule_fires_on_corrected_text,
+             test_rule_names_are_unique_and_carry_replacements,
+             test_guard_advice_is_not_itself_retired,
+             test_jungfrau_facts_match_the_paper_rows)
     ok = 0
     for t in tests:
         try:

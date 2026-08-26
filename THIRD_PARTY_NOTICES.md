@@ -48,6 +48,12 @@ method in original PyTorch/CuPy, written with reference to the C++/CUDA source o
 `github.com/paulscherrerinstitute/fast-feedback-indexer`. These modules **are** part of the
 distributed package.
 
+**Upstream licence verified 2026-08-25**: `LICENSE.md` on the `main` branch of
+`github.com/paulscherrerinstitute/fast-feedback-indexer` is **BSD-3-Clause** (SPDX:
+`BSD-3-Clause`), Copyright 2022 Paul Scherrer Institute
+(<https://raw.githubusercontent.com/paulscherrerinstitute/fast-feedback-indexer/main/LICENSE.md>).
+The text quoted below is that file's.
+
 > Copyright 2022 Paul Scherrer Institute
 >
 > Redistribution and use in source and binary forms, with or without modification, are permitted
@@ -112,8 +118,25 @@ deposited images are redistributed.** See `experiments/DATA_PROVENANCE.md`.
 | `experiments/frames_cxidb_clean.txt` (and duplicates under `experiments/xgandalf/`) | CXIDB entry **17** — lysozyme, LCLS-CXI |
 | `experiments/prok_q.npz` | CXIDB entry **45** — Proteinase K, SACLA MPCCD; geometry from CXIDB entry **62** |
 
-**Status: unresolved.** Deposition terms have not been established against the `cxidb.org` entry
-pages. The originating publications are cited in the accompanying paper.
+**Status: resolved — CC0, verified 2026-08-25.** CXIDB's deposition policy states: "All deposited
+data and metadata are made available under the CC0 waiver to promote maximum reuse"
+(<https://www.cxidb.org/deposit.html>). Each entry page used here carries the visible statement
+"Licensed under the CC0 Public Domain Dedication Waiver. Please give proper credit via citations
+according to established scientific practice." and machine-readable metadata
+`"license": "http://creativecommons.org/about/cc0"`:
+
+- **Entry 17** — <https://www.cxidb.org/id-17.html>, dataset DOI 10.11577/1096920; publication
+  Boutet *et al.*, *Science* **337**, 362 (2012), doi:10.1126/science.1217737.
+- **Entry 45** — <https://www.cxidb.org/id-45.html>, dataset DOI 10.11577/1350027; publication
+  Masuda *et al.*, *Sci. Rep.* **7**, 45604 (2017), doi:10.1038/srep45604.
+- **Entry 62** — <https://www.cxidb.org/id-62.html>, dataset DOI 10.11577/1365656; publication
+  Yamashita *et al.*, *IUCrJ* **4** (2017), doi:10.1107/S2052252517008557. Source of the detector
+  geometry file used in the entry-45 extraction.
+
+CC0 1.0 places the deposited data in the public domain; the citation request is scientific
+practice, not a licence condition. The originating publications are cited in the accompanying
+paper. Verification detail and the exact in-tree derivation chain are in
+`experiments/DATA_PROVENANCE.md`.
 
 ---
 
@@ -129,6 +152,16 @@ Used as libraries or invoked as external programs; no source is copied into this
 cctbx/scitbx/iotbx/rstbx/simtbx (BSD-3-Clause), pyFAI (MIT), pyopencl (MIT), GSAS-II, h5py, mpi4py,
 scikit-learn, joblib (BSD-3-Clause), matplotlib (PSF-based), pydantic, pytest (MIT), requests
 (Apache-2.0), psana / Detector / PSCalib.
+
+**Research-path dependencies with UNRESOLVED licences** (imported or invoked from `experiments/`
+and `lute/` only; no source copied here; none distributed): **LUTE** (`slac-lcls/lute` — the
+in-tree `lute/` directory is GLINT's own task package that installs *into* an external LUTE
+checkout), **envbridge** (SLAC cross-conda bridge, used by `experiments/xtc_bridge/`),
+**radial_integration** (S3DF tool referenced by radial benchmarks), **krtc** (Kerberos ticket
+helper used by `experiments/elog_query.py`), and **peaknet** together with its pretrained weights
+(~673 MB, referenced by `experiments/peaknet/`; the weights carry their own, also unresolved,
+terms). No published licence was verified for any of these; resolve before moving any of them
+into a distributed path.
 
 **Linked at build time by two first-party benchmark drivers** (`experiments/xgandalf/xg_driver.cpp`,
 `ffbidx_driver.cpp`): libxgandalf (**GPL-3.0-or-later**), Eigen (MPL-2.0), ffbidx C API

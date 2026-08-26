@@ -168,6 +168,31 @@ with tempfile.TemporaryDirectory() as d:
           sums[0] > 0 and abs(sums[1] / sums[0] - 3.0) < 0.05 and abs(sums[2] / sums[0] - 9.0) < 0.05,
           sums)
 
+    # --- 4-D where the EVENT count equals the SLAB count (Copilot review of #157) -------------
+    # The slab-count shortcut is reserved for 3-D data; on 4-D the leading axis is the event axis
+    # (the geometry's '%'), even with no per-event metadata to say so. Pre-fix this classified the
+    # file as a panel stack and handed all four axes to the 2-D integrator.
+    cxi_co = os.path.join(d, "coincidence4d.h5")
+    with h5py.File(cxi_co, "w") as f:
+        f.create_dataset(DATA, data=np.stack([stack, stack * 5.0]))    # 2 events == 2 slabs, no metadata
+    s_co = []
+    for ev in range(2):
+        rc = [{"image": cxi_co, "event": ev, "M": LYSO}]
+        integrate_frames(rc, geom, image_dir=d, data_path=DATA, dmin=4.0, tol=0.004)
+        s_co.append(float(np.asarray(rc[0]["I"]).sum()))
+    check("4-D with n_events == n_slabs is EVENTS, not a panel stack",
+          s_co[0] > 0 and abs(s_co[1] / s_co[0] - 5.0) < 0.05, s_co)
+
+    # --- a ONE-event 4-D file: not 'stacked', but its single event is still a panel stack -----
+    cxi_1e = os.path.join(d, "oneevent4d.h5")
+    with h5py.File(cxi_1e, "w") as f:
+        f.create_dataset(DATA, data=stack[None])                       # (1, panel, ss, fs)
+    r1 = [{"image": cxi_1e, "event": 0, "M": LYSO}]
+    n1e, t1e = integrate_frames(r1, geom, image_dir=d, data_path=DATA, dmin=4.0, tol=0.004)
+    check("a one-event 4-D file integrates slab-locally (pre-fix: 4 axes hit the 2-D integrator)",
+          n1e == 1 and t1e > 0 and abs(float(np.asarray(r1[0]["I"]).sum()) / sums[0] - 1.0) < 1e-6,
+          (n1e, t1e))
+
     # --- no mapping -> still refused, and the refusal names the fix ---------------------------
     # A TWO-panel no-dims geometry over the 2-slab file, with per-event metadata saying ONE event
     # (so the ladder reads the axis as panels): the pre-#148 refusal, now telling the user that
@@ -210,6 +235,21 @@ with tempfile.TemporaryDirectory() as d:
     check("a window exceeding the slab raises a geometry/data mismatch",
           isinstance(raised_w, ValueError) and "WITHIN the panel's slab" in str(raised_w),
           repr(raised_w)[:120])
+
+    # ...and so does a NEGATIVE bound -- the complete ordered window is validated, not just the
+    # upper endpoints (Copilot review of #157): an un-addressable window must never surface as
+    # silently dropped reflections.
+    gneg = os.path.join(d, "negwin.geom")
+    open(gneg, "w").write(_geom_text().replace("p0a1/min_ss = 175", "p0a1/min_ss = -5"))
+    raised_n = None
+    try:
+        integrate_frames([{"image": cxi, "event": 0, "M": LYSO}], parse_geom(gneg),
+                         image_dir=d, data_path=DATA, dmin=4.0, tol=0.004)
+    except Exception as exc:                      # noqa: BLE001
+        raised_n = exc
+    check("a negative window bound raises the same mismatch, not silent drops",
+          isinstance(raised_n, ValueError) and "does not address the slab" in str(raised_n),
+          repr(raised_n)[:120])
 
     # --- an off-slab box is edge-gated, not a measured zero -----------------------------------
     edge = np.zeros(1, dtype=pred.dtype)

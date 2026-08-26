@@ -223,12 +223,17 @@ def integrate_spots_stack(stack, pred, panels, half=3, gap=2, ring=3, bg_mode="c
                 f"panel {p.get('name', pi)}: slab {s} does not address the {stack.shape[0]}-slab "
                 f"stack -- every panel needs an integer dimN key matching the data layout "
                 f"(glint#148)")
-        if p["max_ss"] >= stack.shape[1] or p["max_fs"] >= stack.shape[2]:
+        if not (0 <= p["min_fs"] <= p["max_fs"] < stack.shape[2]
+                and 0 <= p["min_ss"] <= p["max_ss"] < stack.shape[1]):
+            # the COMPLETE ordered window, not just the upper endpoints: a negative or inverted
+            # bound does not address the slab either, and letting it through would surface as
+            # silently dropped reflections instead of the promised mismatch error
             raise ValueError(
                 f"panel {p.get('name', pi)}: window fs {p['min_fs']}..{p['max_fs']} x "
-                f"ss {p['min_ss']}..{p['max_ss']} exceeds the slab shape {stack.shape[1:]} -- in "
-                f"a slab-mapped .geom (integer dimN) min/max fs/ss address WITHIN the panel's "
-                f"slab, not a virtual assembled plane (glint#148)")
+                f"ss {p['min_ss']}..{p['max_ss']} does not address the slab shape "
+                f"{stack.shape[1:]} -- in a slab-mapped .geom (integer dimN) min/max fs/ss must "
+                f"be an ordered range WITHIN the panel's slab, not a virtual assembled plane "
+                f"(glint#148)")
     n = len(pred)
     I = np.zeros(n); sig = np.zeros(n); peak = np.zeros(n); bgpp = np.zeros(n)
     for pi, p in enumerate(panels):
@@ -616,6 +621,13 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None, panel_sla
         stacked = getattr(d, "ndim", 0) >= 3 and d.shape[0] > 1
         is_event = event_axis
         n_slabs = (max(panel_slabs) + 1) if panel_slabs else None
+        if stacked and is_event is None and getattr(d, "ndim", 0) >= 4:
+            # 4-D and higher: the leading axis IS the event axis (the geometry's '%' dimension);
+            # slab-count inference below is reserved for 3-D data, where the leading axis is the
+            # ambiguous one. Without this, a 4-D file whose EVENT count happens to equal the slab
+            # count would be classified as a panel stack and returned whole to the 2-D integrator
+            # (Copilot review of #157).
+            is_event = True
         if stacked and is_event is None and n_slabs is not None and d.shape[0] == n_slabs:
             # The .geom's integer dimN keys map the panels onto a leading axis of EXACTLY this
             # length: the geometry DECLARES the layout, so this is a panel stack. This must come
@@ -659,7 +671,7 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None, panel_sla
             # slabs apart, and guessing one -- by declaration order, say -- integrates the wrong
             # pixels silently, which is glint#136 in a different coat. So: refuse, naming the fix.
             if n_panels > 1:
-                if panel_slabs is not None:
+                if panel_slabs is not None and getattr(d, "ndim", 0) == 3:
                     return np.asarray(d[()], np.float32)     # (panel, ss, fs), integrated per slab
                 raise NotImplementedError(
                     f"{path}:{data_path} is being read as a stack of {d.shape[0]} PANELS, but the "
@@ -673,6 +685,10 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None, panel_sla
             a = np.asarray(d[0], np.float32)         # single-panel geometry: slab 0 IS the frame
         else:
             a = np.asarray(d[()], np.float32)
+    if a.ndim == 4 and a.shape[0] == 1:
+        a = a[0]        # a ONE-event 4-D file is not "stacked" (leading axis 1), but its single
+                        # event is still a panel stack -- hand it to the 3-D rules below rather
+                        # than returning 4 axes to a 2-D integrator (Copilot review of #157)
     if a.ndim == 3:
         if a.shape[0] > 1:
             # one EVENT of a 4-D (event, panel, ss, fs) file: the same un-assembled shape, so the

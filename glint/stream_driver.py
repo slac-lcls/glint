@@ -769,6 +769,12 @@ class StreamDriver:
         # transient one in the warning text. Reported in stats() as n_fanout_errors.
         self.n_fanout_errors = 0
         self._fanout_fail_streak = 0
+        # ...and the FRAMES those failures cost: with rescue_buffer=0 a degraded frame is in no
+        # other ledger -- the miss buffer is unarmed, and the adaptive branch never counts
+        # n_gate_rejected -- so without this it would be visible only as pushed minus integrated
+        # (Copilot review of #156, suppressed comment). n_fanout_errors counts invocations;
+        # this counts frames.
+        self.n_fanout_missed = 0
 
         # Blind warm-up: with Mc=None the driver has no cell yet, so it indexes the first frames
         # blind (~26 ms/frame) one at a time, accumulating cross-frame consensus; when the running
@@ -1370,7 +1376,10 @@ class StreamDriver:
                 # The fan-out died for this frame (glint#147). No candidates means no rescue and
                 # NO VOTE -- absence of evidence must not feed the consensus histogram as a frame
                 # that voted for nothing. The frame stays a miss: when a miss buffer is armed it
-                # is already in it (flush() buffers before calling here), so nothing is lost.
+                # is already in it (flush() buffers before calling here). Counted regardless --
+                # with rescue_buffer=0 this counter is the ONLY ledger these frames appear in
+                # (Copilot review of #156, suppressed comment).
+                self.n_fanout_missed += 1
                 still_missed.append(i)
                 continue
             rescued = False
@@ -1531,8 +1540,11 @@ class StreamDriver:
                  # fan-out invocations (retry cascade or watchdog) that raised and were degraded to
                  # the miss path (glint#147). Reported unconditionally for the same reason: a dead
                  # fan-out silently turns every retry/relock mechanism off, and this counter is the
-                 # only place that shows.
-                 n_fanout_errors=self.n_fanout_errors)
+                 # only place that shows. n_fanout_missed is the FRAMES the watchdog could not
+                 # attempt because the fan-out gave no answer -- with rescue_buffer=0 they appear
+                 # in no other ledger.
+                 n_fanout_errors=self.n_fanout_errors,
+                 n_fanout_missed=self.n_fanout_missed)
         if self.warmup_rescue:
             s["n_warmup_rescued"] = self.n_warmup_rescued         # warm-up frames recovered the instant the cell locked
         if self.retry_cascade:                                   # glint#75, opt-in

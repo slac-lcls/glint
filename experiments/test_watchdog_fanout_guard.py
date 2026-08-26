@@ -112,6 +112,7 @@ def test_dead_fanout_does_not_crash_flush():
     assert drv._n == 0, "flush() must complete and reset the ring"
     assert drv.n_fanout_errors == 1, drv.n_fanout_errors
     assert drv.stats()["n_fanout_errors"] == 1
+    assert drv.n_fanout_missed == len(frames) and drv.stats()["n_fanout_missed"] == len(frames)
     assert len(drv._missbuf) == len(frames), (len(drv._missbuf), len(frames))
     assert len(ws) == 1 and "fan-out" in str(ws[0].message), [str(x.message) for x in ws]
     assert drv.n_relock == 0 and not drv.extra, "no votes may come from a dead fan-out"
@@ -128,6 +129,10 @@ def test_streak_counts_and_recovery_relocks():
     assert drv.n_fanout_errors == 2 and drv._fanout_fail_streak == 2
     assert "2 consecutive" in str(ws[0].message), str(ws[0].message)
     assert drv.n_relock == 0, "still no votes after two dead flushes"
+    # rescue_buffer=0: these 10 frames are in NO other ledger -- no miss buffer, and the adaptive
+    # branch never counts n_gate_rejected -- so the frame counter is their only representation
+    # (Copilot review of #156, suppressed comment)
+    assert drv.n_fanout_missed == 10 and drv.stats()["n_fanout_missed"] == 10
 
     drv._fanout = lambda Q, k: [[(B.copy(), 1.0)] for _ in Q]   # workers came back
     _load(drv, [frame_on(B, rng) for _ in range(5)])
@@ -136,6 +141,7 @@ def test_streak_counts_and_recovery_relocks():
     assert drv.n_relock == 1 and len(drv.extra) == 1, "recovered fan-out relocks normally"
     assert drv._fanout_fail_streak == 0, "success resets the streak"
     assert drv.n_fanout_errors == 2, "...but the total stands"
+    assert drv.n_fanout_missed == 10, "...and so does the frame count: recovery adds nothing"
 
 
 def test_short_return_is_padded_not_dropped():
@@ -151,6 +157,7 @@ def test_short_return_is_padded_not_dropped():
         if n_flush < 3:                                         # every miss buffered, none zipped away
             assert len(drv._missbuf) == 4 * n_flush, (n_flush, len(drv._missbuf))
     assert drv.n_fanout_errors == 0
+    assert drv.n_fanout_missed == 9, "the 3 unanswered slots per flush are counted as frames missed"
     assert drv.n_relock == 1, "the answered slot's votes accumulated across flushes"
     assert len(drv._missbuf) == 0, "the relock's retroactive rescue pass consumed the buffer"
 
@@ -167,6 +174,8 @@ def test_cascade_seam_counts_through_the_same_guard():
     assert drv.n_fanout_errors == 1 and len(ws) == 1
     assert drv.n_gate_rejected == len(frames), (drv.n_gate_rejected, len(frames))
     assert drv.stats()["n_fanout_errors"] == 1
+    assert drv.n_fanout_missed == 0, \
+        "cascade-path frames are ATTEMPTED via the per-frame fallback, not missed"
 
 
 def test_refused_verdict_cannot_relock_through_a_dead_batch():

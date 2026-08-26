@@ -103,6 +103,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_missbuf_rescue.py
 
+      # A permanently failing blind fan-out must degrade to the miss path, not crash flush()
+      # (glint#147): survival, the no-votes rule, the failure streak + counter, short-return
+      # padding, and the healthy path staying untouched.
+      - name: experiments/test_watchdog_fanout_guard.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_watchdog_fanout_guard.py
+
       # The opt-in retry cascade (glint#75). Injects the batched/blind/per-frame indexers through the
       # same seams test_missbuf_rescue.py uses, so the whole thing runs on numpy alone. Covers both
       # halves of the contract: flag OFF the gate-failing frame is a miss with no cascade counters at

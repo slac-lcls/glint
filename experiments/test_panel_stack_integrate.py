@@ -258,6 +258,33 @@ with tempfile.TemporaryDirectory() as d:
     check("an off-slab box comes back sigma=0 (edge-gated -> dropped by the keep filter)",
           Ie[0] == 0.0 and se[0] == 0.0, (float(Ie[0]), float(se[0])))
 
+    # --- the gate is the PANEL edge, not the slab edge (Copilot review of #157) ---------------
+    # A reflection 4 px from p0a0's asic boundary (ss window 0..174) sits comfortably inside
+    # slab 0 -- handing integrate_spots the whole slab integrated it, with its annulus reading
+    # p0a1's rows across the asic boundary. Cropped to the panel window it is edge-gated instead:
+    # array adjacency within a slab is packing, not geometry.
+    seam = np.zeros(1, dtype=pred.dtype)
+    seam["panel"] = 0; seam["fs"] = 350.0; seam["ss"] = 170.0    # 4 px from the asic edge, R=8
+    Is, ss_, ps_, bs_ = integrate_spots_stack(stack, seam, panels)
+    check("a box crossing an intra-slab asic boundary is edge-gated, never reads the neighbour",
+          Is[0] == 0.0 and ss_[0] == 0.0, (float(Is[0]), float(ss_[0])))
+
+    # --- a mapped SINGLETON stack must still be validated (Copilot review of #157) ------------
+    # (1, ss, fs) under the 2-slab mapping: squeezing it to 2-D skipped slab validation and
+    # silently integrated slab 0 for every panel; now the mismatch raises by name.
+    cxi_1s = os.path.join(d, "oneslab.h5")
+    with h5py.File(cxi_1s, "w") as f:
+        f.create_dataset(DATA, data=stack[:1])
+    raised_s = None
+    try:
+        integrate_frames([{"image": cxi_1s, "event": 0, "M": LYSO}], geom,
+                         image_dir=d, data_path=DATA, dmin=4.0, tol=0.004)
+    except Exception as exc:                      # noqa: BLE001
+        raised_s = exc
+    check("a mapped geometry over a 1-slab file raises the slab mismatch, never slab-0-for-all",
+          isinstance(raised_s, ValueError) and "does not address the 1-slab stack" in str(raised_s),
+          repr(raised_s)[:120])
+
     # --- _load_image returns the whole stack only under a mapping ----------------------------
     got = _load_image(cxi, DATA, event=0, n_panels=4, panel_slabs=[0, 0, 1, 1])
     check("_load_image hands back the whole (panel, ss, fs) stack when slabs are mapped",

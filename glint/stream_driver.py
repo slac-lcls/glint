@@ -1416,12 +1416,22 @@ class StreamDriver:
             voters = [(q, next(c for c in cs if same_lattice(c, Mn)))
                       for q, cs in watch_ev
                       if any(same_lattice(c, Mn) for c in cs)]
-            if voters:
-                Mg = self._alias_gate.confirm_frames(Mn, voters)
-                if Mg is None:
-                    self.n_gate_refused += 1
-                    return
-                Mn = _conventional_tetragonal(np.asarray(Mg, float))
+            if not voters:
+                # No frame in THIS batch supports the verdict: the histogram retained it from an
+                # earlier batch (a refusal deliberately keeps accumulating), and this batch added
+                # nothing that agrees -- every entry was None from a dead fan-out (glint#147), every
+                # frame was rescued, or the votes went elsewhere. confirm_frames cannot run without
+                # voters, and skipping it here would commit a cell the gate may already have
+                # REFUSED, precisely on the batch with the least evidence (Copilot review of #156).
+                # Refuse instead: same bookkeeping, histogram kept, a later batch with real
+                # supporting frames confirms or refuses on its own evidence.
+                self.n_gate_refused += 1
+                return
+            Mg = self._alias_gate.confirm_frames(Mn, voters)
+            if Mg is None:
+                self.n_gate_refused += 1
+                return
+            Mn = _conventional_tetragonal(np.asarray(Mg, float))
         if any(same_lattice(Mn, Mc) for Mc in self._all_cells()):
             return
         lock_z = None

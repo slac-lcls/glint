@@ -169,6 +169,42 @@ def test_cascade_seam_counts_through_the_same_guard():
     assert drv.stats()["n_fanout_errors"] == 1
 
 
+def test_refused_verdict_cannot_relock_through_a_dead_batch():
+    """Copilot review of #156: the alias gate's refusal keeps the histogram accumulating, so the
+    NEXT batch re-reads the retained verdict -- and if that batch contributed no voters (a dead
+    fan-out yields all-None), skipping confirm_frames would commit the very cell the gate refused,
+    on the batch with the least evidence. A voter-less verdict must be refused, not waved through."""
+    rng = np.random.default_rng(SEED + 5)
+
+    class _RefusingGate:
+        def __init__(self):
+            self.calls = 0
+
+        def confirm_frames(self, Mn, voters):
+            self.calls += 1
+            return None                                         # refuse every confirmation
+
+    gate = _RefusingGate()
+    drv = StreamDriver(A, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                       use_gpu=False, adaptive_relock=True, alias_gate=gate)
+    drv._blind_index = lambda q, k: []
+    drv._known_perframe = None
+
+    drv._fanout = lambda Q, k: [[(B.copy(), 1.0)] for _ in Q]   # batch 1: real votes -> verdict
+    _load(drv, [frame_on(B, rng) for _ in range(5)])
+    _flush_catching(drv)
+    assert gate.calls == 1 and drv.n_gate_refused == 1, (gate.calls, drv.n_gate_refused)
+    assert drv.n_relock == 0, "the gate refused; nothing may lock"
+
+    drv._fanout = _boom                                         # batch 2: dead fan-out, no voters
+    _load(drv, [frame_on(B, rng) for _ in range(5)])
+    _flush_catching(drv)
+    assert gate.calls == 1, "confirm_frames must not run without voters"
+    assert drv.n_relock == 0 and not drv.extra, \
+        "a voter-less batch must not commit the previously refused verdict"
+    assert drv.n_gate_refused == 2, "the voter-less verdict is a refusal, same bookkeeping"
+
+
 def test_healthy_fanout_is_untouched():
     """No exception, full-length return: no warning, zero count, relock exactly as always."""
     rng = np.random.default_rng(SEED + 4)
@@ -183,7 +219,7 @@ def test_healthy_fanout_is_untouched():
 if __name__ == "__main__":
     tests = (test_dead_fanout_does_not_crash_flush, test_streak_counts_and_recovery_relocks,
              test_short_return_is_padded_not_dropped, test_cascade_seam_counts_through_the_same_guard,
-             test_healthy_fanout_is_untouched)
+             test_refused_verdict_cannot_relock_through_a_dead_batch, test_healthy_fanout_is_untouched)
     ok = 0
     for t in tests:
         try:

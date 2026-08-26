@@ -87,6 +87,14 @@ with tempfile.TemporaryDirectory() as d:
           isinstance(gg.get("res"), float) and isinstance(gg.get("clen"), float),
           {k: type(v).__name__ for k, v in gg.items()})
 
+    # '123' is a legal HDF5 dataset name; the float() fallback the other globals ride would turn
+    # it into 123.0, and h5py raises TypeError on a float key (Copilot review of glint#155)
+    g123 = os.path.join(d, "numeric_name.geom")
+    open(g123, "w").write("data = 123\n")
+    got = parse_geom(g123).get("global", {}).get("data")
+    check("a numeric-looking dataset name stays a STRING (data = 123)",
+          got == "123" and isinstance(got, str), (got, type(got).__name__))
+
     panels, clen = panels_from_geom(geom)
     pred = predict_spots(LYSO, panels, clen, LAM, dmin=5.0, tol=0.004)
     inb = pred[(pred["fs"] > 10) & (pred["fs"] < NPX - 11)

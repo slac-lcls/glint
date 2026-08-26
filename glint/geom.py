@@ -72,7 +72,9 @@ def parse_geom(path):
                     p[sub] = float(val)
                 except ValueError:
                     p[sub] = val
-        elif key in _GLOBAL:
+        elif key == "data":
+            g[key] = val                   # an HDF5 dataset PATH: '123' is a legal dataset name,
+        elif key in _GLOBAL:               # so it must never ride the float() fallback below
             try:
                 g[key] = float(val)
             except ValueError:

@@ -356,13 +356,19 @@ def asic_seam_mask(shape, asic, width=2):
     panel edges for free -- so a peak list built from a CrystFEL geometry and one built from a raw
     psana array with the "same" settings are NOT comparable until this is applied.
 
-    Measured on real Jungfrau 16M frames (512x1024 modules of 256x256 ASICs) with the CrystFEL-matched
-    settings (--threshold=50 --min-snr=7 --min-pix-count=4): with the status+perimeter mask ALONE,
-    42% of the peaks this finder returned sat EXACTLY on a seam and 57% within +-1 px, against ~12%
-    expected if they were spread over the module by area -- the median distance from a peak to the
-    nearest seam was 1 pixel. Masking the seams costs ~2% of the module (width=2 drops 4 px per seam,
-    1.94% here) and took the median from 18 peaks/frame to 3: most of what was being counted was the
-    detector, not the sample.
+    Measured on 400 raw Jungfrau 16M frames of mfx101555026 r0013 (512x1024 modules of 256x256 ASICs)
+    at the CrystFEL-matched settings (--threshold=50 --min-snr=7 --min-pix-count=4 --max-pix-count=200
+    --min-res=50 --max-res=3000), with the status+perimeter mask ALONE: of 8,009 peaks this finder
+    returned, 57% sat within half a pixel of an interior seam and 79% within one pixel, against 0.5%
+    and 1.5% of the unmasked area -- an enrichment of 117x and 54x, with a median peak-to-seam distance
+    of 0.5 px. Applying this mask at width=2 costs 1.94% of the module and removes 78% of the peaks,
+    taking the mean from 20.0 to 4.4 per frame and the fraction of frames carrying any peak at all
+    from 90% to 39%: most of what was being counted was the detector, not the sample.
+
+    `experiments/measure_asic_seams.py` produced those numbers and is committed so they can be
+    re-derived; it imports THIS function rather than re-implementing it, which is not a stylistic
+    preference -- a re-implementation that masked 5 px per seam instead of width=2's 4 reported the
+    cost as 2.44%, and only reviewing the two side by side caught it (PR #151).
 
     Related trap, same cause: a per-module Jacobian d(lab)/d(ss, fs) estimated by finite difference at
     the module CENTRE reads 1.5x the pixel pitch on Jungfrau, because (256, 512) is an ASIC corner and

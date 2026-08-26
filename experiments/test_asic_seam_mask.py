@@ -17,8 +17,14 @@ Measured on 400 raw Jungfrau 16M frames of mfx101555026 r0013, at the CrystFEL-m
 the facility mask alone (psana `_mask_from_status()` & `_mask_edges(width=2)`). Of 8,009 returned
 peaks, **57% sat within half a pixel of an interior seam and 79% within one pixel, against 0.5% and
 1.5% of the unmasked area** -- an enrichment of 117x and 54x. The median peak-to-nearest-seam distance
-was 0.5 px. Masking the seams costs 2.44% of the module and removes 78% of the peaks, taking the mean
-from 20.0 to 4.4 per frame and the fraction of frames carrying any peak at all from 90% to 39%.
+was 0.5 px. Masking the seams at width=2 costs 1.94% of the module and removes 78% of the peaks,
+taking the mean from 20.0 to 4.4 per frame and the fraction of frames carrying any peak at all from
+90% to 39%.
+
+Those last figures are unchanged by the seam width, and that is a physical statement rather than a
+coincidence: a re-measurement with a 5-px seam instead of width=2's 4 px removed exactly the same
+78% of peaks, because the artifact sits within half a pixel of the seam line and a 4-px window
+already catches all of it. The wider mask costs more module (2.44% against 1.94%) and buys nothing.
 
 The definitions are part of the claim, because the previous ones were lost. `interior seam` means
 ss = 256 (mod 512) and fs in {256, 512, 768}, EXCLUDING module perimeters -- those are

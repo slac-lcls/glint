@@ -29,10 +29,19 @@ The env's own compiled peakfinder8.so shadows the vendored module, and `import g
 pulls in glint/__init__ -> .detector -> torch, which psana2 does not have. So both modules are loaded
 straight from their files, with `radial` pre-registered under the name peakfinder8.py falls back to.
 """
-import importlib.util, sys, time
+import importlib.util, os, sys, time
 import numpy as np
 
-H = "/sdf/home/s/smarches/h2h"
+# Resolve the package next to THIS file rather than a hard-coded checkout: the script lives in
+# experiments/, so glint/ is one level up -- but it is also run from a flat scratch dir on the
+# analysis node, where glint/ is a sibling. Try both, and say so if neither is there.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _cand in (os.path.dirname(_HERE), _HERE):
+    if os.path.exists(os.path.join(_cand, "glint", "peakfinder8.py")):
+        H = _cand
+        break
+else:
+    sys.exit("cannot find glint/peakfinder8.py next to or above %s" % _HERE)
 
 
 def _load(name, path):
@@ -49,8 +58,9 @@ PF8 = _load("gpf8", f"{H}/glint/peakfinder8.py")
 from psana import DataSource
 
 RUN = int(sys.argv[1]) if len(sys.argv) > 1 else 13
-NFRAMES = int(sys.argv[2]) if len(sys.argv) > 2 else 200
-OUT = sys.argv[3] if len(sys.argv) > 3 else f"{H}/work/seam_r{RUN:04d}.npz"
+NFRAMES = int(sys.argv[2]) if len(sys.argv) > 2 else 400   # matches the quoted sample
+OUT = sys.argv[3] if len(sys.argv) > 3 else f"seam_r{RUN:04d}.npz"   # cwd, which exists
+os.makedirs(os.path.dirname(os.path.abspath(OUT)), exist_ok=True)
 
 SS, FS = 32 * 512, 1024
 row_seams = np.arange(256, SS, 512)                      # interior only: 256, 768, 1280, ...
@@ -61,15 +71,6 @@ def seam_dist(ss, fs):
     dr = np.min(np.abs(ss[:, None] - row_seams[None, :]), axis=1)
     dc = np.min(np.abs(fs[:, None] - col_seams[None, :]), axis=1)
     return np.minimum(dr, dc)
-
-
-def seam_mask(width=2):
-    m = np.ones((SS, FS), bool)
-    for b in row_seams:
-        m[max(0, b - width):b + width + 1, :] = False
-    for b in col_seams:
-        m[:, max(0, b - width):b + width + 1] = False
-    return m
 
 
 ds = DataSource(exp="mfx101555026", run=RUN, max_events=NFRAMES)
@@ -89,7 +90,10 @@ else:
 
 radial_ok = (rpix >= 50.0) & (rpix <= 3000.0)
 mask_fac = facility & radial_ok                          # the "facility mask alone" arm
-mask_seam = mask_fac & seam_mask(2)                      # the same, plus the seam mask
+# THE SHIPPED HELPER, not a local copy of it. A re-implementation here measured a 5-px seam against
+# asic_seam_mask's 4 px (`m[max(0,b-w):b+w]`), which inflated the cost 1.94% -> 2.44% and every
+# post-mask figure with it. Import the thing under test or the measurement is of something else.
+mask_seam = mask_fac & np.tile(PF8.asic_seam_mask((512, FS), (256, 256), width=2), (32, 1))
 
 gy, gx = np.nonzero(mask_fac)
 d_all = seam_dist(gy.astype(float), gx.astype(float))

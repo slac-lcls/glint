@@ -13,14 +13,16 @@ Measured (`cover`, pure geometry, median over 16 crystals) as the extra distinct
 colour reaches, against what a step in NA reaches on its own:
 
     NA      2-colour gain at dE/E=15.4%     NA step        single-colour gain
-    14 mrad         1.63x                   14 -> 20 mrad        1.75x
-    20 mrad         1.37x                   20 -> 28 mrad        1.43x
-    28 mrad         1.23x                   28 -> 40 mrad        1.60x
-    40 mrad         1.17x
+    14 mrad         1.46x                   14 -> 20 mrad        1.38x
+    20 mrad         1.33x                   20 -> 28 mrad        1.55x
+    28 mrad         1.22x                   28 -> 40 mrad        1.47x
+    40 mrad         1.14x                   40 -> 56 mrad        1.36x
 
-A ~1.4x step in convergence beats a 2.5 keV energy split at every NA, and the two-colour gain SHRINKS
-as NA grows, because a wider shell has already swallowed the second sphere. By dE/E = 1% the gain is
-exactly 1.00x at every NA tested.
+Above 20 mrad a comparable step in convergence beats the whole 2.5 keV split; at 14 mrad it does not
+(1.38x against 1.46x), which is the shrinking gain read the other way -- two colours substitute for
+convergence you do not have, and are worth most where you have least. By dE/E = 1% the gain is exactly
+1.00x at every NA tested. (Counts at nchi=11520; the 720 first published here undercounts near
+tangency -- see `excited`.)
 
 The accumulator: score orientation R by voting every observed k_out against the predicted Kossel
 PLANE of every lattice node (the plane residual |k_out.Ghat - |G|/2| is COLOUR-FREE) AND the
@@ -202,7 +204,18 @@ def kossel_basis(G, K):
 def simulate(R, rng, noise, na, Ks, nchi=720, thin=6):
     """emit the convergent-beam Kossel arcs for orientation R over colours Ks.
     returns kobs (Np,3), lab (real vs spurious), col (0/1 true colour, -1 spurious),
-    cents (streak centroids), cent_col (their colour)."""
+    cents (streak centroids), cent_col (their colour).
+
+    TWO SAMPLING LIMITS LIVE IN THE DEFAULTS, both measured (PR #149 review), both left as they are
+    because changing them moves every number in CBXD_TWOCOLOR_STEP1.md:
+
+      * nchi=720 undercounts arcs near cone/sphere tangency -- 18 against 24 at NA = 14 mrad, 24
+        against 30 at 20, converged by 28. See `excited` for the mechanism.
+      * thin=6 leaves ONE POINT PER ARC at NA = 14 and 20 mrad (1.39 at 28, 1.80 at 40, 2.26 at 56).
+        A plane fit needs three points on an arc to see curvature at all, so in the low-NA regime --
+        which is exactly the regime the two-colour result is strongest in -- this testbed is a POINT
+        cloud, not a set of arcs, and nothing it shows there is evidence about pooled curvature.
+        The point-vote results stand as point-vote results."""
     chi = np.linspace(0, 2 * np.pi, nchi, endpoint=False)
     cc, ss = np.cos(chi), np.sin(chi)
     cosa, sina = np.cos(na), np.sin(na)
@@ -474,10 +487,34 @@ def run_split(na, ncry=6, seed=1, ndec=3000):
     print("  (truth = accumulator votes at the true orientation; decoy = best of the random pool)")
 
 
-def excited(R, na, Ks, nchi=720):
+def excited(R, na, Ks, nchi=11520):
     """Which reflections does each colour actually excite? Returns a list of hkl-index sets, one per
     colour. This is the geometry alone -- no noise, no scoring, no refinement -- so it answers the
-    coverage question without a recovery statistic's counting noise in the way."""
+    coverage question without a recovery statistic's counting noise in the way.
+
+    NCHI IS NOT A FREE PARAMETER, and the 720 inherited from `simulate` was wrong here. A reflection
+    counts if at least two sampled chi land inside the cone, so a reflection whose in-cone interval is
+    narrower than the sampling step 2*pi/nchi is DROPPED -- and near cone/sphere tangency the interval
+    goes to zero, so the undercount is worst at small NA, exactly where the coverage ratios are
+    largest. Measured, single colour, median over 16 crystals:
+
+        NA mrad     nchi=720   nchi=2880   nchi=11520
+             14            8          11           11
+             20           14          16           16
+             28           21          23           24
+             40           32          32           32
+             56           45          46           46
+
+    A 37% undercount at 14 mrad. The default is now 11520, where the count is converged (2880 is
+    within one reflection everywhere and 720 is not). Found by review on PR #149.
+
+    `simulate` STILL RUNS AT 720 and that is a known limitation, not an argument that 720 is enough
+    there -- an earlier version of this docstring claimed the latter and it is false. Measured, arcs
+    emitted at 720 against 11520: 18 vs 24 at NA = 14 mrad, 24 vs 30 at 20, 46 vs 46 at 28, 60 vs 71
+    at 40. The same tangency undercount, 20-25% at the low-NA end. Every config in a given experiment
+    shares the setting, so comparisons BETWEEN configs at one NA stay like-for-like; comparisons
+    ACROSS NA, and any absolute arc count, are affected. Changing it alters every result in
+    CBXD_TWOCOLOR_STEP1.md, so it is flagged rather than flipped."""
     chi = np.linspace(0, 2 * np.pi, nchi, endpoint=False)
     cc, ss = np.cos(chi), np.sin(chi)
     cosa, sina = np.cos(na), np.sin(na)
@@ -569,9 +606,20 @@ def run_splitcap(na, ncry=8, seed=3):
     The contrast tower is the wrong instrument for the small-split end and it took a while to see
     why. Votes are counts of indexed points, and as dE/E -> 0 the second colour's Kossel arc for a
     given reflection slides onto the first colour's, so the point count doubles by DUPLICATION. The
-    tower can therefore keep doubling while no new reciprocal-space coverage arrives at all. What
-    cannot be faked that way is the width of the basin the refiner has to find: a genuinely better
-    objective is one a more distant seed still falls into.
+    tower can therefore keep doubling while no new reciprocal-space coverage arrives at all.
+
+    Capture radius is a DIFFERENT instrument, not an immune one -- this docstring used to claim
+    immunity and that was wrong (PR #149 review). `refine` maximises `soft_score`, which sums one
+    term per observed POINT, so duplicated arcs are summed twice here too, and their independent
+    noise realisations change the objective's variance. Capture success can move without a single new
+    reflection arriving.
+
+    What licenses the sweep is narrower and worth stating exactly: the duplication factor is CONSTANT
+    across it. `cover` reports arcs/col1 = 2.00 at every split from 15.4% down to zero, so whatever
+    duplication does to the basin, it does equally in every row and cannot manufacture a TREND in
+    dE/E. The second-order effect even runs the wrong way for the conclusion: at a narrow split the
+    two copies are near-coincident with independent noise, which averages toward a cleaner objective
+    and should widen the basin at the narrow end -- so an observed DECLINE there is conservative.
     """
     e1_0, e2_0 = E1_keV, E2_keV
     Ec = 16.25

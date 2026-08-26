@@ -51,10 +51,10 @@ original write-up reported doubling (25 → 52). Median over 16 crystals.
 
 | Δ*E*/*E* | NA=14 mrad | NA=20 | NA=28 | NA=40 | arcs/col1 (all NA) |
 |---|---|---|---|---|---|
-| 0.15385 | **1.63×** | **1.37×** | **1.23×** | **1.17×** | ~2.00× |
-| 0.08 | 1.26 | 1.23 | 1.09 | 1.08 | ~2.00 |
-| 0.04 | 1.09 | 1.10 | 1.06 | 1.03 | 2.00 |
-| 0.02 | 1.05 | 1.03 | 1.04 | 1.01 | 2.00 |
+| 0.15385 | **1.46×** | **1.33×** | **1.22×** | **1.14×** | ~2.00× |
+| 0.08 | 1.21 | 1.21 | 1.11 | 1.09 | ~2.00 |
+| 0.04 | 1.12 | 1.09 | 1.05 | 1.03 | 2.00 |
+| 0.02 | 1.08 | 1.00 | 1.04 | 1.00 | 2.00 |
 | 0.01 | 1.00 | 1.00 | 1.00 | 1.00 | 2.00 |
 | 0 | 1.00 | 1.00 | 1.00 | 1.00 | 2.00 |
 
@@ -63,18 +63,31 @@ Two readings, both load-bearing:
 1. **Even at 15.4%, "twice the arcs" is 1.2–1.6× the reflections.** The arc count doubles at *every*
    split down to and including zero, because a duplicate excitation is still an excitation. Arc count
    is not a coverage measure.
-2. **The two-colour gain shrinks as NA grows** — 1.63× at 14 mrad down to 1.17× at 40 mrad — exactly
+2. **The two-colour gain shrinks as NA grows** — 1.46× at 14 mrad down to 1.14× at 40 mrad — exactly
    as the shell picture requires: a wider shell has already swallowed the second sphere.
 
-And the convergence lever measured the same way, single colour (`cover na`), distinct reflections:
+And the convergence lever measured the same way, single colour (`coverna`), distinct reflections:
 
-| NA (mrad) | 14 | 20 | 28 | 40 | 56 |
-|---|---|---|---|---|---|
-| reflections | 8 | 14 | 20 | 32 | 44 |
-| vs previous | — | 1.75× | 1.43× | 1.60× | 1.37× |
+| NA (mrad) | 4 | 8 | 14 | 20 | 28 | 40 | 56 |
+|---|---|---|---|---|---|---|---|
+| reflections | 4 | 6 | 10 | 14 | 22 | 33 | 45 |
+| vs previous | — | 1.50× | 1.75× | 1.38× | 1.55× | 1.47× | 1.36× |
 
-**A ~1.4× step in NA beats the entire 2.5 keV split, at every NA.** Convergence is also continuously
-tunable, where the split is set by what the source can be made to do.
+Very nearly linear — about 0.8 reflections per mrad across the whole range.
+
+**Above 20 mrad a comparable step in NA beats the entire 2.5 keV split; at 14 mrad it does not.**
+Stepping 20→28 mrad gives 1.55× against the split's 1.33× at 20; 28→40 gives 1.47× against 1.22×;
+40→56 gives 1.36× against 1.14×. But 14→20 gives 1.38× against the split's 1.46× at 14 mrad, so at
+the starved end the split edges it. That is the same statement as the shrinking gain, read the other
+way: two colours substitute for convergence you do not have, and they are worth most precisely where
+you have least. Convergence is also continuously tunable, where the split is whatever the source can
+be made to do.
+
+> **Sampling.** These counts are at `nchi = 11520`, not the 720 this file first published. `excited`
+> counts a reflection when at least two sampled χ land in the cone, so near cone/sphere tangency a
+> genuinely excited reflection was dropped — worst at small NA, exactly where the ratios are largest.
+> The old table read 8/14/20/32/44 and, worse, **zero** at NA = 4 and 8 mrad, which was pure artifact.
+> 2880 is within one reflection of 11520 everywhere; 720 is not. Found by review on PR #149.
 
 ## (B) The vote-count trap
 
@@ -83,8 +96,8 @@ configs on accumulator votes. Votes at truth, median over 6 crystals, NA = 20 mr
 
 | Δ*E*/*E* | 1-col/1-sphere | 2-col/1-sphere (naive) | 2-col/2-sphere | coverage gain |
 |---|---|---|---|---|
-| 0.15385 | 11 | 10 | **24** | 1.37× |
-| 0.04 | 11 | 10 | 23 | 1.10× |
+| 0.15385 | 11 | 10 | **24** | 1.33× |
+| 0.04 | 11 | 10 | 23 | 1.09× |
 | 0.01 | 11 | 10 | 23 | 1.00× |
 | 0.002 | 11 | 11 | **23** | **1.00×** |
 | 0 | 11 | 22 | 22 | 1.00× |
@@ -109,7 +122,7 @@ hundred-fold below where the physics stops paying.
 
 Everything below was measured at Δ*E*/*E* = 15.4% (cell 16/21/25 Å ortho, d_min 3.5 Å, noise 2e-4) and
 is unchanged. Read it as *what a wide split buys*, not as a general two-colour result; per (A) the
-coverage gain behind these numbers is 1.2–1.6×, not 2×.
+coverage gain behind these numbers is 1.1–1.5×, not 2×.
 
 Three configs isolate *information* from *method*:
 1. **1-col data / 1-sphere** — single-colour baseline
@@ -151,7 +164,7 @@ Matched candidate budget — success / (median indexed fraction); median λ-acc 
 | 2-col / 2-sphere | 3/10 (41%) | 7/10 (92%) | **10/12 (94%), λ 100%** |
 
 The wall-moving column is the low-NA one, and note *why* it is the low-NA one: (A) says the
-two-colour coverage gain is largest exactly where NA is smallest (1.63× at 14 mrad). Two colours
+two-colour coverage gain is largest exactly where NA is smallest (1.46× at 14 mrad). Two colours
 substitute for convergence you do not have. Where NA is already generous the substitution is not
 worth much — which is the same statement as the shrinking gain down the first row of (A).
 

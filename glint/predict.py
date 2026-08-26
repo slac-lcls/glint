@@ -204,13 +204,14 @@ def integrate_spots_stack(stack, pred, panels, half=3, gap=2, ring=3, bg_mode="c
     slab, so no coordinate shift is needed. Panels sharing a slab (asics tiling one module) each
     read their own window of it.
 
-    No assembled canvas is ever built, so no pixel is invented and the gap question dissolves: a
-    reflection whose box would leave its slab is edge-gated by ``integrate_spots`` exactly like a
-    frame-edge reflection on an assembled frame (sigma=0, dropped by the caller's keep filter),
-    and a box near an internal seam is gated rather than silently integrated across two physical
-    modules -- which an assembled canvas would do. Returns (I, sigma, peak, bg) aligned with
-    ``pred``; raises on a panel whose slab or window does not address the stack, because that is a
-    geometry/data mismatch, not a measurement of zero.
+    No assembled canvas is ever built, so no pixel is invented and the gap question dissolves.
+    Each panel is CROPPED to its own window before integrating, so the in-frame gate is the panel
+    edge -- a reflection whose box would leave its panel is edge-gated (sigma=0, dropped by the
+    caller's keep filter) exactly like a frame-edge reflection on an assembled frame, and that
+    includes the boundary between two asics packed into one slab: array adjacency there is
+    packing, not geometry, so no box ever reads a neighbouring panel's pixels. Returns
+    (I, sigma, peak, bg) aligned with ``pred``; raises on a panel whose slab or window does not
+    address the stack, because that is a geometry/data mismatch, not a measurement of zero.
     """
     stack = np.asarray(stack)
     # Validate EVERY panel against the stack up front, reflections or not: a slab or window that
@@ -240,7 +241,15 @@ def integrate_spots_stack(stack, pred, panels, half=3, gap=2, ring=3, bg_mode="c
         m = pred["panel"] == pi
         if not m.any():
             continue
-        I[m], sig[m], peak[m], bgpp[m] = integrate_spots(stack[p["slab"]], pred[m], half=half,
+        # Crop to THIS panel's window and translate the predictions into it, so integrate_spots'
+        # in-frame gate is the PANEL edge -- not the slab edge. Handing it the whole slab let a
+        # box near an intra-slab asic boundary gather signal/background from the neighbouring
+        # panel's pixels, which may be a physically separated or differently oriented ASIC
+        # (Copilot review of #157); array adjacency within a slab is packing, not geometry.
+        win = stack[p["slab"], p["min_ss"]:p["max_ss"] + 1, p["min_fs"]:p["max_fs"] + 1]
+        loc = pred[m].copy()
+        loc["fs"] = loc["fs"] - p["min_fs"]; loc["ss"] = loc["ss"] - p["min_ss"]
+        I[m], sig[m], peak[m], bgpp[m] = integrate_spots(win, loc, half=half,
                                                          gap=gap, ring=ring, bg_mode=bg_mode)
     return I, sig, peak, bgpp
 
@@ -646,14 +655,18 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None, panel_sla
             # count would be classified as a panel stack and returned whole to the 2-D integrator
             # (Copilot review of #157).
             is_event = True
-        if stacked and is_event is None and n_slabs is not None and d.shape[0] == n_slabs:
-            # The .geom's integer dimN keys map the panels onto a leading axis of EXACTLY this
-            # length: the geometry DECLARES the layout, so this is a panel stack. This must come
-            # before the metadata step and before rule 4 -- with asics sharing modules the slab
-            # count differs from the panel count, so "leading axis != n_panels -> events" reads a
-            # 2-slab/4-panel stack as events and integrates slab 0's pixels for every panel
-            # (glint#148); and a per-event array that happens to match the slab count is
-            # circumstance, while the dims are a statement.
+        if stacked and is_event is None and n_slabs is not None:
+            # The .geom's integer dimN keys DECLARE the 3-D layout: the leading axis is the panel
+            # axis, full stop. (A 3-D EVENT stack cannot coexist with a slab-mapped multi-panel
+            # geometry -- its per-slab windows overlap, so a single 2-D frame per event describes
+            # nothing; a real event series under this geometry is 4-D and is claimed above.) This
+            # must come before the metadata step and before rule 4: with asics sharing modules the
+            # slab count differs from the panel count, so "leading axis != n_panels -> events"
+            # read a 2-slab/4-panel stack as events and integrated slab 0's pixels for every panel
+            # (glint#148), and a per-event array that happens to match the leading axis is
+            # circumstance, while the dims are a statement. A leading axis that does not match the
+            # mapping is a geometry/data MISMATCH, and integrate_spots_stack raises it by name --
+            # guessing events there instead would integrate wrong pixels silently.
             is_event = False
         if stacked and is_event is None:
             n_ev = _event_count(f)
@@ -708,6 +721,12 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None, panel_sla
                         # event is still a panel stack -- hand it to the 3-D rules below rather
                         # than returning 4 axes to a 2-D integrator (Copilot review of #157)
     if a.ndim == 3:
+        if n_panels > 1 and panel_slabs is not None:
+            # A mapped multi-panel stack goes back WHOLE at any slab count -- including a
+            # singleton. Squeezing (1, ss, fs) to 2-D here skipped integrate_spots_stack's slab
+            # validation, so a geometry mapping panels onto slabs {0, 1} silently integrated
+            # slab 0 for every panel (Copilot review of #157); now that mismatch raises by name.
+            return a
         if a.shape[0] > 1:
             # one EVENT of a 4-D (event, panel, ss, fs) file: the same un-assembled shape, so the
             # same rules as the 3-D branch above -- slab-local with a mapping, refused without.

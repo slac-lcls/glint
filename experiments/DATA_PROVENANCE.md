@@ -91,9 +91,12 @@ reading of the footer's relationship to them is asserted here.)
 - `experiments/nbest_120.npz` — derived from the **entry-17** peak lists above
   (`frames_cxidb_clean.txt`) by GLINT's blind N-best indexing (top-3 hypotheses per frame; the
   producing run's wall time is recorded in the file's own `index_s` key, see its section above).
-  The exact producing run predates this file's commit and no in-tree generator reproduces it —
-  the file is a recorded artifact, pinned by size and sha256 above. It contains only derived
-  lattice hypotheses; no deposited data are redistributed.
+  The original producing run predates this file's commit, but the call has since been
+  reconstructed and validated: `experiments/gen_nbest.py` run on `frames_cxidb_clean.txt`
+  reproduces the committed payload **bit-exactly** (2026-08-26, A100, `cells` max |Δ| = 0.0,
+  identical scores and frame ids; only `index_s` differs, as it must — that key is the run's
+  wall time). The file therefore has a verified derivation chain, not just a pinned hash. It
+  contains only derived lattice hypotheses; no deposited data are redistributed.
 - `experiments/prok_q.npz` — reciprocal-lattice points extracted from **entry 45** images
   (`dump_prok_q.py`, NERSC; see above). The extraction used a detector geometry file
   (`mpccd-optimized.geom`) that originates from the **entry 62** deposition — so entry 45's derived

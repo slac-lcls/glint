@@ -537,10 +537,13 @@ def load(p):
 
 
 # The paper's strict gate, in one place: a frame counts as indexed iff same_lattice(M, truth)
-# AND matched(M, q)/len(q) >= GATE_FRAC AND matched(M, q) >= GATE_MIN, where matched() counts
-# peaks with |q @ M - round(q @ M)| < GATE_TOL componentwise. These three values are PUBLISHED
-# (every gated rate in the paper is defined by them) and are tied to check_numbers.py FACTS by a
-# source regex, so changing them here fails the guard until the deliverables are re-measured.
+# AND matched_strict(M, q)/len(q) >= GATE_FRAC AND matched_strict(M, q) >= GATE_MIN, where
+# matched_strict() counts peaks with |q @ M - round(q @ M)| < GATE_TOL componentwise. These
+# three values are PUBLISHED (every gated rate in the paper is defined by them) and are tied
+# to check_numbers.py FACTS by a source regex, so changing them here fails the guard until the
+# deliverables are re-measured. matched_strict() is separated from the configurable matched()
+# so that gpass() is never accidentally routed through the QDIST=1 reciprocal-distance scorer,
+# which ignores GATE_TOL entirely (Copilot review of glint#170).
 # The ~12 experiment scripts that still inline the same triple are historical copies of THIS
 # definition; new code should import these names instead of re-declaring them.
 GATE_TOL = 0.15                      # near-integer window on q @ M, per component

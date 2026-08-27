@@ -1631,31 +1631,59 @@ def check_arithmetic() -> list[str]:
         _fns = ({n.name: n for n in ast.walk(_tree) if isinstance(n, ast.FunctionDef)}
                 if _tree is not None else {})
 
-        def _body_names(fn):
-            """Every Name/Attribute id referenced in the body, docstring excluded."""
-            body = fn.body[1:] if (fn.body and isinstance(fn.body[0], ast.Expr)
-                                   and isinstance(fn.body[0].value, ast.Constant)
-                                   and isinstance(fn.body[0].value.value, str)) else fn.body
-            out = set()
-            for stmt in body:
-                for node in ast.walk(stmt):
-                    if isinstance(node, ast.Name):
-                        out.add(node.id)
-            return out
+        def _fn_body(fn):
+            """Statements in the body with the leading docstring removed."""
+            return (fn.body[1:] if (fn.body and isinstance(fn.body[0], ast.Expr)
+                                    and isinstance(fn.body[0].value, ast.Constant)
+                                    and isinstance(fn.body[0].value.value, str))
+                    else fn.body)
 
-        for _fn, _need, _what in (("matched_strict", "GATE_TOL", "the strict window"),
-                                  ("gpass", "matched_strict", "the strict matcher"),
-                                  ("gpass", "GATE_FRAC", "the fraction bar"),
-                                  ("gpass", "GATE_MIN", "the count bar")):
+        def _in_comparator(fn, name):
+            """True if `name` is a Name node in the comparators of any Compare in the body.
+
+            A plain body-names check is satisfied by `tol = GATE_TOL` followed by a return
+            comparison against a literal: the constant is referenced but the gate threshold is
+            not. Checking that it appears as an actual comparator closes that gap (Copilot
+            review of #170, round 6).
+            """
+            for stmt in _fn_body(fn):
+                for node in ast.walk(stmt):
+                    if isinstance(node, ast.Compare):
+                        for comp in node.comparators:
+                            if any(isinstance(n, ast.Name) and n.id == name
+                                   for n in ast.walk(comp)):
+                                return True
+            return False
+
+        def _called_in_body(fn, name):
+            """True if `name` is used as a called function anywhere in the body."""
+            for stmt in _fn_body(fn):
+                for node in ast.walk(stmt):
+                    if isinstance(node, ast.Call):
+                        func = node.func
+                        if isinstance(func, ast.Name) and func.id == name:
+                            return True
+            return False
+
+        # Each entry: (fn_name, needed_name, check_fn, description_of_what_is_pinned).
+        # Constants must appear in comparators (not merely referenced), so that
+        # `tol = GATE_TOL; return ... < 0.15` is caught; function references need only
+        # appear as a call site.
+        for _fn, _need, _check, _what in (
+                ("matched_strict", "GATE_TOL", _in_comparator, "the strict window"),
+                ("gpass", "matched_strict", _called_in_body, "the strict matcher"),
+                ("gpass", "GATE_FRAC", _in_comparator, "the fraction bar"),
+                ("gpass", "GATE_MIN", _in_comparator, "the count bar")):
             if _tree is None:
                 break
             if _fn not in _fns:
                 bad.append(f"  FACTS: glint/glint_fast.py defines no {_fn}() -- the strict gate's "
                            f"canonical path is gone, so {_what} is defined by nothing")
-            elif _need not in _body_names(_fns[_fn]):
-                bad.append(f"  FACTS: {_fn}()'s BODY no longer references {_need} in "
-                           f"glint/glint_fast.py -- {_what} has been re-inlined, so the shipped "
-                           "gate can drift from the published one with every other check green")
+            elif not _check(_fns[_fn], _need):
+                bad.append(f"  FACTS: {_fn}()'s BODY no longer uses {_need} in the required "
+                           f"position in glint/glint_fast.py -- {_what} has been re-inlined or "
+                           "indirected, so the shipped gate can drift from the published one with "
+                           "every other check green")
         # matched() stays configurable, but its default must remain the canonical constant.
         _m = _fns.get("matched")
         if _tree is not None and _m is not None:

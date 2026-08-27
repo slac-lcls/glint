@@ -36,6 +36,7 @@ STEPS = [
     "experiments/test_asic_seam_mask.py",
     "experiments/test_negative_intensities.py",
     "experiments/test_integrate_event.py",
+    "experiments/test_panel_stack_integrate.py",
     "experiments/test_geom_data_key.py",
     "experiments/test_consensus_degenerate.py",
     "experiments/test_stream_gate_lock.py",

@@ -158,14 +158,16 @@ def main():
             nint, tot = integrate_cxi(results, args.geom, wavelength_A=args.wavelength,
                                       dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
                                       data_key=args.data_path)
-            _, _g = _pg(args.geom)
+            _panels, _g = _pg(args.geom)
+            _pnames = [p["name"] for p in _panels]
             def _f(v, d):
                 try:
                     return float(v)
                 except (TypeError, ValueError):
                     return d
             write_stream_integrated(results, args.out,
-                                    photon_eV=_f(_g.get("photon_energy"), 9392.7), clen_m=_f(_g.get("clen"), 0.15))
+                                    photon_eV=_f(_g.get("photon_energy"), 9392.7), clen_m=_f(_g.get("clen"), 0.15),
+                                    panel_names=_pnames)
         else:                                                    # per-file images (legacy detectors)
             from glint.predict import integrate_frames
             from glint.geom import parse_geom
@@ -175,8 +177,10 @@ def main():
                                          dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
                                          event_axis={"auto": None, "event": True,
                                                      "panel": False}[args.event_axis])
+            _pnames = list(geomd.get("panels", {}).keys())
             write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
-                                    photon_eV=float(gg.get("photon_energy", 9392.7)), clen_m=float(gg.get("clen", 0.15)))
+                                    photon_eV=float(gg.get("photon_energy", 9392.7)), clen_m=float(gg.get("clen", 0.15)),
+                                    panel_names=_pnames or None)
     else:
         # the .geom is what makes the stream readable at all -- see stream.write_stream
         write_stream(results, args.out,

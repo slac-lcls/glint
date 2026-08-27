@@ -195,6 +195,65 @@ def integrate_spots(data, pred, half=3, gap=2, ring=3, bg_mode="clipmean"):
     return I, sig, peak, bgpp
 
 
+def integrate_spots_stack(stack, pred, panels, half=3, gap=2, ring=3, bg_mode="clipmean"):
+    """Box-integrate against an UN-ASSEMBLED ``(panel, ss, fs)`` stack, slab-locally (glint#148).
+
+    Each reflection is integrated on ITS OWN panel's slab (``panels[i]['slab']``, from the .geom's
+    integer ``dimN`` key) at its ``fs``/``ss`` as-is: ``project_q`` emits data-array coordinates
+    (panel window + local offset), and in a slab-mapped .geom the window addresses WITHIN the
+    slab, so no coordinate shift is needed. Panels sharing a slab (asics tiling one module) each
+    read their own window of it.
+
+    No assembled canvas is ever built, so no pixel is invented and the gap question dissolves.
+    Each panel is CROPPED to its own window before integrating, so the in-frame gate is the panel
+    edge -- a reflection whose box would leave its panel is edge-gated (sigma=0, dropped by the
+    caller's keep filter) exactly like a frame-edge reflection on an assembled frame, and that
+    includes the boundary between two asics packed into one slab: array adjacency there is
+    packing, not geometry, so no box ever reads a neighbouring panel's pixels. Returns
+    (I, sigma, peak, bg) aligned with ``pred``; raises on a panel whose slab or window does not
+    address the stack, because that is a geometry/data mismatch, not a measurement of zero.
+    """
+    stack = np.asarray(stack)
+    # Validate EVERY panel against the stack up front, reflections or not: a slab or window that
+    # does not address the data is a geometry/data mismatch, and it must not depend on where this
+    # frame's reflections happened to land whether it is caught.
+    for pi, p in enumerate(panels):
+        s = p.get("slab")
+        if s is None or not 0 <= s < stack.shape[0]:
+            raise ValueError(
+                f"panel {p.get('name', pi)}: slab {s} does not address the {stack.shape[0]}-slab "
+                f"stack -- every panel needs an integer dimN key matching the data layout "
+                f"(glint#148)")
+        if not (0 <= p["min_fs"] <= p["max_fs"] < stack.shape[2]
+                and 0 <= p["min_ss"] <= p["max_ss"] < stack.shape[1]):
+            # the COMPLETE ordered window, not just the upper endpoints: a negative or inverted
+            # bound does not address the slab either, and letting it through would surface as
+            # silently dropped reflections instead of the promised mismatch error
+            raise ValueError(
+                f"panel {p.get('name', pi)}: window fs {p['min_fs']}..{p['max_fs']} x "
+                f"ss {p['min_ss']}..{p['max_ss']} does not address the slab shape "
+                f"{stack.shape[1:]} -- in a slab-mapped .geom (integer dimN) min/max fs/ss must "
+                f"be an ordered range WITHIN the panel's slab, not a virtual assembled plane "
+                f"(glint#148)")
+    n = len(pred)
+    I = np.zeros(n); sig = np.zeros(n); peak = np.zeros(n); bgpp = np.zeros(n)
+    for pi, p in enumerate(panels):
+        m = pred["panel"] == pi
+        if not m.any():
+            continue
+        # Crop to THIS panel's window and translate the predictions into it, so integrate_spots'
+        # in-frame gate is the PANEL edge -- not the slab edge. Handing it the whole slab let a
+        # box near an intra-slab asic boundary gather signal/background from the neighbouring
+        # panel's pixels, which may be a physically separated or differently oriented ASIC
+        # (Copilot review of #157); array adjacency within a slab is packing, not geometry.
+        win = stack[p["slab"], p["min_ss"]:p["max_ss"] + 1, p["min_fs"]:p["max_fs"] + 1]
+        loc = pred[m].copy()
+        loc["fs"] = loc["fs"] - p["min_fs"]; loc["ss"] = loc["ss"] - p["min_ss"]
+        I[m], sig[m], peak[m], bgpp[m] = integrate_spots(win, loc, half=half,
+                                                         gap=gap, ring=ring, bg_mode=bg_mode)
+    return I, sig, peak, bgpp
+
+
 _RCOL = "   h    k    l          I   sigma(I)   peak  background  fs/px  ss/px panel\n"
 
 
@@ -451,9 +510,28 @@ def write_fromfile(results, path, lattice_code="aP"):
     return len(rows)
 
 
+def _panel_slab(p):
+    """The panel's data-array SLAB index from its CrystFEL ``dimN`` keys, or None.
+
+    In a 3-D data layout -- ``(panel, ss, fs)``, or 4-D with an event axis in front -- each panel
+    names its place along the extra leading axis with an INTEGER dim entry (``p1/dim0 = 1``);
+    ``%`` marks the event axis and ``ss``/``fs`` the in-slab axes, and ``parse_geom`` already
+    keeps all of them on the panel dict (integers as floats, the rest as strings). Exactly one
+    integer entry is the slab; none means a plain 2-D layout; more than one describes a layout
+    this flat-panel model does not (refused downstream by returning None). glint#148."""
+    ints = [int(v) for k in ("dim0", "dim1", "dim2", "dim3")
+            for v in (p.get(k),)
+            if v is not None and not isinstance(v, str) and float(v).is_integer()]
+    return ints[0] if len(ints) == 1 else None
+
+
 def panels_from_geom(geom):
     """Convert an ``fftindex.geom.parse_geom()`` result into the panel dicts predict_spots/project_q
-    want (same flat-panel model, different key names). Returns (panels, clen_m)."""
+    want (same flat-panel model, different key names). Returns (panels, clen_m).
+
+    ``slab`` is the panel's index along a 3-D dataset's leading axis, from its integer ``dimN``
+    key, or None for a plain 2-D layout -- what lets ``integrate_spots_stack`` integrate an
+    un-assembled panel stack slab-locally instead of refusing it (glint#148)."""
     g = geom.get("global", {})
     clen = float(g.get("clen", 0.1)); coff = float(g.get("coffset", 0.0)); res_g = float(g.get("res", 1.0))
     panels = []
@@ -462,7 +540,8 @@ def panels_from_geom(geom):
                            res=float(p.get("res", res_g)), cx=float(p["corner_x"]), cy=float(p["corner_y"]),
                            coffset=float(p.get("coffset", coff)),
                            min_fs=int(p["min_fs"]), max_fs=int(p["max_fs"]),
-                           min_ss=int(p["min_ss"]), max_ss=int(p["max_ss"])))
+                           min_ss=int(p["min_ss"]), max_ss=int(p["max_ss"]),
+                           slab=_panel_slab(p)))
     return panels, clen
 
 
@@ -509,7 +588,7 @@ def _event_count(f):
     return None
 
 
-def _load_image(path, data_path, event=0, n_panels=1, event_axis=None):
+def _load_image(path, data_path, event=0, n_panels=1, event_axis=None, panel_slabs=None):
     """Read the frame for THIS event out of an image file at the geom ``data`` path.
 
     EVENT-AWARE since glint#136. This used to end ``a = a[0] if a.shape[0] > 1 else a[0]`` -- both
@@ -533,9 +612,12 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None):
       3. one-panel geometry          -> EVENTS. A one-panel geometry cannot describe a panel stack.
       4. leading axis != n_panels    -> EVENTS. It cannot be a panel stack either.
 
-    A PANEL reading is only honoured for a ONE-PANEL geometry, where slab 0 is the whole detector.
-    Un-assembled multi-panel input is refused, because integration runs on one assembled frame and
-    a single slab is not one -- see the comment at the raise, and glint#148.
+    A PANEL reading is honoured two ways: a ONE-PANEL geometry takes slab 0 (the whole detector),
+    and a slab-mapped multi-panel geometry (``panel_slabs`` from integer ``dimN`` keys, glint#148)
+    gets the WHOLE 3-D stack back, which ``integrate_frames`` integrates slab-locally through
+    ``integrate_spots_stack``. A multi-panel stack WITHOUT the slab mapping is still refused --
+    there is no mapping from slab index to panel, and guessing one integrates the wrong pixels
+    silently -- see the comment at the raise.
       5. otherwise                   ``n_panels > 1`` and the axis matches it and the file said
                                      nothing -> genuinely ambiguous, so RAISE, naming both readings
                                      and the override. Never silently pick.
@@ -565,6 +647,27 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None):
                 f"Image-like datasets found here: {', '.join(cands) if cands else 'none'}.") from None
         stacked = getattr(d, "ndim", 0) >= 3 and d.shape[0] > 1
         is_event = event_axis
+        n_slabs = (max(panel_slabs) + 1) if panel_slabs else None
+        if stacked and is_event is None and getattr(d, "ndim", 0) >= 4:
+            # 4-D and higher: the leading axis IS the event axis (the geometry's '%' dimension);
+            # slab-count inference below is reserved for 3-D data, where the leading axis is the
+            # ambiguous one. Without this, a 4-D file whose EVENT count happens to equal the slab
+            # count would be classified as a panel stack and returned whole to the 2-D integrator
+            # (Copilot review of #157).
+            is_event = True
+        if stacked and is_event is None and n_slabs is not None:
+            # The .geom's integer dimN keys DECLARE the 3-D layout: the leading axis is the panel
+            # axis, full stop. (A 3-D EVENT stack cannot coexist with a slab-mapped multi-panel
+            # geometry -- its per-slab windows overlap, so a single 2-D frame per event describes
+            # nothing; a real event series under this geometry is 4-D and is claimed above.) This
+            # must come before the metadata step and before rule 4: with asics sharing modules the
+            # slab count differs from the panel count, so "leading axis != n_panels -> events"
+            # read a 2-slab/4-panel stack as events and integrated slab 0's pixels for every panel
+            # (glint#148), and a per-event array that happens to match the leading axis is
+            # circumstance, while the dims are a statement. A leading axis that does not match the
+            # mapping is a geometry/data MISMATCH, and integrate_spots_stack raises it by name --
+            # guessing events there instead would integrate wrong pixels silently.
+            is_event = False
         if stacked and is_event is None:
             n_ev = _event_count(f)
             if n_ev is not None:
@@ -591,28 +694,53 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None):
         elif stacked:
             # PANEL STACK. Handing back slab 0 is what this function did before glint#136, and it
             # was WRONG for any multi-panel geometry -- not a behaviour worth preserving. Measured
-            # on a 2-panel tiled geometry: predict_spots emits ASSEMBLED coordinates (project_q
-            # adds each panel's min_fs/min_ss), so a real 4500-count spot on panel 1 comes back
-            # I=0.0 sigma=0.0 peak=0.0 from a slab-0 frame -- silently zero, not missing. On a
-            # CrystFEL 3-D layout (dim0 selects the slab, every panel min_fs/min_ss = 0..N) it is
-            # worse: all panels occupy the SAME assembled window, so panel-1 reflections read
-            # panel-0 pixels. Assembling correctly needs a multi-panel data model in project_q and
-            # integrate_spots, not a reshape here -- glint#148. So: refuse.
+            # on a 2-panel tiled geometry: a real 4500-count spot on panel 1 comes back
+            # I=0.0 sigma=0.0 peak=0.0 from a slab-0 frame -- silently zero, not missing. With the
+            # .geom's integer dimN keys mapping each panel to its slab (panel_slabs), the whole
+            # stack goes back to integrate_frames for slab-local integration instead
+            # (integrate_spots_stack, glint#148). WITHOUT that mapping there is no way to tell the
+            # slabs apart, and guessing one -- by declaration order, say -- integrates the wrong
+            # pixels silently, which is glint#136 in a different coat. So: refuse, naming the fix.
             if n_panels > 1:
+                if panel_slabs is not None and getattr(d, "ndim", 0) == 3:
+                    return np.asarray(d[()], np.float32)     # (panel, ss, fs), integrated per slab
                 raise NotImplementedError(
                     f"{path}:{data_path} is being read as a stack of {d.shape[0]} PANELS, but the "
-                    f"geometry has {n_panels} panels and integration runs on ONE assembled frame: "
-                    f"predict_spots emits assembled fs/ss across all panels, so every reflection "
-                    f"outside panel 0 would integrate to exactly 0 (measured) or read another "
-                    f"panel's pixels. Un-assembled multi-panel input is not supported (glint#148). "
-                    f"Use the --images route (integrate_cxi) for stacked .cxi, or supply assembled "
-                    f"frames; if this file is really one frame per EVENT, pass event_axis=True / "
-                    f"--event-axis event.")
+                    f"geometry has {n_panels} panels and none of them maps to a slab: every "
+                    f"reflection outside panel 0 would integrate to exactly 0 (measured) or read "
+                    f"another panel's pixels (glint#148). Declare each panel's slab in the .geom "
+                    f"with an integer dimN key (e.g. `p1/dim0 = 1`) and GLINT integrates each "
+                    f"panel on its own slab; or use the --images route (integrate_cxi) for "
+                    f"assembled stacked .cxi; or, if this file is really one frame per EVENT, "
+                    f"pass event_axis=True / --event-axis event.")
             a = np.asarray(d[0], np.float32)         # single-panel geometry: slab 0 IS the frame
         else:
             a = np.asarray(d[()], np.float32)
-    if a.ndim == 3:                                  # (1, ss, fs) -> single assembled 2D frame
-        a = a[0]
+    if a.ndim == 4 and a.shape[0] == 1:
+        a = a[0]        # a ONE-event 4-D file is not "stacked" (leading axis 1), but its single
+                        # event is still a panel stack -- hand it to the 3-D rules below rather
+                        # than returning 4 axes to a 2-D integrator (Copilot review of #157)
+    if a.ndim == 3:
+        if n_panels > 1 and panel_slabs is not None:
+            # A mapped multi-panel stack goes back WHOLE at any slab count -- including a
+            # singleton. Squeezing (1, ss, fs) to 2-D here skipped integrate_spots_stack's slab
+            # validation, so a geometry mapping panels onto slabs {0, 1} silently integrated
+            # slab 0 for every panel (Copilot review of #157); now that mismatch raises by name.
+            return a
+        if a.shape[0] > 1:
+            # one EVENT of a 4-D (event, panel, ss, fs) file: the same un-assembled shape, so the
+            # same rules as the 3-D branch above -- slab-local with a mapping, refused without.
+            # (This line used to take a[0] unconditionally, which was the #148 defect on the 4-D
+            # path.)
+            if n_panels > 1 and panel_slabs is not None:
+                return a
+            if n_panels > 1:
+                raise NotImplementedError(
+                    f"{path}:{data_path} event {event!r} is a stack of {a.shape[0]} PANELS under "
+                    f"a {n_panels}-panel geometry with no slab mapping: reflections outside "
+                    f"panel 0 would integrate to exactly 0 (glint#148). Declare integer dimN keys "
+                    f"in the .geom (e.g. `p1/dim1 = 1`).")
+        a = a[0]                                     # (1, ss, fs) -> single assembled 2D frame
     return a
 
 
@@ -630,6 +758,11 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
     file) ``integrate_cxi`` is still the better route. Until glint#136 this function ignored
     ``event`` entirely and integrated every result against event 0 of its file."""
     panels, clen = panels_from_geom(geom)
+    # Slab mapping from the .geom's integer dimN keys, required on EVERY panel to count: with it,
+    # an un-assembled (panel, ss, fs) stack comes back whole from _load_image and is integrated
+    # slab-locally; without it such a stack is refused there rather than guessed at (glint#148).
+    slabs = [p["slab"] for p in panels]
+    panel_slabs = slabs if len(panels) > 1 and all(s is not None for s in slabs) else None
     if data_path is None:
         data_path = geom.get("global", {}).get("data", "/data/data")
     lam = geom.get("wavelength_A")
@@ -640,9 +773,12 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
             continue
         img = _load_image(os.path.join(image_dir, os.path.basename(str(r.get("image", "")))),
                           data_path, r.get("event", 0),       # THIS result's event, not frame 0 (glint#136)
-                          n_panels=len(panels), event_axis=event_axis)
+                          n_panels=len(panels), event_axis=event_axis, panel_slabs=panel_slabs)
         pred = predict_spots(M, panels, clen, lam, dmin=dmin, tol=tol)
-        I, sig, peak, bg = integrate_spots(img, pred, bg_mode=bg_mode)
+        if img.ndim == 3:                             # un-assembled panel stack -> slab-local (glint#148)
+            I, sig, peak, bg = integrate_spots_stack(img, pred, panels, bg_mode=bg_mode)
+        else:
+            I, sig, peak, bg = integrate_spots(img, pred, bg_mode=bg_mode)
         # Keep NON-POSITIVE intensities. Dropping them is a selection on the measured value of
         # the quantity being measured: a reflection whose true I is ~0 measures negative about
         # half the time, so discarding exactly those while keeping their positive counterparts

@@ -168,9 +168,9 @@ def main():
     if bad:
         print(f"{len(bad)} failure(s)"); print("\n".join(bad)); return 1
     nf = (len(MUST_FIRE)+len(MUST_FIRE_16)+len(MUST_FIRE_TIE)+len(MUST_FIRE_38)
-          + len(MUST_FIRE_AMB)+len(MUST_FIRE_RATIO)+len(MUST_FIRE_12) + len(MUST_FIRE_RATIO))
+          + len(MUST_FIRE_AMB)+len(MUST_FIRE_RATIO)+len(MUST_FIRE_12))
     ns = (len(MUST_NOT_FIRE)+len(MUST_NOT_FIRE_16)+len(MUST_NOT_FIRE_TIE)+len(MUST_NOT_FIRE_38)
-          + len(MUST_NOT_FIRE_AMB)+len(MUST_NOT_FIRE_RATIO)+len(MUST_NOT_FIRE_12) + len(MUST_NOT_FIRE_RATIO))
+          + len(MUST_NOT_FIRE_AMB)+len(MUST_NOT_FIRE_RATIO)+len(MUST_NOT_FIRE_12))
     print(f"drift-rule battery OK -- {nf} fire, {ns} stay silent")
     return 0
 

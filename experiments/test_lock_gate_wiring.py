@@ -124,15 +124,27 @@ def test_live_gate_defaults_and_window_are_pinned():
     # green if _inliers grows its own literal again (Copilot review of #170, round 2). With M the
     # identity, each q row's residual is its own fractional part, so the window is probed
     # directly from both sides, and the max(1) rule is exercised -- a row inside the window on
-    # one component and outside on another must NOT count. No exact-edge row, deliberately: 1.15
-    # is not representable in binary float (it stores as 1.1499999...), so a decimal literal
-    # cannot probe the strict-< boundary -- it silently tests 0.1499... and COUNTS. The
-    # strictness is covered by 0.151-out plus the constant-equality asserts above.
+    # one component and outside on another must NOT count.
+    #
+    # THE EXACT EDGE IS TESTABLE, and it is the row that pins the COMPARISON OPERATOR: without it
+    # `<` and `<=` are indistinguishable, since every other row is strictly inside or strictly
+    # outside. It cannot be written as a decimal literal -- 1.15 stores as 1.1499999... and
+    # silently probes the wrong side -- but HKL_TOL ITSELF works: round() subtracts exactly zero
+    # from it, so the residual comes back bit-identical to the constant, whatever float that is,
+    # and `residual < HKL_TOL` is False for the shipped strict `<` and True for `<=` (Copilot
+    # review of #170, round 3, correcting this comment's earlier claim that the edge was
+    # untestable -- it was untestable the way I first tried, not in general).
+    #
+    # It must be HKL_TOL BARE, not 1 + HKL_TOL: measured, 1.15 - round(1.15) = 0.1499999999999999,
+    # which is strictly BELOW the constant and counts as an inlier, so the offset form silently
+    # tests the wrong side exactly like the decimal literal did. Only round()-subtracts-zero
+    # preserves the bits.
     M = np.eye(3)
-    q = np.array([[1.149, 2.0, 3.0],      # max residual 0.149 -> in
-                  [1.151, 2.0, 3.0],      # 0.151             -> out
-                  [1.10, 2.149, 2.851],   # all inside         -> in
-                  [1.149, 2.151, 3.0]])   # mixed: max rules   -> out
+    q = np.array([[1.149, 2.0, 3.0],      # max residual 0.149  -> in
+                  [1.151, 2.0, 3.0],      # 0.151               -> out
+                  [HKL_TOL, 2.0, 3.0],    # residual == HKL_TOL -> out under strict <, in under <=
+                  [1.10, 2.149, 2.851],   # all inside          -> in
+                  [1.149, 2.151, 3.0]])   # mixed: max rules    -> out
     got = StreamDriver._inliers(None, q, M)
     assert got == 2, f"_inliers counted {got} of the straddle set, expected 2"
 

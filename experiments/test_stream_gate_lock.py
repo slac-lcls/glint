@@ -118,6 +118,7 @@ def test_stats_reports_refusals_in_both_branches():
     d.locked_after, d.consensus_support, d.n_theoretical = 6, 9, 4200
     d.n_indexed = d.n_integrated = 25
     d.n_gate_rejected = d.n_fanout_errors = d.n_fanout_missed = 0
+    d.n_gate_deferred = 2
     d.warmup_rescue = d.retry_cascade = d.adaptive_relock = d.double_hit = False
     d.qc_frac_threshold = None
     d._writer = d._grefiner = None
@@ -125,6 +126,11 @@ def test_stats_reports_refusals_in_both_branches():
     assert s["locked"] is True
     assert s.get("gate_refused") == 3, (
         "the locked branch dropped the counter -- a post-lock watchdog refusal would be invisible")
+    # The no-voter subset is its own key: the total's two sources cannot be told apart from the
+    # neighbours (a healthy fan-out defers too), so the split is reported, not inferred. The
+    # difference -- here 3 - 2 = 1 -- is the count of verdicts the gate itself scored and refused.
+    assert s.get("gate_deferred_no_voters") == 2, (
+        "the deferral subset is not reported -- refused-vs-deferred is uninferable without it")
 
 
 def test_adopt_mode_returns_the_tighter_cell():

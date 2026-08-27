@@ -640,10 +640,23 @@ RETIRED = [
     # these on 2026-08-27, and they are exactly the kind that outlive their source -- 0.26 was quoted
     # in the abstract, two docs, three docstrings and four rules in THIS file. Retired together so a
     # half-applied edit cannot leave one behind (cf. xgandalf-550, which outlived its source by weeks).
-    Rule("fused-b120-0.26", r"(?<![\d.])0\.26\s*ms",
+    # ⚠ THE UNIT IS NOT RELIABLY ADJACENT, AND \s DOES NOT MATCH A LATEX TIE. The manuscript writes
+    # "$0.26$~ms" and "$3.8$~kHz", and _normalize() deliberately preserves ASCII "~" (see the
+    # pk45-merge-row note). With `\s*ms` these rules reported glint_rewrite_JAC_refined.tex CLEAN
+    # while its INTRODUCTION, tab:summary row and streaming section all still said 0.26 -- a guard
+    # that could not see the file it was pointed at. Found by an adversarial sweep on #167, after
+    # Copilot missed it too. So: [\s~]* for the separator, and the unit itself OPTIONAL, because a
+    # table cell carries its unit in the column header ("\textbf{0.26} & \textbf{3800} \\").
+    # The (?!\s*\\?%) guard keeps "0.26%" (a percentage in multishot.py) out of it.
+    # Dropping the unit entirely over-fires on layout COORDINATES ("x+0.26,cy+0.24" in the deck
+    # builders), so the separator is widened instead: [\s~",]{0,3} reaches across a LaTeX tie AND
+    # across a Python string boundary ("26 -> 0.26","ms/f ...). The \textbf{} alternative catches the
+    # tab:summary cell, where the unit lives in the column header and no separator will ever help.
+    Rule("fused-b120-0.26",
+         r"(?<![\d.])0\.26\b[\s~\",]{0,3}(?:ms|kHz)|\\textbf\{0\.26\}",
          "0.26 ms/frame was the pre-#165 B=120 fp64 known-cell figure; the candidate-split kernel "
          "measures 0.17 ms on the same A100, bit-exact", "0.17 ms"),
-    Rule("fused-b32-0.45", r"(?<![\d.])0\.45\s*ms",
+    Rule("fused-b32-0.45", r"(?<![\d.])0\.45[\s~]*ms",
          "0.45 ms/frame was the pre-#165 B=32 fp64 figure; it is now 0.33 ms", "0.33 ms"),
     # 0.33 is the awkward one: it is LIVE for fp64-at-B=32 and for box-integration, and RETIRED for
     # fp32-at-B=32 (now 0.31).  So it cannot be retired outright, and the bare-0.33 ambiguity rule
@@ -681,7 +694,8 @@ RETIRED = [
          r"|(?<![\d.])0\.16\b(?:(?!fp64)[\s\S]){0,15}?fp32(?![^\n]{0,20}\d\.\d)",
          "0.16 was fp32 indexing at B=120 BEFORE #165; it is now 0.14 (0.16 is predict's per-frame "
          "cost, which is why this is scoped to the fp32 pairing)", "0.14"),
-    Rule("fused-fps-3800", r"(?<![\d.])3[,.]?800\s*(?:frames?\s*/\s*s|f/s|fps|Hz)|3\.8\s*kHz",
+    Rule("fused-fps-3800",
+         r"(?<![\d.])3[,.]?800\b|3\.8[\s~]*kHz",
          "3.8 kHz was 1000/0.26; against the measured 0.17 ms/frame it is ~5.9 kHz", "~5.9 kHz"),
     Rule("ffbidx-12x", r"(?<![\d.])12\s*(?:×|x|\\times)(?=[^\n]{0,80}(?:ffbidx|pipelined))",
          "12x was ffbidx_pipelined_ms/0.26; against 0.17 it is ~18x", "~18x"),

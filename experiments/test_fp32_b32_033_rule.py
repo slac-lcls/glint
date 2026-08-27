@@ -52,6 +52,34 @@ MUST_NOT_FIRE_16 = [
 ]
 
 
+# ---------------------------------------------------------------------------------------------
+# The LaTeX-tie battery. The retired fused family originally anchored its unit with `\s*`, and the
+# manuscript writes "$0.26$~ms" / "$3.8$~kHz". `~` is not whitespace and _normalize() deliberately
+# preserves it, so the guard reported glint_rewrite_JAC_refined.tex CLEAN while its INTRODUCTION,
+# its tab:summary row and its streaming section all still said 0.26. Seven live sites, invisible.
+# Copilot did not catch this either; an adversarial sweep on #167 did.
+RULE26 = next(r for r in RETIRED if r.name == "fused-b120-0.26")
+RULE38 = next(r for r in RETIRED if r.name == "fused-fps-3800")
+
+MUST_FIRE_TIE = [
+    "batched known-cell registration requires 0.26~ms per frame",   # the introduction, verbatim
+    "the tabulated 0.26~ms is measured at B=120",
+    "known-cell registration operates at 0.26 ms per frame",        # plain space still works
+    '_snum(xr+0.28,5.12,"26 -> 0.26","ms/f index once locked")',    # across a string boundary
+    "& known-cell & 76% (91/120) & --- & " + chr(92) + "textbf{0.26} & " + chr(92) + "textbf{3800}",  # unit in the header
+]
+MUST_NOT_FIRE_TIE = [
+    "dot(s,x+0.26,cy+0.24,0.14,col)",                    # a LAYOUT COORDINATE, not a timing
+    "box(s,x+0.26,cy+0.52,cw-0.4,0.68)",                 # ditto
+    "38.3/79.3/79.7 (0.26%) -- same lattice either way", # a PERCENTAGE in multishot.py
+    "batch $32" + chr(92) + "to120$ (occupancy, same kernels) & 0.45 & 0.26 & $1.7" + chr(92) + "times$",  # lever-table BEFORE
+]
+MUST_FIRE_38 = [
+    "corresponding to approximately 3.8~kHz",
+    "about 3800 frames~s$^{-1}$",
+]
+
+
 def _check(rule, fire, silent, label):
     bad = []
     for s in fire:
@@ -65,11 +93,14 @@ def _check(rule, fire, silent, label):
 
 def main():
     bad = (_check(RULE, MUST_FIRE, MUST_NOT_FIRE, "fp32-b32-0.33")
-           + _check(RULE16, MUST_FIRE_16, MUST_NOT_FIRE_16, "fp32-b120-0.16"))
+           + _check(RULE16, MUST_FIRE_16, MUST_NOT_FIRE_16, "fp32-b120-0.16")
+           + _check(RULE26, MUST_FIRE_TIE, MUST_NOT_FIRE_TIE, "fused-b120-0.26")
+           + _check(RULE38, MUST_FIRE_38, [], "fused-fps-3800"))
     if bad:
         print(f"{len(bad)} failure(s)"); print("\n".join(bad)); return 1
-    print(f"both fp32-pairing rules OK -- {len(MUST_FIRE)+len(MUST_FIRE_16)} fire, "
-          f"{len(MUST_NOT_FIRE)+len(MUST_NOT_FIRE_16)} stay silent")
+    nf = len(MUST_FIRE)+len(MUST_FIRE_16)+len(MUST_FIRE_TIE)+len(MUST_FIRE_38)
+    ns = len(MUST_NOT_FIRE)+len(MUST_NOT_FIRE_16)+len(MUST_NOT_FIRE_TIE)
+    print(f"drift-rule battery OK -- {nf} fire, {ns} stay silent")
     return 0
 
 

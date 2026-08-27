@@ -28,6 +28,7 @@ Numbers reported are on an arbitrary common intensity scale (the batch path's gl
 dropped as it cancels); this affects nothing that is reported, all of which are ratios.
 """
 import os
+import warnings
 from collections import deque
 import numpy as np
 
@@ -762,6 +763,18 @@ class StreamDriver:
         # ALREADY-active cell(s) first is nearly free on top of it, and rescues a same-cell miss
         # immediately instead of only ever detecting a genuinely different cell (see _watchdog).
         self.n_watchdog_rescued = 0
+        # A dead fan-out (dead GPU worker, poisoned queue) must degrade to the miss path, not
+        # take flush() down with it -- glint#147. _fanout_guarded counts every invocation that
+        # raised; the consecutive-failure streak is what tells a persistent failure from a
+        # transient one in the warning text. Reported in stats() as n_fanout_errors.
+        self.n_fanout_errors = 0
+        self._fanout_fail_streak = 0
+        # ...and the FRAMES those failures cost: with rescue_buffer=0 a degraded frame is in no
+        # other ledger -- the miss buffer is unarmed, and the adaptive branch never counts
+        # n_gate_rejected -- so without this it would be visible only as pushed minus integrated
+        # (Copilot review of #156, suppressed comment). n_fanout_errors counts invocations;
+        # this counts frames.
+        self.n_fanout_missed = 0
 
         # Blind warm-up: with Mc=None the driver has no cell yet, so it indexes the first frames
         # blind (~26 ms/frame) one at a time, accumulating cross-frame consensus; when the running
@@ -1187,15 +1200,11 @@ class StreamDriver:
         cells = self._all_cells()
         qs = [self._q[i] for i in slots]
         self.n_cascade_retried += len(slots)
-        try:                                                 # ONE blind index per frame, shared by
-            nbs = list(self._fanout(qs, self.retry_nbest))   # every active cell below
-        except Exception:                                    # a dead/partial fan-out must not take the
-            nbs = []                                         # miss path down with it -- solved per frame
-        if len(nbs) < len(slots):                            # below, and cached like any other result
-            # A fan-out that returns SHORT is padded rather than zipped away: the old zip silently
-            # dropped those slots, so they were neither retried nor returned to the miss path -- they
-            # just vanished. Padding sends them through the per-frame fallback like any other miss.
-            nbs += [None] * (len(slots) - len(nbs))
+        # ONE blind index per frame, shared by every active cell below. Guarded (glint#147): an
+        # exception degrades every slot to None and a short return is padded -- either way each
+        # affected frame goes through the per-frame fallback below, and is cached like any other
+        # result. The guard also counts/warns, so a dead fan-out is visible, not just survived.
+        nbs = self._fanout_guarded(qs, self.retry_nbest)
         arm1 = f"blind_nbest_k{self.retry_nbest}"
         still = []
         for j, (i, q) in enumerate(zip(slots, qs)):
@@ -1266,6 +1275,37 @@ class StreamDriver:
         except Exception:                                    # pragma: no cover - a dead blind indexer
             return None
 
+    def _fanout_guarded(self, qs, k):
+        """`self._fanout`, degraded instead of fatal (glint#147): ALWAYS returns a list of
+        len(qs), where a None entry means "no answer for this frame".
+
+        The watchdog's fan-out invocation was unguarded, so a fanout that raises persistently --
+        a dead GPU worker, a poisoned queue -- propagated out of flush() and took the streaming
+        driver down with it, even though every one of those frames already has a defined miss
+        path. On an exception every slot degrades to None (counted in n_fanout_errors, surfaced
+        in stats(), and warned with the consecutive-failure streak so a dead fan-out reads
+        differently from a transient one). A SHORT return is padded with None rather than zipped
+        away: a bare zip silently dropped the tail slots, so they were neither retried nor
+        returned to the miss path -- they just vanished (the defect _cascade_retry's fan-out
+        already fixed for itself; this centralizes it). On the no-exception, full-length path the
+        fan-out's own results pass through untouched, so flag-off behaviour stays bit-identical:
+        the guard only changes what happens on the paths that used to crash or drop frames."""
+        try:
+            out = list(self._fanout(qs, k))
+        except Exception as exc:
+            self.n_fanout_errors += 1
+            self._fanout_fail_streak += 1
+            warnings.warn(
+                f"blind fan-out raised ({self._fanout_fail_streak} consecutive failure(s)): "
+                f"{exc!r} -- degrading {len(qs)} frame(s) to the miss path; a persistent count "
+                f"here means the fan-out workers are dead (see stats()['n_fanout_errors'])",
+                RuntimeWarning, stacklevel=3)
+            return [None] * len(qs)
+        self._fanout_fail_streak = 0
+        if len(out) < len(qs):
+            out += [None] * (len(qs) - len(out))
+        return out
+
     def _watchdog_nbest(self, missed, cached):
         """N-best candidates for the watchdog's missed frames, reusing the retry cascade's blind
         solves instead of paying for a second one (glint#145 review).
@@ -1292,7 +1332,7 @@ class StreamDriver:
         """
         qs = [self._q[i] for i in missed]
         if not cached or self.warmup_nbest > self.retry_nbest:
-            return self._fanout(qs, self.warmup_nbest)        # historical path, verbatim
+            return self._fanout_guarded(qs, self.warmup_nbest)   # historical path (guarded, glint#147)
         out = [None] * len(missed)
         todo, todo_at = [], []
         for j, i in enumerate(missed):
@@ -1302,7 +1342,7 @@ class StreamDriver:
             else:
                 out[j] = list(nb)[:self.warmup_nbest]
         if todo:                                              # one batched call for the remainder,
-            for j, nb in zip(todo_at, self._fanout(todo, self.warmup_nbest)):
+            for j, nb in zip(todo_at, self._fanout_guarded(todo, self.warmup_nbest)):
                 out[j] = nb                                   # so the fan-out is still fanned out
         return out
 
@@ -1332,6 +1372,16 @@ class StreamDriver:
         # Opt-in mpi_fanout distributes the frames across GPUs).
         for i, nb in zip(missed, self._watchdog_nbest(missed, cached_nbest)):
             q = self._q[i]
+            if nb is None:
+                # The fan-out died for this frame (glint#147). No candidates means no rescue and
+                # NO VOTE -- absence of evidence must not feed the consensus histogram as a frame
+                # that voted for nothing. The frame stays a miss: when a miss buffer is armed it
+                # is already in it (flush() buffers before calling here). Counted regardless --
+                # with rescue_buffer=0 this counter is the ONLY ledger these frames appear in
+                # (Copilot review of #156, suppressed comment).
+                self.n_fanout_missed += 1
+                still_missed.append(i)
+                continue
             rescued = False
             for c, _ in nb:
                 c = np.asarray(c, float)
@@ -1375,12 +1425,22 @@ class StreamDriver:
             voters = [(q, next(c for c in cs if same_lattice(c, Mn)))
                       for q, cs in watch_ev
                       if any(same_lattice(c, Mn) for c in cs)]
-            if voters:
-                Mg = self._alias_gate.confirm_frames(Mn, voters)
-                if Mg is None:
-                    self.n_gate_refused += 1
-                    return
-                Mn = _conventional_tetragonal(np.asarray(Mg, float))
+            if not voters:
+                # No frame in THIS batch supports the verdict: the histogram retained it from an
+                # earlier batch (a refusal deliberately keeps accumulating), and this batch added
+                # nothing that agrees -- every entry was None from a dead fan-out (glint#147), every
+                # frame was rescued, or the votes went elsewhere. confirm_frames cannot run without
+                # voters, and skipping it here would commit a cell the gate may already have
+                # REFUSED, precisely on the batch with the least evidence (Copilot review of #156).
+                # Refuse instead: same bookkeeping, histogram kept, a later batch with real
+                # supporting frames confirms or refuses on its own evidence.
+                self.n_gate_refused += 1
+                return
+            Mg = self._alias_gate.confirm_frames(Mn, voters)
+            if Mg is None:
+                self.n_gate_refused += 1
+                return
+            Mn = _conventional_tetragonal(np.asarray(Mg, float))
         if any(same_lattice(Mn, Mc) for Mc in self._all_cells()):
             return
         lock_z = None
@@ -1476,7 +1536,15 @@ class StreamDriver:
                  # frames the ingest gate refused outright. Reported unconditionally: dropping data
                  # must never be silent, and a rising count is the signal that the cell has drifted
                  # away from the sample (or that min_inlier_frac is set too high for this run).
-                 gate_rejected=self.n_gate_rejected)
+                 gate_rejected=self.n_gate_rejected,
+                 # fan-out invocations (retry cascade or watchdog) that raised and were degraded to
+                 # the miss path (glint#147). Reported unconditionally for the same reason: a dead
+                 # fan-out silently turns every retry/relock mechanism off, and this counter is the
+                 # only place that shows. n_fanout_missed is the FRAMES the watchdog could not
+                 # attempt because the fan-out gave no answer -- with rescue_buffer=0 they appear
+                 # in no other ledger.
+                 n_fanout_errors=self.n_fanout_errors,
+                 n_fanout_missed=self.n_fanout_missed)
         if self.warmup_rescue:
             s["n_warmup_rescued"] = self.n_warmup_rescued         # warm-up frames recovered the instant the cell locked
         if self.retry_cascade:                                   # glint#75, opt-in

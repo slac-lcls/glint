@@ -63,6 +63,20 @@ extern "C" __global__ void anneal_fused(
 
 # ---------------------------------------------------------------------------------- obj -----------
 # proj = V.Q_p ; d=|proj-round|; inl += (d<TRIMH); sub += log2(clamp(d,TRIML,TRIMH)+DELTA); sub/=npk
+#
+# Unlike anneal/refine, obj runs at K >> block: _stage_compute calls it with K = 4096 and 5760 while
+# block is 128, so one block per frame made every thread walk 32-45 candidates SERIALLY.  With
+# grid=(F,) that is 120 blocks for a 120-frame batch -- 0.06% of an A100's ~221k thread slots, which
+# is why per-frame cost kept falling out to large B: the batch axis was the ONLY source of occupancy.
+# Splitting the candidate axis over blockIdx.y gives 3840/5400 blocks instead of 120, so a single hit
+# exposes 32-45 blocks on its own.  Each block re-stages the frame's peaks (the loop above is
+# repeated ky times), which is why this pays ~7x rather than ~ky.
+#
+# BIT-EXACT by construction: it only re-maps which thread owns which candidate.  Each k is still
+# summed over p in the same order by a single thread, and no partial results are combined across
+# threads or blocks -- so inl and sub are identical, not merely equivalent.  Do NOT copy this to
+# anneal_fused/refine_fused: they run at K <= block, where ky collapses to 1 and there is nothing to
+# split (a warp-per-candidate mapping is the lever there, and it is NOT bit-exact).
 _OBJ = r"""
 extern "C" __global__ void obj_fused(
     const DT* __restrict__ V, const DT* __restrict__ Q, const int* __restrict__ npk,
@@ -74,7 +88,7 @@ extern "C" __global__ void obj_fused(
         const DT* qp = Q + ((long)f*Pmax + p)*3; Qs[3*p]=qp[0]; Qs[3*p+1]=qp[1]; Qs[3*p+2]=qp[2]; }
     __syncthreads();
     DT invn = (DT)1.0 / (DT)(P < 1 ? 1 : P);
-    for (int k = threadIdx.x; k < K; k += blockDim.x) {
+    for (int k = blockIdx.y*blockDim.x + threadIdx.x; k < K; k += gridDim.y*blockDim.x) {
         const DT* vp = V + ((long)f*K + k)*3; DT v0=vp[0],v1=vp[1],v2=vp[2];
         int inl = 0; DT sub = 0;
         for (int p = 0; p < P; ++p) {
@@ -206,8 +220,9 @@ def obj_fused(V, Q, m, block=128):
     Vc = V.contiguous()
     inl = torch.empty(F, K, dtype=torch.int32, device=V.device)
     sub = torch.empty(F, K, dtype=V.dtype, device=V.device)
+    ky = min(max(1, -(-K // block)), 65535)              # candidates split across blockIdx.y
     with _stream():
-        _KO((F,), (block,), (_cp(Vc), _cp(Q.contiguous()), _cp(npk), _cp(inl), _cp(sub),
+        _KO((F, ky), (block,), (_cp(Vc), _cp(Q.contiguous()), _cp(npk), _cp(inl), _cp(sub),
              np.int32(F), np.int32(K), np.int32(Pmax)), shared_mem=Pmax*3*_IB)
     return inl.long(), sub
 

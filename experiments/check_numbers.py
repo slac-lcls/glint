@@ -257,10 +257,13 @@ FACTS: dict[str, float | str] = {
     "subset_seeds":              8,  # seeds 0-7
     "subset_draws_total":     3200,  # = subset_draws_per_n * subset_seeds
     "nstar_r0278":              16,  # smallest tested N reaching 90% recovery of the all-frame cell
-    "nstar_r0058":              16,  # r0058 CROSSES the bar by 16 -- weaker than r0278's, which
-                                    # is bracketed on both sides. No sub-16 point was recorded for
-                                    # r0058, so "smallest tested N" is NOT established for it and
-                                    # nothing here should say it is (Copilot review of #163, r7).
+    # ⚑ NAMED FOR WHAT WAS MEASURED, not for N*. Round 7 narrowed the PROSE around this key while
+    # leaving it called `nstar_r0058`, and the name is itself a claim: FACTS defines N* as the
+    # smallest tested N reaching the bar, and no sub-16 point was ever recorded for r0058, so a
+    # key called nstar asserted a measurement that does not exist (Copilot review of #163, r8).
+    # r0278 keeps `nstar_` because its crossing IS bracketed (89.8% at 12, 96.1% at 16). Rename
+    # this back only if a below-threshold r0058 point is measured and banked beside it.
+    "n_cross90_r0058":          16,  # smallest N at which r0058 was MEASURED to exceed 90%
     "recov_r0278_n12_pct":    89.8,  # BELOW the 90% bar, which is why N*=16 and not 12
     "recov_r0278_n16_pct":    96.1,
     "recov_r0058_n16_pct":    91.2,
@@ -718,16 +721,20 @@ RETIRED = [
     # r0058's N* was published as 32 and the 2026-08-24 reconstruction puts it at 16. The paper
     # keeps 32 visible in ONE place -- the note explaining that it does not reproduce -- so the
     # exempts below are the reconstruction's own vocabulary, not a blanket escape.
-    Rule("nstar-32-retired", r"N\^?\{?\\star\}?\s*=\s*32(?!\.?\d)|N\*\s*=\s*32(?!\.?\d)",
+    # `32(?!\.?\d)` rejected 320 and 32.5 correctly but ALSO went quiet on "N*=32.0", which is
+    # the retired claim written with a trailing zero (round 8). A zero-valued decimal suffix is
+    # the same number, so only a NONZERO decimal disqualifies the match.
+    Rule("nstar-32-retired",
+         r"N\^?\{?\\star\}?\s*=\s*32(?!\d)(?!\.\d*[1-9])|N\*\s*=\s*32(?!\d)(?!\.\d*[1-9])",
          f"N* = 32 for r0058 is SUPERSEDED: the symmetric pooled treatment on the protocol-matching "
-         f"pool gives {FACTS['nstar_r0058']} for r0058 and {FACTS['nstar_r0278']} for r0278. It is "
+         f"pool gives {FACTS['n_cross90_r0058']} for r0058 and {FACTS['nstar_r0278']} for r0278. It is "
          "protocol-conditional -- the original N grid was never recorded and a coarse grid "
          "(...16, 32) would legitimately have reported 32 -- so state it as not reproducing under "
          "the reconstructed protocol rather than as a live measurement",
          # The replacement carries the qualification ITSELF: a bare "N* = 16" here would have the
          # `say:` line advising exactly the flat assertion the `why:` above forbids (Copilot
          # review of #163, round 2). Whoever follows this advice verbatim stays inside the rule.
-         f"N* = {FACTS['nstar_r0058']} under the reconstructed protocol (the previously quoted "
+         f"N* = {FACTS['n_cross90_r0058']} under the reconstructed protocol (the previously quoted "
          f"32 does not reproduce)",
          # Every exempt here must RETIRE the value or state it counterfactually. "reconstructed
          # protocol" was in this tuple and does neither -- it is the section's ordinary vocabulary,
@@ -1141,8 +1148,12 @@ def _lit(v: str) -> str:
     let "1785" match inside "1785.4 indexed frames", so a malformed edited count still satisfied
     every needle built from it (Copilot review of #163, round 6). `\\.?\\d` keeps a sentence-final
     "1785." matching while rejecting "1785.4"; fixing it HERE fixes every caller.
+
+    The lookbehind excludes a leading SIGN for the same reason it excludes a digit: "-1785
+    indexed frames" and "-0.90" contain the positive literal, so a sign-flipped claim satisfied
+    every needle built from the value (Copilot review of #163, round 8).
     """
-    return rf"(?<![\d.]){re.escape(v)}(?!\.?\d)"
+    return rf"(?<![\d.\-\u2212]){re.escape(v)}(?!\.?\d)"
 
 
 @dataclass
@@ -1235,7 +1246,10 @@ REQUIRED = [
     Required("s16-subset-recovery-facts",
              r"Consensus\s+recovery\s+from\s+random\s+subsets",
              (_lit(f"{FACTS['subset_draws_per_n']:d}") + r"\$?\s+draws\s+per\s+\$?N",
-              rf"(?:{_numword(FACTS['subset_seeds'])}|{FACTS['subset_seeds']:d})\s+random\s+seeds",
+              # Both branches bounded: the numeric one through _lit (an unbounded "8" was found
+              # inside "18 random seeds", round 8) and the word through \b.
+              r"(?:\b" + _numword(FACTS["subset_seeds"]) + r"\b|"
+              + _lit(f"{FACTS['subset_seeds']:d}") + r")\s+random\s+seeds",
               # ONE needle for both counts, because the manuscript labels only the first:
               # "r0278, with 1785 indexed frames, and r0058, with 2319". Two loose per-run
               # needles accepted "r0278 (1785 shots; 1700 indexed frames)" -- the value merely
@@ -1248,7 +1262,13 @@ REQUIRED = [
               # or between that count and "indexed frames".
               r"r0278(?:(?!\d)[^.]){0,20}?" + _lit(f"{FACTS['indexed_r0278']:d}")
               + r"(?:(?!\d)[^.]){0,40}?indexed\s+frames[^.]{0,40}?"
-              + r"r0058(?:(?!\d)[^.]){0,20}?" + _lit(f"{FACTS['indexed_r0058']:d}"),
+              + r"r0058(?:(?!\d)[^.]){0,20}?" + _lit(f"{FACTS['indexed_r0058']:d}")
+              # ...and the SECOND count must be bound to the label as well. Matching the bare
+              # number left "r0058, with 2319 shots." green even though the guarded claim -- that
+              # 2319 are INDEXED FRAMES -- had disappeared (round 8). It may inherit the label by
+              # coordination, which is what the manuscript does ("and r0058, with $2319$."), or
+              # repeat it; anything else between the count and the sentence end is a relabelling.
+              + r"(?:\$?\s*\.|\$?\s*indexed\s+frames)",
               _lit(f"{FACTS['subset_draws_total']:d}") + r"\$?\s+draws\s+per\s+point",
               # The N=12 clause shares its trailing "for r0278" with the N=16 clause, so the bind
               # is a tempered gap: an intervening r0058 or a sentence end breaks it. A plain [^.]
@@ -1751,7 +1771,7 @@ def check_arithmetic() -> list[str]:
     # N* at all: the loop below reads recov_*_n16_pct and reported nstar_* only in its message, so
     # editing either N* to 24 left the checker green while the evidence still said 16 (Copilot
     # review of #163). The needed relation is an equality -- the key is literally named n16.
-    for _k, _n in (("recov_r0278_n16_pct", "nstar_r0278"), ("recov_r0058_n16_pct", "nstar_r0058")):
+    for _k, _n in (("recov_r0278_n16_pct", "nstar_r0278"), ("recov_r0058_n16_pct", "n_cross90_r0058")):
         if F[_n] != 16:                          # raw compare -- int() would truncate 16.4 to a pass
             bad.append(f"  FACTS: {_n} = {F[_n]} but the only recovery banked for it is {_k}, "
                        f"measured at N=16 -- an N* moved without the measurement that fixes it "

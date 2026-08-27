@@ -483,7 +483,7 @@ ARITHMETIC_PERTURBATIONS = [
     ({"subset_seeds": 7},                             "subset_draws_total"),
     ({"recov_r0278_n12_pct": 90.4},                   "would be 12"),
     ({"nstar_r0278": 32},                             "moved without the measurement"),
-    ({"nstar_r0058": 24},                             "moved without the measurement"),
+    ({"n_cross90_r0058": 24},                             "moved without the measurement"),
     ({"recov_r0278_n16_pct": 88.0},                   "BELOW the 90% bar"),
     ({"recov_r0058_n16_pct": 88.0},                   "BELOW the 90% bar"),
 ]
@@ -663,9 +663,33 @@ def test_s16_needles_bind_values_to_what_they_count():
     other_run = _s16_prose(at12="at $N=12$ for r9999")
     assert _required_fires(other_run, "s16-subset-recovery-facts"), (
         "an unrelated run tag let the N=12 bind scan onward to r0278")
+    relabelled = _s16_prose().replace(
+        f"and r0058, with ${_cn.FACTS['indexed_r0058']}$.",
+        f"and r0058, with ${_cn.FACTS['indexed_r0058']}$ shots.")
+    assert _required_fires(relabelled, "s16-subset-recovery-facts"), (
+        "the r0058 count was accepted after its 'indexed frames' label was replaced")
     recast = _s16_prose(cross="Both runs used")
     assert _required_fires(recast, "s16-subset-recovery-facts"), (
         "the threshold claim was replaced while the number survived")
+
+
+def test_needles_reject_signs_and_unbounded_digits():
+    """Round-8 findings: three ways a needle matched a value it should not have.
+
+    (a) `_lit` excluded a leading digit or period but not a SIGN, so "-1785 indexed frames" and
+    "-0.90" satisfied every needle built from the positive literal. (b) The numeric seeds branch
+    was unbounded, so "8 random seeds" was found inside "18 random seeds". (c) The retired N*=32
+    rule's decimal guard went too far the other way and fell silent on "N*=32.0", which is the
+    same retired claim with a trailing zero -- only a NONZERO decimal is a different number.
+    """
+    assert _required_fires(_s16_prose(idx278=f"-{_cn.FACTS['indexed_r0278']}"),
+                           "s16-subset-recovery-facts"), "a sign-flipped count satisfied the needle"
+    assert _required_fires(_s16_prose(seeds="18"), "s16-subset-recovery-facts"), (
+        "'8 random seeds' was found inside '18 random seeds'")
+    assert _fires("The sweep gives $N^{\\star}=32.0$ for r0058.", "nstar-32-retired"), (
+        "the retired claim written as 32.0 slipped past the decimal guard")
+    assert not _fires("Interpolation puts it at $N^{\\star}=32.5$.", "nstar-32-retired")
+    assert not _fires("Pooling to $N^{\\star}=320$ was never tested.", "nstar-32-retired")
 
 
 def test_nstar32_exemption_is_clause_scoped():
@@ -718,7 +742,7 @@ def test_nstar32_rule_fires_live_and_stays_exempt_when_retired():
             "a coarser grid whose next tested point after 16 was 32 would have correctly "
             "reported $N^{\\star}=32$"):
         assert not _fires(retired, "nstar-32-retired"), retired
-    assert not _fires(f"Both runs give $N^{{\\star}} = {_cn.FACTS['nstar_r0058']}$.",
+    assert not _fires(f"Both runs give $N^{{\\star}} = {_cn.FACTS['n_cross90_r0058']}$.",
                       "nstar-32-retired")
 
 
@@ -832,6 +856,7 @@ if __name__ == "__main__":
              test_s16_required_fires_on_narrowed_or_moved_claims,
              test_needles_reject_decimal_extensions,
              test_s16_needles_bind_values_to_what_they_count,
+             test_needles_reject_signs_and_unbounded_digits,
              test_nstar32_exemption_is_clause_scoped,
              test_s16_required_stays_silent_without_its_trigger,
              test_nstar32_rule_fires_live_and_stays_exempt_when_retired,

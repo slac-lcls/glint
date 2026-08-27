@@ -604,6 +604,39 @@ def test_s16_required_stays_silent_without_its_trigger():
         assert not _required_fires(probe, "s16-subset-recovery-facts"), probe
 
 
+def test_s16_required_fires_on_narrowed_or_moved_claims():
+    """Round-3 findings: two more shapes that value-only or loosely-bound needles let through.
+
+    (a) The both-runs relationship is part of the claim: a section that quietly narrows
+    "Both runs cross ... N*=16" to one run keeps a bare N*=16 needle satisfied while the second
+    banked N* silently stops being asserted. (b) The N=12 clause must be bound to r0278 through
+    a tempered gap: a plain [^.]{0,80} bind lazily scans past an intervening "for r0058" to the
+    legitimate "for r0278" later in the sentence, so the moved claim passed.
+    """
+    narrowed = _s16_prose().replace("Both runs cross", "r0278 crosses")
+    assert _required_fires(narrowed, "s16-subset-recovery-facts"), (
+        "narrowing the N*=16 claim to one run stayed green -- the r0058 half is unwatched")
+    moved = _s16_prose(at12="at $N=12$ for r0058")
+    assert _required_fires(moved, "s16-subset-recovery-facts"), (
+        "moving the N=12 recovery to r0058 stayed green -- the tempered bind is not tempering")
+
+
+def test_nstar32_exemption_is_sentence_scoped():
+    """Round-3 finding: the 240-char exemption window let one properly retired mention exempt a
+    SEPARATE live N*=32 claim in the same paragraph. The exemption is now sentence-scoped, so the
+    mixed probe fires on its second sentence while each single-sentence retirement stays exempt --
+    and a decimal inside the sentence must not truncate the scope (sentence ends are '.' followed
+    by whitespace, not any '.')."""
+    mixed = ("The previously quoted $N^{\\star}=32$ for r0058 does not reproduce here. "
+             "The reconstructed protocol gives $N^{\\star}=32$ for r0058.")
+    assert _fires(mixed, "nstar-32-retired"), (
+        "a live N*=32 rode the previous sentence's retirement vocabulary out")
+    decimal_span = ("The previously quoted $N^{\\star}=32$ (recovery 93.4\\% at $N=24$) "
+                    "does not reproduce here.")
+    assert not _fires(decimal_span, "nstar-32-retired"), (
+        "a decimal split the sentence and orphaned the retirement vocabulary")
+
+
 def test_nstar32_rule_fires_live_and_stays_exempt_when_retired():
     """The retired N*=32, in all three states -- the probes #163 shipped without.
 
@@ -731,6 +764,8 @@ if __name__ == "__main__":
              test_s16_required_passes_on_the_measured_values,
              test_s16_required_fires_on_every_edited_claim,
              test_s16_required_fires_on_swapped_context,
+             test_s16_required_fires_on_narrowed_or_moved_claims,
+             test_nstar32_exemption_is_sentence_scoped,
              test_s16_required_stays_silent_without_its_trigger,
              test_nstar32_rule_fires_live_and_stays_exempt_when_retired,
              test_every_test_in_this_file_is_registered,

@@ -632,6 +632,13 @@ class Rule:
     needs: tuple[str, ...] = ()      # if set: a match is OK when one of these is nearby
     exempt: tuple[str, ...] = ()     # a match is OK when one of these is nearby (e.g. "LEGACY")
     window: int = 240                # how far to look for `needs` / `exempt`, in characters
+    # Scope `exempt` to the SENTENCE containing the match instead of the character window. The
+    # window form lets one properly-retired mention exempt a SEPARATE live claim in the same
+    # paragraph -- "The previously quoted N*=32 does not reproduce. The reconstructed protocol
+    # gives N*=32." passes whole, because the second match sits within 240 chars of the first
+    # sentence's retirement vocabulary (Copilot review of #163, round 3). Sentence boundaries are
+    # `.` followed by whitespace/EOF, so decimals ("93.4%") do not truncate the segment.
+    sentence_exempt: bool = False
     flags: int = re.I
     _rx: re.Pattern = field(init=False, repr=False)
 
@@ -719,8 +726,12 @@ RETIRED = [
          # so the live, wrong sentence "the reconstructed protocol gives N* = 32" sat inside the
          # exemption and passed silently (Copilot review of #163). The manuscript's real sentence
          # carries "does not reproduce" and "previously quoted" and stays exempt without it.
+         # sentence_exempt, because the window form fails open one step later: a properly retired
+         # mention exempts a SEPARATE live N*=32 within 240 chars of it (round 3). The retirement
+         # must sit in the SAME SENTENCE as the value it retires.
          exempt=("does not reproduce", "previously quoted",
-                 "would have correctly reported")),
+                 "would have correctly reported"),
+         sentence_exempt=True),
     Rule("blind-pair-adjacent-retired", r"\b76\s*\\?%[^.]{0,30}?\b71\s*\\?%",
          f"'76% vs 71%' is the RETIRED blind pair -- the counts moved to "
          f"{FACTS['glint1_strict_of120']}/120 and {FACTS['xgandalf_blind_strict_of120']}/120 while "
@@ -1204,12 +1215,25 @@ REQUIRED = [
               r"r0278[^.]{0,30}?" + _lit(f"{FACTS['indexed_r0278']:d}"),
               r"r0058[^.]{0,30}?" + _lit(f"{FACTS['indexed_r0058']:d}"),
               _lit(f"{FACTS['subset_draws_total']:d}") + r"\$?\s+draws\s+per\s+point",
-              _lit(f"{FACTS['recov_r0278_n12_pct']:g}") + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*12",
+              # The N=12 clause shares its trailing "for r0278" with the N=16 clause, so the bind
+              # is a tempered gap: an intervening r0058 or a sentence end breaks it. A plain [^.]
+              # gap fails TWICE here -- open on "89.8% at N=12 for r0058 and ... for r0278" (it
+              # lazily scans past the wrong run tag, round 3), and closed on the REAL manuscript,
+              # whose gap contains the decimal in "96.1%" -- so the sentence boundary is a period
+              # followed by whitespace, exactly as _in_sentence defines it, not any period.
+              _lit(f"{FACTS['recov_r0278_n12_pct']:g}")
+              + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*12\$?(?:(?!r0058)(?!\.\s)[\s\S]){0,80}?"
+                r"for\s+r0278",
               _lit(f"{FACTS['recov_r0278_n16_pct']:g}")
               + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*16\$?\s+for\s+r0278",
               _lit(f"{FACTS['recov_r0058_n16_pct']:g}")
               + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*16\$?\s+for\s+r0058",
-              r"N\^?\{?\\star\}?\s*=\s*" + _lit(f"{FACTS['nstar_r0278']:d}")),
+              # BOTH-RUNS is part of the claim: a bare "N*=16" needle is satisfied by a section
+              # that quietly narrows the assertion to one run (round 3). The needle requires the
+              # relationship the manuscript states -- "both runs cross the 90% level by N*=16" --
+              # so dropping either run from the claim is a firing, not a wording change.
+              r"[Bb]oth\s+runs[^.]{0,80}?N\^?\{?\\star\}?\s*=\s*"
+              + _lit(f"{FACTS['nstar_r0278']:d}")),
              f"SI S16 states its measurement, so the file carrying it must state the banked values "
              f"IN CONTEXT: {FACTS['subset_draws_per_n']} draws per N over "
              f"{FACTS['subset_seeds']} random seeds ({FACTS['subset_draws_total']} draws per "
@@ -1300,6 +1324,21 @@ def _near(hay: str, pos: int, words: tuple[str, ...], window: int) -> bool:
     return any(w.lower() in seg for w in words)
 
 
+def _in_sentence(hay: str, pos: int, words: tuple[str, ...]) -> bool:
+    """Like _near, but the segment is the sentence containing `pos` (see Rule.sentence_exempt).
+
+    A sentence end is a period followed by whitespace or EOF, so decimals and version numbers do
+    not split the segment; parentheses and LaTeX markup pass through untouched.
+    """
+    lo = 0
+    for m in re.finditer(r"\.(?=\s|$)", hay[:pos]):
+        lo = m.end()
+    m = re.search(r"\.(?=\s|$)", hay[pos:])
+    hi = pos + m.start() + 1 if m else len(hay)
+    seg = hay[lo:hi].lower()
+    return any(w.lower() in seg for w in words)
+
+
 def scan(path: Path, text: str) -> list[str]:
     """Return a list of human-readable failures for one file."""
     fails: list[str] = []
@@ -1322,7 +1361,9 @@ def scan(path: Path, text: str) -> list[str]:
     for group, rules in (("RETIRED", RETIRED), ("OVERCLAIM", OVERCLAIM), ("AMBIGUOUS", AMBIGUOUS)):
         for rule in rules:
             for m in rule._rx.finditer(norm):
-                if rule.exempt and _near(norm, m.start(), rule.exempt, rule.window):
+                if rule.exempt and (_in_sentence(norm, m.start(), rule.exempt)
+                                    if rule.sentence_exempt
+                                    else _near(norm, m.start(), rule.exempt, rule.window)):
                     continue
                 if rule.needs and _near(norm, m.start(), rule.needs, rule.window):
                     continue

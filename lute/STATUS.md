@@ -1,8 +1,18 @@
-# GLINT in LUTE — what works, what is measured, what is not
+# GLINT in LUTE — the evidence behind the integration
 
-Written 2026-08-05. The point of this file is that the state of this integration should live next to
-the code, not in a chat log or one person's head. Every number below has a named source; anything
-without one is marked as an assumption.
+**What this file is.** The measurement record for GLINT-in-LUTE: every number with the job that
+produced it, the negative results, the corrections (including corrections of earlier entries in
+this file), and the assumptions nobody has tested. It exists because the state of this integration
+should live next to the code rather than in a chat log or one person's head. The two READMEs say
+what the pipeline does; this says *how we know*, and it is the right place to look before trusting
+any number in them.
+
+**How to read it.** Started 2026-08-05 around seven things that then stood between this integration
+and production; all seven are now closed, and each section below is the evidence that closed one —
+kept in the order the work happened, corrections included, because several conclusions here were
+reached twice and the first version was wrong in a way worth being able to see. Where a later
+measurement replaced an earlier operating point (item 6 twice over), both are kept and the
+superseding one says so. Anything without a named source is marked as an assumption.
 
 **Bottom line: all seven are closed** (item 6 as a measurement with a reframing — see its section).
 The raw-xtc route runs on real data and produces a correct cell; with `--integrate` it emits a
@@ -79,7 +89,7 @@ from `IndexGLINTParameters`). Both are fixed; both are the kind of defect only e
 |---|---|
 | `glint_launch.sh` xtc routing + flag whitelist | **run** — S3DF job 34240308 |
 | `glint_xtc.py` read + peak-find + index + write | **run** — same job |
-| `IndexGLINTParameters` validators (`_one_source`, per-source `peakfinder`) | **tested** — `lute/test_glint_index.py`, 44 pass; still no CI (item 1) |
+| `IndexGLINTParameters` validators (`_one_source`, per-source `peakfinder`) | **tested** — `lute/test_glint_index.py`, 47 pass, run in CI on every push (glint#107) |
 | the `peaks` and `images` routes | untouched by this branch; not re-run |
 | psana2 / `--psana 2` over envbridge | **never run on this branch** |
 | MPI sharding (`glint_xtc_mpi.py`) | **never run on this branch** |
@@ -109,10 +119,10 @@ so symmetry has to be supplied downstream. And the reflection rows carry the pla
 
 ---
 
-## The seven things that stand between this and production
+## The seven things that stood between this and production
 
-**Progress: all 7 struck through.** A struck-through item carries the commit that closed it and how
-it was verified. Item 1's CI half landed after its tests did (glint#107). Item 6 took three passes:
+**All seven are closed.** Each item below carries the commit that closed it and how it was
+verified; the struck-through heading is the problem as it was originally stated. Item 1's CI half landed after its tests did (glint#107). Item 6 took three passes:
 2026-08-06 against an indexing reference on a run the beamline kept, 2026-08-13 on raw Jungfrau 16M
 images with the ADU floor (the pass that closed it), and a 2026-08-25 re-measurement (glint#139) that
 leaves the item closed but **replaces the operating point it recommended** — read its section to the
@@ -121,9 +131,9 @@ end before taking a number out of it.
 (This paragraph previously said "6 of 7 ... item 6 is the one still open", contradicting both the
 header and the "What is left" footer, which have said all seven since 2026-08-13.)
 
-**1. ~~The LUTE task model has no test.~~ TESTS DONE (`bdbe67b`), CI STILL OPEN.**
+**1. ~~The LUTE task model has no test.~~ DONE** — tests in `bdbe67b`, CI in glint#107.
 `lute/test_glint_index.py` covers all eight validators and the launcher's per-destination flag
-filter: 41 tests, no GPU, no psana, no data. The launcher tests **run** `glint_launch.sh` with a fake
+filter: 47 tests, no GPU, no psana, no data. The launcher tests **run** `glint_launch.sh` with a fake
 `python` on `PATH` that records argv, rather than reimplementing its filter — the two defects found
 by hand were a shell-level import failure and a missing whitelist entry, neither of which a
 Python-only test would see.
@@ -137,8 +147,8 @@ v2 at all; LUTE pins v1, and on a v2 box the tests point `pydantic` at the bundl
 And the first draft passed 23 of 41 **vacuously**: a stand-in base from the wrong pydantic attached
 no validators, so every negative test failed loudly and every positive one passed for no reason.
 
-**Still open:** this repo has no CI. A GitHub runner has no GPU, so a workflow could cover exactly
-this pure-Python layer — the one that until now had no tests.
+**Closed by glint#107.** A GitHub runner has no GPU, so the workflow covers exactly this
+pure-Python layer — the one that until then had no tests — and it has grown with the repo since.
 
 **2. ~~`--pf8-min-snr` cannot reach the program.~~ DONE (`7867d88`).** It exists in `glint_xtc.py`'s argparse and is a real
 tuning knob (see #6), but it is missing from `XTC_FLAGS` in `glint_launch.sh` and has no field in
@@ -567,10 +577,10 @@ All seven items are closed. Item 6 closed 2026-08-13 as a measurement on Jungfra
 section: the calibrated object is the (`threshold`, `min_snr`) pair; `thr_adu` landed in glint#108),
 and was re-measured 2026-08-25 (glint#139) with the interior ASIC seams masked, which replaces the
 operating point that measurement recommended without reopening the item.
-CI closed via glint#107: six CPU-only test files run on every push and pull request
-(`lute/test_glint_index.py` — 44 tests — plus five `xtc_bridge` script tests), with the GPU
-(`test_core.py`) and MPI (`test_mpi_smoke.py`) tests excluded as unhostable and said so in the
-workflow. What remains is beyond the seven, not blocking them:
+CI closed via glint#107 and extended since: `.github/workflows/ci.yml` runs the whole CPU-only
+layer on every push and pull request — the LUTE model tests, the `experiments/` regression suite
+and the `xtc_bridge` script tests — with the GPU (`test_core.py`) and MPI (`test_mpi_smoke.py`)
+tests excluded as unhostable. Read the workflow for the current list rather than a count here. What remains is beyond the seven, not blocking them:
 
 1. **`gpu_calib.py` is Epix10ka-family only** and refuses loudly on anything else (item 4).
    Jungfrau and epixHR need their own decode (`UtilsJungfrau` / `UtilsEpixHR`) before they get the

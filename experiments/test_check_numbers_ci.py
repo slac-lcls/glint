@@ -488,6 +488,38 @@ def test_each_arithmetic_guard_fires_when_its_facts_are_perturbed():
             + ("\n".join(bad) or "  (nothing at all -- the guard is gone)"))
 
 
+BLIND_PAIR_CASES = [
+    # (label, text, must_fire)
+    ("prose form, one line", "GLINT indexes blind above xgandalf's rate (76% vs 71% at the same gate)", True),
+    # THE REGRESSION: ordinary Markdown/LaTeX wrapping put a newline between the two numerals and
+    # the first version of this rule used `[^.\n]`, so reflowing the guarded paragraph defeated it
+    # -- the same defect the stream-band rule had at :824 (Copilot review of glint#160).
+    ("prose form, WRAPPED", "GLINT indexes blind above xgandalf's rate (76% vs\n71% at the same gate)", True),
+    ("report table row", "| xgandalf | blind | 71% | 11,542 | 0.087 |", True),
+    ("table row, corrected", "| xgandalf | blind | 72% (86/120) | 11,542 | 0.087 |", False),
+    # a builder's own comment RECORDING that it once shipped the pair is not a claim of it
+    ("historical mention", '# one build behind -- it shipped 76%/71% and "~3 frames" for a week', False),
+    # both numerals are still correct alone: 91/120 offline, and the 85/120 lattice-bar ceiling
+    ("lone 76%, offline", "the offline hybrid reaches 76% (91/120) at the strict bar", False),
+    ("lone 71%, ceiling", "Blind indexing saturates at ~71% gated on sparse cxidb", False),
+]
+
+
+def test_blind_pair_rules_fire_and_stay_silent():
+    """The retired 76/71 blind pair, in every form the deliverables actually wrote it.
+
+    This pair sat in README.md and GLINT_REPORT.md -- both GUARDED targets -- while the guard ran
+    green, because the two rules that existed keyed on adjacencies neither file used: one needs
+    `xgandalf` next to 71% (table pipes break it), the other needs 71% within 40 chars of GLINT
+    (the README's phrasing is 45). Both directions are pinned here, because a rule that fires on
+    everything is as useless as one that fires on nothing.
+    """
+    for label, text, must_fire in BLIND_PAIR_CASES:
+        fired = any("blind-pair" in f for f in _cn.scan(Path("probe.md"), text))
+        assert fired == must_fire, (
+            f"{label}: fired={fired}, expected {must_fire} -- {text!r}")
+
+
 def test_submission_files_are_default_targets():
     """The files that GO TO THE JOURNAL must be scanned by default -- all three of them.
 
@@ -531,6 +563,7 @@ if __name__ == "__main__":
              test_required_merge_rows_fire_on_an_edited_cell,
              test_required_whole_file_form_catches_a_value_leaving_the_file,
              test_required_stays_silent_without_its_trigger,
+             test_blind_pair_rules_fire_and_stay_silent,
              test_submission_files_are_default_targets,
              test_check_arithmetic_is_green_on_the_shipped_table,
              test_each_arithmetic_guard_fires_when_its_facts_are_perturbed,

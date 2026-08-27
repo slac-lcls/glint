@@ -624,7 +624,33 @@ RETIRED = [
     # The retired pair as the DELIVERABLES actually phrase it -- "76%" headline beside "xgandalf 71%".
     # Scoped to that adjacency on purpose: bare 76% and bare 71% are both still CORRECT elsewhere
     # (91/120 offline, and the 85/120 lattice-bar front end), so an unscoped rule would cry wolf.
-    Rule("blind-pair-retired", r"xgandalf\s*(?:\\?geq\s*)?71\s*\\?%",
+    # ...and the pair as the READMEs phrase it, which slipped BOTH rules above for two years'
+    # worth of drift: "76% vs 71% at the same gate" carries no `xgandalf` adjacent to the 71 (so the
+    # rule below misses) and sits >40 chars from the word GLINT (so blind-rate-swap misses too).
+    # Found 2026-08-26 by an audit of the LUTE docs, in README.md -- a GUARDED target that had been
+    # running green over a retired pair. Keyed on the two numerals ADJACENT to each other, which is
+    # what makes it the pair rather than either legitimate lone number (91/120 offline = 76%, the
+    # 85/120 lattice-bar ceiling = 71%).
+    # `[^.]`, NOT `[^.\n]`: ordinary Markdown/LaTeX wrapping puts a newline between the two
+    # numerals ("76% vs\n71%"), and a class that excludes \n is defeated by reflowing the very
+    # paragraph it guards. That is the same defect the stream-band rule had (see :824) -- caught
+    # there by the #154 review and reintroduced here, which is why it is spelled out twice.
+    Rule("blind-pair-adjacent-retired", r"\b76\s*\\?%[^.]{0,30}?\b71\s*\\?%",
+         f"'76% vs 71%' is the RETIRED blind pair -- the counts moved to "
+         f"{FACTS['glint1_strict_of120']}/120 and {FACTS['xgandalf_blind_strict_of120']}/120 while "
+         "the percentages stayed written down. Quote the counts, and say which n you mean: at "
+         f"n=480 the arms are {FACTS['glint1_strict_of480']} vs "
+         f"{FACTS['xgandalf_blind_strict_of480']}, a tie at p=0.18",
+         f"{FACTS['glint_blind_rate_pct']}% ({FACTS['glint1_strict_of120']}/120) vs "
+         f"{FACTS['xgandalf_blind_rate_pct']}% ({FACTS['xgandalf_blind_strict_of120']}/120)",
+         # A deck builder's own comment RECORDING that it once shipped the retired pair is not a
+         # claim of it. Same historical-mention vocabulary the rules at :743 and :772 already use.
+         exempt=("it shipped", "previously said", "used to say", "build behind")),
+    # Widened 2026-08-26 to cross table pipes: the report's row is `| xgandalf | blind | 71% |`,
+    # where the old `xgandalf\s*` adjacency could not reach past the cell separators, so the same
+    # retired pair sat in a second guarded file. A short bounded gap, still same-line, still
+    # anchored on the word xgandalf -- so a lone 71% elsewhere stays legitimate.
+    Rule("blind-pair-retired", r"xgandalf[^.\n]{0,20}?(?:\\?geq\s*)?\b71\s*\\?%",
          f"'xgandalf 71%' is the retired blind pair. Measured at the >=25% bar it is "
          f"{FACTS['xgandalf_blind_rate_pct']}% ({FACTS['xgandalf_blind_strict_of120']}/120) against "
          f"GLINT-(1)'s {FACTS['glint_blind_rate_pct']}% ({FACTS['glint1_strict_of120']}/120)",

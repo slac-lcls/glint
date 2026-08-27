@@ -1,8 +1,14 @@
 # Reproducing the results in the GLINT paper
 
-This maps every table and figure in *Blind indexing by cross-frame consensus* to what regenerates
-it: the script, the data, the hardware, and the command. It is written for a referee or a reader
+This maps the tables and figures of *Blind indexing by cross-frame consensus* to what regenerates
+them: the script, the data, the hardware, and the command. It is written for a referee or a reader
 who has the repository and wants to check something specific.
+
+Coverage is deliberately uneven. Artifacts a reader is likely to want to check are worked through;
+a few are recorded only as not reproducible here. Two tables carry no entry because there is
+nothing to run: `tab:modules` describes the source layout and is checked by reading the modules it
+names, and `tab:realindex` gathers rows stated elsewhere in the paper, each covered under its own
+dataset below.
 
 **Read this first.** The results divide into four tiers by what they cost to check, and the cheap
 tiers are not token gestures. The paper's central claim — that the unit cell can be recovered from
@@ -56,10 +62,13 @@ Everything here runs from a clean checkout on CPU. The scoring and gate-arithmet
 only `numpy` and `scipy`; running GLINT itself additionally needs `torch` (CPU build is fine).
 
 ```bash
-python3 -m pip install -e .        # optional; the commands below use PYTHONPATH instead
+python3 -m pip install -e .        # installs numpy/scipy/torch -- do this in a fresh environment
 ```
 
-`experiments/` is deliberately not shipped in the wheel, so research scripts run from the checkout.
+That install is what brings in the dependencies. The `PYTHONPATH=.` on the commands below only
+makes the checkout importable -- `experiments/` is deliberately not shipped in the wheel, so the
+research scripts run from the checkout rather than site-packages -- but it installs nothing, so a
+fresh environment still needs the line above.
 
 ### The xgandalf rows of `tab:summary` — exact, ~2 seconds
 
@@ -90,33 +99,48 @@ Mc_known=None)`: N-best blind, consensus over the pooled N-best, the best N-best
 with it, then cell-general rescue. It runs on the committed q-vectors with no GPU:
 
 ```bash
-PYTHONPATH=. python3 -c "
-from glint.glint_fast import load
-from glint.hybrid_stream import hybrid_index
-frames = [f for f in load('experiments/frames_cxidb_clean.txt')][:120]
-r, st = hybrid_index(frames, Mc_known=None)
-print('indexed', st['n_idx'], 'of', st['n'], '| cell edges', st['edges'].round(1),
-      '| consensus support', st['support'])"
+CUDA_VISIBLE_DEVICES= PYTHONPATH=. python3 experiments/score_glint_gate.py -N 120
 ```
 
-Measured here on an M-series laptop: **~115 s**, recovering `[37.8 78.6 78.9]` — the lysozyme cell,
-79.0/79.0/38.0 Å, derived from the frames alone with no cell supplied. That is the paper's central
-claim, reproducible on a laptop in the time it takes to read this page.
+`CUDA_VISIBLE_DEVICES=` is what actually forces CPU here: the module-level device is chosen at
+import, before any flag is read, so on a GPU host the command would otherwise use CUDA. (The CLI's
+`--device cpu` sets the same variable for you; either is fine, but set one deliberately if you mean
+to test the CPU path.)
 
-The printed `n_idx` is the loose count, **not** a table value: `tab:summary` scores at the strict
-gate (correct reduced cell AND ≥25% of observed peaks indexed AND ≥10 reflections), which is what
-the xgandalf scorer above applies. Apply the same gate before comparing. Note also that this is
-*not* `compare3.py`'s blind-top-1 arm — the two agree on the 120-frame subset (both 92) and differ
-by 15 frames at n=480 (361 vs 346), so the distinction only becomes visible on the larger set.
+The scorer applies `tab:summary`'s gate -- correct reduced cell **and** at least 25% of observed
+peaks indexed **and** at least 10 reflections -- reading its tolerance from the xgandalf scorer
+above so the two arms cannot drift apart. Add `--cell` for the known-cell arm.
 
-Handing it a cell instead (`Mc_known=…`, consensus skipped) gives the known-cell rows.
+Measured here on an M-series laptop, **~115 s**:
 
-Or through the command line, which writes a CrystFEL stream:
+```
+GLINT-(1) BLIND  N=120: correct-lattice 115/120=96%  >=25%(Table1) 91/120=76%  >=10refl 115/120=96%
+  consensus cell edges [37.8 78.6 78.9]  support 90  (refused: False)
+```
+
+The cell is recovered blind: `[37.8 78.6 78.9]` against lysozyme's 79.0/79.0/38.0 A, derived from
+the frames alone with no cell supplied. That is the paper's central claim, reproducible on a laptop.
+
+**One frame short, and unexplained.** The paper's blind row is `92/120` at this gate; this CPU run
+gives `91`. It is not a scoring difference -- the gate here is the one the xgandalf arm uses -- and
+not the frame filter (no frame in the file has fewer than six peaks). The recorded run was on an
+A100, so the likeliest cause is device-dependent tie-breaking on a single marginal frame, but that
+is a hypothesis and has not been confirmed on a GPU. Do not read `91` here as contradicting the
+table, and do not read it as confirming it either. (`91/120` is separately a real published value --
+the *known-cell* row -- so the coincidence is worth naming: the paper's SI explains that 91-vs-92
+pair as two pipelines at one gate, which is a different distinction from this one.)
+
+Note also that this is *not* `compare3.py`'s blind-top-1 arm -- the two agree on the 120-frame
+subset and differ by 15 frames at n=480 (361 vs 346), so the distinction only becomes visible on
+the larger set.
+
+To write a CrystFEL stream instead of a score:
 
 ```bash
 PYTHONPATH=. python3 -m glint.glint_cli --qframes experiments/frames_cxidb_clean.txt \
     -N 120 --device cpu -o indexed.stream
 ```
+
 
 ### The consensus barrier, cached vs uncached
 

@@ -1,8 +1,8 @@
 """The device ladder must never select MPS -- it cannot run this package (glint#161).
 
 WHY THIS EXISTS. `glint.replica_gpu` and `glint.glint_index` chose their device as
-cuda -> mps -> cpu. Apple's MPS backend does not implement float64, and both modules compute in
-float64, so on any Apple-silicon machine the mps rung raised
+cuda -> mps -> cpu. Apple's MPS backend does not implement float64, and `replica_gpu` allocates
+float64 at MODULE scope, so on any Apple-silicon machine the mps rung raised
 
     TypeError: Cannot convert a MPS Tensor to float64 dtype ...
 
@@ -13,6 +13,12 @@ never an acceleration path at all: only a way for the working cpu fallback to be
 
 Found while verifying the commands in REPRODUCING.md actually run -- a referee reading the paper on
 a Mac would have hit it on their first GLINT command.
+
+BOTH modules are held to the rule, but for DIFFERENT reasons, and the difference is worth keeping
+straight (Copilot review of glint#161). `replica_gpu` genuinely cannot use MPS -- its float64
+tensors refuse. `glint_index` computes in float32 and might well run there; nobody has tried. It
+is held to cuda -> cpu because the package is used as a whole (`hybrid_index` imports replica_gpu),
+so an mps rung here would only produce a split-device configuration nobody has run.
 
 THE SOURCE CHECK RUNS WITHOUT TORCH, DELIBERATELY. The obvious way to write this test is to import
 the two modules and read their `DEV`, but the environments that run it -- the CPU CI job, and
@@ -82,7 +88,10 @@ else:
             ok, why = True, ""
         except Exception as exc:              # noqa: BLE001 - the message is the point
             ok, why = False, repr(exc)
-        check(f"{name}.DEV accepts float64 (what the module actually uses)", ok, why)
+        # float64 for BOTH, deliberately: replica_gpu allocates it and glint_index does not, but
+        # the two are imported together by hybrid_index, so a device either of them names has to
+        # carry the package's widest dtype. This is the assertion MPS failed.
+        check(f"{name}.DEV accepts float64 (the package's widest dtype)", ok, why)
     # the original failure was at IMPORT, so getting here is itself part of the contract
     check("both modules import on this host", True)
 

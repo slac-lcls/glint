@@ -28,10 +28,14 @@ import torch
 from glint.lattice import buerger_reduce
 
 PI = np.pi
-# cuda -> cpu, with NO mps rung: MPS does not implement float64 and this package computes in it,
-# so an mps selection is an import-time crash on Apple silicon rather than an acceleration. See the
-# note in glint/replica_gpu.py. (This also retires the torch<1.12 getattr guard that used to be
-# needed here, since torch.backends.mps is no longer consulted at all.)
+# cuda -> cpu, with NO mps rung -- but NOT for this module's own dtype: glint_index computes in
+# float32 (`sample`'s start grid, `index_blind`'s Q), so unlike replica_gpu it has no float64
+# allocation that MPS would refuse, and whether it would run there is simply UNTESTED. The rung is
+# gone because the package is used as a whole: `hybrid_index` imports replica_gpu, whose
+# module-level float64 tensors DO crash on MPS at import, so offering mps here would only produce
+# a split-device configuration nobody has run. Consistency with the module that cannot, not a
+# float64 limit of this one. (Also retires the torch<1.12 getattr guard, since torch.backends.mps
+# is no longer consulted at all.)
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 

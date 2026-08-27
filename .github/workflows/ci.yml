@@ -59,9 +59,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_integrate_event.py
 
-      # The device ladder must never select MPS: it cannot do float64, which this package computes
-      # in, so an mps selection is an import-time crash on Apple silicon -- and `--device cpu` did
-      # not rescue it (glint#161). Skips without torch, which is this job's normal state.
+      # The device ladder must never select MPS: replica_gpu's module-level float64 tensors crash
+      # on it at import, and `--device cpu` did not rescue that (glint#161). The SOURCE half of
+      # this test needs no torch, so it really runs here -- which is the point, since this job
+      # installs no torch and a skip-only test would stay green with the defect restored.
       - name: experiments/test_device_selection.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_device_selection.py

@@ -156,9 +156,9 @@ jobs:
       # was enforced on one machine and not in CI. Editing a stored split left CI green.
       #
       # What runs HERE is check_arithmetic() in full (which is where those assertions live) plus
-      # the in-repo docs (README/ROADMAP/GLINT_REPORT, CONTRIBUTING.md and docs/, 7 files as of
+      # the in-repo docs (README/ROADMAP/GLINT_REPORT, CONTRIBUTING.md and docs/, 8 files as of
       # 2026-08-27), now resolved from the checkout instead of ~/git/glint. The paper and the
-      # decks live outside the repo and are reported as SKIP -- 7 checked, 8 skipped on a bare
+      # decks live outside the repo and are reported as SKIP -- 8 checked, 8 skipped on a bare
       # runner. That is the honest scope: this step cannot catch a number drifting in
       # glint_rewrite_JAC_refined.tex, and the pre-push hook still has to.
       - name: experiments/check_numbers.py

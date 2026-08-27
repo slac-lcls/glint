@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import unicodedata
@@ -582,6 +583,11 @@ DEFAULT_TARGETS = [
     REPO / "docs/onboarding.md",
     REPO / "docs/results.md",
     REPO / "docs/lineage.md",
+    # ...and the fourth docs file, which the first version of this list missed while its comment
+    # claimed the tree was covered: perlmutter_cnn.md is linked as the active NERSC recipe from
+    # lineage.md and train_cnn.py and carries quantitative training settings (Copilot review of
+    # #168). Verified green before wiring in, same protocol as the other three.
+    REPO / "docs/perlmutter_cnn.md",
 ]
 PDF_TARGETS = [
     HOME / "git/slides/glint/glint_summary.pdf",
@@ -1837,10 +1843,24 @@ def main(argv: list[str]) -> int:
                 print(f"  SKIP {path} (missing)")
                 skipped += 1
             continue
+        if path in must_exist and not path.is_file():
+            # exists() passed but this is a directory or a special file -- for a requested
+            # target that is the same defect as a missing file: an entry checking nothing
+            # (Copilot review of #168, round 2).
+            fails.append(f"  UNREADABLE TARGET {path} -- exists but is not a regular file\n")
+            print(f"  UNREADABLE {path} (not a regular file -- counted as a failure)")
+            continue
         text = _read(path)
         if text is None:
-            print(f"  SKIP {path} (pdftotext unavailable, or file unreadable)")
-            skipped += 1
+            # Two different situations still share the None: the MACHINE lacking pdftotext (a
+            # skip -- ci.yml documents that scope) and the TARGET being unreadable or failing
+            # conversion. For a requested target only the first is excusable.
+            if path in must_exist and not (path.suffix == ".pdf" and shutil.which("pdftotext") is None):
+                fails.append(f"  UNREADABLE TARGET {path} -- read/conversion failed\n")
+                print(f"  UNREADABLE {path} (read or pdftotext conversion failed -- counted as a failure)")
+            else:
+                print(f"  SKIP {path} (pdftotext unavailable, or file unreadable)")
+                skipped += 1
             continue
         checked += 1
         found = scan(path, text) + check_required(path, text)

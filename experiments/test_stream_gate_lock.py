@@ -97,6 +97,12 @@ def test_stats_reports_refusals_in_both_branches():
     and only a later watchdog relock is observed through the locked one. Reporting the counter on
     the locked branch alone (as glint#164 first did) therefore hid it at the exact moment an
     operator asks "there is consensus support but no cell -- why?" (Copilot review of glint#164).
+
+    BOTH branches are exercised, literally per the name: the first version of this test called
+    stats() only while blind, so deleting gate_refused from the LOCKED return -- the line the PR
+    originally added -- left it green (Copilot review of glint#164, round 2). The locked driver
+    below is initialised with exactly the attributes the locked branch reads, `acc` faked to the
+    one method stats() calls on it.
     """
     d = _driver(AliasGate(), None)
     d._blind, d.n_pushed, d.n_warmup = True, 40, 31
@@ -106,6 +112,19 @@ def test_stats_reports_refusals_in_both_branches():
     assert s["locked"] is False
     assert "gate_refused" in s, "a blind driver hides the refusals that are keeping it blind"
     assert s["gate_refused"] == 3, s
+
+    d._blind = False                                    # ...and the locked branch, same counter
+    d.acc = type("Acc", (), {"stats": staticmethod(lambda thr=0.0, n_theoretical=None: {})})()
+    d.locked_after, d.consensus_support, d.n_theoretical = 6, 9, 4200
+    d.n_indexed = d.n_integrated = 25
+    d.n_gate_rejected = d.n_fanout_errors = d.n_fanout_missed = 0
+    d.warmup_rescue = d.retry_cascade = d.adaptive_relock = d.double_hit = False
+    d.qc_frac_threshold = None
+    d._writer = d._grefiner = None
+    s = d.stats()
+    assert s["locked"] is True
+    assert s.get("gate_refused") == 3, (
+        "the locked branch dropped the counter -- a post-lock watchdog refusal would be invisible")
 
 
 def test_adopt_mode_returns_the_tighter_cell():

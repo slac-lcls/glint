@@ -1544,12 +1544,18 @@ class StreamDriver:
                  # must never be silent, and a rising count is the signal that the cell has drifted
                  # away from the sample (or that min_inlier_frac is set too high for this run).
                  gate_rejected=self.n_gate_rejected,
-                 # alias-gate REFUSALS: locks the gate turned down, at warm-up and at every
-                 # watchdog re-lock. Counted since glint#83 but never reported, so the one
-                 # diagnostic that says "a cell was proposed and rejected as an alias" was
-                 # invisible to anyone watching a live run -- readable only by reaching into the
-                 # attribute, which is what the tests do. A rising count with a flat n_relock is
-                 # the signature of a run generating alias hypotheses the gate is holding back.
+                 # alias-gate REFUSALS, in the broad sense: proposed locks that were NOT committed.
+                 # Counted since glint#83 but never reported, so the one diagnostic that says "a
+                 # cell was proposed and turned down" was invisible to anyone watching a live run.
+                 # THE COUNTER HAS TWO SOURCES, and an operator reading it must know both (Copilot
+                 # review of glint#164): (1) the alias gate scoring the cell and refusing it, and
+                 # (2) the watchdog declining to re-gate a verdict because the current batch
+                 # carried no supporting voters -- every entry rescued, votes gone elsewhere, or a
+                 # dead fan-out returning None for all of them (the #156 fix). So a rising count
+                 # with a flat n_relock means locks are being proposed and not committed; whether
+                 # that is the gate holding back aliases or the driver deferring voter-less
+                 # verdicts is read from the neighbours -- n_fanout_errors rising implicates the
+                 # fan-out, otherwise the gate.
                  gate_refused=self.n_gate_refused,
                  # fan-out invocations (retry cascade or watchdog) that raised and were degraded to
                  # the miss path (glint#147). Reported unconditionally for the same reason: a dead

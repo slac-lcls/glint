@@ -488,6 +488,24 @@ def test_each_arithmetic_guard_fires_when_its_facts_are_perturbed():
             + ("\n".join(bad) or "  (nothing at all -- the guard is gone)"))
 
 
+def test_submission_files_are_default_targets():
+    """The files that GO TO THE JOURNAL must be scanned by default -- all three of them.
+
+    Nothing else here covers this. Every other test hands text to `scan`/`check_required`
+    directly, so a target quietly dropped from DEFAULT_TARGETS leaves all of them green, and CI
+    cannot notice either: the papers checkout lives outside the repo, so these entries are SKIPped
+    on a runner and only the pre-push hook ever reads them. That combination is exactly how
+    glint_SI.tex went unguarded until 2026-08-26 while carrying the retired Jungfrau
+    `93% (support 54/60)` the main text had already been corrected out of -- the SI holds PARALLEL
+    copies of the dataset tables, so guarding the manuscript alone just moves the drift one file
+    over. Asserting the whole submission set, not only the file that drifted: the same argument
+    covers each of them (Copilot review of glint#159).
+    """
+    for name in ("glint_rewrite_JAC_refined.tex", "glint_SI.tex", "cover_letter_JAC.tex"):
+        assert any(p.name == name for p in _cn.DEFAULT_TARGETS), (
+            f"{name} is not in DEFAULT_TARGETS -- it would go to the journal unguarded")
+
+
 def test_perturbations_are_restored():
     """A leaked override would make every later test run against a table nobody measured."""
     for edit, _ in ARITHMETIC_PERTURBATIONS:
@@ -513,6 +531,7 @@ if __name__ == "__main__":
              test_required_merge_rows_fire_on_an_edited_cell,
              test_required_whole_file_form_catches_a_value_leaving_the_file,
              test_required_stays_silent_without_its_trigger,
+             test_submission_files_are_default_targets,
              test_check_arithmetic_is_green_on_the_shipped_table,
              test_each_arithmetic_guard_fires_when_its_facts_are_perturbed,
              test_perturbations_are_restored)

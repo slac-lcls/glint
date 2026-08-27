@@ -85,6 +85,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_consensus_degenerate.py
 
+      - name: experiments/test_consensus_order.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_consensus_order.py
+
       - name: experiments/test_stream_gate_lock.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_stream_gate_lock.py
@@ -143,6 +147,10 @@ jobs:
       - name: experiments/test_geom_bridge.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_geom_bridge.py
+
+      - name: experiments/test_cli_smoke.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_cli_smoke.py
 
       # ~50s, by far the slowest step here: it refines over 540 synthetic frames. Kept because
       # it is the only cover of the geometry-refinement solver, but it is the first candidate

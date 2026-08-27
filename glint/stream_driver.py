@@ -1537,6 +1537,13 @@ class StreamDriver:
                  # must never be silent, and a rising count is the signal that the cell has drifted
                  # away from the sample (or that min_inlier_frac is set too high for this run).
                  gate_rejected=self.n_gate_rejected,
+                 # alias-gate REFUSALS: locks the gate turned down, at warm-up and at every
+                 # watchdog re-lock. Counted since glint#83 but never reported, so the one
+                 # diagnostic that says "a cell was proposed and rejected as an alias" was
+                 # invisible to anyone watching a live run -- readable only by reaching into the
+                 # attribute, which is what the tests do. A rising count with a flat n_relock is
+                 # the signature of a run generating alias hypotheses the gate is holding back.
+                 gate_refused=self.n_gate_refused,
                  # fan-out invocations (retry cascade or watchdog) that raised and were degraded to
                  # the miss path (glint#147). Reported unconditionally for the same reason: a dead
                  # fan-out silently turns every retry/relock mechanism off, and this counter is the

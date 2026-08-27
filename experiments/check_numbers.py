@@ -651,11 +651,36 @@ RETIRED = [
     # is 0.33 ms" satisfies both that rule and subms-no-batch while contradicting FACTS.  Found by
     # Copilot on #167.  Fire only on the fp32 PAIRING, either order, and exempt a sentence that also
     # says fp64 (a deliberate fp32-vs-fp64 contrast legitimately puts both near 0.33).
-    # [\s\S] so a line break is not a hiding place -- see the jungfrau-93pct note below.
-    Rule("fp32-b32-0.33", r"fp32[\s\S]{0,40}(?<![\d.])0\.33\s*ms|(?<![\d.])0\.33\s*ms[\s\S]{0,40}fp32",
-         "0.33 ms was fp32 indexing at B=32 BEFORE #165; it is now 0.31 ms (0.33 is the fp64 B=32 "
-         "figure, and the fused box-integration per frame)", "0.31 ms",
-         exempt=("fp64",)),
+    # ⚠ TWO defects in the first version of this rule, both caught by Copilot on #167 round 2, and
+    # both worth stating because they are easy to repeat:
+    #   1. It required "ms", so the bare form "0.33 fp32 indexing" walked straight through.
+    #   2. It used exempt=("fp64",). `exempt` is a PROXIMITY test, not a scope: _near looks over the
+    #      rule's whole +/-240 window, so "fp32 indexing at B=32 is 0.33 ms. fp64 results are
+    #      discussed next." was silently exempted by an fp64 in the NEXT SENTENCE. An exemption
+    #      cannot express "fp64 owns this number" -- only "fp64 is somewhere nearby".
+    # So the exclusion is encoded IN the pattern, scoped to the pairing, and exempt is gone:
+    #   forward  fp32 ... 0.33  with NO fp64 between (tempered), so a contrast where fp64 owns the
+    #            0.33 cannot match;
+    #   reverse  0.33 ... fp32  within 15 chars, tempered the same way, AND with fp32 not followed
+    #            by its own decimal -- that last clause is what separates the stale "0.33 fp32
+    #            indexing" from the legitimate "fp64 is 0.33 ms, fp32 is 0.31 ms".
+    # Pinned by test_fp32_b32_033_rule.py: 5 must-fire, 6 must-not-fire, both Copilot cases included.
+    Rule("fp32-b32-0.33",
+         r"fp32(?:(?!fp64)[\s\S]){0,40}?(?<![\d.])0\.33\b"
+         r"|(?<![\d.])0\.33\b(?:(?!fp64)[\s\S]){0,15}?fp32(?![^\n]{0,20}\d\.\d)",
+         "0.33 was fp32 indexing at B=32 BEFORE #165; it is now 0.31 (0.33 is the fp64 B=32 figure, "
+         "and the fused box-integration per frame)", "0.31"),
+    # The fp32 B=120 figure has the SAME shape of problem: 0.16 was fp32-at-B=120 (now 0.14), but
+    # 0.16 is ALSO predict's live per-frame cost (the "7.3x predict (0.16 ms)" line in the DRP
+    # deliverables), so it cannot be retired outright either. Same tempered pairing against fp32.
+    # This rule is not hypothetical: adding it immediately caught two stale sites the 0.26/0.45
+    # sweep had missed -- slides/drp/build_drp.py and the DRP projections page both still said
+    # "0.16 ms at B=120 (0.33 at B=32)" for fp32.
+    Rule("fp32-b120-0.16",
+         r"fp32(?:(?!fp64)[\s\S]){0,60}?(?<![\d.])0\.16\b"
+         r"|(?<![\d.])0\.16\b(?:(?!fp64)[\s\S]){0,15}?fp32(?![^\n]{0,20}\d\.\d)",
+         "0.16 was fp32 indexing at B=120 BEFORE #165; it is now 0.14 (0.16 is predict's per-frame "
+         "cost, which is why this is scoped to the fp32 pairing)", "0.14"),
     Rule("fused-fps-3800", r"(?<![\d.])3[,.]?800\s*(?:frames?\s*/\s*s|f/s|fps|Hz)|3\.8\s*kHz",
          "3.8 kHz was 1000/0.26; against the measured 0.17 ms/frame it is ~5.9 kHz", "~5.9 kHz"),
     Rule("ffbidx-12x", r"(?<![\d.])12\s*(?:×|x|\\times)(?=[^\n]{0,80}(?:ffbidx|pipelined))",
@@ -1035,7 +1060,10 @@ AMBIGUOUS = [
          "0.33 ms is BOTH fp64 indexing at B=32 (post-#165) and fused box-integration per frame; "
          "a bare one cannot be told apart",
          "name the quantity inline",
-         needs=("fp64", "fp32", "indexing", "integrat", "box-integ", "b=32", "batch 32")),
+         # "fp32" is NOT in this list: neither current meaning of 0.33 is fp32 (fp32 at B=32 is
+         # 0.31 since #165), so naming fp32 near a 0.33 does not disambiguate it -- it misattributes
+         # it. That pairing is caught by the fp32-b32-0.33 RETIRED rule above instead.
+         needs=("fp64", "indexing", "integrat", "box-integ", "b=32", "batch 32")),
     # After #165 the known-cell pair is 0.17/0.33, and 0.33 now COLLIDES with fused box-integration
     # per frame -- which is a genuine per-frame latency, so this rule's premise does not apply to it.
     # "integrat"/"box-integ" are accepted for the same reason bare-0.33 accepts them: they name the

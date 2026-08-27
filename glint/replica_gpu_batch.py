@@ -311,7 +311,12 @@ def index_fused(frames, Mc, B=32):
     B=96 is no better than B=64 in either precision, but that is batch-count quantisation, not
     occupancy -- 120 frames at B=96 is a ragged 96+24 while B=120 is one batch. Output is
     batch-invariant -- the kernels loop each frame's real peak count, not Pmax, so a looser
-    per-batch pad costs no work (fp64 bit-identical across B).
+    per-batch pad costs no ARITHMETIC (fp64 bit-identical across B). It is not unconditionally free:
+    every block reserves Pmax*3*_IB dynamic shared memory, which caps resident blocks per SM.
+    MEASURED (A100, fp64, K=4096, real P pinned at 200, only the pad varied): flat to Pmax 800
+    (1.00x), 1.02x at 1600, 1.29x at 3200 -- the reservation only bites once residency falls to ~4
+    blocks/SM. At the peak counts this code sees (cxidb-17 tops out at 554: ~13 KB/block, ~12
+    blocks/SM) the pad really is free.
 
     Each frame's peaks are staged in dynamic shared memory, so a frame with more peaks than the
     device can hold in one block (fused_kernels.max_peaks(): ~6954 fp64 / 13909 fp32 on an A100)

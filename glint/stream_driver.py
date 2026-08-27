@@ -9,7 +9,10 @@ run -- so a live run needs no cell handed in, only a ~150 ms discovery transient
 
 Why a driver is needed at all. Each stage is fast on its own (index 0.17 ms/frame, integrate
 0.33 ms/frame), but they have opposite batching requirements: indexing wants MANY frames at once
-(one thread-block per frame, so the batch sets GPU occupancy -- B>=64 saturates an A100), while
+(the anneal and refine kernels take one thread-block per frame, so the batch sets GPU occupancy;
+obj splits its candidates across blocks since #165 but that did not remove the need to batch).
+B=64 is the driver default and is NOT a saturation point: B=120 measures 26% faster (0.214 ->
+0.170 ms/frame fp64), so the batch is a latency/throughput trade, not a knee. While
 integration is per-frame and needs THAT frame's pixels. Uploading the frame twice would cost ~3-5 ms
 for a 16 Mpix frame, an order of magnitude more than either kernel. So the driver holds a ring of B
 frames resident on the device, indexes them as one batch, and then integrates each against the

@@ -624,6 +624,27 @@ def test_s16_required_fires_on_narrowed_or_moved_claims():
         "moving the N=12 recovery to r0058 stayed green -- the tempered bind is not tempering")
 
 
+def test_needles_reject_decimal_extensions():
+    """A number needle must not be satisfied by a decimal that merely STARTS with it.
+
+    `_lit` guarded against a following digit but not against `.<digit>`, so "1785.4 indexed
+    frames" satisfied the needle for 1785 and a malformed edited count stayed green -- and the
+    same hole let the retired N*=32 pattern fire on the legitimate larger values N*=320 and
+    N*=32.5 (Copilot review of #163, round 6). Both directions are pinned: the needle must reject
+    the decimal, and the retired rule must not claim one.
+    """
+    for key, field in (("indexed_r0278", "idx278"), ("indexed_r0058", "idx058")):
+        stretched = _s16_prose(**{field: f"{_cn.FACTS[key]}.4"})
+        assert _required_fires(stretched, "s16-subset-recovery-facts"), (
+            f"{key} needle accepted a decimal extension of its value")
+    assert _required_fires(_s16_prose(nstar="16.4"), "s16-subset-recovery-facts"), (
+        "the N* needle accepted 16.4 as if it were 16")
+    for larger in ("Pooling to $N^{\\star}=320$ was never tested.",
+                   "The sweep reports $N^{\\star}=32.5$ under interpolation."):
+        assert not _fires(larger, "nstar-32-retired"), (
+            f"the retired-32 rule claimed a different value: {larger!r}")
+
+
 def test_nstar32_exemption_is_clause_scoped():
     """Round-3 finding: the 240-char exemption window let one properly retired mention exempt a
     SEPARATE live N*=32 claim in the same paragraph, and full-sentence scope then failed the same
@@ -643,6 +664,10 @@ def test_nstar32_exemption_is_clause_scoped():
     assert _fires(one_sentence, "nstar-32-retired"), (
         "a comma joined a retirement and a live claim into one sentence and both were exempted "
         "(round 4) -- the exemption must be clause-scoped, not sentence-scoped")
+    standalone = "The previously quoted $N^{\\star}=32$ for r0058 remains correct."
+    assert _fires(standalone, "nstar-32-retired"), (
+        "'previously quoted' alone suppressed the rule -- an exempt must RETIRE the value, and "
+        "ORed entries made this one a standalone escape (round 6)")
     decimal_span = ("The previously quoted $N^{\\star}=32$ (recovery 93.4\\% at $N=24$) "
                     "does not reproduce here.")
     assert not _fires(decimal_span, "nstar-32-retired"), (
@@ -777,6 +802,7 @@ if __name__ == "__main__":
              test_s16_required_fires_on_every_edited_claim,
              test_s16_required_fires_on_swapped_context,
              test_s16_required_fires_on_narrowed_or_moved_claims,
+             test_needles_reject_decimal_extensions,
              test_nstar32_exemption_is_clause_scoped,
              test_s16_required_stays_silent_without_its_trigger,
              test_nstar32_rule_fires_live_and_stays_exempt_when_retired,

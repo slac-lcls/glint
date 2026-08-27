@@ -715,7 +715,7 @@ RETIRED = [
     # r0058's N* was published as 32 and the 2026-08-24 reconstruction puts it at 16. The paper
     # keeps 32 visible in ONE place -- the note explaining that it does not reproduce -- so the
     # exempts below are the reconstruction's own vocabulary, not a blanket escape.
-    Rule("nstar-32-retired", r"N\^?\{?\\star\}?\s*=\s*32|N\*\s*=\s*32",
+    Rule("nstar-32-retired", r"N\^?\{?\\star\}?\s*=\s*32(?!\.?\d)|N\*\s*=\s*32(?!\.?\d)",
          f"N* = 32 for r0058 is SUPERSEDED: the symmetric pooled treatment on the protocol-matching "
          f"pool gives {FACTS['nstar_r0058']} for r0058 and {FACTS['nstar_r0278']} for r0278. It is "
          "protocol-conditional -- the original N grid was never recorded and a coarse grid "
@@ -736,8 +736,7 @@ RETIRED = [
          # scope one step after that (a comma joins a retirement and a live claim into one
          # sentence, round 4). The retirement must sit in the SAME CLAUSE as the value it
          # retires.
-         exempt=("does not reproduce", "previously quoted",
-                 "would have correctly reported"),
+         exempt=("does not reproduce", "would have correctly reported"),
          clause_exempt=True),
     Rule("blind-pair-adjacent-retired", r"\b76\s*\\?%[^.]{0,30}?\b71\s*\\?%",
          f"'76% vs 71%' is the RETIRED blind pair -- the counts moved to "
@@ -1134,8 +1133,13 @@ def _lit(v: str) -> str:
 
     Same trap (a) the RETIRED patterns document: \\b treats a decimal point as a boundary, so
     `\\b1506\\b` happily matches inside `1506.4`, and a bare `31` matches the tail of `531`.
+
+    The trailing guard rejects a DECIMAL extension too, not merely a following digit: `(?![\\d])`
+    let "1785" match inside "1785.4 indexed frames", so a malformed edited count still satisfied
+    every needle built from it (Copilot review of #163, round 6). `\\.?\\d` keeps a sentence-final
+    "1785." matching while rejecting "1785.4"; fixing it HERE fixes every caller.
     """
-    return rf"(?<![\d.]){re.escape(v)}(?![\d])"
+    return rf"(?<![\d.]){re.escape(v)}(?!\.?\d)"
 
 
 @dataclass

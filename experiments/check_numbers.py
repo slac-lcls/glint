@@ -34,6 +34,7 @@ flags. Do not silence a rule to make a deliverable pass.
 """
 from __future__ import annotations
 
+import ast
 import os
 import re
 import shutil
@@ -1373,26 +1374,54 @@ def check_arithmetic() -> list[str]:
     # the same "agrees with the value" vs "reads the constant" gap the _inliers pin closes for the
     # live gate. It has to be a SOURCE check for matched(): its `tol=GATE_TOL` default is bound
     # once at def time, so no runtime patch can reach it.
+    # ...and that the constants are actually USED by the functions that define the gate, read
+    # from the PARSED TREE rather than by regex. A regex over the source was satisfied by the
+    # word GATE_TOL appearing in matched_strict's DOCSTRING, so re-inlining the return
+    # comparison as `< 0.15` left the tie green -- the check was passing on prose (Copilot review
+    # of #170, round 5). ast walks the body only, so only real references count.
     if _gf_s:
-        _uses = ((r"def\s+matched\s*\([^)]*\btol\s*=\s*GATE_TOL\b", "matched()'s tol default",
-                  "GATE_TOL"),
-                 # The STRICT matcher must read GATE_TOL directly and must be what gpass calls:
-                 # `matched` honours QDIST and stops consulting GATE_TOL entirely, so a gpass
-                 # routed through it applies the published thresholds to a different rule while
-                 # every tie above still reads green (round 8).
-                 (r"def\s+matched_strict\b[\s\S]{0,400}?\bGATE_TOL\b",
-                  "matched_strict()'s window", "GATE_TOL"),
-                 (r"def\s+gpass\b[\s\S]{0,400}?\bmatched_strict\s*\(",
-                  "gpass()'s matcher", "matched_strict"),
-                 (r"def\s+gpass\b[\s\S]{0,400}?\bGATE_FRAC\b", "gpass()'s fraction test",
-                  "GATE_FRAC"),
-                 (r"def\s+gpass\b[\s\S]{0,400}?\bGATE_MIN\b", "gpass()'s count test",
-                  "GATE_MIN"))
-        for _pat, _where, _cname in _uses:
-            if not re.search(_pat, _gf_s):
-                bad.append(f"  FACTS: {_where} no longer reads {_cname} in glint/glint_fast.py -- "
-                           f"the canonical constant is decorative there, so the shipped gate can "
-                           f"drift from the published one with every check still green")
+        try:
+            _tree = ast.parse(_gf_s)
+        except SyntaxError as _exc:
+            _tree = None
+            bad.append(f"  FACTS: glint/glint_fast.py does not parse ({_exc}), so the strict-gate "
+                       "functional checks are unchecked")
+        _fns = ({n.name: n for n in ast.walk(_tree) if isinstance(n, ast.FunctionDef)}
+                if _tree is not None else {})
+
+        def _body_names(fn):
+            """Every Name/Attribute id referenced in the body, docstring excluded."""
+            body = fn.body[1:] if (fn.body and isinstance(fn.body[0], ast.Expr)
+                                   and isinstance(fn.body[0].value, ast.Constant)
+                                   and isinstance(fn.body[0].value.value, str)) else fn.body
+            out = set()
+            for stmt in body:
+                for node in ast.walk(stmt):
+                    if isinstance(node, ast.Name):
+                        out.add(node.id)
+            return out
+
+        for _fn, _need, _what in (("matched_strict", "GATE_TOL", "the strict window"),
+                                  ("gpass", "matched_strict", "the strict matcher"),
+                                  ("gpass", "GATE_FRAC", "the fraction bar"),
+                                  ("gpass", "GATE_MIN", "the count bar")):
+            if _tree is None:
+                break
+            if _fn not in _fns:
+                bad.append(f"  FACTS: glint/glint_fast.py defines no {_fn}() -- the strict gate's "
+                           f"canonical path is gone, so {_what} is defined by nothing")
+            elif _need not in _body_names(_fns[_fn]):
+                bad.append(f"  FACTS: {_fn}()'s BODY no longer references {_need} in "
+                           f"glint/glint_fast.py -- {_what} has been re-inlined, so the shipped "
+                           "gate can drift from the published one with every other check green")
+        # matched() stays configurable, but its default must remain the canonical constant.
+        _m = _fns.get("matched")
+        if _tree is not None and _m is not None:
+            _defs = [d for d in _m.args.defaults if isinstance(d, ast.Name) and d.id == "GATE_TOL"]
+            if not _defs:
+                bad.append("  FACTS: matched()'s tol default is no longer GATE_TOL in "
+                           "glint/glint_fast.py -- the configurable scorer has stopped defaulting "
+                           "to the published window")
 
     # The peak-weight block's headline is "every soft weighting is SIGNIFICANTLY worse", which is a
     # claim about p-values; check them as such, from the stored splits, and require the reconciling

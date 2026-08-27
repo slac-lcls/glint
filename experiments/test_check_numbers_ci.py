@@ -494,11 +494,17 @@ GLINT_FAST = ROOT / "glint" / "glint_fast.py"
 GATE_SOURCE_MUTATIONS = [
     ("GATE_TOL = 0.15  ", "GATE_TOL = 0.15 + 0.01  ",     "GATE_TOL could not be located"),
     ("def matched(M, q, tol=GATE_TOL):", "def matched(M, q, tol=0.15):",
-     "matched()'s tol default no longer reads GATE_TOL"),
+     "matched()'s tol default is no longer GATE_TOL"),
     ("m = matched_strict(M, q)", "m = matched(M, q)",
-     "gpass()'s matcher no longer reads matched_strict"),
-    (">= GATE_FRAC)", ">= 0.25)",  "gpass()'s fraction test no longer reads GATE_FRAC"),
-    (">= GATE_MIN)",  ">= 10)",    "gpass()'s count test no longer reads GATE_MIN"),
+     "gpass()'s BODY no longer references matched_strict"),
+    # The RETURN EXPRESSION, which a regex over the source could not distinguish from the same
+    # word in the docstring above it (Copilot review of #170, round 5) -- the tie reads the
+    # parsed body now, so this severing is visible.
+    ("return int((np.abs(r).max(1) < GATE_TOL).sum())",
+     "return int((np.abs(r).max(1) < 0.15).sum())",
+     "matched_strict()'s BODY no longer references GATE_TOL"),
+    (">= GATE_FRAC)", ">= 0.25)",  "gpass()'s BODY no longer references GATE_FRAC"),
+    (">= GATE_MIN)",  ">= 10)",    "gpass()'s BODY no longer references GATE_MIN"),
 ]
 
 

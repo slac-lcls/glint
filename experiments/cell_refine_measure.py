@@ -21,7 +21,7 @@ WT = "/sdf/home/s/smarches/glint_streamfix_wt"
 sys.path.insert(0, WT)
 sys.path.insert(0, WT + "/experiments")
 import glint.glint_fast as gf
-from glint.glint_fast import matched
+from glint.glint_fast import matched_strict
 from glint.multishot import same_lattice
 from glint.lattice import cell_to_Ar, cell_params
 from glint.predict import _canonical_axes
@@ -30,7 +30,10 @@ import glint.stream_driver as sd
 
 LYSO = gf.LYSO
 # Canonical gate constants, not a re-declaration: the triple lives in glint/glint_fast.py next to
-# matched()/gpass() and is source-tied to check_numbers.py FACTS there.
+# matched_strict()/gpass() and is source-tied to check_numbers.py FACTS there. The STRICT
+# matcher is the one to call here: plain matched() honours QDIST and, in that mode, ignores
+# the tolerance it is handed entirely (Copilot review of glint#170), so both the gate counts
+# and the matched_frac distributions could come from a different gate than the one claimed.
 GATE_FRAC, GATE_MIN, TOL = gf.GATE_FRAC, gf.GATE_MIN, gf.GATE_TOL
 FRAMES_PATH = WT + "/experiments/frames_cxidb_clean.txt"
 LYSO_CELL = np.array(cell_params(_canonical_axes(LYSO)))
@@ -42,7 +45,7 @@ def strict_gate(M, q, truth=None):
     truth = LYSO if truth is None else truth
     if not same_lattice(M, truth):
         return False
-    m = matched(M, q, TOL)
+    m = matched_strict(M, q)
     return (m / len(q) >= GATE_FRAC) and (m >= GATE_MIN)
 
 
@@ -62,7 +65,7 @@ def push_blind_q(driver, qq):                      # verbatim from what_are_the_
 def frac_of(M, q):
     if M is None or abs(np.linalg.det(M)) < 1.0:
         return 0.0
-    return matched(M, q, TOL) / len(q)
+    return matched_strict(M, q) / len(q)
 
 
 def dist_line(label, fr):
@@ -122,7 +125,7 @@ def run_arm(frames, idxs, Mc0, K, rule, refine=True):
         for i in chunk:
             M = r[i]
             if M is not None and abs(np.linalg.det(M)) >= 1.0:
-                pool.append((cell_of(M), matched(M, frames[i], TOL) / len(frames[i])))
+                pool.append((cell_of(M), matched_strict(M, frames[i]) / len(frames[i])))
         if refine:
             C = refit(pool, rule)
             if C is not None:

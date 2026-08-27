@@ -245,6 +245,24 @@ FACTS: dict[str, float | str] = {
     # `lyso_glint_int.stream` gives 1476/1563 (94.4%) and the Aug rerun 1506/1563, while the Aug
     # rerun reports the consensus support UNSET, so 54/60 has no source at all. RETIRED rules
     # `jungfrau-93pct` and `jungfrau-support-54-60` catch both in the files.
+    # --- SI S16: consensus recovery from random subsets of long runs (added to the paper by Yuan
+    # 2026-08-27; banked here the same day because a whole new SI section arrived carrying ten
+    # quantitative claims that nothing was watching -- the same gap #159 closed for the SI file).
+    # Source: the 2026-08-24 reconstruction and its adversarial self-review, which CORRECTED the
+    # previously published N*=32 for r0058 down to 16. The correction is protocol-conditional and
+    # the paper says so: the original sweep's N grid was never recorded, and a coarse grid whose
+    # next point after 16 was 32 would legitimately have reported 32. Do not restate 32 as a live
+    # measurement -- see the retired rule below.
+    "subset_draws_per_n":      400,  # random N-frame subsets drawn per N
+    "subset_seeds":              8,  # seeds 0-7
+    "subset_draws_total":     3200,  # = subset_draws_per_n * subset_seeds
+    "nstar_r0278":              16,  # smallest tested N reaching 90% recovery of the all-frame cell
+    "nstar_r0058":              16,  # SAME -- the symmetric pooled treatment gives 16 AND 16
+    "recov_r0278_n12_pct":    89.8,  # BELOW the 90% bar, which is why N*=16 and not 12
+    "recov_r0278_n16_pct":    96.1,
+    "recov_r0058_n16_pct":    91.2,
+    "indexed_r0278":          1785,  # indexed frames the subsets are drawn from
+    "indexed_r0058":          2319,
     "jungfrau_frames_total":  1563,  # MEASURED: 404+373+409+377 over the four r0033 .cxi files
     "jungfrau_blind_of1563":  1506,  # blind indexed                        (job 35507050)
     "jungfrau_blind_rate_pct":  96,  # = round(100 * jungfrau_blind_of1563 / jungfrau_frames_total)
@@ -682,6 +700,18 @@ RETIRED = [
     # numerals ("76% vs\n71%"), and a class that excludes \n is defeated by reflowing the very
     # paragraph it guards. That is the same defect the stream-band rule had (see :824) -- caught
     # there by the #154 review and reintroduced here, which is why it is spelled out twice.
+    # r0058's N* was published as 32 and the 2026-08-24 reconstruction puts it at 16. The paper
+    # keeps 32 visible in ONE place -- the note explaining that it does not reproduce -- so the
+    # exempts below are the reconstruction's own vocabulary, not a blanket escape.
+    Rule("nstar-32-retired", r"N\^?\{?\\star\}?\s*=\s*32|N\*\s*=\s*32",
+         f"N* = 32 for r0058 is SUPERSEDED: the symmetric pooled treatment on the protocol-matching "
+         f"pool gives {FACTS['nstar_r0058']} for r0058 and {FACTS['nstar_r0278']} for r0278. It is "
+         "protocol-conditional -- the original N grid was never recorded and a coarse grid "
+         "(...16, 32) would legitimately have reported 32 -- so state it as not reproducing under "
+         "the reconstructed protocol rather than as a live measurement",
+         f"N* = {FACTS['nstar_r0058']}",
+         exempt=("does not reproduce", "reconstructed protocol", "previously quoted",
+                 "would have correctly reported")),
     Rule("blind-pair-adjacent-retired", r"\b76\s*\\?%[^.]{0,30}?\b71\s*\\?%",
          f"'76% vs 71%' is the RETIRED blind pair -- the counts moved to "
          f"{FACTS['glint1_strict_of120']}/120 and {FACTS['xgandalf_blind_strict_of120']}/120 while "
@@ -1551,6 +1581,18 @@ def check_arithmetic() -> list[str]:
         if int(F[_pct_key]) != _want:
             bad.append(f"  FACTS: {_pct_key} = {F[_pct_key]}% but {_cnt_key} = {F[_cnt_key]}/120 rounds to "
                        f"{_want}% -- a count and its percentage were edited apart")
+    close("subset_draws_total = per_n * seeds", float(F["subset_draws_total"]),
+          float(F["subset_draws_per_n"]) * float(F["subset_seeds"]))
+    # N* is DEFINED as the smallest tested N reaching 90%, so the recoveries either side of it must
+    # bracket the bar. This is the invariant that makes N*=16 a measurement rather than a choice:
+    # if r0278's N=12 figure ever rises to >=90, N* is 12 and the paper's sentence is wrong.
+    if float(F["recov_r0278_n12_pct"]) >= 90.0:
+        bad.append(f"  FACTS: recov_r0278_n12_pct = {F['recov_r0278_n12_pct']}% is AT OR ABOVE the "
+                   f"90% bar, so N* for r0278 would be 12, not {F['nstar_r0278']}")
+    for _k, _n in (("recov_r0278_n16_pct", "nstar_r0278"), ("recov_r0058_n16_pct", "nstar_r0058")):
+        if float(F[_k]) < 90.0:
+            bad.append(f"  FACTS: {_k} = {F[_k]}% is BELOW the 90% bar, so {_n} = {F[_n]} does not "
+                       f"follow from it -- N* is the smallest tested N that REACHES the bar")
     # The correct-lattice bar is strictly LOOSER than the strict bar (it drops the coverage
     # requirement), so a count below its own strict count is an edit that crossed two rows.
     for _lat, _strict, _who in (("glint1_lattice_of120", "glint1_strict_of120", "GLINT-(1)"),

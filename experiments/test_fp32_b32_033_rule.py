@@ -25,6 +25,9 @@ MUST_FIRE = [
     "0.33 fp32 indexing",                                                  # inverted form
     "known-cell fp32 0.33 ms/hit at batch 32",
     "at B=32 the fp32 engine measures 0.33",
+    # number BEFORE its attribution, 41 chars apart -- the 15-char reverse window missed this
+    # entirely (Copilot, round 4). Natural wording, and exactly the claim the rule exists to kill.
+    "0.33 ms per frame for known-cell indexing in fp32 at B=32",
 ]
 MUST_NOT_FIRE = [
     # Integration is the OTHER live meaning of 0.33 and is not precision-tagged, so an fp32 sentence
@@ -47,6 +50,7 @@ RULE16 = next(r for r in RETIRED if r.name == "fp32-b120-0.16")
 MUST_FIRE_16 = [
     "GPU in fp32, measured on A100: 0.16 ms at B=120",       # the real stale site, verbatim
     "fp32 at B=120 is 0.16 ms/hit",
+    "0.16 ms per hit for known-cell indexing in fp32 at B=120",   # reverse order, 39 chars apart
 ]
 MUST_NOT_FIRE_16 = [
     "peakfind at 1.16 ms is 7.3x predict (0.16 ms)",         # predict's LIVE cost

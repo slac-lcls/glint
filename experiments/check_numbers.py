@@ -81,7 +81,13 @@ FACTS: dict[str, float | str] = {
     # below survives #165: splitting obj's candidates did NOT remove the need to batch (measured --
     # split at B=16 is 0.579, still slower than pre-#165 at B=120, and the B-spread WIDENS from
     # 2.92x to 3.41x), because anneal/refine still run one block per frame.
-    "saturating_batch":    64,      # one block per frame; 108 SMs on an A100
+    # RENAMED 2026-08-27 (#167) from `saturating_batch`. The old name asserted saturation, and the
+    # provenance directly above denies it: B=120 beats B=64 by 19% pre-#165 and 26% post, so a
+    # --facts consumer was being handed a claim its own comment refutes. 64 is the streaming
+    # driver's DEFAULT batch (stream_driver.py:481), which is what it has always actually been.
+    # No genuine saturation point is recorded because none was measured -- throughput improves
+    # through B=120, the largest batch the 120-frame benchmark can form.
+    "driver_default_batch": 64,      # stream_driver's B default; NOT a measured saturation point
     # ⚠ 2026-08-27 (#167): this DISAGREES with what the benchmark measures today. bench_fused.py's
     # rate() is the same (strict, loose) pair over the same 120 pushed frames -- gpass() returns
     # (correct-lattice AND >=25% matched, correct-lattice AND >=10 refl) -- and it reads (80, 115),
@@ -696,7 +702,12 @@ RETIRED = [
          # box-integration reaches 0.33 ms" is LIVE (integration is the other current meaning of
          # 0.33 and is not precision-tagged), so fp32 alone must not condemn a 0.33.
          r"fp32(?:(?!fp64|integrat|box-integ)[\s\S]){0,40}?(?<![\d.])0\.33\b"
-         r"|(?<![\d.])0\.33\b(?:(?!fp64|integrat|box-integ)[\s\S]){0,15}?fp32(?![^\n]{0,20}\d\.\d)",
+         # Reverse window 60, not 15: "0.33 ms per frame for known-cell indexing in fp32 at B=32"
+         # puts 41 characters between the number and its attribution, and 15 missed it. The
+         # not-followed-by-its-own-decimal clause is what keeps the contrast sentences safe at this
+         # width -- "fp64 is 0.33 ms at B=32, fp32 is 0.31 ms" still passes because that fp32 has a
+         # 0.31 of its own within 20 chars.
+         r"|(?<![\d.])0\.33\b(?:(?!fp64|integrat|box-integ)[\s\S]){0,60}?fp32(?![^\n]{0,20}\d\.\d)",
          "0.33 was fp32 indexing at B=32 BEFORE #165; it is now 0.31 (0.33 is the fp64 B=32 figure, "
          "and the fused box-integration per frame)", "0.31"),
     # The fp32 B=120 figure has the SAME shape of problem: 0.16 was fp32-at-B=120 (now 0.14), but
@@ -710,7 +721,7 @@ RETIRED = [
          # 0.16 ms" is entirely correct and the forward branch used to condemn it. My own negative
          # test covered only the reverse ordering -- testing one direction is testing half a rule.
          r"fp32(?:(?!fp64|predict)[\s\S]){0,60}?(?<![\d.])0\.16\b"
-         r"|(?<![\d.])0\.16\b(?:(?!fp64|predict)[\s\S]){0,15}?fp32(?![^\n]{0,20}\d\.\d)",
+         r"|(?<![\d.])0\.16\b(?:(?!fp64|predict)[\s\S]){0,60}?fp32(?![^\n]{0,20}\d\.\d)",
          "0.16 was fp32 indexing at B=120 BEFORE #165; it is now 0.14 (0.16 is predict's per-frame "
          "cost, which is why this is scoped to the fp32 pairing)", "0.14"),
     Rule("fused-fps-3800",

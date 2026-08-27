@@ -9,7 +9,7 @@ only kind there was when this was written and is now the legacy one: the batch p
 the densest neighbourhood since glint#102 and this path has not (GROUPING ORDER, below, is the whole
 story and it is not a footnote -- the two can pick different winners from the same hypotheses).
 Locking is what flips the driver from blind indexing (~26 ms/frame) to the batched known-cell
-rescue path (~0.17 ms/frame).
+rescue path (~0.21 ms/frame at the driver's default B=64; 0.17 at B=120).
 
 Equivalence, and its EXPIRY DATE: feed every frame, then ``verdict(gap=0)`` returns the same
 max-weight group as ``consensus_cell`` -- same ``reduced_params`` fingerprint, same (rtol, ctol,

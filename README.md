@@ -7,9 +7,10 @@ anneals cells, keeps the *N*-best hypotheses per frame, derives the unit cell ac
 ingests exactly what a CrystFEL / LUTE peak search emits and writes a CrystFEL `.stream`, so it
 drops into the existing CrystFEL-based merging flow (`partialator`).
 
-On one NVIDIA A100, over 120 sparse cxidb-17 lysozyme frames, GLINT indexes blind
-*above* xgandalf's rate (76% vs 71% at the same gate) at ~450× the throughput, and with cross-frame
-consensus indexes 97% of frames blind (≥10 reflections).
+On one NVIDIA A100, over 480 sparse cxidb-17 lysozyme frames, GLINT **matches** the strongest blind
+indexer we tested — 361 of 480 frames against xgandalf's 350 at the same gate, a difference that is
+not significant (McNemar *p* = 0.18) — at **~450×** the throughput. Deriving the cell by consensus
+costs nothing against being handed it: 458 of 480 frames (95%) index at the ≥10-reflection bar.
 
 **New here?** [`docs/onboarding.md`](docs/onboarding.md) has a short primer on *what crystallographic
 indexing is and what GLINT does*, plus how to set up, run, and contribute.
@@ -47,35 +48,24 @@ The reason it exists: none of LUTE's bundled CrystFEL builds are compiled with F
 `indexamajig --indexing=ffbidx` fails and GPU fast-feedback-style indexing is unavailable in LUTE
 today. GLINT fills that gap, emitting a CrystFEL `.stream` the downstream stages already understand.
 
-> ⚠️ **The default stream is orientation-only and is *not* mergeable.** Every reflection carries
-> placeholder `I=0.00 sigma(I)=0.00`, so feeding it through the concatenator to `PartialatorMerger`
-> merges zeros. To get a real dataset:
->
-> * **`tofile:` + an added `indexamajig --indexing=file` task between `GLINTIndexer` and
->   `StreamFileConcatenator`.** CrystFEL's prediction refinement imposes the lattice symmetry, and
->   this gives the **better merge**. Setting `tofile:` alone is not enough — the DAG above would
->   still concatenate the placeholder stream. Two measured traps: the added task must reuse the
->   stored peaks (`peaks: cxi`), or `indexamajig` validates the solutions against its own re-found
->   peaks and rejects them; and CrystFEL **0.12.0's** `--indexing=file` is broken ("Failed to
->   prepare indexing method" before any frame) — use 0.11.1.
-> * **`integrate: true` on the raw-images route** (`--images`, GLINT's event-aware `integrate_cxi`
->   path — the configuration of the validated end-to-end run): GLINT box-integrates its own
->   reflections and writes real I/sigma, and the stream flows through the concatenator to the
->   merger with no CrystFEL step.
->
-> The peaks route takes a single run-level `clen`/`photon_energy` where `integrate_cxi` reads them
-> per event, so the raw-images route above remains the validated one. (`image_dir` is required on
-> the peaks route; the config is rejected without it. Historical note: before
-> [#136](https://github.com/slac-lcls/glint/issues/136) was fixed, `integrate: true` on this path
-> silently integrated stacked multi-event `.cxi` against event 0. The fix predates any release or
-> external user, so this matters only to streams from pre-fix development runs — those need
-> re-integration; the validated end-to-end run used the raw-images route and is unaffected.)
+**Pick a merge route.** GLINT's default stream carries the cell and the per-frame orientation, with
+placeholder `I=0.00` intensities — everything a *refiner* needs and nothing a *merger* does. One of
+the two settings below turns it into a mergeable dataset; which one you want depends on whether you
+want CrystFEL in the pipeline:
 
-Install the Task into a LUTE tree with [`lute/install_into_lute.sh`](lute/install_into_lute.sh);
-[`lute/README.md`](lute/README.md) has the configuration, and
-[`lute/STATUS.md`](lute/STATUS.md) is the honest account of what is measured, what is assumed and
-what has never been run. Check it for current readiness rather than relying on a count here — its
-summary and its per-item sections do not presently agree with each other.
+* **`integrate: true`** — GPU end to end, no CrystFEL step. GLINT predicts and box-integrates its
+  own reflections and writes real I/σ, so the stream flows straight through the concatenator to
+  `PartialatorMerger`. This is the configuration of the validated end-to-end run.
+* **`tofile:`** — hand the orientations to `indexamajig --indexing=file`, added as a task between
+  `GLINTIndexer` and `StreamFileConcatenator`. CrystFEL's prediction refinement imposes the lattice
+  symmetry, which still gives the **better merge**. Note that `tofile:` alone is not enough: without
+  the added task the DAG concatenates the placeholder stream.
+
+Configuration for both, including the traps worth knowing on the `tofile:` route, is in
+[`lute/README.md`](lute/README.md). Install the Task into a LUTE tree with
+[`lute/install_into_lute.sh`](lute/install_into_lute.sh).
+[`lute/STATUS.md`](lute/STATUS.md) is the evidence behind this integration: every measurement with
+its run, the negative results, and the assumptions that have never been tested.
 
 ## Library
 

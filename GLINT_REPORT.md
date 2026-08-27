@@ -25,8 +25,8 @@ ffbidx when both solve.**
 
 | indexer | mode | indexing rate | ms/frame | frames/s |
 |---|---|---|---|---|
-| **GLINT-①** | **blind** | **~76% / 94% ≥10 refl** | **34** | **30** |
-| xgandalf | blind | 71% | 11,542 | 0.087 |
+| **GLINT-①** | **blind** | **77% (92/120) / 94% ≥10 refl** | **34** | **30** |
+| xgandalf | blind | 72% (86/120) | 11,542 | 0.087 |
 | ffbidx | known-cell | 75% | 4.4 | 226 |
 | GLINT (known-cell mode) | cell given | matches ffbidx | 16.5 | 60 |
 

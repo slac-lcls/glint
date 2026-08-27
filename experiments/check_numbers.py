@@ -90,6 +90,7 @@ FACTS: dict[str, float | str] = {
     # No genuine saturation point is recorded because none was measured -- throughput improves
     # through B=120, the largest batch the 120-frame benchmark can form.
     "driver_default_batch": 64,      # stream_driver's B default; NOT a measured saturation point
+    "saturating_batch":     64,      # deprecated compatibility alias; use driver_default_batch
     # ⚠ 2026-08-27 (#167): this DISAGREES with what the benchmark measures today. bench_fused.py's
     # rate() is the same (strict, loose) pair over the same 120 pushed frames -- gpass() returns
     # (correct-lattice AND >=25% matched, correct-lattice AND >=10 refl) -- and it reads (80, 115),
@@ -805,7 +806,7 @@ RETIRED = [
          "0.16 was fp32 indexing at B=120 BEFORE #165; it is now 0.14 (0.16 is predict's per-frame "
          "cost, which is why this is scoped to the fp32 pairing)", "0.14"),
     Rule("fused-fps-3800",
-         r"(?<![\d.])3[,.]?800\b|3\.8[\s~]*kHz",
+         r"(?<![\d.])3,?800(?![\d.])|(?<![\d.])3\.8[\s~]*kHz\b",
          "3.8 kHz was 1000/0.26; against the measured 0.17 ms/frame it is ~5.9 kHz", "~5.9 kHz"),
     # BOTH orderings: the lookahead alone accepted "ffbidx is 12x faster", where the comparator
     # precedes the number. Same one-directional gap as the fp32 pairing rules further down --
@@ -1244,23 +1245,13 @@ AMBIGUOUS = [
          "a sub-millisecond known-cell figure is throughput amortized over a batch, not a per-frame "
          "latency; without the batch it reads as latency next to ffbidx's 4.4 ms",
          "add /hit and the batch size (or name the other quantity, e.g. integration)",
-         # ⚠ TIGHTENED TWICE ON #167 AND REVERTED BOTH TIMES, so the reasoning is recorded here.
-         # (a) needs_all requiring a throughput word AND a batch size within one CLAUSE failed 29
-         #     correct sites, including "the tabulated 0.17 ms is measured at B=120" -- flagged for
-         #     not ALSO saying "/hit".
-         # (b) requiring the batch SIZE at the normal window still failed 16, including the
-         #     abstract's "Batched registration required 0.17 ms per frame": the word "batched"
-         #     already tells a reader this is not a latency, which is the whole defect named above.
-         # The any-of set below is what four review rounds actually accepted; the additions are the
-         # escapes for the other quantities 0.17/0.33 legitimately name.
-         # KNOWN LIMITATION, left open deliberately: the bare token "batch" also matches
-         # "before batching", which asserts the opposite. Narrowing it to "batched" closes that but
-         # then rejects correct prose that names the batch in words -- "the full batch (0.33 ms at
-         # 32 frames, 0.17 at 120)" in sec:throughput and its SI twin. A contrived self-
-         # contradictory string is a smaller risk than rejecting the paper's own sentences, so the
-         # reviewed any-of set stands and the gap is recorded rather than papered over.
-         needs=("/hit", "batch", "b=32", "b=120", "amortiz", "throughput", "steady",
-                "integrat", "box-integ", "un-attributed", "unattributed")),
+         # Require both a throughput attribution and an explicit batch size in this clause.
+         # Integration and explicitly unattributed values are alternate meanings, so each satisfies
+         # both groups without allowing an unrelated nearby sentence to suppress the warning.
+         needs_all=(("/hit", "per hit", "amortiz", "throughput", "steady",
+                     "integrat", "box-integ", "un-attributed", "unattributed"),
+                    ("b=32", "b=120", "batch 32", "batch 120", "32 frames", "120 frames",
+                     "integrat", "box-integ", "un-attributed", "unattributed"))),
     # The RATIO evades the rule above. 100x was 26 / 0.26, so it is retired with the old B=120 timing;
     # the current 25.7 / 0.17 is ~151x. A batch qualifier no longer makes the old derivation current.
     # (?<![\d.]) so "1100x cheaper" is not read as the retired "100x" -- the same numeric-boundary

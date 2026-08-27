@@ -88,6 +88,10 @@ MUST_FIRE_38 = [
     "corresponding to approximately 3.8~kHz",
     "about 3800 frames~s$^{-1}$",
 ]
+MUST_NOT_FIRE_38 = [
+    "the tolerance is 3.800 pixels",
+    "the unrelated rate is 13.8 kHz",
+]
 
 # The AMBIGUOUS rules had the identical tie blind spot one screen below the RETIRED ones. Fixing a
 # class means fixing every instance of it, so this pins the ambiguity side too.
@@ -95,6 +99,9 @@ RULE_AMB = next(r for r in AMBIGUOUS if r.name == "subms-no-batch")
 MUST_FIRE_AMB = [
     "the known-cell path costs 0.17~ms per frame",   # LaTeX tie, no batch qualifier
     "the known-cell path costs 0.17 ms per frame",   # plain space, same defect
+    "Known-cell indexing costs 0.17 ms/hit.",
+    "Known-cell indexing costs 0.17 ms/hit. A later sentence mentions batch 120.",
+    "Known-cell indexing costs 0.17 ms before batching.",
 ]
 MUST_NOT_FIRE_AMB = [
     "0.17~ms/hit at B=120",                          # throughput unit and batch both named
@@ -154,7 +161,7 @@ def main():
     bad = (_check(RULE, MUST_FIRE, MUST_NOT_FIRE, "fp32-b32-0.33")
            + _check(RULE16, MUST_FIRE_16, MUST_NOT_FIRE_16, "fp32-b120-0.16")
            + _check(RULE26, MUST_FIRE_TIE, MUST_NOT_FIRE_TIE, "fused-b120-0.26")
-           + _check(RULE38, MUST_FIRE_38, [], "fused-fps-3800")
+           + _check(RULE38, MUST_FIRE_38, MUST_NOT_FIRE_38, "fused-fps-3800")
            + _check_via_scan(MUST_FIRE_AMB, MUST_NOT_FIRE_AMB, "subms-no-batch")
            + _check_via_scan(MUST_FIRE_RATIO, MUST_NOT_FIRE_RATIO, "ratio-100x")
            + _check(RULE12, MUST_FIRE_12, MUST_NOT_FIRE_12, "ffbidx-12x"))
@@ -162,7 +169,7 @@ def main():
         print(f"{len(bad)} failure(s)"); print("\n".join(bad)); return 1
     nf = (len(MUST_FIRE)+len(MUST_FIRE_16)+len(MUST_FIRE_TIE)+len(MUST_FIRE_38)
           + len(MUST_FIRE_AMB)+len(MUST_FIRE_RATIO)+len(MUST_FIRE_12) + len(MUST_FIRE_RATIO))
-    ns = (len(MUST_NOT_FIRE)+len(MUST_NOT_FIRE_16)+len(MUST_NOT_FIRE_TIE)
+    ns = (len(MUST_NOT_FIRE)+len(MUST_NOT_FIRE_16)+len(MUST_NOT_FIRE_TIE)+len(MUST_NOT_FIRE_38)
           + len(MUST_NOT_FIRE_AMB)+len(MUST_NOT_FIRE_RATIO)+len(MUST_NOT_FIRE_12) + len(MUST_NOT_FIRE_RATIO))
     print(f"drift-rule battery OK -- {nf} fire, {ns} stay silent")
     return 0

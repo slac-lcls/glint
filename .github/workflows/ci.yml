@@ -59,6 +59,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_integrate_event.py
 
+      # The device ladder must never select MPS: it cannot do float64, which this package computes
+      # in, so an mps selection is an import-time crash on Apple silicon -- and `--device cpu` did
+      # not rescue it (glint#161). Skips without torch, which is this job's normal state.
+      - name: experiments/test_device_selection.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_device_selection.py
+
       # Un-assembled multi-panel input integrates slab-locally via the .geom's integer dimN keys
       # (glint#148): 4 panels sharing 2 slabs, each recovering its OWN planted flux; the 4-D
       # event+panel path; the no-mapping refusal; and the window-exceeds-slab mismatch error.

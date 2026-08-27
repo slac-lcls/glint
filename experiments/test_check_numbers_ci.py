@@ -683,6 +683,12 @@ def test_s16_needles_bind_values_to_what_they_count():
     recast = _s16_prose(cross="Both runs used")
     assert _required_fires(recast, "s16-subset-recovery-facts"), (
         "the threshold claim was replaced while the number survived")
+    # Negation BEFORE the threshold, which the post-threshold negator list did not reach: the
+    # claim can be inverted from either side of the number (round 13).
+    for pre_neg in ("Both runs cross anything except the $90\\%$ recovery level by",
+                    "Both runs cross, or fail to cross, the $90\\%$ level by"):
+        assert _required_fires(_s16_prose(cross=pre_neg), "s16-subset-recovery-facts"), (
+            f"negation before the threshold satisfied the both-runs needle: {pre_neg!r}")
     # Negation WITHOUT punctuation, which the comma-breaking constraint alone did not stop:
     # in "level not by", the two permitted \w+ tokens are "level" and "not" (round 12).
     for neg in ("Both runs cross the $90\\%$ level not by",

@@ -1320,7 +1320,14 @@ REQUIRED = [
               # A negator list rather than a whitelist of bridge words: the bridge is prose that
               # may legitimately be reworded ("level", "recovery", "of trials"), whereas the
               # words that INVERT the claim are a short closed set.
-              r"[Bb]oth\s+runs\s+cross[^.]{0,40}?90\s*\\?%"
+              # ...and the SAME constraint on the gap BEFORE the threshold, which was still an
+              # unrestricted [^.]{0,40}: "Both runs cross anything except the 90% recovery level
+              # by N*=16" matched, though it says the runs do not cross 90% at all (round 13).
+              # Negation can invert the claim from either side of the number, so both sides carry
+              # the same closed list.
+              r"[Bb]oth\s+runs\s+cross"
+              r"(?:(?!\b(?:not|never|only|except|unless|rather|without|nor|fail\w*)\b)[^.]){0,40}?"
+              r"90\s*\\?%"
               r"(?:\s+(?!(?:not|never|only|rarely|barely|hardly|nor|without|un\w+)\b)\w+){1,2}"
               r"\s+\bby\b\s+"
               r"N\^?\{?\\star\}?\s*=\s*" + _lit(f"{FACTS['nstar_r0278']:d}")),

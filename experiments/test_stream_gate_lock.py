@@ -89,6 +89,25 @@ def test_supercell_lock_is_refused():
     assert d.n_gate_refused == 1
 
 
+def test_stats_reports_refusals_in_both_branches():
+    """A refusal must be visible in stats() WHILE STILL BLIND -- that is the case it explains.
+
+    `_gate_lock` runs only on the blind path, and a refusal is what leaves the driver blind, so the
+    run states are not symmetric: every warm-up refusal is observed through the unlocked branch,
+    and only a later watchdog relock is observed through the locked one. Reporting the counter on
+    the locked branch alone (as glint#164 first did) therefore hid it at the exact moment an
+    operator asks "there is consensus support but no cell -- why?" (Copilot review of glint#164).
+    """
+    d = _driver(AliasGate(), None)
+    d._blind, d.n_pushed, d.n_warmup = True, 40, 31
+    d.n_gate_refused = 3
+    d._rc = RunningConsensus(min_support=3, gap=2, adaptive=False)
+    s = d.stats()
+    assert s["locked"] is False
+    assert "gate_refused" in s, "a blind driver hides the refusals that are keeping it blind"
+    assert s["gate_refused"] == 3, s
+
+
 def test_adopt_mode_returns_the_tighter_cell():
     """adopt=True: the gate knows which family member the frames prefer, so the driver locks THAT."""
     rng = np.random.default_rng(SEED + 3)

@@ -1527,8 +1527,15 @@ class StreamDriver:
     def stats(self, thr=0.0):
         if self._blind:                                         # not yet locked -- warm-up in progress
             _, sup, lead = self._rc.verdict()
+            # gate_refused belongs HERE most of all. `_gate_lock` runs only on the blind path
+            # (_push_blind, warmup_batch), and a refusal is precisely what leaves the driver blind
+            # -- so the moment this counter is the whole explanation of what the operator is
+            # looking at is the moment the locked branch below never runs. Reporting it only after
+            # a successful lock would have hidden it at the one time it answers the question
+            # "there is support but no cell -- why?" (Copilot review of glint#164).
             return dict(locked=False, pushed=self.n_pushed, warmup_indexed=self.n_warmup,
-                        consensus_support=sup, consensus_lead=lead)
+                        consensus_support=sup, consensus_lead=lead,
+                        gate_refused=self.n_gate_refused)
         s = self.acc.stats(thr=thr, n_theoretical=self.n_theoretical)
         s.update(locked=True, locked_after=self.locked_after, consensus_support=self.consensus_support,
                  pushed=self.n_pushed, indexed=self.n_indexed, integrated=self.n_integrated,

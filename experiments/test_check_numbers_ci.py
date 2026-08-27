@@ -683,10 +683,17 @@ def test_s16_needles_bind_values_to_what_they_count():
     recast = _s16_prose(cross="Both runs used")
     assert _required_fires(recast, "s16-subset-recovery-facts"), (
         "the threshold claim was replaced while the number survived")
-    # Negation BEFORE the threshold, which the post-threshold negator list did not reach: the
-    # claim can be inverted from either side of the number (round 13).
+    # THE WHOLE EVASION BATTERY, rounds 12-14 plus three I constructed after the round-14 fix
+    # to show a blacklist could not converge. The gap before the threshold is now a WHITELIST
+    # (article + LaTeX punctuation only), which closes all of them at once and cannot be widened
+    # by a synonym -- that is why the list below is allowed to keep growing without the pattern
+    # having to.
     for pre_neg in ("Both runs cross anything except the $90\\%$ recovery level by",
-                    "Both runs cross, or fail to cross, the $90\\%$ level by"):
+                    "Both runs cross, or fail to cross, the $90\\%$ level by",
+                    "Both runs cross a threshold below the $90\\%$ recovery level by",
+                    "Both runs cross a threshold near the $90\\%$ recovery level by",
+                    "Both runs cross a weaker $90\\%$ proxy level by",
+                    "Both runs cross roughly half the $90\\%$ recovery level by"):
         assert _required_fires(_s16_prose(cross=pre_neg), "s16-subset-recovery-facts"), (
             f"negation before the threshold satisfied the both-runs needle: {pre_neg!r}")
     # Negation WITHOUT punctuation, which the comma-breaking constraint alone did not stop:

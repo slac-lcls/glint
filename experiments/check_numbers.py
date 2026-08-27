@@ -1320,13 +1320,21 @@ REQUIRED = [
               # A negator list rather than a whitelist of bridge words: the bridge is prose that
               # may legitimately be reworded ("level", "recovery", "of trials"), whereas the
               # words that INVERT the claim are a short closed set.
-              # ...and the SAME constraint on the gap BEFORE the threshold, which was still an
-              # unrestricted [^.]{0,40}: "Both runs cross anything except the 90% recovery level
-              # by N*=16" matched, though it says the runs do not cross 90% at all (round 13).
-              # Negation can invert the claim from either side of the number, so both sides carry
-              # the same closed list.
-              r"[Bb]oth\s+runs\s+cross"
-              r"(?:(?!\b(?:not|never|only|except|unless|rather|without|nor|fail\w*)\b)[^.]){0,40}?"
+              # THE GAP BEFORE THE THRESHOLD IS A WHITELIST, NOT A BLACKLIST -- and that choice
+              # is the point. Rounds 12-14 each extended a list of forbidden words (not/never,
+              # then except/unless/fail, then below/under/less), and each fix was immediately
+              # evadable by a synonym: "a threshold NEAR the 90% level", "a WEAKER 90% proxy
+              # level", "ROUGHLY HALF the 90% recovery level" all still matched afterwards.
+              # Blacklisting prose cannot converge, because the ways to qualify a number are
+              # unbounded while any list is finite.
+              #
+              # What IS bounded is the legitimate variation: between "cross" and the threshold
+              # the manuscript has an article and LaTeX math punctuation, nothing else. Allowing
+              # only that closes every evasion above at once and cannot be widened by a synonym.
+              # The trade is deliberate and stated: a genuine rewording that inserts a noun
+              # phrase here FIRES and needs a human to look, which is the correct outcome for a
+              # guard whose whole job is that these numbers are stated in their real context.
+              r"[Bb]oth\s+runs\s+cross(?:\s+(?:the|a|an))?\s*\$?\s*"
               r"90\s*\\?%"
               r"(?:\s+(?!(?:not|never|only|rarely|barely|hardly|nor|without|un\w+)\b)\w+){1,2}"
               r"\s+\bby\b\s+"

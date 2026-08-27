@@ -709,7 +709,11 @@ RETIRED = [
          "protocol-conditional -- the original N grid was never recorded and a coarse grid "
          "(...16, 32) would legitimately have reported 32 -- so state it as not reproducing under "
          "the reconstructed protocol rather than as a live measurement",
-         f"N* = {FACTS['nstar_r0058']}",
+         # The replacement carries the qualification ITSELF: a bare "N* = 16" here would have the
+         # `say:` line advising exactly the flat assertion the `why:` above forbids (Copilot
+         # review of #163, round 2). Whoever follows this advice verbatim stays inside the rule.
+         f"N* = {FACTS['nstar_r0058']} under the reconstructed protocol (the previously quoted "
+         f"32 does not reproduce)",
          # Every exempt here must RETIRE the value or state it counterfactually. "reconstructed
          # protocol" was in this tuple and does neither -- it is the section's ordinary vocabulary,
          # so the live, wrong sentence "the reconstructed protocol gives N* = 32" sat inside the
@@ -1186,22 +1190,37 @@ REQUIRED = [
     # reached by a file that merely mentions subsets or pooling: `\SIsec{S16. Consensus recovery
     # from random subsets of long runs}`. Whole-file window -- the section runs to ~2000 chars and
     # the claims are spread across all of it, so any character window would fail open on reflow.
+    # THE NEEDLES BIND EACH VALUE TO ITS N AND ITS RUN, not merely to the file. Independent
+    # file-wide needles pass under a SWAP -- exchange 89.8 and 96.1 in the section and every
+    # needle is still present while N=12 now exceeds the bar and N*=16 is false (Copilot review
+    # of #163, round 2). The context words are taken from the manuscript's own phrasing; a
+    # rewording that keeps the claims true keeps these words. And ALL TEN banked claims get a
+    # needle, because the manuscript states all ten -- a banked fact whose statement in the
+    # deliverable nothing demands is exactly the "decorative FACTS" defect this entry fixes.
     Required("s16-subset-recovery-facts",
              r"Consensus\s+recovery\s+from\s+random\s+subsets",
-             (_lit(f"{FACTS['subset_draws_total']:d}"),
-              _lit(f"{FACTS['recov_r0278_n12_pct']:g}") + r"\s*\\?%",
-              _lit(f"{FACTS['recov_r0278_n16_pct']:g}") + r"\s*\\?%",
-              _lit(f"{FACTS['recov_r0058_n16_pct']:g}") + r"\s*\\?%",
+             (_lit(f"{FACTS['subset_draws_per_n']:d}") + r"\$?\s+draws\s+per\s+\$?N",
+              r"(?:eight|8)\s+random\s+seeds",
+              r"r0278[^.]{0,30}?" + _lit(f"{FACTS['indexed_r0278']:d}"),
+              r"r0058[^.]{0,30}?" + _lit(f"{FACTS['indexed_r0058']:d}"),
+              _lit(f"{FACTS['subset_draws_total']:d}") + r"\$?\s+draws\s+per\s+point",
+              _lit(f"{FACTS['recov_r0278_n12_pct']:g}") + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*12",
+              _lit(f"{FACTS['recov_r0278_n16_pct']:g}")
+              + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*16\$?\s+for\s+r0278",
+              _lit(f"{FACTS['recov_r0058_n16_pct']:g}")
+              + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*16\$?\s+for\s+r0058",
               r"N\^?\{?\\star\}?\s*=\s*" + _lit(f"{FACTS['nstar_r0278']:d}")),
-             f"SI S16 states its measurement, so the file carrying it must state the banked values: "
-             f"{FACTS['subset_draws_total']} draws per point "
-             f"({FACTS['subset_draws_per_n']} subsets x {FACTS['subset_seeds']} seeds), pooled "
-             f"recovery {FACTS['recov_r0278_n12_pct']}% at N=12 and "
+             f"SI S16 states its measurement, so the file carrying it must state the banked values "
+             f"IN CONTEXT: {FACTS['subset_draws_per_n']} draws per N over "
+             f"{FACTS['subset_seeds']} random seeds ({FACTS['subset_draws_total']} draws per "
+             f"point) on r0278 ({FACTS['indexed_r0278']} indexed frames) and r0058 "
+             f"({FACTS['indexed_r0058']}); pooled recovery "
+             f"{FACTS['recov_r0278_n12_pct']}% at N=12 and "
              f"{FACTS['recov_r0278_n16_pct']}% at N=16 for r0278, "
-             f"{FACTS['recov_r0058_n16_pct']}% at N=16 for r0058, and N* = "
-             f"{FACTS['nstar_r0278']} on both runs. The 89.8/96.1 pair is not decoration: it is "
-             "what makes N* a measurement rather than a choice, since N* is DEFINED as the "
-             "smallest tested N reaching 90%. If a value really moved, edit FACTS and re-run every "
+             f"{FACTS['recov_r0058_n16_pct']}% at N=16 for r0058; N* = "
+             f"{FACTS['nstar_r0278']} on both runs under the reconstructed protocol. Each "
+             "percentage is bound to its N and run because a swapped pair passes value-only "
+             "needles while falsifying N*. If a value really moved, edit FACTS and re-run every "
              "target -- do not edit the section"),
     # cxidb-45, and NOT "Proteinase K": build_pitch.py discusses Proteinase K indexing (the DIALS
     # head-to-head) without ever merging it, so keying on the protein name would demand merge
@@ -1619,11 +1638,13 @@ def check_arithmetic() -> list[str]:
     # seeds is 3200 draws and nothing else -- and close()'s 3% band would pass any total from 3104
     # to 3296 against it (Copilot review of #163). The percentage/count loop just above compares
     # with `!=` for the same reason; close() is for ratios of measured times, where 3% is the
-    # measurement's own scatter.
-    if int(F["subset_draws_total"]) != int(F["subset_draws_per_n"]) * int(F["subset_seeds"]):
+    # measurement's own scatter. RAW values, no int() coercion: int() would truncate a fractional
+    # edit (subset_draws_per_n = 400.9 x 8 -> int 400 x 8 = 3200) and the "exact" identity would
+    # fail open on exactly the malformed value it exists to reject (Copilot review, round 2).
+    if F["subset_draws_total"] != F["subset_draws_per_n"] * F["subset_seeds"]:
         bad.append(f"  FACTS: subset_draws_total = {F['subset_draws_total']} but "
                    f"{F['subset_draws_per_n']} per N x {F['subset_seeds']} seeds = "
-                   f"{int(F['subset_draws_per_n']) * int(F['subset_seeds'])} -- exact integers")
+                   f"{F['subset_draws_per_n'] * F['subset_seeds']} -- exact counts")
     # N* is DEFINED as the smallest tested N reaching 90%, so the recoveries either side of it must
     # bracket the bar. This is the invariant that makes N*=16 a measurement rather than a choice:
     # if r0278's N=12 figure ever rises to >=90, N* is 12 and the paper's sentence is wrong.
@@ -1635,9 +1656,10 @@ def check_arithmetic() -> list[str]:
     # editing either N* to 24 left the checker green while the evidence still said 16 (Copilot
     # review of #163). The needed relation is an equality -- the key is literally named n16.
     for _k, _n in (("recov_r0278_n16_pct", "nstar_r0278"), ("recov_r0058_n16_pct", "nstar_r0058")):
-        if int(F[_n]) != 16:
+        if F[_n] != 16:                          # raw compare -- int() would truncate 16.4 to a pass
             bad.append(f"  FACTS: {_n} = {F[_n]} but the only recovery banked for it is {_k}, "
-                       f"measured at N=16 -- an N* moved without the measurement that fixes it")
+                       f"measured at N=16 -- an N* moved without the measurement that fixes it "
+                       f"(and any corrected N* stays protocol-conditional; see nstar-32-retired)")
         if float(F[_k]) < 90.0:
             bad.append(f"  FACTS: {_k} = {F[_k]}% is BELOW the 90% bar, so {_n} = {F[_n]} does not "
                        f"follow from it -- N* is the smallest tested N that REACHES the bar")

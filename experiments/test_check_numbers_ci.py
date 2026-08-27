@@ -472,6 +472,17 @@ ARITHMETIC_PERTURBATIONS = [
     # one reaches this check and nothing else.
     ({"pk45_ccstar": 0.915},                          "collapsed into one number"),
     ({"jungfrau_ccstar": 0.90},                       "collapsed into one number"),
+    # THE S16 GUARDS, one perturbation per branch -- they were mutation-verified by hand when
+    # added and never encoded, so removing any of them left the committed suite green (Copilot
+    # review of #163, round 2). The 400.9 case is the int()-truncation trap specifically: the
+    # identity must fire on a fractional per-N count, not truncate it to a pass.
+    ({"subset_draws_total": 3250},                    "subset_draws_total"),
+    ({"subset_draws_per_n": 400.9},                   "subset_draws_total"),
+    ({"recov_r0278_n12_pct": 90.4},                   "would be 12"),
+    ({"nstar_r0278": 32},                             "moved without the measurement"),
+    ({"nstar_r0058": 24},                             "moved without the measurement"),
+    ({"recov_r0278_n16_pct": 88.0},                   "BELOW the 90% bar"),
+    ({"recov_r0058_n16_pct": 88.0},                   "BELOW the 90% bar"),
 ]
 
 
@@ -521,17 +532,30 @@ def test_blind_pair_rules_fire_and_stay_silent():
 
 
 def _s16_prose(**edit) -> str:
-    """SI S16's result sentence, as the manuscript writes it, with values substitutable."""
-    v = dict(draws=f"{_cn.FACTS['subset_draws_total']:d}",
+    """SI S16's protocol + result sentences, as the manuscript writes them, values substitutable.
+
+    Carries all ten banked claims in the manuscript's own phrasing, because the rule's needles
+    bind each value to its N and run context -- a probe stating fewer claims, or stating them
+    context-free, would test a weaker rule than the one that ships.
+    """
+    v = dict(per_n=f"{_cn.FACTS['subset_draws_per_n']:d}",
+             seeds="eight",
+             idx278=f"{_cn.FACTS['indexed_r0278']:d}",
+             idx058=f"{_cn.FACTS['indexed_r0058']:d}",
+             draws=f"{_cn.FACTS['subset_draws_total']:d}",
              n12=f"{_cn.FACTS['recov_r0278_n12_pct']:g}",
              n16a=f"{_cn.FACTS['recov_r0278_n16_pct']:g}",
              n16b=f"{_cn.FACTS['recov_r0058_n16_pct']:g}",
-             nstar=f"{_cn.FACTS['nstar_r0278']:d}")
+             nstar=f"{_cn.FACTS['nstar_r0278']:d}",
+             at12="at $N=12$", run278="for r0278", run058="for r0058")
     v.update(edit)                       # update, not **edit: an override is the whole point here
     return (f"\\SIsec{{S16. Consensus recovery from random subsets of long runs}}\n"
+            f"Two runs from LCLS experiment mfxl1038923: r0278, with ${v['idx278']}$ indexed "
+            f"frames, and r0058, with ${v['idx058']}$. For a subset size $N$, draw $R={v['per_n']}$ "
+            f"draws per $N$, repeated over {v['seeds']} random seeds.\n"
             f"Both runs cross the $90\\%$ level by $N^{{\\star}}={v['nstar']}$: pooled recovery is "
-            f"${v['n12']}\\%$ at $N=12$ and ${v['n16a']}\\%$ at $N=16$ for r0278, and "
-            f"${v['n16b']}\\%$ at $N=16$ for r0058 (${v['draws']}$ draws per point).")
+            f"${v['n12']}\\%$ {v['at12']} and ${v['n16a']}\\%$ at $N=16$ {v['run278']}, and "
+            f"${v['n16b']}\\%$ at $N=16$ {v['run058']} (${v['draws']}$ draws per point).")
 
 
 def test_s16_required_passes_on_the_measured_values():
@@ -546,10 +570,30 @@ def test_s16_required_fires_on_every_edited_claim():
     the same fail-open as no entry at all -- the case `test_every_merge_fact_is_read_by_a_required
     _rule` exists to catch for the merge block.
     """
-    for edit in (dict(draws="3000"), dict(n12="90.4"), dict(n16a="95.1"),
-                 dict(n16b="89.9"), dict(nstar="32")):
+    for edit in (dict(per_n="300"), dict(seeds="five"), dict(idx278="1700"),
+                 dict(idx058="2300"), dict(draws="3000"), dict(n12="90.4"),
+                 dict(n16a="95.1"), dict(n16b="89.9"), dict(nstar="32")):
         assert _required_fires(_s16_prose(**edit), "s16-subset-recovery-facts"), (
             f"S16 rule stayed silent on {edit}")
+
+
+def test_s16_required_fires_on_swapped_context():
+    """The round-2 finding: value-only needles pass under a SWAP.
+
+    Exchanging 89.8 and 96.1 leaves every value present in the file while N=12 now exceeds the
+    bar and N*=16 is false; same for trading the two N=16 recoveries between runs. The bound
+    needles must fire on both swaps -- these probes are what make the binding real rather than
+    asserted.
+    """
+    F = _cn.FACTS
+    swap_pct = _s16_prose(n12=f"{F['recov_r0278_n16_pct']:g}",
+                          n16a=f"{F['recov_r0278_n12_pct']:g}")
+    assert _required_fires(swap_pct, "s16-subset-recovery-facts"), (
+        "swapping 89.8 and 96.1 between N=12 and N=16 stayed green")
+    swap_run = _s16_prose(n16a=f"{F['recov_r0058_n16_pct']:g}",
+                          n16b=f"{F['recov_r0278_n16_pct']:g}")
+    assert _required_fires(swap_run, "s16-subset-recovery-facts"), (
+        "trading the two N=16 recoveries between r0278 and r0058 stayed green")
 
 
 def test_s16_required_stays_silent_without_its_trigger():
@@ -686,6 +730,7 @@ if __name__ == "__main__":
              test_blind_pair_rules_fire_and_stay_silent,
              test_s16_required_passes_on_the_measured_values,
              test_s16_required_fires_on_every_edited_claim,
+             test_s16_required_fires_on_swapped_context,
              test_s16_required_stays_silent_without_its_trigger,
              test_nstar32_rule_fires_live_and_stays_exempt_when_retired,
              test_every_test_in_this_file_is_registered,

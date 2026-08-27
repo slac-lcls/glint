@@ -300,7 +300,8 @@ def index_fused(frames, Mc, B=32):
     anneal/obj/refine per-candidate hot loops + an on-device cpu_stage (batched buerger same_lattice),
     replacing the many small per-stage torch kernels AND the host tail. At B=32 on one A100: 0.31
     ms/frame fp32 / 0.33 fp64 -- 6.6x (fp32) / 4.3x (fp64) over index_all_graph -- with per-frame output
-    IDENTICAL (bit-exact fp64; rate + lattice identical fp32, 80/115 on 120 cxidb) to the stock engine.
+    numerically equivalent in fp64 (max|ΔM| 1.42e-13; rate + lattice identical in both precisions,
+    80/115 on 120 cxidb) to the stock engine.
     Sorts frames by peak count so each batch pads to its own tight Pmax. Requires cupy on a GPU; falls
     back to index_all_graph (graph path) when cupy is unavailable or on CPU.
 

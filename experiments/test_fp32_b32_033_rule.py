@@ -95,16 +95,27 @@ RULE_AMB = next(r for r in AMBIGUOUS if r.name == "subms-no-batch")
 MUST_FIRE_AMB = [
     "the known-cell path costs 0.17~ms per frame",   # LaTeX tie, no batch qualifier
     "the known-cell path costs 0.17 ms per frame",   # plain space, same defect
+    "the known-cell path costs 0.17 ms/hit",         # throughput unit, but no batch size
+    "the known-cell path costs 0.17 ms before batching",  # generic "batch" is not a batch size
+    "the known-cell path costs 0.17 ms at B=120",    # batch size, but no throughput unit
 ]
 MUST_NOT_FIRE_AMB = [
-    "0.17~ms per frame at B=120",                    # batch named
+    "0.17~ms/hit at B=120",                          # throughput unit and batch both named
+    "0.17 ms amortized at batch 120",                 # equivalent explicit qualification
     "0.33~ms per frame of integration",              # other quantity named
+]
+
+MUST_FIRE_RATIO = [
+    "registration is 100x cheaper when batched at B=120",
+]
+MUST_NOT_FIRE_RATIO = [
+    "registration is 151x cheaper when batched at B=120",
 ]
 
 
 def _check_via_scan(fire, silent, label):
-    """Rules with a `needs` tuple must be tested through scan(): `needs` is applied by scan/_near,
-    NOT by the pattern, so matching the regex alone proves nothing about whether the file fails.
+    """Rules with `needs` conditions must be tested through scan(): they are applied by scan/_near,
+    not by the pattern, so matching the regex alone proves nothing about whether the file fails.
     Testing the regex for such a rule tests the wrong layer -- the first version of this battery
     did exactly that and reported two false failures."""
     from pathlib import Path
@@ -134,13 +145,14 @@ def main():
            + _check(RULE16, MUST_FIRE_16, MUST_NOT_FIRE_16, "fp32-b120-0.16")
            + _check(RULE26, MUST_FIRE_TIE, MUST_NOT_FIRE_TIE, "fused-b120-0.26")
            + _check(RULE38, MUST_FIRE_38, [], "fused-fps-3800")
-           + _check_via_scan(MUST_FIRE_AMB, MUST_NOT_FIRE_AMB, "subms-no-batch"))
+           + _check_via_scan(MUST_FIRE_AMB, MUST_NOT_FIRE_AMB, "subms-no-batch")
+           + _check_via_scan(MUST_FIRE_RATIO, MUST_NOT_FIRE_RATIO, "ratio-100x"))
     if bad:
         print(f"{len(bad)} failure(s)"); print("\n".join(bad)); return 1
     nf = (len(MUST_FIRE)+len(MUST_FIRE_16)+len(MUST_FIRE_TIE)+len(MUST_FIRE_38)
-          + len(MUST_FIRE_AMB))
+          + len(MUST_FIRE_AMB) + len(MUST_FIRE_RATIO))
     ns = (len(MUST_NOT_FIRE)+len(MUST_NOT_FIRE_16)+len(MUST_NOT_FIRE_TIE)
-          + len(MUST_NOT_FIRE_AMB))
+          + len(MUST_NOT_FIRE_AMB) + len(MUST_NOT_FIRE_RATIO))
     print(f"drift-rule battery OK -- {nf} fire, {ns} stay silent")
     return 0
 

@@ -12,7 +12,9 @@ Part 2 covers the OTHER entry point. index_fused hands its over-lane one frame a
 run_fused() and any direct patch() caller hand the wrappers a whole padded batch, so each wrapper
 splits the batch itself (fused_kernels._fallback) rather than passing an F x K x Pmax allocation
 through to the stock op. That split is invisible to part 1, so call the three wrappers directly with
-a multi-frame oversized batch and check each matches the stock op run on the batch whole.
+a multi-frame oversized batch and check each matches the stock op run on the batch whole. Part 3
+executes obj_fused with enough candidates to require multiple grid.y blocks and checks both outputs
+bit-for-bit against obj_b.
 
 GPU node + cupy; exits 0 with a SKIP without them.
 
@@ -138,6 +140,21 @@ for name in ("obj_b", "refine_b", "anneal_b"):
     if not shapes:  fail.append(f"{name} fallback returned the wrong shape")
     if not exact:   fail.append(f"{name} fallback changed an integer output")
     if rel > tol:   fail.append(f"{name} fallback differs from the whole-batch stock op (rel {rel:.2e})")
+
+# ---------------------------------------------------------------------------------------------
+# Part 3: candidate-split obj path. K > block is the condition that makes grid.y > 1.
+Ksplit = 257
+us = torch.randn(Fd, Ksplit, 3, generator=gen)
+Vs = (us / us.norm(dim=2, keepdim=True) * float(np.linalg.norm(Mcn, axis=0).max())).to(
+    dtype=rgb.FP, device=rgb.DEV)
+want_inl, want_sub = fk._ORIG["obj_b"](Vs, Qd, md)
+got_inl, got_sub = fk.obj_fused(Vs, Qd, md)
+inl_exact = bool(torch.equal(got_inl, want_inl))
+sub_exact = bool(torch.equal(got_sub, want_sub))
+print(f"[{tag}] part 3 -- obj candidate split at K={Ksplit}: "
+      f"inl {'equal' if inl_exact else 'DIFFER'}   sub {'equal' if sub_exact else 'DIFFER'}")
+if not inl_exact: fail.append("candidate-split obj changed inl")
+if not sub_exact: fail.append("candidate-split obj changed sub")
 
 print("   " + ("FAIL: " + "; ".join(fail) if fail else "PASS"))
 sys.exit(1 if fail else 0)

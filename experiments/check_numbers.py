@@ -88,6 +88,7 @@ FACTS: dict[str, float | str] = {
     # No genuine saturation point is recorded because none was measured -- throughput improves
     # through B=120, the largest batch the 120-frame benchmark can form.
     "driver_default_batch": 64,      # stream_driver's B default; NOT a measured saturation point
+    "saturating_batch":     64,      # deprecated compatibility alias; use driver_default_batch
     # ⚠ 2026-08-27 (#167): this DISAGREES with what the benchmark measures today. bench_fused.py's
     # rate() is the same (strict, loose) pair over the same 120 pushed frames -- gpass() returns
     # (correct-lattice AND >=25% matched, correct-lattice AND >=10 refl) -- and it reads (80, 115),
@@ -626,6 +627,7 @@ class Rule:
     why: str
     instead: str = ""
     needs: tuple[str, ...] = ()      # if set: a match is OK when one of these is nearby
+    needs_all: tuple[tuple[str, ...], ...] = ()  # each any-of group must have a nearby match
     exempt: tuple[str, ...] = ()     # a match is OK when one of these is nearby (e.g. "LEGACY")
     window: int = 240                # how far to look for `needs` / `exempt`, in characters
     flags: int = re.I
@@ -1125,21 +1127,15 @@ AMBIGUOUS = [
          "a sub-millisecond known-cell figure is throughput amortized over a batch, not a per-frame "
          "latency; without the batch it reads as latency next to ffbidx's 4.4 ms",
          "add /hit and the batch size (or name the other quantity, e.g. integration)",
-         needs=("/hit", "batch", "b=32", "b=120", "amortiz", "throughput", "steady",
-                "integrat", "box-integ", "un-attributed", "unattributed")),
-    # The RATIO evades the rule above. subms-no-batch keys on the literal "0.26 ms", so a sentence
-    # that states the same amortized figure as a ratio -- "registration costs ~100x less" -- carried
-    # the identical defect straight past the guard and into the abstract (papers/glint 25c8801..b0357c9).
-    # 100x IS 26 / 0.26, i.e. a per-image blind latency over a B=120 batched throughput. Unbatched, the
-    # per-frame ratio is 25.7 / 16.5 = 1.6x, and tab:summary's own unbatched known-cell row (32 ms) is
-    # SLOWER than the blind row (26 ms). So a bare "100x cheaper" overstates the per-frame case ~60x.
-    Rule("ratio-100x-no-batch", r"100\s*x\s*(?:less|cheaper|fewer|faster)",
-         "the ~100x discovery-vs-registration ratio is 26 ms per-image blind over 0.26 ms/frame "
-         "batched at B=120 -- a throughput ratio. Per frame unbatched it is 1.6x (25.7 vs 16.5 ms), "
-         "and the unbatched known-cell row is slower than the blind row. Without the batch qualifier "
-         "it reads as the cost of registering one frame",
-         "say '~100x less cost when batched', as sec:streaming does",
-         needs=("batch", "b=32", "b=120", "amortiz", "throughput", "steady"), window=400),
+         needs=("integrat", "box-integ", "un-attributed", "unattributed"),
+         needs_all=(("/hit", "amortiz", "throughput", "steady"),
+                    ("b=32", "batch 32", "b=120", "batch 120"))),
+    # The RATIO evades the rule above. 100x was 26 / 0.26, so it is retired with the old B=120 timing;
+    # the current 25.7 / 0.17 is ~151x. A batch qualifier no longer makes the old derivation current.
+    Rule("ratio-100x", r"100\s*x\s*(?:less|cheaper|fewer|faster)",
+         "the ~100x discovery-vs-registration ratio used the retired 0.26 ms B=120 figure; "
+         "25.7 / 0.17 is ~151x",
+         "say '~151x less cost when batched at B=120'", window=400),
 ]
 
 
@@ -1351,6 +1347,9 @@ def scan(path: Path, text: str) -> list[str]:
                     continue
                 if rule.needs and _near(norm, m.start(), rule.needs, rule.window):
                     continue
+                if rule.needs_all and all(_near(norm, m.start(), group, rule.window)
+                                          for group in rule.needs_all):
+                    continue
                 ln = lineno(m.start())
                 quote = norm[starts[ln - 1]:starts[ln]].strip()[:110] if ln else m.group(0)
                 fails.append(
@@ -1366,6 +1365,8 @@ def check_arithmetic() -> list[str]:
     """The facts table must be internally consistent. A half-applied edit fails here first."""
     F = FACTS
     bad: list[str] = []       # hard failures: the table contradicts itself
+    if F["saturating_batch"] != F["driver_default_batch"]:
+        bad.append("  FACTS: deprecated saturating_batch alias must equal driver_default_batch")
     warn: list[str] = []      # advisories: true of the measurement, not fixable by editing a file
 
     def close(label: str, got: float, want: float, tol: float = 0.03) -> None:

@@ -15,7 +15,7 @@ puts both tokens next to a 0.33 that fp64 owns.
 import os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from check_numbers import RETIRED, _normalize                                 # noqa: E402
+from check_numbers import AMBIGUOUS, RETIRED, _normalize, scan                                 # noqa: E402
 
 RULE = next(r for r in RETIRED if r.name == "fp32-b32-0.33")
 
@@ -27,6 +27,9 @@ MUST_FIRE = [
     "at B=32 the fp32 engine measures 0.33",
 ]
 MUST_NOT_FIRE = [
+    # Integration is the OTHER live meaning of 0.33 and is not precision-tagged, so an fp32 sentence
+    # about integration is correct and must not be condemned (Copilot, round 3).
+    "in fp32, fused box-integration reaches 0.33 ms per frame",
     "at B=32 fp32 is 0.31 ms against fp64's 0.33 ms",         # fp64 owns the 0.33
     "fp64 is 0.33 ms at B=32, fp32 is 0.31 ms",               # same, other order
     "a fused GPU box-integration reaches 0.33 ms per frame",  # the other live meaning
@@ -48,6 +51,9 @@ MUST_FIRE_16 = [
 MUST_NOT_FIRE_16 = [
     "peakfind at 1.16 ms is 7.3x predict (0.16 ms)",         # predict's LIVE cost
     "predict 0.16 ms; fp32 indexing is 0.14 ms at B=120",    # both present, correctly attributed
+    # ⚠ the SAME sentence in the OTHER order. Round 2 tested only the line above, and the forward
+    # branch condemned this one -- testing one ordering is testing half a rule (Copilot, round 3).
+    "fp32 indexing is 0.14 ms at B=120; predict 0.16 ms",
     "fp64 0.17 ms at B=120, fp32 0.14",                      # currently true
 ]
 
@@ -79,6 +85,34 @@ MUST_FIRE_38 = [
     "about 3800 frames~s$^{-1}$",
 ]
 
+# The AMBIGUOUS rules had the identical tie blind spot one screen below the RETIRED ones. Fixing a
+# class means fixing every instance of it, so this pins the ambiguity side too.
+RULE_AMB = next(r for r in AMBIGUOUS if r.name == "subms-no-batch")
+MUST_FIRE_AMB = [
+    "the known-cell path costs 0.17~ms per frame",   # LaTeX tie, no batch qualifier
+    "the known-cell path costs 0.17 ms per frame",   # plain space, same defect
+]
+MUST_NOT_FIRE_AMB = [
+    "0.17~ms per frame at B=120",                    # batch named
+    "0.33~ms per frame of integration",              # other quantity named
+]
+
+
+def _check_via_scan(fire, silent, label):
+    """Rules with a `needs` tuple must be tested through scan(): `needs` is applied by scan/_near,
+    NOT by the pattern, so matching the regex alone proves nothing about whether the file fails.
+    Testing the regex for such a rule tests the wrong layer -- the first version of this battery
+    did exactly that and reported two false failures."""
+    from pathlib import Path
+    bad = []
+    for s_ in fire:
+        if not any(label in f for f in scan(Path("probe.md"), s_)):
+            bad.append(f"  [{label}] MISSED (should fire): {s_}")
+    for s_ in silent:
+        if any(label in f for f in scan(Path("probe.md"), s_)):
+            bad.append(f"  [{label}] FALSE POSITIVE (should not fire): {s_}")
+    return bad
+
 
 def _check(rule, fire, silent, label):
     bad = []
@@ -95,11 +129,14 @@ def main():
     bad = (_check(RULE, MUST_FIRE, MUST_NOT_FIRE, "fp32-b32-0.33")
            + _check(RULE16, MUST_FIRE_16, MUST_NOT_FIRE_16, "fp32-b120-0.16")
            + _check(RULE26, MUST_FIRE_TIE, MUST_NOT_FIRE_TIE, "fused-b120-0.26")
-           + _check(RULE38, MUST_FIRE_38, [], "fused-fps-3800"))
+           + _check(RULE38, MUST_FIRE_38, [], "fused-fps-3800")
+           + _check_via_scan(MUST_FIRE_AMB, MUST_NOT_FIRE_AMB, "subms-no-batch"))
     if bad:
         print(f"{len(bad)} failure(s)"); print("\n".join(bad)); return 1
-    nf = len(MUST_FIRE)+len(MUST_FIRE_16)+len(MUST_FIRE_TIE)+len(MUST_FIRE_38)
-    ns = len(MUST_NOT_FIRE)+len(MUST_NOT_FIRE_16)+len(MUST_NOT_FIRE_TIE)
+    nf = (len(MUST_FIRE)+len(MUST_FIRE_16)+len(MUST_FIRE_TIE)+len(MUST_FIRE_38)
+          + len(MUST_FIRE_AMB))
+    ns = (len(MUST_NOT_FIRE)+len(MUST_NOT_FIRE_16)+len(MUST_NOT_FIRE_TIE)
+          + len(MUST_NOT_FIRE_AMB))
     print(f"drift-rule battery OK -- {nf} fire, {ns} stay silent")
     return 0
 

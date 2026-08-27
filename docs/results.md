@@ -87,7 +87,7 @@ until issue #5 closed via PRs #14 / #15 / #16:
 | per-frame numpy → GPU (`replica_gpu`) | 16.5 |
 | \+ CUDA graph, bit-identical (#14) | 1.46 |
 | \+ fused CUDA kernels, B=32 (#16) | 0.33 |
-| \+ saturated batch B=120 | 0.17 |
+| \+ full batch B=120 (not a saturation point: 26% faster than B=64) | 0.17 |
 
 Against pipelined ffbidx (3.1 ms) that is ~**18× faster**, not 4× slower. `KC_FP=32` (#15) gives
 0.14 ms at B=120, rate-neutral.

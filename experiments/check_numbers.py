@@ -82,7 +82,16 @@ FACTS: dict[str, float | str] = {
     # split at B=16 is 0.579, still slower than pre-#165 at B=120, and the B-spread WIDENS from
     # 2.92x to 3.41x), because anneal/refine still run one block per frame.
     "saturating_batch":    64,      # one block per frame; 108 SMs on an A100
-    "indexing_rate":       "75/114",
+    # ⚠ 2026-08-27 (#167): this DISAGREES with what the benchmark measures today. bench_fused.py's
+    # rate() is the same (strict, loose) pair over the same 120 pushed frames -- gpass() returns
+    # (correct-lattice AND >=25% matched, correct-lattice AND >=10 refl) -- and it reads (80, 115),
+    # not (75, 114), in FOUR independent runs: origin/main and the #165 branch, at S3DF and at
+    # NERSC, fp64 and fp32. So 75/114 is stale, and the drift is NOT from #165: the pre-change tree
+    # gives 80/115 too. Which commit moved it was not bisected -- several accuracy-affecting changes
+    # have landed since #16 recorded this (dedup radius, binarisation, the alias gate). Recorded as
+    # measured rather than left contradicting the bench; if the old pair is wanted for a historical
+    # comparison, take it from #16, not from here. Not a published number (it appears in no .tex).
+    "indexing_rate":       "80/115",
     # Percentages are ROUNDED, not floored (changed 2026-08-02). tab:summary previously mixed the two:
     # DIALS printed 27% for 32/120 = 26.67 (rounded) while GLINT-(1) printed 76% for 92/120 = 76.67
     # (floored), so three "correct" values for one measurement were in circulation. Counts are now
@@ -152,8 +161,12 @@ FACTS: dict[str, float | str] = {
     "union_all_indexers_480":  407,  # union of GLINT blind/(1), xgandalf blind+known, ffbidx, offline
     # sec:streaming's "ingests essentially every frame" clause, MEASURED off the driver's own
     # post-lock accept counter. It used to read "114 of 115", which was the misreading `indexing_rate`
-    # is annotated against below: 114 is the LOOSE half of the (strict, loose) pair 75/114 over 120
-    # PUSHED frames, not a numerator over the 115 post-lock ones. The real value there is 111.
+    # is annotated against below: the 114 was the LOOSE half of the then-current (strict, loose) pair
+    # 75/114 over 120 PUSHED frames, not a numerator over the 115 post-lock ones. The real value is
+    # 111. ⚠ THE COLLISION GOT WORSE, NOT BETTER: `indexing_rate`'s loose half re-measured to 115 on
+    # 2026-08-27 (#167), which is now numerically EQUAL to the post-lock frame count. So "115" alone
+    # is ambiguous between the two, and any sentence using it must say which. That is why the keys
+    # are named `driver_accept_of115` and `indexing_rate` rather than sharing a bare number.
     "driver_accept_of115":     111,  # post-lock frames the driver accepts at its count-only gate, n=120
     "driver_accept_of475":     442,  # ...and at n=480 (5 warm-up frames in both, so 115 and 475)
     # The sequential-stop trial, re-run at n=480 over 400 random arrival orders. Blind N-best is
@@ -446,7 +459,7 @@ FACTS: dict[str, float | str] = {
     # under drift the true gap can only widen.
     #
     # Denominator is 120 pushed frames in ALL THREE, and the names say so on purpose: `indexing_rate`
-    # above is a (strict, loose) PAIR over 120, not a ratio, and reading it as 75/114=66% is the exact
+    # above is a (strict, loose) PAIR over 120, not a ratio, and reading it as 80/115=70% is the exact
     # misreading these names exist to prevent.
     #
     # INDEX-ONLY. The q-vector dataset cannot exercise the integrate path (test_inlier_frac_gate.py),
@@ -653,7 +666,7 @@ RETIRED = [
     # across a Python string boundary ("26 -> 0.26","ms/f ...). The \textbf{} alternative catches the
     # tab:summary cell, where the unit lives in the column header and no separator will ever help.
     Rule("fused-b120-0.26",
-         r"(?<![\d.])0\.26\b[\s~\",]{0,3}(?:ms|kHz)|\\textbf\{0\.26\}",
+         r"(?<![\d.])0\.26\b[\s~\",]{0,3}(?:ms|kHz)|\\textbf\{0\.26\}(?![\s~]*\\?%)",
          "0.26 ms/frame was the pre-#165 B=120 fp64 known-cell figure; the candidate-split kernel "
          "measures 0.17 ms on the same A100, bit-exact", "0.17 ms"),
     Rule("fused-b32-0.45", r"(?<![\d.])0\.45[\s~]*ms",
@@ -679,8 +692,11 @@ RETIRED = [
     #            indexing" from the legitimate "fp64 is 0.33 ms, fp32 is 0.31 ms".
     # Pinned by test_fp32_b32_033_rule.py: 5 must-fire, 6 must-not-fire, both Copilot cases included.
     Rule("fp32-b32-0.33",
-         r"fp32(?:(?!fp64)[\s\S]){0,40}?(?<![\d.])0\.33\b"
-         r"|(?<![\d.])0\.33\b(?:(?!fp64)[\s\S]){0,15}?fp32(?![^\n]{0,20}\d\.\d)",
+         # Tempered against fp64 AND against the integration wording: "in fp32, fused
+         # box-integration reaches 0.33 ms" is LIVE (integration is the other current meaning of
+         # 0.33 and is not precision-tagged), so fp32 alone must not condemn a 0.33.
+         r"fp32(?:(?!fp64|integrat|box-integ)[\s\S]){0,40}?(?<![\d.])0\.33\b"
+         r"|(?<![\d.])0\.33\b(?:(?!fp64|integrat|box-integ)[\s\S]){0,15}?fp32(?![^\n]{0,20}\d\.\d)",
          "0.33 was fp32 indexing at B=32 BEFORE #165; it is now 0.31 (0.33 is the fp64 B=32 figure, "
          "and the fused box-integration per frame)", "0.31"),
     # The fp32 B=120 figure has the SAME shape of problem: 0.16 was fp32-at-B=120 (now 0.14), but
@@ -690,8 +706,11 @@ RETIRED = [
     # sweep had missed -- slides/drp/build_drp.py and the DRP projections page both still said
     # "0.16 ms at B=120 (0.33 at B=32)" for fp32.
     Rule("fp32-b120-0.16",
-         r"fp32(?:(?!fp64)[\s\S]){0,60}?(?<![\d.])0\.16\b"
-         r"|(?<![\d.])0\.16\b(?:(?!fp64)[\s\S]){0,15}?fp32(?![^\n]{0,20}\d\.\d)",
+         # Tempered against predict in BOTH orders: "fp32 indexing is 0.14 ms at B=120; predict
+         # 0.16 ms" is entirely correct and the forward branch used to condemn it. My own negative
+         # test covered only the reverse ordering -- testing one direction is testing half a rule.
+         r"fp32(?:(?!fp64|predict)[\s\S]){0,60}?(?<![\d.])0\.16\b"
+         r"|(?<![\d.])0\.16\b(?:(?!fp64|predict)[\s\S]){0,15}?fp32(?![^\n]{0,20}\d\.\d)",
          "0.16 was fp32 indexing at B=120 BEFORE #165; it is now 0.14 (0.16 is predict's per-frame "
          "cost, which is why this is scoped to the fp32 pairing)", "0.14"),
     Rule("fused-fps-3800",
@@ -771,14 +790,21 @@ RETIRED = [
          "so four times the frames still do not license a ranking. The supportable claim is MATCHES",
          f"matches the strongest blind indexer we tested ({FACTS['glint1_strict_of480']} vs "
          f"{FACTS['xgandalf_blind_strict_of480']} of 480 frames, p=0.18)"),
-    # The pair-vs-ratio misreading, caught at its one known site. `indexing_rate` = "75/114" is a
+    # The pair-vs-ratio misreading, caught at its one known site. `indexing_rate` = "80/115" is a
     # (strict, loose) PAIR over 120 pushed frames; sec:streaming turned the loose half into a
     # numerator over the 115 post-lock frames and published "114 of 115". Measured, it is 111 of 115
     # (442 of 475 at n=480). Keyed on the exact adjacency because bare 114 and bare 115 are both
     # legitimate elsewhere.
+    # ⚠ Do NOT interpolate FACTS['indexing_rate'] into this message. Interpolation is right for a
+    # LIVE value (that is why blind-rate-swap does it) and wrong for a HISTORICAL one: 114 was the
+    # loose half of the pair AS IT STOOD when the error was published (75/114). The pair re-measured
+    # to 80/115 on 2026-08-27, and interpolating turned this message into the false claim that 114
+    # is the loose half of 80/115. Same trap as the hard-coded 76%/71% two rules down, approached
+    # from the opposite side -- the fix is not "always interpolate", it is "interpolate what is live".
     Rule("postlock-114-of-115", r"114\s*(?:of|/)\s*115",
-         f"114 is the LOOSE half of the (strict, loose) pair indexing_rate = {FACTS['indexing_rate']} "
-         "over 120 PUSHED frames -- not a numerator over the 115 post-lock frames. The driver's own "
+         "114 was the LOOSE half of the (strict, loose) indexing_rate pair AS PUBLISHED (75/114; the "
+         "pair now measures 80/115) over 120 PUSHED frames -- not a numerator over the 115 post-lock "
+         "frames. The driver's own "
          f"post-lock accept counter gives {FACTS['driver_accept_of115']} of 115 at n=120 and "
          f"{FACTS['driver_accept_of475']} of 475 at n=480",
          f"{FACTS['driver_accept_of475']} of 475 post-lock frames at n=480, "
@@ -1082,7 +1108,9 @@ AMBIGUOUS = [
     # per frame -- which is a genuine per-frame latency, so this rule's premise does not apply to it.
     # "integrat"/"box-integ" are accepted for the same reason bare-0.33 accepts them: they name the
     # other quantity. Widening the escape hatch, not the rule.
-    Rule("subms-no-batch", r"0\.(?:17|33)\s*ms",
+    # [\s~]* here too: fixing the tie blind spot only in the RETIRED rules would have left the
+    # identical hole one screen further down. Fix a class, not an instance.
+    Rule("subms-no-batch", r"0\.(?:17|33)[\s~]*ms",
          "a sub-millisecond known-cell figure is throughput amortized over a batch, not a per-frame "
          "latency; without the batch it reads as latency next to ffbidx's 4.4 ms",
          "add /hit and the batch size (or name the other quantity, e.g. integration)",

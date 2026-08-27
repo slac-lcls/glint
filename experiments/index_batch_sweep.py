@@ -1,5 +1,5 @@
-"""index is 0.430 ms/frame in the DRP table but 0.26 elsewhere. check_numbers.py says why:
-0.26 is the B=120 amortization, and the DRP driver ran at B=40 ("index_b40_ms": 0.54). Indexing is
+"""index is 0.430 ms/frame in the DRP table but 0.17 elsewhere. check_numbers.py says why:
+0.17 is the B=120 amortization, and the DRP driver ran at B=40 ("index_b40_ms": 0.54). Indexing is
 one thread-block per frame, so B sets GPU occupancy. Two knobs are therefore available and BOTH are
 currently at their slow setting in the measured configuration:
   * B = 40 rather than >= 64 (which the driver docstring says saturates an A100)

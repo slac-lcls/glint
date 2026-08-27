@@ -72,6 +72,11 @@ extern "C" __global__ void anneal_fused(
 # exposes 32-45 blocks on its own.  Each block re-stages the frame's peaks (the loop above is
 # repeated ky times), which is why this pays ~7x rather than ~ky.
 #
+# It does NOT remove the need to batch, and I predicted that it would.  Measured end-to-end: B=16
+# after the split (0.579 ms/fr) is still slower than B=120 before it (0.261), and the spread across
+# B WIDENS from 2.92x to 3.41x.  anneal_fused and refine_fused still take one block per frame, so
+# they keep setting occupancy from the batch axis.
+#
 # BIT-EXACT by construction: it only re-maps which thread owns which candidate.  Each k is still
 # summed over p in the same order by a single thread, and no partial results are combined across
 # threads or blocks -- so inl and sub are identical, not merely equivalent.  Do NOT copy this to

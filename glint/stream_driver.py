@@ -4,10 +4,10 @@ detector frame staying on the GPU for the whole chain.
 Blind or known-cell. Constructed with a cell (Mc) it runs known-cell from frame 0. Constructed with
 Mc=None it starts BLIND: it indexes the first frames one at a time (~26 ms/frame), accumulates a
 running-histogram cross-frame consensus (glint.running_consensus), and the instant the cell LOCKS it
-builds the hkl grid and switches to the batched known-cell path (~0.26 ms/frame) for the rest of the
+builds the hkl grid and switches to the batched known-cell path (~0.17 ms/frame) for the rest of the
 run -- so a live run needs no cell handed in, only a ~150 ms discovery transient.
 
-Why a driver is needed at all. Each stage is fast on its own (index 0.26 ms/frame, integrate
+Why a driver is needed at all. Each stage is fast on its own (index 0.17 ms/frame, integrate
 0.33 ms/frame), but they have opposite batching requirements: indexing wants MANY frames at once
 (one thread-block per frame, so the batch sets GPU occupancy -- B>=64 saturates an A100), while
 integration is per-frame and needs THAT frame's pixels. Uploading the frame twice would cost ~3-5 ms
@@ -679,7 +679,7 @@ class StreamDriver:
         # and nearly pointless; the pairing is the result.
         #
         # DEFAULT OFF. It trades latency for yield -- a retried frame costs a blind index (~26 ms)
-        # plus a per-frame registration, against ~0.26 ms for its share of the batched pass -- and
+        # plus a per-frame registration, against ~0.17 ms for its share of the batched pass -- and
         # the cost model at DAQ rates is unmeasured. Off, nothing here is constructed or called and
         # the emitted stream is byte-identical.
         self.retry_cascade = bool(retry_cascade)
@@ -779,7 +779,7 @@ class StreamDriver:
         # Blind warm-up: with Mc=None the driver has no cell yet, so it indexes the first frames
         # blind (~26 ms/frame) one at a time, accumulating cross-frame consensus; when the running
         # histogram LOCKS the cell it builds the hkl grid and drops into the batched known-cell path
-        # below (~0.26 ms/frame). Warm-up frames are spent on discovery (not integrated) -- ~6-10
+        # below (~0.17 ms/frame). Warm-up frames are spent on discovery (not integrated) -- ~6-10
         # frames, negligible for completeness. See glint.running_consensus.
         self._blind = Mc is None
         self.n_warmup = 0; self.locked_after = None; self.consensus_support = None

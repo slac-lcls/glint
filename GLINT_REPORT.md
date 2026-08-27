@@ -6,7 +6,7 @@ reproduced from the experiment scripts in `experiments/`.*
 
 > **Snapshot: 2026-06-29. The throughput figures here are superseded.** The known-cell
 > engine has since been CUDA-graphed and fused (issue #5, PRs #14/#15/#16): the 16.5 ms
-> row below is now **0.26 ms/hit** at batch 120, i.e. ~12× *faster* than pipelined ffbidx
+> row below is now **0.17 ms/hit** at batch 120, i.e. ~18× *faster* than pipelined ffbidx
 > rather than slower, and §7's "remaining gap to ffbidx" is closed.
 > For current numbers use `python experiments/check_numbers.py --facts`, which is the
 > single source of truth and self-checks its own arithmetic. The *analysis* below — failure

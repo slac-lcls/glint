@@ -1,5 +1,7 @@
-"""index_fused throughput vs batch size B. Each frame is one thread-block, so B sets GPU occupancy;
-B>=64 saturates an A100. The kernels loop each frame's real peak count (not Pmax), so a larger,
+"""index_fused throughput vs batch size B. anneal/refine give each frame one thread-block, so B sets
+their occupancy; obj splits its candidates over blockIdx.y (#165) but still needs the batch --
+measured, B=16 is 0.579 ms/fr against B=120's 0.170. B=96 ties B=64 in both precisions, but that is
+batch-count quantisation (120 frames = a ragged 96+24) rather than saturation. The kernels loop each frame's real peak count (not Pmax), so a larger,
 looser-padded batch adds blocks with no work penalty and output is batch-invariant. GPU node + cupy.
 
   KC_FP=32 python experiments/bench_fused_batch.py

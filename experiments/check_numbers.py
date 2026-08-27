@@ -56,11 +56,23 @@ FACTS: dict[str, float | str] = {
     "blind_fps":           39.0,    # = 1000/blind_ms
     "known_perframe_ms":   16.5,    # per-frame known-cell rescue (replica_gpu.index_known_gpu_cell)
     "graph_ms":            1.46,    # batched + CUDA graph                                    (#14)
-    "fused_b32_ms":        0.45,    # fused kernels, fp64, batch 32                           (#16)
-    "fused_b120_ms":       0.26,    # fused kernels, fp64, batch 120                          (#16)
-    "fused_b32_fp32_ms":   0.33,    # fp32 INDEXING at batch 32                               (#15/#16)
-    "fused_b120_fp32_ms":  0.16,    # fp32 INDEXING at batch 120                              (#15/#16)
-    "fused_fps":           3800.0,  # = 1000/fused_b120_ms
+    # 2026-08-27: obj_fused's candidate axis is now split over blockIdx.y (#165).  Bit-exact --
+    # obj_fused's inl/sub are BITWISE identical at K=120/4096/5760, bench_fused max|dM| 1.42e-13 on
+    # both trees, same_lattice 120/120, rate (80,115) unchanged -- so these are the SAME pipeline
+    # measured faster, not a different answer.  A/B on one exclusive A100 (sdfampere018), both trees
+    # in one allocation; the pre-change tree reproduced the retired values exactly (0.261/0.447/
+    # 0.158/0.323 vs the 0.26/0.45/0.16/0.33 recorded here since #16).
+    "fused_b32_ms":        0.33,    # fused kernels, fp64, batch 32       (was 0.45 pre-#165)
+    "fused_b120_ms":       0.17,    # fused kernels, fp64, batch 120      (was 0.26 pre-#165)
+    "fused_b32_fp32_ms":   0.31,    # fp32 INDEXING at batch 32           (was 0.33 pre-#165)
+    "fused_b120_fp32_ms":  0.14,    # fp32 INDEXING at batch 120          (was 0.16 pre-#165)
+    "fused_fps":           5900.0,  # = 1000/fused_b120_ms
+    # The VALUE stands but was never a clean saturation: B=120 beat B=64 by 19% before #165 and by
+    # 26% after, and B=96 ~ B=64 in both trees because 120 frames at B=96 is a ragged 96+24 while
+    # B=120 is one batch -- that curve is batch-count quantisation, not occupancy.  The rationale
+    # below survives #165: splitting obj's candidates did NOT remove the need to batch (measured --
+    # split at B=16 is 0.579, still slower than pre-#165 at B=120, and the B-spread WIDENS from
+    # 2.92x to 3.41x), because anneal/refine still run one block per frame.
     "saturating_batch":    64,      # one block per frame; 108 SMs on an A100
     "indexing_rate":       "75/114",
     # Percentages are ROUNDED, not floored (changed 2026-08-02). tab:summary previously mixed the two:
@@ -489,12 +501,12 @@ FACTS: dict[str, float | str] = {
     "rep_rate_hz":         35000.0,
     "hit_rate":            0.10,
     "hits_per_s":          3500.0,  # = rep_rate_hz * hit_rate
-    "gpus_at_10pct":       1.0,     # = rep_rate_hz * hit_rate * fused_b120_ms/1000
+    "gpus_at_10pct":       0.6,     # = rep_rate_hz * hit_rate * fused_b120_ms/1000
     "xgandalf_blind_ms":   11542.0,
     "xgandalf_speedup":    449.0,   # = xgandalf_blind_ms / blind_ms
     "ffbidx_latency_ms":   4.4,     # per single call -- a LATENCY
     "ffbidx_pipelined_ms": 3.1,     # persistent indexer -- the THROUGHPUT comparator
-    "ffbidx_speedup":      12.0,    # = ffbidx_pipelined_ms / fused_b120_ms (throughput vs throughput)
+    "ffbidx_speedup":      18.0,    # = ffbidx_pipelined_ms / fused_b120_ms (throughput vs throughput)
 }
 
 # Every arm-vs-default discordant split from the n=480 M3 sweep, both channels: (arm-only,
@@ -616,6 +628,19 @@ RETIRED = [
          "~450x"),
     Rule("xgandalf-340", r"(?<![\d.])340\s*(?:×|x|\\times)",
          "340x was 11542/34 (the pre-fusion blind figure); against the measured 26 ms it is ~450x", "~450x"),
+    # The pre-#165 fused-kernel family. obj_fused's candidate split (bit-exact) moved every one of
+    # these on 2026-08-27, and they are exactly the kind that outlive their source -- 0.26 was quoted
+    # in the abstract, two docs, three docstrings and four rules in THIS file. Retired together so a
+    # half-applied edit cannot leave one behind (cf. xgandalf-550, which outlived its source by weeks).
+    Rule("fused-b120-0.26", r"(?<![\d.])0\.26\s*ms",
+         "0.26 ms/frame was the pre-#165 B=120 fp64 known-cell figure; the candidate-split kernel "
+         "measures 0.17 ms on the same A100, bit-exact", "0.17 ms"),
+    Rule("fused-b32-0.45", r"(?<![\d.])0\.45\s*ms",
+         "0.45 ms/frame was the pre-#165 B=32 fp64 figure; it is now 0.33 ms", "0.33 ms"),
+    Rule("fused-fps-3800", r"(?<![\d.])3[,.]?800\s*(?:frames?\s*/\s*s|f/s|fps|Hz)|3\.8\s*kHz",
+         "3.8 kHz was 1000/0.26; against the measured 0.17 ms/frame it is ~5.9 kHz", "~5.9 kHz"),
+    Rule("ffbidx-12x", r"(?<![\d.])12\s*(?:×|x|\\times)(?=[^\n]{0,80}(?:ffbidx|pipelined))",
+         "12x was ffbidx_pipelined_ms/0.26; against 0.17 it is ~18x", "~18x"),
     Rule("speedup-160", r"(?<![\d.])160\s*(?:×|x|\\times)",
          "the scalar->GPU blind ratio follows 2342/26, not 2342/15", "~90x"),
     # Two traps here, both live for months. (1) HARD-CODED PROSE DRIFTS. This rule named 76%/71%, the
@@ -984,16 +1009,24 @@ OVERCLAIM = [
 
 # ---- 3. ambiguity ----------------------------------------------------------------------------
 AMBIGUOUS = [
+    # #165 did not remove this collision, it MOVED it: fp32 at B=32 went 0.33 -> 0.31, and fp64 at
+    # B=32 went 0.45 -> 0.33. So a bare 0.33 is still ambiguous, but now between fp64 indexing and
+    # box-integration rather than fp32 indexing and box-integration. Same rule, different pair.
     Rule("bare-0.33", r"0\.33",
-         "0.33 ms is BOTH fp32 indexing at B=32 and fused box-integration per frame; "
+         "0.33 ms is BOTH fp64 indexing at B=32 (post-#165) and fused box-integration per frame; "
          "a bare one cannot be told apart",
          "name the quantity inline",
-         needs=("fp32", "indexing", "integrat", "box-integ", "b=32", "batch 32")),
-    Rule("subms-no-batch", r"0\.(?:26|45)\s*ms",
+         needs=("fp64", "fp32", "indexing", "integrat", "box-integ", "b=32", "batch 32")),
+    # After #165 the known-cell pair is 0.17/0.33, and 0.33 now COLLIDES with fused box-integration
+    # per frame -- which is a genuine per-frame latency, so this rule's premise does not apply to it.
+    # "integrat"/"box-integ" are accepted for the same reason bare-0.33 accepts them: they name the
+    # other quantity. Widening the escape hatch, not the rule.
+    Rule("subms-no-batch", r"0\.(?:17|33)\s*ms",
          "a sub-millisecond known-cell figure is throughput amortized over a batch, not a per-frame "
          "latency; without the batch it reads as latency next to ffbidx's 4.4 ms",
-         "add /hit and the batch size",
-         needs=("/hit", "batch", "b=32", "b=120", "amortiz", "throughput", "steady")),
+         "add /hit and the batch size (or name the other quantity, e.g. integration)",
+         needs=("/hit", "batch", "b=32", "b=120", "amortiz", "throughput", "steady",
+                "integrat", "box-integ", "un-attributed", "unattributed")),
     # The RATIO evades the rule above. subms-no-batch keys on the literal "0.26 ms", so a sentence
     # that states the same amortized figure as a ratio -- "registration costs ~100x less" -- carried
     # the identical defect straight past the guard and into the abstract (papers/glint 25c8801..b0357c9).

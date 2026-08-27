@@ -13,12 +13,14 @@ from glint.glint_fast import anneal_batch_t
 from glint.lattice import cell_to_Ar
 from glint.multishot import same_lattice
 
-# getattr: torch.backends has no `mps` attribute at all before 1.12, so the plain expression is an
-# AttributeError there -- masked on a GPU node only because torch.cuda.is_available() short-circuits
-# ahead of it. Same fix and same reason as glint/glint_index.py; see STATUS.md item 5.
-_MPS = getattr(torch.backends, "mps", None)
-DEV = ("cuda" if torch.cuda.is_available() else
-       "mps" if (_MPS is not None and _MPS.is_available()) else "cpu")
+# cuda -> cpu, with NO mps rung. Apple's MPS backend does not implement float64, and this module
+# computes in float64 throughout (DIRS below is the first of eleven sites), so selecting mps raised
+# `Cannot convert a MPS Tensor to float64` at IMPORT time on every Apple-silicon machine -- and
+# `--device cpu` did not rescue it, because that flag only clears CUDA_VISIBLE_DEVICES. mps was
+# therefore never a working path, only a way for the cpu fallback to be skipped. Same in
+# glint/glint_index.py. (The old ladder was getattr-guarded for torch<1.12, which has no
+# torch.backends.mps at all; removing the rung removes that concern with it.)
+DEV = "cuda" if torch.cuda.is_available() else "cpu"
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 LA, LC = 79.02, 37.98
 TRIML, TRIMH, DELTA = 0.05, 0.30, 0.10

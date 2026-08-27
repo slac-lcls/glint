@@ -28,14 +28,15 @@ import torch
 from glint.lattice import buerger_reduce
 
 PI = np.pi
-# getattr, not torch.backends.mps.is_available(): torch.backends has NO `mps` attribute at all
-# before 1.12, so the plain expression is an AttributeError there. It survives on a GPU node only
-# because `torch.cuda.is_available()` short-circuits ahead of it -- on a CPU-only node under torch
-# 1.11 this line raises at IMPORT time, before anything can be indexed. See _first_index_per_group
-# for why torch 1.11 has to keep working.
-_MPS = getattr(torch.backends, "mps", None)
-DEV = ("cuda" if torch.cuda.is_available() else
-       "mps" if (_MPS is not None and _MPS.is_available()) else "cpu")
+# cuda -> cpu, with NO mps rung -- but NOT for this module's own dtype: glint_index computes in
+# float32 (`sample`'s start grid, `index_blind`'s Q), so unlike replica_gpu it has no float64
+# allocation that MPS would refuse, and whether it would run there is simply UNTESTED. The rung is
+# gone because the package is used as a whole: `hybrid_index` imports replica_gpu, whose
+# module-level float64 tensors DO crash on MPS at import, so offering mps here would only produce
+# a split-device configuration nobody has run. Consistency with the module that cannot, not a
+# float64 limit of this one. (Also retires the torch<1.12 getattr guard, since torch.backends.mps
+# is no longer consulted at all.)
+DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def _first_index_per_group(inv, n_groups, N):

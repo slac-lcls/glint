@@ -844,8 +844,12 @@ RETIRED = [
          "quantity that happens to sit beside it",
          "4.2% (a fixed 5 frames of 120), or give the fixed count and let the reader divide"),
     # (?<![\d.]) is doing real work here: without it this fires inside "105.8/105.8/75.5 A", the
-    # cxidb-62 unit cell (ACG, hexagonal P6 -- a=b is the giveaway; cxidb-83 is beta-lactamase on
-    # EuXFEL/AGIPD and is a different cell entirely). Trap (a) in the notes above, reproduced
+    # cxidb-62 unit cell: ACG (Agrocybe cylindracea galectin), which the paper's SI S1 gives as
+    # hexagonal P6 at 105.8/105.8/75.5 A, and which cxidb.org entry 62 identifies. Entry 83 is
+    # beta-lactamase (EuXFEL/AGIPD) and is a different cell. (An earlier version of this comment
+    # offered a=b as corroboration; it is not diagnostic -- tetragonal and cubic satisfy it too,
+    # and what makes P6 is gamma=120. The identification rests on the deposition and the stated
+    # space group, not on the axis lengths.) Trap (a) in the notes above, reproduced
     # exactly. The dataset label was wrong here, and in this rule's fixture in
     # experiments/test_check_numbers_ci.py, until 2026-08-27. The REGEX was always right, so
     # nothing the guard did was affected -- but a provenance comment naming the wrong deposition

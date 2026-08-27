@@ -472,6 +472,13 @@ ARITHMETIC_PERTURBATIONS = [
     # one reaches this check and nothing else.
     ({"pk45_ccstar": 0.915},                          "collapsed into one number"),
     ({"jungfrau_ccstar": 0.90},                       "collapsed into one number"),
+    # THE GATE SOURCE-TIE, one perturbation per constant: the tie compares FACTS to the shipped
+    # glint_fast source, so perturbing FACTS away from the source must produce the drift message.
+    # Without these, deleting the tie loop left both the unit suite and the guard green -- and
+    # preventing exactly that drift is the feature (Copilot review of #170, round 2).
+    ({"gate_tol": 0.16},                              "gate_tol"),
+    ({"gate_frac": 0.26},                             "gate_frac"),
+    ({"gate_min": 12},                                "gate_min"),
 ]
 
 

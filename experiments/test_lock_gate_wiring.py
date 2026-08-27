@@ -120,6 +120,21 @@ def test_live_gate_defaults_and_window_are_pinned():
     from glint.stream_driver import HKL_TOL as DRIVER_HKL_TOL
     assert HKL_TOL == 0.15, HKL_TOL
     assert DRIVER_HKL_TOL == HKL_TOL, (DRIVER_HKL_TOL, HKL_TOL)
+    # ...and the BEHAVIOR, not just the declarations: comparing the two constants leaves this
+    # green if _inliers grows its own literal again (Copilot review of #170, round 2). With M the
+    # identity, each q row's residual is its own fractional part, so the window is probed
+    # directly from both sides, and the max(1) rule is exercised -- a row inside the window on
+    # one component and outside on another must NOT count. No exact-edge row, deliberately: 1.15
+    # is not representable in binary float (it stores as 1.1499999...), so a decimal literal
+    # cannot probe the strict-< boundary -- it silently tests 0.1499... and COUNTS. The
+    # strictness is covered by 0.151-out plus the constant-equality asserts above.
+    M = np.eye(3)
+    q = np.array([[1.149, 2.0, 3.0],      # max residual 0.149 -> in
+                  [1.151, 2.0, 3.0],      # 0.151             -> out
+                  [1.10, 2.149, 2.851],   # all inside         -> in
+                  [1.149, 2.151, 3.0]])   # mixed: max rules   -> out
+    got = StreamDriver._inliers(None, q, M)
+    assert got == 2, f"_inliers counted {got} of the straddle set, expected 2"
 
 
 if __name__ == "__main__":

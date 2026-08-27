@@ -1325,7 +1325,10 @@ def check_arithmetic() -> list[str]:
     # per-constant "unreadable" reports the QPOW and gate ties promise (Copilot review of #170).
     try:
         _gf_s = _gf_p.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeError):
+        # UnicodeError too: read_text(encoding="utf-8") raises UnicodeDecodeError -- which is NOT
+        # an OSError -- on invalid UTF-8, and that is precisely an "unreadable file" for a source
+        # tie (Copilot review of #170, round 2).
         _gf_s = ""
     _qm = re.search(r'QPOW = float\(os\.environ\.get\("QPOW", "([\d.]+)"\)\)', _gf_s)
     if not _gf_s:

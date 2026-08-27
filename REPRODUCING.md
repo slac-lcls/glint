@@ -13,7 +13,7 @@ committed here. Start there.
 | tier | what it needs | what it covers |
 |---|---|---|
 | **0** | nothing | every published number, with its provenance, and an automated consistency check |
-| **1** | this checkout, CPU only | GLINT's own blind indexing on the benchmark, the xgandalf rows of the headline table, the consensus-gate arithmetic, the regression suite, all vector figures |
+| **1** | this checkout, CPU only | GLINT's own blind indexing on the benchmark, the xgandalf rows of the headline table, the consensus barrier, the regression suite |
 | **2** | a CUDA GPU + public CXIDB data | the timing tables, and the benchmark at speed |
 | **3** | SLAC S3DF / NERSC accounts | the real-data merges and the three statistics figures |
 
@@ -118,18 +118,21 @@ PYTHONPATH=. python3 -m glint.glint_cli --qframes experiments/frames_cxidb_clean
     -N 120 --device cpu -o indexed.stream
 ```
 
-### The consensus acceptance gate
+### The consensus barrier, cached vs uncached
 
 The recorded N-best pool for the 120-frame benchmark is committed (`nbest_120.npz`, 360 hypotheses
-= 120 frames × top-3), so the gate's accept/refuse decision at any pool size can be re-derived with
-no GPU and no re-indexing:
+= 120 frames × top-3), so the consensus reduction runs with no GPU and no re-indexing. This script
+times the shipped (cached) path against a reconstruction of the pre-cache one, both in the same
+run — the only way to check a speedup whose baseline no longer exists in the code:
 
 ```bash
-PYTHONPATH=. python3 experiments/consensus_barrier_ab.py 5
+PYTHONPATH=. python3 experiments/consensus_barrier_ab.py 5      # 5 = timing repetitions
 ```
 
-This is how the gate was shown to refuse at K=3 and K=4 and first accept at K=5 — which corrected
-an earlier slide claim that consensus "saturates by ~3 frames".
+Its argument is the repetition count, **not** a pool size: it always consensus-es all 360
+hypotheses. The gate's accept/refuse arithmetic is separately checkable from the same file, but no
+committed script sweeps it — the `min_frac`/`min_lead` decision is exercised by
+`experiments/test_consensus_gate.py` on its own fixtures instead.
 
 ### The regression suite
 
@@ -143,16 +146,20 @@ the alias gate, peak-finder thresholding, ASIC seam masking, negative-intensity 
 event-addressed and multi-panel integration, the streaming driver's gates and fan-out guards, and
 the number guard's own self-tests. It does **not** exercise the GPU indexing kernels.
 
-### The vector figures
+### The vector figures — needs the manuscript sources, not this repository
 
-Figures 2 (two paths), 4 (streaming schedule), 5 (pipeline) and 6 (Ewald construction) are TikZ —
-drawn in the manuscript sources, not generated from data. They rebuild by compiling the paper:
+Figures 2 (two paths), 4 (streaming schedule), 5 (pipeline) and 6 (Ewald construction) are TikZ:
+drawn in the manuscript sources, not generated from data, so there is no script and no dataset
+behind them. They rebuild by compiling the paper — but the `.tex` sources live in the **manuscript**
+repository, not this one, so this step needs whatever the journal supplies you rather than a clone
+of GLINT:
 
 ```bash
-cd <papers>/glint && pdflatex glint_rewrite_JAC_refined.tex
+cd <manuscript sources> && pdflatex glint_rewrite_JAC_refined.tex
 ```
 
-Figure 6 additionally exists as a standalone document (`glint_ewald.tex`) that compiles on its own.
+Figure 6 additionally exists there as a standalone document (`glint_ewald.tex`) that compiles on
+its own.
 
 ## Tier 2 — a CUDA GPU and public data
 
@@ -178,9 +185,15 @@ public**.
 
 Timing tables (`tab:throughput`, `tab:stages`) are per-row measurements from
 `experiments/bench_kc_graph.py`, `bench_fused.py`, `index_batch_sweep.py` and `profile_glint.py`.
-They were measured on one A100; numbers will not transfer to a different GPU, and several entries
-in the FACTS table are *derived* (frames/s from ms/frame, speedups from timing pairs) and so need
-no independent measurement — the arithmetic guard checks them against each other.
+They were measured on one A100, so numbers will not transfer to a different GPU.
+
+**Two of those four are not runnable as-is**: `index_batch_sweep.py` hard-codes a worktree path and
+`profile_glint.py` hard-codes both its repository root and its input, all under `/sdf/home/`, with
+no path argument. Edit the constants at the top or treat those two rows as facility-only.
+
+Several entries in the FACTS table are *derived* rather than measured (frames/s from ms/frame,
+speedups from timing pairs) and so need no independent measurement at all — the arithmetic guard
+checks them against each other, and `--facts` marks which is which in its provenance comments.
 
 ## Tier 3 — SLAC S3DF / NERSC
 

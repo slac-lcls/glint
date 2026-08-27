@@ -12,21 +12,26 @@ documented escape hatch was inert on exactly the machines that needed it, and th
 never an acceleration path at all: only a way for the working cpu fallback to be skipped.
 
 Found while verifying the commands in REPRODUCING.md actually run -- a referee reading the paper on
-a Mac would have hit it on their first command.
+a Mac would have hit it on their first GLINT command.
 
-What is pinned:
-  * neither module offers an `mps` device, under any torch, on any host
-  * the ladder is exactly cuda -> cpu, and resolves to a device torch will accept float64 on
-  * the modules import at all (the crash was at import, so this is not redundant)
+THE SOURCE CHECK RUNS WITHOUT TORCH, DELIBERATELY. The obvious way to write this test is to import
+the two modules and read their `DEV`, but the environments that run it -- the CPU CI job, and
+`run_ci_locally.py`, which blocks torch at the import system on purpose -- have no torch, so a
+test built that way skips in every automated context and would report success with the defect
+restored (Copilot review of glint#161). So the regression that CI must catch is checked by reading
+the SOURCE, which needs nothing; the runtime assertions below are a bonus wherever torch exists.
 
   PYTHONPATH=. python experiments/test_device_selection.py     # exit 0 = all pass
 """
 from __future__ import annotations
 
 import os
+import pathlib
+import re
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = pathlib.Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, str(ROOT))
 
 FAILS = []
 
@@ -37,39 +42,49 @@ def check(name, ok, detail=""):
         FAILS.append(name)
 
 
+MODULES = ("glint/replica_gpu.py", "glint/glint_index.py")
+
+# --- the half that must run everywhere, torch or no torch ---------------------------------------
+for rel in MODULES:
+    src = (ROOT / rel).read_text(encoding="utf-8")
+    # Comments are stripped first: the fix's own comment explains that torch.backends.mps is no
+    # longer consulted, which a naive substring search reads as the very thing it promises is gone.
+    code = "\n".join(l.split("#", 1)[0] for l in src.split("\n"))
+    # The two forms that can actually select the backend -- NOT a bare "mps" substring, which
+    # matches inside "jumps" and "ramps" in the prose of docstrings (comment-stripping does not
+    # reach those). Being precise here is the difference between a rule and a nuisance.
+    MPS_CODE = re.compile(r"backends\s*\.\s*mps|[\"']mps[\"']")
+    offenders = [l.strip() for l in code.split("\n") if MPS_CODE.search(l)]
+    check(f"{rel} does not select mps in code", not offenders, offenders[:2])
+
+    dev_lines = [l.strip() for l in code.split("\n") if re.match(r"\s*DEV\s*=", l)]
+    check(f"{rel} assigns DEV exactly once", len(dev_lines) == 1, dev_lines)
+    if len(dev_lines) == 1:
+        check(f"{rel} ladder is cuda -> cpu",
+              "cuda" in dev_lines[0] and "cpu" in dev_lines[0] and "mps" not in dev_lines[0],
+              dev_lines[0])
+
+# --- the runtime half, wherever torch exists ----------------------------------------------------
 try:
     import torch
-except ImportError:                      # pragma: no cover - the CPU CI job has no torch
-    print("SKIP: torch not available (the device ladder needs it to be meaningful)")
-    sys.exit(0)
+except ImportError:
+    print("\n  (runtime checks skipped: no torch here -- the source checks above are the "
+          "regression CI relies on)")
+else:
+    import glint.glint_index as gi
+    import glint.replica_gpu as rg
 
-import glint.glint_index as gi
-import glint.replica_gpu as rg
-
-for mod in (gi, rg):
-    name = mod.__name__
-    check(f"{name}.DEV is never 'mps'", mod.DEV != "mps", mod.DEV)
-    check(f"{name}.DEV is one of cuda/cpu", mod.DEV in ("cuda", "cpu"), mod.DEV)
-    # the whole point: whatever was chosen must accept the dtype the module computes in
-    try:
-        torch.zeros(2, dtype=torch.float64, device=mod.DEV)
-        ok, why = True, ""
-    except Exception as exc:             # noqa: BLE001 - the message is the point
-        ok, why = False, repr(exc)
-    check(f"{name}.DEV accepts float64 (what the module actually uses)", ok, why)
-
-# the crash was at IMPORT, so reaching here at all is part of the contract
-check("both modules import on this host", True)
-
-# ...and the CODE must not have grown the rung back. Comments are stripped first: the fix's own
-# explanatory comment says "torch.backends.mps is no longer consulted", which a naive substring
-# search reads as the very thing it is promising is absent.
-import inspect                                                        # noqa: E402
-for mod in (gi, rg):
-    code = "\n".join(l.split("#", 1)[0] for l in inspect.getsource(mod).split("\n"))
-    check(f"{mod.__name__} does not consult torch.backends.mps in code",
-          "backends.mps" not in code and '"mps"' not in code,
-          [l.strip() for l in code.split("\n") if "mps" in l][:2])
+    for mod in (gi, rg):
+        name = mod.__name__
+        check(f"{name}.DEV is one of cuda/cpu", mod.DEV in ("cuda", "cpu"), mod.DEV)
+        try:                                  # whatever was chosen must accept the module's dtype
+            torch.zeros(2, dtype=torch.float64, device=mod.DEV)
+            ok, why = True, ""
+        except Exception as exc:              # noqa: BLE001 - the message is the point
+            ok, why = False, repr(exc)
+        check(f"{name}.DEV accepts float64 (what the module actually uses)", ok, why)
+    # the original failure was at IMPORT, so getting here is itself part of the contract
+    check("both modules import on this host", True)
 
 print(f"\nFAILURES: {len(FAILS)}" + ("" if not FAILS else "  " + ", ".join(FAILS)))
 sys.exit(1 if FAILS else 0)

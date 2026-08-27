@@ -62,6 +62,12 @@ FACTS: dict[str, float | str] = {
     # measured faster, not a different answer.  A/B on one exclusive A100 (sdfampere018), both trees
     # in one allocation; the pre-change tree reproduced the retired values exactly (0.261/0.447/
     # 0.158/0.323 vs the 0.26/0.45/0.16/0.33 recorded here since #16).
+    # REPLICATED ACROSS FACILITIES the same day: NERSC Perlmutter A100-SXM4-40GB, a wholly different
+    # stack (py3.12 / torch 2.6.0 / cuda 12.4 / cupy 14.2 against S3DF's py3.9 / torch 2.1.0), gave
+    # 0.266 -> 0.172 fp64 B=120 and 0.162 -> 0.140 fp32 -- every row within 1-3% of S3DF, with
+    # max|dM| 1.42e-13 and rate (80,115) identical on both. The B=96 ~ B=64 tie reproduces there
+    # too, which is what rules it out as a one-machine artefact. Values below are the S3DF numbers
+    # (same device class as the #16 measurement they supersede); Perlmutter is the cross-check.
     "fused_b32_ms":        0.33,    # fused kernels, fp64, batch 32       (was 0.45 pre-#165)
     "fused_b120_ms":       0.17,    # fused kernels, fp64, batch 120      (was 0.26 pre-#165)
     "fused_b32_fp32_ms":   0.31,    # fp32 INDEXING at batch 32           (was 0.33 pre-#165)

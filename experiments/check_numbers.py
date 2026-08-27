@@ -668,6 +668,12 @@ class Rule:
     # of #163, round 9). A PRE-qualifier attaches forwards ("would have correctly reported
     # N*=32") and is legitimate exactly where a post-qualifier is not.
     exempt_after: tuple[str, ...] = ()
+    # ...and the mirror. A forward-attaching qualifier ("would have correctly reported N*=32")
+    # must PRECEDE its value; position-agnostic, it suppressed a live claim from the other side:
+    # "The reconstructed protocol gives N*=32 but the original sweep would have correctly
+    # reported 16" (Copilot review of #163, round 10). Between exempt_before and exempt_after,
+    # every exemption on this rule is now bound to the side it actually attaches from.
+    exempt_before: tuple[str, ...] = ()
     flags: int = re.I
     _rx: re.Pattern = field(init=False, repr=False)
 
@@ -767,7 +773,7 @@ RETIRED = [
          # "would have correctly reported" attaches FORWARD ("...would have correctly reported
          # N*=32"), so it may precede; "does not reproduce" attaches BACKWARD and must follow the
          # value it retires, or an unrelated failure earlier in the clause suppresses a live claim.
-         exempt=("would have correctly reported",),
+         exempt_before=("would have correctly reported",),
          exempt_after=("does not reproduce",),
          clause_exempt=True),
     Rule("blind-pair-adjacent-retired", r"\b76\s*\\?%[^.]{0,30}?\b71\s*\\?%",
@@ -1300,7 +1306,7 @@ REQUIRED = [
               # followed by whitespace, exactly as _in_clause's sentence enders, not any period.
               _lit(f"{FACTS['recov_r0278_n12_pct']:g}")
               + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*12\$?"
-                r"(?:(?!for\s+r(?!0278\b))(?![.?!]\s)[\s\S]){0,80}?for\s+r0278",
+                r"(?:(?!r(?!0278\b)\d{4}\b)(?![.?!]\s)[\s\S]){0,80}?for\s+r0278",
               _lit(f"{FACTS['recov_r0278_n16_pct']:g}")
               + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*16\$?\s+for\s+r0278",
               _lit(f"{FACTS['recov_r0058_n16_pct']:g}")
@@ -1312,7 +1318,25 @@ REQUIRED = [
               # ...and the THRESHOLD language with it: "Both runs" + the bare number accepted
               # "Both runs used N*=16 as an arbitrary cap", which keeps the guarded value while
               # replacing the measured claim it stands for (round 7).
-              r"[Bb]oth\s+runs\s+cross[^.]{0,40}?90\s*\\?%[^.]{0,40}?"
+              # ...and "by" in ORDER, because without it the gaps admitted "Both runs cross
+              # 90% only AFTER N*=16", which contradicts the guarded claim while satisfying every
+              # token in it (round 10).
+              # ...and the gap before "by" is limited to one or two plain words without
+              # punctuation, so "but not by N*=16" cannot satisfy the needle -- "level, but not
+              # by" fails because the comma breaks the word-whitespace sequence (round 11).
+              # ...and the SAME whitelist on the far side, for the same reason. This bridge was
+              # still a blacklist after round 12, and round 15 walked through it with "level
+              # WHETHER by N*=16 or only later" -- conditional wording, not negation, so no
+              # negator list would ever have contained it. The reviewer's own conclusion was that
+              # "adding individual negators will remain bypassable", which is the round-14
+              # finding arrived at independently.
+              #
+              # The supported noun phrases are what the manuscript and its plausible rewordings
+              # actually use -- "level", "recovery", "recovery level" -- and nothing else reaches
+              # "by". Same stated trade as the other side: a genuine rewording fires and a human
+              # looks.
+              r"[Bb]oth\s+runs\s+cross(?:\s+(?:the|a|an))?\s*\$?\s*90\s*\\?%"
+              r"(?:\s+(?:recovery|level|mark|threshold)){1,2}\s+\bby\b\s+"
               r"N\^?\{?\\star\}?\s*=\s*" + _lit(f"{FACTS['nstar_r0278']:d}")),
              f"SI S16 states its measurement, so the file carrying it must state the banked values "
              f"IN CONTEXT: {FACTS['subset_draws_per_n']} draws per N over "
@@ -1443,6 +1467,32 @@ def _in_clause(hay: str, pos: int, words: tuple[str, ...], rx: "re.Pattern | Non
     return any(w.lower() in seg.lower() for w in words)
 
 
+def _before_match(hay: str, pos: int, words: tuple[str, ...],
+                  rx: "re.Pattern | None" = None) -> bool:
+    """Does one of `words` end IMMEDIATELY before `pos` within the clause?
+
+    "Immediately" means only whitespace may separate the qualifier from the matched value; any
+    non-whitespace intervening text means the qualifier attaches to something else in the clause
+    (e.g. 'would have correctly reported 16 but ... gives N*=32' must not be exempted because the
+    qualifier already attaches to 16, not to N*=32). See Rule.exempt_before.
+    """
+    if not words:
+        return False
+    lo = 0
+    for m in _CLAUSE_END.finditer(hay[:pos]):
+        lo = m.end()
+    m = _CLAUSE_END.search(hay[pos:])
+    hi = pos + m.start() + 1 if m else len(hay)
+    if rx is not None and len(rx.findall(hay[lo:hi])) > 1:
+        return False
+    seg = hay[lo:pos]
+    for w in words:
+        idx = seg.lower().rfind(w.lower())
+        if idx >= 0 and not seg[idx + len(w):].strip():
+            return True
+    return False
+
+
 def _after_match(hay: str, pos: int, words: tuple[str, ...],
                  rx: "re.Pattern | None" = None) -> bool:
     """Does one of `words` follow `pos`, within the clause? See Rule.exempt_after.
@@ -1488,10 +1538,12 @@ def scan(path: Path, text: str) -> list[str]:
                 _exempted = (_in_clause(norm, m.start(), rule.exempt, rule._rx)
                              if rule.clause_exempt
                              else _near(norm, m.start(), rule.exempt, rule.window))
+                _rx_gate = rule._rx if rule.clause_exempt else None
                 if not _exempted and rule.exempt_after:
-                    _exempted = _after_match(norm, m.start(), rule.exempt_after,
-                                             rule._rx if rule.clause_exempt else None)
-                if (rule.exempt or rule.exempt_after) and _exempted:
+                    _exempted = _after_match(norm, m.start(), rule.exempt_after, _rx_gate)
+                if not _exempted and rule.exempt_before:
+                    _exempted = _before_match(norm, m.start(), rule.exempt_before, _rx_gate)
+                if (rule.exempt or rule.exempt_after or rule.exempt_before) and _exempted:
                     continue
                 if rule.needs and _near(norm, m.start(), rule.needs, rule.window):
                     continue

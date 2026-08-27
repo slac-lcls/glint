@@ -181,6 +181,9 @@ jobs:
       - name: experiments/test_check_numbers_ci.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_check_numbers_ci.py
+      - name: experiments/test_fp32_b32_033_rule.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_fp32_b32_033_rule.py
 
 
       # The GPU comparison itself cannot run here, but its PASS/FAIL RULES can: without cupy this

@@ -86,11 +86,17 @@ until issue #5 closed via PRs #14 / #15 / #16:
 |---|---|
 | per-frame numpy → GPU (`replica_gpu`) | 16.5 |
 | \+ CUDA graph, bit-identical (#14) | 1.46 |
-| \+ fused CUDA kernels, B=32 (#16) | 0.45 |
-| \+ saturated batch B=120 | 0.26 |
+| \+ fused CUDA kernels, B=32 (#16) | 0.33 |
+| \+ full batch B=120 (not a saturation point: 26% faster than B=64) | 0.17 |
 
-Against pipelined ffbidx (3.1 ms) that is ~**12× faster**, not 4× slower. `KC_FP=32` (#15) gives
-0.16 ms at B=120, rate-neutral.
+Against pipelined ffbidx (3.1 ms) that is ~**18× faster**, not 4× slower. `KC_FP=32` (#15) gives
+0.14 ms at B=120, rate-neutral.
+
+The last two rows moved on 2026-08-27 (#165): `obj_fused` runs at K=4096/5760 against a 128-thread
+block, so one block per frame made each thread walk 32-45 candidates serially. Splitting the
+candidate axis over `blockIdx.y` is **bit-exact** — `inl`/`sub` identical, `same_lattice` 120/120,
+rate (80,115) unchanged — and 1.54× faster at B=120 fp64. fp32 gains far less (1.14×), so the
+speedup is an fp64 result and should not be read as a deployment-precision claim.
 
 ## M5 anneal — the CUDA-graph lever was overtaken
 

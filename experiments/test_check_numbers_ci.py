@@ -955,6 +955,10 @@ def test_main_fails_on_missing_or_unreadable_in_repo_defaults():
     assert _main_quiet([], default_targets=[ok, Path("/nonexistent/outside/papers.tex")]) == 0
 
 
+def test_deprecated_saturating_batch_alias_is_preserved():
+    assert _cn.FACTS["saturating_batch"] == _cn.FACTS["driver_default_batch"] == 64
+
+
 if __name__ == "__main__":
     tests = (test_closed_form_mle_matches_brute_force,
              test_bounds_ordered_and_bracket_the_estimate,
@@ -990,7 +994,8 @@ if __name__ == "__main__":
              test_each_arithmetic_guard_fires_when_its_facts_are_perturbed,
              test_perturbations_are_restored,
              test_main_fails_on_missing_requested_targets,
-             test_main_fails_on_missing_or_unreadable_in_repo_defaults)
+             test_main_fails_on_missing_or_unreadable_in_repo_defaults,
+             test_deprecated_saturating_batch_alias_is_preserved)
     ok = 0
     for t in tests:
         try:

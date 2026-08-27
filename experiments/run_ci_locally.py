@@ -58,6 +58,7 @@ STEPS = [
     # rename in glint/ fails here rather than waiting for someone with a GPU.
     "experiments/check_numbers.py",
     "experiments/test_check_numbers_ci.py",
+    "experiments/test_fp32_b32_033_rule.py",
     "experiments/test_gate_project.py",
     "experiments/bench_integrate_fused.py",
 ]

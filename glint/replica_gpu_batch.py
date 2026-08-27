@@ -298,16 +298,26 @@ index_batch = index_known_gpu_cell_batch   # alias
 def index_fused(frames, Mc, B=32):
     """Fully-fused known-cell indexer: custom fused CUDA kernels (cupy RawKernel, nvrtc-JIT) for the
     anneal/obj/refine per-candidate hot loops + an on-device cpu_stage (batched buerger same_lattice),
-    replacing the many small per-stage torch kernels AND the host tail. ~0.36 ms/frame fp32 / ~0.63
-    fp64 on one A100 -- 2.2x (fp64) to 6.7x (fp32) over index_all_graph -- with per-frame output
-    IDENTICAL (bit-exact fp64; rate + lattice identical fp32, 75/114 on 120 cxidb) to the stock engine.
+    replacing the many small per-stage torch kernels AND the host tail. At B=32 on one A100: 0.31
+    ms/frame fp32 / 0.33 fp64 -- 6.6x (fp32) / 4.3x (fp64) over index_all_graph -- with per-frame output
+    numerically equivalent in fp64 (max|ΔM| 1.42e-13; rate + lattice identical in both precisions,
+    80/115 on 120 cxidb) to the stock engine.
     Sorts frames by peak count so each batch pads to its own tight Pmax. Requires cupy on a GPU; falls
     back to index_all_graph (graph path) when cupy is unavailable or on CPU.
 
-    Throughput scales with the batch B: each frame is one thread-block, so B sets GPU occupancy.
-    B>=64 saturates an A100 (120 cxidb frames: B=32 -> 0.33/0.45 ms/fr fp32/fp64; B=64 -> 0.21/0.31;
-    B=120 -> 0.16/0.26). Output is batch-invariant -- the kernels loop each frame's real peak count,
-    not Pmax, so a looser per-batch pad costs no work (fp64 bit-identical across B).
+    Throughput scales with the batch B: anneal and refine give each frame one thread-block, so B
+    still sets their occupancy (obj splits its candidates across blockIdx.y since #165, but that did
+    NOT remove the need to batch -- measured, B=16 is 0.579 ms/fr against B=120's 0.170).
+    120 cxidb frames: B=32 -> 0.31/0.33 ms/fr fp32/fp64; B=64 -> 0.19/0.21; B=120 -> 0.14/0.17.
+    B=96 is no better than B=64 in either precision, but that is batch-count quantisation, not
+    occupancy -- 120 frames at B=96 is a ragged 96+24 while B=120 is one batch. Output is
+    batch-invariant -- the kernels loop each frame's real peak count, not Pmax, so a looser
+    per-batch pad costs no ARITHMETIC (fp64 bit-identical across B). It is not unconditionally free:
+    every block reserves Pmax*3*_IB dynamic shared memory, which caps resident blocks per SM.
+    MEASURED (A100, fp64, K=4096, real P pinned at 200, only the pad varied): flat to Pmax 800
+    (1.00x), 1.02x at 1600, 1.29x at 3200 -- the reservation only bites once residency falls to ~4
+    blocks/SM. At the peak counts this code sees (cxidb-17 tops out at 554: ~13 KB/block, ~12
+    blocks/SM) the pad really is free.
 
     Each frame's peaks are staged in dynamic shared memory, so a frame with more peaks than the
     device can hold in one block (fused_kernels.max_peaks(): ~6954 fp64 / 13909 fp32 on an A100)

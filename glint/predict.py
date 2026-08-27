@@ -399,7 +399,8 @@ def _write_chunk(f, serial, r, panel_name="p0", photon_eV=9392.7, clen_m=0.15, p
             # f.write per reflection. This is on the live integrate path, so it is not free: measured
             # 8.98 -> 2.60 ms for a dense 2212-reflection chunk (3.5x). At the driver's default
             # tol=0.002 chunks are far smaller, but on a dense run this still costs milliseconds per
-            # frame against a ~0.26 ms/frame known-cell path -- if that matters, the next step is to
+            # frame against a ~0.21 ms/frame known-cell path (driver default B=64) -- if that
+            # matters, the next step is to
             # hand formatting to a writer thread rather than to micro-optimise further.
             h, k, l = pred["h"].tolist(), pred["k"].tolist(), pred["l"].tolist()
             fsl, ssl = pred["fs"].tolist(), pred["ss"].tolist()

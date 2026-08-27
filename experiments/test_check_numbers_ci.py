@@ -472,6 +472,26 @@ ARITHMETIC_PERTURBATIONS = [
     # one reaches this check and nothing else.
     ({"pk45_ccstar": 0.915},                          "collapsed into one number"),
     ({"jungfrau_ccstar": 0.90},                       "collapsed into one number"),
+    # THE S16 GUARDS, one perturbation per branch -- they were mutation-verified by hand when
+    # added and never encoded, so removing any of them left the committed suite green (Copilot
+    # review of #163, round 2). The 400.9 case is the int()-truncation trap specifically: the
+    # identity must fire on a fractional per-N count, not truncate it to a pass.
+    ({"subset_draws_total": 3250},                    "subset_draws_total"),
+    ({"subset_draws_per_n": 400.9},                   "subset_draws_total"),
+    # seeds was the one input of the draw identity never perturbed -- a literal 8 in place of the
+    # FACTS lookup left every case above green (Copilot review of #163, round 4)
+    ({"subset_seeds": 7},                             "subset_draws_total"),
+    ({"recov_r0278_n12_pct": 90.4},                   "would be 12"),
+    # EXACTLY the bar, and a FRACTIONAL N: these pin the two operators the implementation
+    # promises. 90.4 fires under both `>= 90` and `> 90`, so it cannot catch the boundary being
+    # loosened; 90.0 can. And 32/24 fire whether or not the comparison truncates through int(),
+    # so only a fractional N catches a reintroduced int() (Copilot review of #163, round 9).
+    ({"recov_r0278_n12_pct": 90.0},                   "AT OR ABOVE"),
+    ({"nstar_r0278": 16.4},                           "moved without the measurement"),
+    ({"nstar_r0278": 32},                             "moved without the measurement"),
+    ({"n_cross90_r0058": 24},                             "moved without the measurement"),
+    ({"recov_r0278_n16_pct": 88.0},                   "BELOW the 90% bar"),
+    ({"recov_r0058_n16_pct": 88.0},                   "BELOW the 90% bar"),
 ]
 
 
@@ -518,6 +538,243 @@ def test_blind_pair_rules_fire_and_stay_silent():
         fired = any("blind-pair" in f for f in _cn.scan(Path("probe.md"), text))
         assert fired == must_fire, (
             f"{label}: fired={fired}, expected {must_fire} -- {text!r}")
+
+
+def _s16_prose(**edit) -> str:
+    """SI S16's protocol + result sentences, as the manuscript writes them, values substitutable.
+
+    Carries all ten banked claims in the manuscript's own phrasing, because the rule's needles
+    bind each value to its N and run context -- a probe stating fewer claims, or stating them
+    context-free, would test a weaker rule than the one that ships.
+    """
+    v = dict(per_n=f"{_cn.FACTS['subset_draws_per_n']:d}",
+             seeds=_cn._numword(_cn.FACTS['subset_seeds']),   # co-moves with FACTS, like the needle
+             idx278=f"{_cn.FACTS['indexed_r0278']:d}",
+             idx058=f"{_cn.FACTS['indexed_r0058']:d}",
+             draws=f"{_cn.FACTS['subset_draws_total']:d}",
+             n12=f"{_cn.FACTS['recov_r0278_n12_pct']:g}",
+             n16a=f"{_cn.FACTS['recov_r0278_n16_pct']:g}",
+             n16b=f"{_cn.FACTS['recov_r0058_n16_pct']:g}",
+             nstar=f"{_cn.FACTS['nstar_r0278']:d}",
+             at12="at $N=12$", run278="for r0278", run058="for r0058",
+             cross="Both runs cross the $90\\%$ level by", extra="")
+    v.update(edit)                       # update, not **edit: an override is the whole point here
+    return (f"\\SIsec{{S16. Consensus recovery from random subsets of long runs}}\n"
+            f"Two runs from LCLS experiment mfxl1038923: r0278, with ${v['idx278']}$ indexed "
+            f"frames, and r0058, with ${v['idx058']}$. {v['extra']}For a subset size $N$, draw $R={v['per_n']}$ "
+            f"draws per $N$, repeated over {v['seeds']} random seeds.\n"
+            f"{v['cross']} $N^{{\\star}}={v['nstar']}$: pooled recovery is "
+            f"${v['n12']}\\%$ {v['at12']} and ${v['n16a']}\\%$ at $N=16$ {v['run278']}, and "
+            f"${v['n16b']}\\%$ at $N=16$ {v['run058']} (${v['draws']}$ draws per point).")
+
+
+def test_s16_required_passes_on_the_measured_values():
+    """The section as written must be clean -- otherwise the rule is unsatisfiable, not a guard."""
+    assert not _required_fires(_s16_prose(), "s16-subset-recovery-facts")
+
+
+def test_s16_required_fires_on_every_edited_claim():
+    """The finding: #163 banked ten S16 numbers and no rule read the section they came from.
+
+    One perturbation per needle, because a Required entry that fires on only some of its values is
+    the same fail-open as no entry at all -- the case `test_every_merge_fact_is_read_by_a_required
+    _rule` exists to catch for the merge block.
+    """
+    for edit in (dict(per_n="300"), dict(seeds="five"), dict(idx278="1700"),
+                 dict(idx058="2300"), dict(draws="3000"), dict(n12="90.4"),
+                 dict(n16a="95.1"), dict(n16b="89.9"), dict(nstar="32")):
+        assert _required_fires(_s16_prose(**edit), "s16-subset-recovery-facts"), (
+            f"S16 rule stayed silent on {edit}")
+
+
+def test_s16_required_fires_on_swapped_context():
+    """The round-2 finding: value-only needles pass under a SWAP.
+
+    Exchanging 89.8 and 96.1 leaves every value present in the file while N=12 now exceeds the
+    bar and N*=16 is false; same for trading the two N=16 recoveries between runs. The bound
+    needles must fire on both swaps -- these probes are what make the binding real rather than
+    asserted.
+    """
+    F = _cn.FACTS
+    swap_pct = _s16_prose(n12=f"{F['recov_r0278_n16_pct']:g}",
+                          n16a=f"{F['recov_r0278_n12_pct']:g}")
+    assert _required_fires(swap_pct, "s16-subset-recovery-facts"), (
+        "swapping 89.8 and 96.1 between N=12 and N=16 stayed green")
+    swap_run = _s16_prose(n16a=f"{F['recov_r0058_n16_pct']:g}",
+                          n16b=f"{F['recov_r0278_n16_pct']:g}")
+    assert _required_fires(swap_run, "s16-subset-recovery-facts"), (
+        "trading the two N=16 recoveries between r0278 and r0058 stayed green")
+
+
+def test_s16_required_stays_silent_without_its_trigger():
+    """Scoping. Files that discuss subsets or pooled consensus without carrying S16 must pass."""
+    for probe in ("The consensus vote pools N-best hypotheses over random subsets of frames.",
+                  "Recovery of the all-frame cell improves with the number of pooled frames.",
+                  _jungfrau_prose()):
+        assert not _required_fires(probe, "s16-subset-recovery-facts"), probe
+
+
+def test_s16_required_fires_on_narrowed_or_moved_claims():
+    """Round-3 findings: two more shapes that value-only or loosely-bound needles let through.
+
+    (a) The both-runs relationship is part of the claim: a section that quietly narrows
+    "Both runs cross ... N*=16" to one run keeps a bare N*=16 needle satisfied while the second
+    banked N* silently stops being asserted. (b) The N=12 clause must be bound to r0278 through
+    a tempered gap: a plain [^.]{0,80} bind lazily scans past an intervening "for r0058" to the
+    legitimate "for r0278" later in the sentence, so the moved claim passed.
+    """
+    narrowed = _s16_prose().replace("Both runs cross", "r0278 crosses")
+    assert _required_fires(narrowed, "s16-subset-recovery-facts"), (
+        "narrowing the N*=16 claim to one run stayed green -- the r0058 half is unwatched")
+    moved = _s16_prose(at12="at $N=12$ for r0058")
+    assert _required_fires(moved, "s16-subset-recovery-facts"), (
+        "moving the N=12 recovery to r0058 stayed green -- the tempered bind is not tempering")
+
+
+def test_needles_reject_decimal_extensions():
+    """A number needle must not be satisfied by a decimal that merely STARTS with it.
+
+    `_lit` guarded against a following digit but not against `.<digit>`, so "1785.4 indexed
+    frames" satisfied the needle for 1785 and a malformed edited count stayed green -- and the
+    same hole let the retired N*=32 pattern fire on the legitimate larger values N*=320 and
+    N*=32.5 (Copilot review of #163, round 6). Both directions are pinned: the needle must reject
+    the decimal, and the retired rule must not claim one.
+    """
+    for key, field in (("indexed_r0278", "idx278"), ("indexed_r0058", "idx058")):
+        stretched = _s16_prose(**{field: f"{_cn.FACTS[key]}.4"})
+        assert _required_fires(stretched, "s16-subset-recovery-facts"), (
+            f"{key} needle accepted a decimal extension of its value")
+    assert _required_fires(_s16_prose(nstar="16.4"), "s16-subset-recovery-facts"), (
+        "the N* needle accepted 16.4 as if it were 16")
+    for larger in ("Pooling to $N^{\\star}=320$ was never tested.",
+                   "The sweep reports $N^{\\star}=32.5$ under interpolation."):
+        assert not _fires(larger, "nstar-32-retired"), (
+            f"the retired-32 rule claimed a different value: {larger!r}")
+
+
+def test_s16_needles_bind_values_to_what_they_count():
+    """Round-7 findings: three needles held their value loosely enough to accept a wrong claim.
+
+    (a) The indexed counts were only required "shortly after the run ID", so
+    "r0278 (1785 shots; 1700 indexed frames)" passed with the guarded count wrong. (b) The N=12
+    tempered gap rejected only an intervening `for r0058`, so any other run tag let the regex
+    scan on to the legitimate `for r0278`. (c) The both-runs needle took `Both runs` + the bare
+    number, so "Both runs used N*=16 as an arbitrary cap" kept the value and replaced the claim.
+    """
+    mislabelled = _s16_prose().replace(
+        f"r0278, with ${_cn.FACTS['indexed_r0278']}$ indexed frames",
+        f"r0278 (${_cn.FACTS['indexed_r0278']}$ shots; 1700 indexed frames)")
+    assert _required_fires(mislabelled, "s16-subset-recovery-facts"), (
+        "the indexed count was accepted without being bound to 'indexed frames'")
+    other_run = _s16_prose(at12="at $N=12$ for r9999")
+    assert _required_fires(other_run, "s16-subset-recovery-facts"), (
+        "an unrelated run tag let the N=12 bind scan onward to r0278")
+    relabelled = _s16_prose().replace(
+        f"and r0058, with ${_cn.FACTS['indexed_r0058']}$.",
+        f"and r0058, with ${_cn.FACTS['indexed_r0058']}$ shots.")
+    assert _required_fires(relabelled, "s16-subset-recovery-facts"), (
+        "the r0058 count was accepted after its 'indexed frames' label was replaced")
+    recast = _s16_prose(cross="Both runs used")
+    assert _required_fires(recast, "s16-subset-recovery-facts"), (
+        "the threshold claim was replaced while the number survived")
+
+
+def test_needles_reject_signs_and_unbounded_digits():
+    """Round-8 findings: three ways a needle matched a value it should not have.
+
+    (a) `_lit` excluded a leading digit or period but not a SIGN, so "-1785 indexed frames" and
+    "-0.90" satisfied every needle built from the positive literal. (b) The numeric seeds branch
+    was unbounded, so "8 random seeds" was found inside "18 random seeds". (c) The retired N*=32
+    rule's decimal guard went too far the other way and fell silent on "N*=32.0", which is the
+    same retired claim with a trailing zero -- only a NONZERO decimal is a different number.
+    """
+    assert _required_fires(_s16_prose(idx278=f"-{_cn.FACTS['indexed_r0278']}"),
+                           "s16-subset-recovery-facts"), "a sign-flipped count satisfied the needle"
+    assert _required_fires(_s16_prose(seeds="18"), "s16-subset-recovery-facts"), (
+        "'8 random seeds' was found inside '18 random seeds'")
+    assert _fires("The sweep gives $N^{\\star}=32.0$ for r0058.", "nstar-32-retired"), (
+        "the retired claim written as 32.0 slipped past the decimal guard")
+    assert not _fires("Interpolation puts it at $N^{\\star}=32.5$.", "nstar-32-retired")
+    assert not _fires("Pooling to $N^{\\star}=320$ was never tested.", "nstar-32-retired")
+
+
+def test_nstar32_exemption_is_clause_scoped():
+    """Round-3 finding: the 240-char exemption window let one properly retired mention exempt a
+    SEPARATE live N*=32 claim in the same paragraph, and full-sentence scope then failed the same
+    way through a comma. The exemption is CLAUSE-scoped, so each probe below fires on its live
+    claim while a self-contained retirement stays exempt -- and a decimal must not truncate the
+    scope (sentence ends are '.', '?' or '!' followed by whitespace, never a bare '.')."""
+    mixed = ("The previously quoted $N^{\\star}=32$ for r0058 does not reproduce here. "
+             "The reconstructed protocol gives $N^{\\star}=32$ for r0058.")
+    assert _fires(mixed, "nstar-32-retired"), (
+        "a live N*=32 rode the previous sentence's retirement vocabulary out")
+    question = ("Was the previously quoted $N^{\\star}=32$ reproduced? "
+                "The protocol gives $N^{\\star}=32$ for r0058.")
+    assert _fires(question, "nstar-32-retired"), (
+        "a '?' sentence end was read as one sentence -- the live second claim passed (round 4)")
+    one_sentence = ("The previously quoted $N^{\\star}=32$ does not reproduce, "
+                    "but the reconstructed protocol gives $N^{\\star}=32$ for r0058.")
+    assert _fires(one_sentence, "nstar-32-retired"), (
+        "a comma joined a retirement and a live claim into one sentence and both were exempted "
+        "(round 4) -- the exemption must be clause-scoped, not sentence-scoped")
+    conjunction = ("The protocol gives $N^{\\star}=32$ but the previously quoted "
+                   "$N^{\\star}=32$ does not reproduce")
+    assert _fires(conjunction, "nstar-32-retired"), (
+        "two matches in ONE clause shared the retirement phrase and both were exempted -- with "
+        "no way to tell which occurrence it qualifies, the guard must refuse (round 7)")
+    unrelated = ("The old recovery does not reproduce but the reconstructed protocol gives "
+                 "$N^{\\star}=32$")
+    assert _fires(unrelated, "nstar-32-retired"), (
+        "an unrelated failure earlier in the clause suppressed a live claim -- the retirement "
+        "phrase must FOLLOW the value it retires (round 9)")
+    standalone = "The previously quoted $N^{\\star}=32$ for r0058 remains correct."
+    assert _fires(standalone, "nstar-32-retired"), (
+        "'previously quoted' alone suppressed the rule -- an exempt must RETIRE the value, and "
+        "ORed entries made this one a standalone escape (round 6)")
+    decimal_span = ("The previously quoted $N^{\\star}=32$ (recovery 93.4\\% at $N=24$) "
+                    "does not reproduce here.")
+    assert not _fires(decimal_span, "nstar-32-retired"), (
+        "a decimal split the sentence and orphaned the retirement vocabulary")
+
+
+def test_nstar32_rule_fires_live_and_stays_exempt_when_retired():
+    """The retired N*=32, in all three states -- the probes #163 shipped without.
+
+    The middle case is the one Copilot's review turned up: "reconstructed protocol" had been put in
+    the exempt tuple, and it neither retires the value nor states it counterfactually, so the live
+    and WRONG sentence below sat inside the exemption and passed. The exempts that remain are the
+    ones that actually retire it, and the manuscript's real sentence carries both.
+    """
+    assert _fires("The pooled sweep gives $N^{\\star} = 32$ for r0058.", "nstar-32-retired")
+    assert _fires("The reconstructed protocol gives $N^{\\star} = 32$ for r0058.",
+                  "nstar-32-retired"), "a live wrong claim rode the section's own vocabulary out"
+    for retired in (
+            "the previously quoted $N^{\\star}=32$ for r0058 does not reproduce here",
+            "a coarser grid whose next tested point after 16 was 32 would have correctly "
+            "reported $N^{\\star}=32$"):
+        assert not _fires(retired, "nstar-32-retired"), retired
+    assert not _fires(f"Both runs give $N^{{\\star}} = {_cn.FACTS['n_cross90_r0058']}$.",
+                      "nstar-32-retired")
+
+
+def test_every_test_in_this_file_is_registered():
+    """The __main__ runner lists its tests by hand, so a new one is silent until it is added.
+
+    Caught the moment it happened: the four S16 tests above were written, passed under pytest, and
+    the `python experiments/...` run -- which is the form CI uses -- reported 21/21 without ever
+    calling them. A test that is never called is worse than no test, because the count goes up.
+    Reads the tuple out of the source rather than importing it, since it is built inside
+    `if __name__ == "__main__"` and does not exist when pytest collects this module. Anchored on
+    the INDENTED assignment and taken from the last match: an unanchored split matched the literal
+    inside this function first and read its own body as the registry (every test then reported
+    unregistered, which is at least a loud way to be wrong).
+    """
+    src = Path(__file__).read_text(encoding="utf-8")
+    body = re.split(r"^ +tests = \(", src, flags=re.M)[-1].split(")\n", 1)[0]
+    registered = set(re.findall(r"\btest_\w+", body))
+    defined = set(re.findall(r"^def (test_\w+)", src, re.M))
+    assert not (defined - registered), (
+        f"defined but never run by the __main__ runner: {sorted(defined - registered)}")
 
 
 def test_submission_files_are_default_targets():
@@ -604,6 +861,17 @@ if __name__ == "__main__":
              test_required_whole_file_form_catches_a_value_leaving_the_file,
              test_required_stays_silent_without_its_trigger,
              test_blind_pair_rules_fire_and_stay_silent,
+             test_s16_required_passes_on_the_measured_values,
+             test_s16_required_fires_on_every_edited_claim,
+             test_s16_required_fires_on_swapped_context,
+             test_s16_required_fires_on_narrowed_or_moved_claims,
+             test_needles_reject_decimal_extensions,
+             test_s16_needles_bind_values_to_what_they_count,
+             test_needles_reject_signs_and_unbounded_digits,
+             test_nstar32_exemption_is_clause_scoped,
+             test_s16_required_stays_silent_without_its_trigger,
+             test_nstar32_rule_fires_live_and_stays_exempt_when_retired,
+             test_every_test_in_this_file_is_registered,
              test_submission_files_are_default_targets,
              test_check_arithmetic_is_green_on_the_shipped_table,
              test_each_arithmetic_guard_fires_when_its_facts_are_perturbed,

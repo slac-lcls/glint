@@ -536,7 +536,19 @@ def load(p):
     return fr
 
 
-def matched(M, q, tol=0.15):
+# The paper's strict gate, in one place: a frame counts as indexed iff same_lattice(M, truth)
+# AND matched(M, q)/len(q) >= GATE_FRAC AND matched(M, q) >= GATE_MIN, where matched() counts
+# peaks with |q @ M - round(q @ M)| < GATE_TOL componentwise. These three values are PUBLISHED
+# (every gated rate in the paper is defined by them) and are tied to check_numbers.py FACTS by a
+# source regex, so changing them here fails the guard until the deliverables are re-measured.
+# The ~12 experiment scripts that still inline the same triple are historical copies of THIS
+# definition; new code should import these names instead of re-declaring them.
+GATE_TOL = 0.15                      # near-integer window on q @ M, per component
+GATE_FRAC = 0.25                     # minimum matched fraction of the frame's peaks
+GATE_MIN = 10                        # minimum matched reflection count
+
+
+def matched(M, q, tol=GATE_TOL):
     if M is None:
         return 0
     r = q @ M - np.rint(q @ M)
@@ -547,7 +559,7 @@ def matched(M, q, tol=0.15):
 
 def gpass(M, q):
     if M is None or not same_lattice(M, LYSO): return (0, 0)
-    m = matched(M, q); return (int(m / len(q) >= 0.25), int(m >= 10))
+    m = matched(M, q); return (int(m / len(q) >= GATE_FRAC), int(m >= GATE_MIN))
 
 
 if __name__ == "__main__":

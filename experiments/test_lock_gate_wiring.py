@@ -103,11 +103,31 @@ def test_new_options_stay_at_the_end_of_the_signature():
     assert params[-len(tail):] == tail, params[-len(tail):]
 
 
+def test_live_gate_defaults_and_window_are_pinned():
+    """The LIVE gate (_fits: min_inliers count AND min_inlier_frac fraction, counting peaks at the
+    _inliers near-integer window) shipped with min_inlier_frac=0.15, min_inliers=0 and a 0.15
+    window, and until now nothing pinned any of the three: reset the defaults or nudge the window
+    and the whole suite stayed green. Same defect this file exists for, one signature over.
+
+    The window is asserted through BOTH names on purpose: stream_driver.HKL_TOL is the gate's own
+    constant, spurious_meter.HKL_TOL is the meters' declared mirror of it, and the paper's 0.15 is
+    what both must equal. stream_driver also asserts the pair equal at import, so if that module-
+    scope check is ever deleted, this test still catches a split."""
+    p = inspect.signature(StreamDriver.__init__).parameters
+    assert p["min_inlier_frac"].default == 0.15, p["min_inlier_frac"].default
+    assert p["min_inliers"].default == 0, p["min_inliers"].default
+    from glint.spurious_meter import HKL_TOL
+    from glint.stream_driver import HKL_TOL as DRIVER_HKL_TOL
+    assert HKL_TOL == 0.15, HKL_TOL
+    assert DRIVER_HKL_TOL == HKL_TOL, (DRIVER_HKL_TOL, HKL_TOL)
+
+
 if __name__ == "__main__":
     tests = (test_blind_driver_gets_the_pool_keyed_gate_by_default,
              test_overrides_are_forwarded_including_the_inert_one,
              test_known_cell_driver_builds_no_vote_histogram,
-             test_new_options_stay_at_the_end_of_the_signature)
+             test_new_options_stay_at_the_end_of_the_signature,
+             test_live_gate_defaults_and_window_are_pinned)
     ok = 0
     for t in tests:
         try:

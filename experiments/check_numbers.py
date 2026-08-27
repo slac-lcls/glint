@@ -64,6 +64,15 @@ FACTS: dict[str, float | str] = {
     "fused_fps":           3800.0,  # = 1000/fused_b120_ms
     "saturating_batch":    64,      # one block per frame; 108 SMs on an A100
     "indexing_rate":       "75/114",
+    # The strict gate every "indexed" count in the paper is defined by: same_lattice(M, truth) AND
+    # matched frac >= gate_frac AND matched >= gate_min, with matched counting peaks at
+    # |q @ M - round| < gate_tol per component. Canonical home: glint/glint_fast.py GATE_TOL /
+    # GATE_FRAC / GATE_MIN beside matched()/gpass(). Read from the source below (same device as
+    # pw_qpow_default): if the shipped constants move, every gated rate above is measured against
+    # a gate the paper does not describe.
+    "gate_tol":            0.15,    # near-integer window on q @ M, per component
+    "gate_frac":           0.25,    # minimum matched fraction of the frame's peaks
+    "gate_min":            10,      # minimum matched reflection count
     # Percentages are ROUNDED, not floored (changed 2026-08-02). tab:summary previously mixed the two:
     # DIALS printed 27% for 32/120 = 26.67 (rounded) while GLINT-(1) printed 76% for 92/120 = 76.67
     # (floored), so three "correct" values for one measurement were in circulation. Counts are now
@@ -1323,6 +1332,26 @@ def check_arithmetic() -> list[str]:
         bad.append(f"  FACTS: pw_qpow_default is {F['pw_qpow_default']} but glint_fast ships "
                    f"{_qm.group(1)}; the 'binary' arm is no longer the shipped weight, so every "
                    "weighting comparison is against a baseline nobody runs")
+
+    # The strict gate, tied to its canonical source the same way. glint_fast's GATE_TOL/GATE_FRAC/
+    # GATE_MIN (beside matched()/gpass()) define what "indexed" means for every gated rate in the
+    # paper; ~a dozen experiment scripts inline the same triple, but this is the copy new code is
+    # told to import, so this is the copy that must not drift. Reuses _gf_p/_gf_s from the QPOW
+    # tie above (the unreadable-file case is reported per-constant here for the same reason it is
+    # reported there: a silently skipped check is a comment).
+    for _cname, _fkey in (("GATE_TOL", "gate_tol"), ("GATE_FRAC", "gate_frac"),
+                          ("GATE_MIN", "gate_min")):
+        _gm = re.search(rf"^{_cname}\s*=\s*([\d.]+)", _gf_s, re.M)
+        if not _gf_s:
+            bad.append(f"  FACTS: {_gf_p} unreadable, so {_fkey} is unchecked and the strict gate "
+                       "is defined by nothing")
+        elif _gm is None:
+            bad.append(f"  FACTS: {_cname} could not be located in glint/glint_fast.py -- the "
+                       f"{_fkey} check is dead; fix the pattern rather than dropping it")
+        elif float(_gm.group(1)) != float(F[_fkey]):
+            bad.append(f"  FACTS: {_fkey} is {F[_fkey]} but glint_fast ships {_cname} = "
+                       f"{_gm.group(1)}; the shipped gate is no longer the published gate, so "
+                       "every gated rate in the paper is defined by a constant nobody measured")
 
     # The peak-weight block's headline is "every soft weighting is SIGNIFICANTLY worse", which is a
     # claim about p-values; check them as such, from the stored splits, and require the reconciling

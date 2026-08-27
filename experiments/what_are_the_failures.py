@@ -34,7 +34,9 @@ import glint.replica_gpu_batch as rgb
 import glint.stream_driver as sd
 
 LYSO = gf.LYSO
-GATE_FRAC, GATE_MIN, TOL = 0.25, 10, 0.15
+# Canonical gate constants, not a re-declaration: the triple lives in glint/glint_fast.py next to
+# matched()/gpass() and is source-tied to check_numbers.py FACTS there.
+GATE_FRAC, GATE_MIN, TOL = gf.GATE_FRAC, gf.GATE_MIN, gf.GATE_TOL
 FRAMES_PATH = os.environ.get("GLINT_FRAMES", os.path.join(WT, "experiments", "frames_cxidb_clean.txt"))
 
 

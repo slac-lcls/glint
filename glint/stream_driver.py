@@ -47,6 +47,17 @@ from glint.running_consensus import RunningConsensus
 from glint.multishot import same_lattice
 from glint.multilattice import deflate_peaks
 from glint.retry_cascade import DEFAULT_NBEST, arm_blind_nbest, arm_known_perframe
+from glint.spurious_meter import HKL_TOL as _SPURIOUS_HKL_TOL
+
+# _inliers' near-integer window on q @ M -- the tolerance THE live gate (_fits) counts peaks at.
+# spurious_meter.HKL_TOL declares itself "== stream_driver._inliers near-integer window"; that
+# equality was a comment until now, so check it where either side would break it. All of
+# spurious_meter's lattice meters are calibrated against this exact window.
+HKL_TOL = 0.15
+assert HKL_TOL == _SPURIOUS_HKL_TOL, (
+    "stream_driver.HKL_TOL and spurious_meter.HKL_TOL have drifted apart "
+    f"({HKL_TOL} vs {_SPURIOUS_HKL_TOL}); the live gate and the spurious meters must count "
+    "inliers at the same window")
 try:
     import glint.replica_gpu_batch as rgb                     # the q-only batch indexer (needs torch)
 except Exception:                                            # pragma: no cover - CPU-only unit env (no torch)
@@ -993,7 +1004,7 @@ class StreamDriver:
     def _inliers(self, q, M):
         """# of q peaks near-integer in cell M (hkl = q @ M) -- the 'does this frame fit this cell' test."""
         hf = np.asarray(q, float) @ M
-        return int((np.abs(hf - np.round(hf)).max(1) < 0.15).sum())
+        return int((np.abs(hf - np.round(hf)).max(1) < HKL_TOL).sum())
 
     def _fits(self, q, M):
         """THE live gate: does frame `q` fit cell `M` well enough to accept? Count AND fraction.

@@ -550,13 +550,14 @@ def _s16_prose(**edit) -> str:
              n16a=f"{_cn.FACTS['recov_r0278_n16_pct']:g}",
              n16b=f"{_cn.FACTS['recov_r0058_n16_pct']:g}",
              nstar=f"{_cn.FACTS['nstar_r0278']:d}",
-             at12="at $N=12$", run278="for r0278", run058="for r0058")
+             at12="at $N=12$", run278="for r0278", run058="for r0058",
+             cross="Both runs cross the $90\\%$ level by", extra="")
     v.update(edit)                       # update, not **edit: an override is the whole point here
     return (f"\\SIsec{{S16. Consensus recovery from random subsets of long runs}}\n"
             f"Two runs from LCLS experiment mfxl1038923: r0278, with ${v['idx278']}$ indexed "
-            f"frames, and r0058, with ${v['idx058']}$. For a subset size $N$, draw $R={v['per_n']}$ "
+            f"frames, and r0058, with ${v['idx058']}$. {v['extra']}For a subset size $N$, draw $R={v['per_n']}$ "
             f"draws per $N$, repeated over {v['seeds']} random seeds.\n"
-            f"Both runs cross the $90\\%$ level by $N^{{\\star}}={v['nstar']}$: pooled recovery is "
+            f"{v['cross']} $N^{{\\star}}={v['nstar']}$: pooled recovery is "
             f"${v['n12']}\\%$ {v['at12']} and ${v['n16a']}\\%$ at $N=16$ {v['run278']}, and "
             f"${v['n16b']}\\%$ at $N=16$ {v['run058']} (${v['draws']}$ draws per point).")
 
@@ -645,6 +646,28 @@ def test_needles_reject_decimal_extensions():
             f"the retired-32 rule claimed a different value: {larger!r}")
 
 
+def test_s16_needles_bind_values_to_what_they_count():
+    """Round-7 findings: three needles held their value loosely enough to accept a wrong claim.
+
+    (a) The indexed counts were only required "shortly after the run ID", so
+    "r0278 (1785 shots; 1700 indexed frames)" passed with the guarded count wrong. (b) The N=12
+    tempered gap rejected only an intervening `for r0058`, so any other run tag let the regex
+    scan on to the legitimate `for r0278`. (c) The both-runs needle took `Both runs` + the bare
+    number, so "Both runs used N*=16 as an arbitrary cap" kept the value and replaced the claim.
+    """
+    mislabelled = _s16_prose().replace(
+        f"r0278, with ${_cn.FACTS['indexed_r0278']}$ indexed frames",
+        f"r0278 (${_cn.FACTS['indexed_r0278']}$ shots; 1700 indexed frames)")
+    assert _required_fires(mislabelled, "s16-subset-recovery-facts"), (
+        "the indexed count was accepted without being bound to 'indexed frames'")
+    other_run = _s16_prose(at12="at $N=12$ for r9999")
+    assert _required_fires(other_run, "s16-subset-recovery-facts"), (
+        "an unrelated run tag let the N=12 bind scan onward to r0278")
+    recast = _s16_prose(cross="Both runs used")
+    assert _required_fires(recast, "s16-subset-recovery-facts"), (
+        "the threshold claim was replaced while the number survived")
+
+
 def test_nstar32_exemption_is_clause_scoped():
     """Round-3 finding: the 240-char exemption window let one properly retired mention exempt a
     SEPARATE live N*=32 claim in the same paragraph, and full-sentence scope then failed the same
@@ -664,6 +687,11 @@ def test_nstar32_exemption_is_clause_scoped():
     assert _fires(one_sentence, "nstar-32-retired"), (
         "a comma joined a retirement and a live claim into one sentence and both were exempted "
         "(round 4) -- the exemption must be clause-scoped, not sentence-scoped")
+    conjunction = ("The protocol gives $N^{\\star}=32$ but the previously quoted "
+                   "$N^{\\star}=32$ does not reproduce")
+    assert _fires(conjunction, "nstar-32-retired"), (
+        "two matches in ONE clause shared the retirement phrase and both were exempted -- with "
+        "no way to tell which occurrence it qualifies, the guard must refuse (round 7)")
     standalone = "The previously quoted $N^{\\star}=32$ for r0058 remains correct."
     assert _fires(standalone, "nstar-32-retired"), (
         "'previously quoted' alone suppressed the rule -- an exempt must RETIRE the value, and "
@@ -803,6 +831,7 @@ if __name__ == "__main__":
              test_s16_required_fires_on_swapped_context,
              test_s16_required_fires_on_narrowed_or_moved_claims,
              test_needles_reject_decimal_extensions,
+             test_s16_needles_bind_values_to_what_they_count,
              test_nstar32_exemption_is_clause_scoped,
              test_s16_required_stays_silent_without_its_trigger,
              test_nstar32_rule_fires_live_and_stays_exempt_when_retired,

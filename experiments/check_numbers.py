@@ -257,7 +257,10 @@ FACTS: dict[str, float | str] = {
     "subset_seeds":              8,  # seeds 0-7
     "subset_draws_total":     3200,  # = subset_draws_per_n * subset_seeds
     "nstar_r0278":              16,  # smallest tested N reaching 90% recovery of the all-frame cell
-    "nstar_r0058":              16,  # SAME -- the symmetric pooled treatment gives 16 AND 16
+    "nstar_r0058":              16,  # r0058 CROSSES the bar by 16 -- weaker than r0278's, which
+                                    # is bracketed on both sides. No sub-16 point was recorded for
+                                    # r0058, so "smallest tested N" is NOT established for it and
+                                    # nothing here should say it is (Copilot review of #163, r7).
     "recov_r0278_n12_pct":    89.8,  # BELOW the 90% bar, which is why N*=16 and not 12
     "recov_r0278_n16_pct":    96.1,
     "recov_r0058_n16_pct":    91.2,
@@ -1233,8 +1236,19 @@ REQUIRED = [
              r"Consensus\s+recovery\s+from\s+random\s+subsets",
              (_lit(f"{FACTS['subset_draws_per_n']:d}") + r"\$?\s+draws\s+per\s+\$?N",
               rf"(?:{_numword(FACTS['subset_seeds'])}|{FACTS['subset_seeds']:d})\s+random\s+seeds",
-              r"r0278[^.]{0,30}?" + _lit(f"{FACTS['indexed_r0278']:d}"),
-              r"r0058[^.]{0,30}?" + _lit(f"{FACTS['indexed_r0058']:d}"),
+              # ONE needle for both counts, because the manuscript labels only the first:
+              # "r0278, with 1785 indexed frames, and r0058, with 2319". Two loose per-run
+              # needles accepted "r0278 (1785 shots; 1700 indexed frames)" -- the value merely
+              # had to appear shortly after the run ID, never bound to what it counts (Copilot
+              # review of #163, round 7). Spanning the sentence binds run -> count -> label.
+              # The gaps are tempered against DIGITS, not merely against sentence ends: a
+              # plain [^.] gap let a second number sit between the value and its label, so
+              # "r0278 (1785 shots; 1700 indexed frames)" still matched -- the count was near
+              # the label, not bound to it. No digit may intervene between a run and its count,
+              # or between that count and "indexed frames".
+              r"r0278(?:(?!\d)[^.]){0,20}?" + _lit(f"{FACTS['indexed_r0278']:d}")
+              + r"(?:(?!\d)[^.]){0,40}?indexed\s+frames[^.]{0,40}?"
+              + r"r0058(?:(?!\d)[^.]){0,20}?" + _lit(f"{FACTS['indexed_r0058']:d}"),
               _lit(f"{FACTS['subset_draws_total']:d}") + r"\$?\s+draws\s+per\s+point",
               # The N=12 clause shares its trailing "for r0278" with the N=16 clause, so the bind
               # is a tempered gap: an intervening r0058 or a sentence end breaks it. A plain [^.]
@@ -1243,8 +1257,8 @@ REQUIRED = [
               # whose gap contains the decimal in "96.1%" -- so the sentence boundary is a period
               # followed by whitespace, exactly as _in_clause's sentence enders, not any period.
               _lit(f"{FACTS['recov_r0278_n12_pct']:g}")
-              + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*12\$?(?:(?!r0058)(?![.?!]\s)[\s\S]){0,80}?"
-                r"for\s+r0278",
+              + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*12\$?"
+                r"(?:(?!for\s+r(?!0278\b))(?![.?!]\s)[\s\S]){0,80}?for\s+r0278",
               _lit(f"{FACTS['recov_r0278_n16_pct']:g}")
               + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*16\$?\s+for\s+r0278",
               _lit(f"{FACTS['recov_r0058_n16_pct']:g}")
@@ -1253,8 +1267,11 @@ REQUIRED = [
               # that quietly narrows the assertion to one run (round 3). The needle requires the
               # relationship the manuscript states -- "both runs cross the 90% level by N*=16" --
               # so dropping either run from the claim is a firing, not a wording change.
-              r"[Bb]oth\s+runs[^.]{0,80}?N\^?\{?\\star\}?\s*=\s*"
-              + _lit(f"{FACTS['nstar_r0278']:d}")),
+              # ...and the THRESHOLD language with it: "Both runs" + the bare number accepted
+              # "Both runs used N*=16 as an arbitrary cap", which keeps the guarded value while
+              # replacing the measured claim it stands for (round 7).
+              r"[Bb]oth\s+runs\s+cross[^.]{0,40}?90\s*\\?%[^.]{0,40}?"
+              r"N\^?\{?\\star\}?\s*=\s*" + _lit(f"{FACTS['nstar_r0278']:d}")),
              f"SI S16 states its measurement, so the file carrying it must state the banked values "
              f"IN CONTEXT: {FACTS['subset_draws_per_n']} draws per N over "
              f"{FACTS['subset_seeds']} random seeds ({FACTS['subset_draws_total']} draws per "
@@ -1263,7 +1280,10 @@ REQUIRED = [
              f"{FACTS['recov_r0278_n12_pct']}% at N=12 and "
              f"{FACTS['recov_r0278_n16_pct']}% at N=16 for r0278, "
              f"{FACTS['recov_r0058_n16_pct']}% at N=16 for r0058; N* = "
-             f"{FACTS['nstar_r0278']} on both runs under the reconstructed protocol. Each "
+             f"{FACTS['nstar_r0278']} -- both runs CROSS the 90% level by that N under the "
+             f"reconstructed protocol, which is the claim the evidence supports: r0278's crossing "
+             f"is bracketed on both sides (below the bar at N=12, above at N=16) while r0058 has "
+             f"no sub-16 point banked, so 'smallest tested N' is established for r0278 only. Each "
              "percentage is bound to its N and run because a swapped pair passes value-only "
              "needles while falsifying N*. If a value really moved, edit FACTS and re-run every "
              "target -- do not edit the section"),
@@ -1348,7 +1368,7 @@ def _near(hay: str, pos: int, words: tuple[str, ...], window: int) -> bool:
 _CLAUSE_END = re.compile(r"[.?!](?=\s|$)|[,;:]")     # see Rule.clause_exempt for why each is here
 
 
-def _in_clause(hay: str, pos: int, words: tuple[str, ...]) -> bool:
+def _in_clause(hay: str, pos: int, words: tuple[str, ...], rx: "re.Pattern | None" = None) -> bool:
     """Like _near, but the segment is the CLAUSE containing `pos` (see Rule.clause_exempt).
 
     Boundaries are sentence enders -- ., ? or ! followed by whitespace or EOF, so decimals and
@@ -1361,7 +1381,16 @@ def _in_clause(hay: str, pos: int, words: tuple[str, ...]) -> bool:
         lo = m.end()
     m = _CLAUSE_END.search(hay[pos:])
     hi = pos + m.start() + 1 if m else len(hay)
-    seg = hay[lo:hi].lower()
+    seg = hay[lo:hi]
+    # TWO MATCHES IN ONE CLAUSE = NO EXEMPTION. A conjunction needs no punctuation, so "The
+    # protocol gives N*=32 but the previously quoted N*=32 does not reproduce" is a single clause
+    # carrying a live claim AND a retired one; scoping by segment alone exempts both (Copilot
+    # review of #163, round 7). Nothing can tell which occurrence the retirement qualifies, so the
+    # guard refuses rather than guesses -- the author splits the sentence, which is clearer prose
+    # anyway. This is the conservative direction: it can only ever ADD a report.
+    if rx is not None and len(rx.findall(seg)) > 1:
+        return False
+    seg = seg.lower()
     return any(w.lower() in seg for w in words)
 
 
@@ -1387,7 +1416,7 @@ def scan(path: Path, text: str) -> list[str]:
     for group, rules in (("RETIRED", RETIRED), ("OVERCLAIM", OVERCLAIM), ("AMBIGUOUS", AMBIGUOUS)):
         for rule in rules:
             for m in rule._rx.finditer(norm):
-                if rule.exempt and (_in_clause(norm, m.start(), rule.exempt)
+                if rule.exempt and (_in_clause(norm, m.start(), rule.exempt, rule._rx)
                                     if rule.clause_exempt
                                     else _near(norm, m.start(), rule.exempt, rule.window)):
                     continue
@@ -1729,7 +1758,9 @@ def check_arithmetic() -> list[str]:
                        f"(and any corrected N* stays protocol-conditional; see nstar-32-retired)")
         if float(F[_k]) < 90.0:
             bad.append(f"  FACTS: {_k} = {F[_k]}% is BELOW the 90% bar, so {_n} = {F[_n]} does not "
-                       f"follow from it -- N* is the smallest tested N that REACHES the bar")
+                       f"follow from it -- N* is the smallest tested N that REACHES the bar. "
+                       f"(For r0278 that is bracketed both sides; for r0058 only the crossing at "
+                       f"N=16 is measured, so its claim is 'crosses by 16', not 'smallest'.)")
     # ⚑ ASYMMETRY, DELIBERATE AND WORTH KNOWING: r0278's N* is bracketed on BOTH sides (89.8% at
     # N=12 below, 96.1% at N=16 above), r0058's only from above (91.2% at N=16). No sub-16 point
     # was recorded for r0058, so "smallest tested N" is, for that run, an assertion rather than a

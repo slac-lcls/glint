@@ -14,8 +14,10 @@ It checks four things, in rough order of how much damage each does:
                             76%, and conflating them once cost two decks a wrong headline.
   2. OVERCLAIMS          -- language asserting end-to-end real-time / live merge, which the measured
                             179 frames/s (vs ~3500 hits/s needed) does not support.
-  3. AMBIGUITY           -- `0.33 ms` means fp32 INDEXING at B=32 *and* fused INTEGRATION per frame.
-                            A bare one is a defect; it must sit near a word that says which.
+  3. AMBIGUITY           -- `0.33 ms` means fp64 INDEXING at B=32 (fp32 is 0.31 since #165) *and*
+                            fused INTEGRATION per frame; `0.17 ms` means fp64 indexing at B=120 *and*
+                            the un-attributed residual of the 3.64 ms driver wall. A bare one is a
+                            defect; it must sit near a word that says which.
   4. ARITHMETIC          -- the facts table self-checks: frames/s must equal 1000/ms, speedups must
                             equal before/after, the DRP tier sizing must equal its own formula. This
                             is what catches a half-applied edit, because you cannot change `34 ms`
@@ -643,6 +645,17 @@ RETIRED = [
          "measures 0.17 ms on the same A100, bit-exact", "0.17 ms"),
     Rule("fused-b32-0.45", r"(?<![\d.])0\.45\s*ms",
          "0.45 ms/frame was the pre-#165 B=32 fp64 figure; it is now 0.33 ms", "0.33 ms"),
+    # 0.33 is the awkward one: it is LIVE for fp64-at-B=32 and for box-integration, and RETIRED for
+    # fp32-at-B=32 (now 0.31).  So it cannot be retired outright, and the bare-0.33 ambiguity rule
+    # below does not help -- "fp32" is one of ITS accepted disambiguators, so "fp32 indexing at B=32
+    # is 0.33 ms" satisfies both that rule and subms-no-batch while contradicting FACTS.  Found by
+    # Copilot on #167.  Fire only on the fp32 PAIRING, either order, and exempt a sentence that also
+    # says fp64 (a deliberate fp32-vs-fp64 contrast legitimately puts both near 0.33).
+    # [\s\S] so a line break is not a hiding place -- see the jungfrau-93pct note below.
+    Rule("fp32-b32-0.33", r"fp32[\s\S]{0,40}(?<![\d.])0\.33\s*ms|(?<![\d.])0\.33\s*ms[\s\S]{0,40}fp32",
+         "0.33 ms was fp32 indexing at B=32 BEFORE #165; it is now 0.31 ms (0.33 is the fp64 B=32 "
+         "figure, and the fused box-integration per frame)", "0.31 ms",
+         exempt=("fp64",)),
     Rule("fused-fps-3800", r"(?<![\d.])3[,.]?800\s*(?:frames?\s*/\s*s|f/s|fps|Hz)|3\.8\s*kHz",
          "3.8 kHz was 1000/0.26; against the measured 0.17 ms/frame it is ~5.9 kHz", "~5.9 kHz"),
     Rule("ffbidx-12x", r"(?<![\d.])12\s*(?:×|x|\\times)(?=[^\n]{0,80}(?:ffbidx|pipelined))",

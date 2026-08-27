@@ -2,8 +2,10 @@
   anneal_fused  -- the 20/10-iter anneal (bit-exact fp64, ports anneal_b+solve3x3)
   obj_fused     -- obj_b scoring (inlier count + log2 sub-score) for K axis-vector candidates
   refine_fused  -- refine_b (S-step sin-gradient) for K axis-vector candidates
-All share the pattern: one thread-BLOCK per frame, one thread per candidate (k-strided), the frame's
-peaks staged in shared memory once, per-candidate state in registers.  Launch on torch's CURRENT
+anneal/refine: one thread-BLOCK per frame, one thread per candidate (k-strided).  obj since #165:
+grid=(F, ceil(K/block)) -- it runs at K >> block, so the candidate axis gets its own grid dimension
+and EACH of those blocks stages the frame's peaks (see the obj section).  All stage that frame's
+peaks in shared memory, per-candidate state in registers.  Launch on torch's CURRENT
 stream (cupy ExternalStream) -> correct ordering, no host sync.  Precision follows KC_FP (rgb.FP)."""
 import numpy as np, torch, cupy as cp
 import glint.replica_gpu_batch as rgb
@@ -65,9 +67,10 @@ extern "C" __global__ void anneal_fused(
 # proj = V.Q_p ; d=|proj-round|; inl += (d<TRIMH); sub += log2(clamp(d,TRIML,TRIMH)+DELTA); sub/=npk
 #
 # Unlike anneal/refine, obj runs at K >> block: _stage_compute calls it with K = 4096 and 5760 while
-# block is 128, so one block per frame made every thread walk 32-45 candidates SERIALLY.  With
-# grid=(F,) that is 120 blocks for a 120-frame batch -- 0.06% of an A100's ~221k thread slots, which
-# is why per-frame cost kept falling out to large B: the batch axis was the ONLY source of occupancy.
+# block is 128, so one block per frame made every thread walk 32-45 candidates SERIALLY.  ONE frame
+# then exposes a single 128-thread block -- 0.06% of an A100's ~221k slots (108 SM x 2048) -- and a
+# whole 120-frame batch only 15,360 threads, ~7%.  That is why per-frame cost kept falling out to
+# large B: the batch axis was the ONLY source of occupancy.
 # Splitting the candidate axis over blockIdx.y gives 3840/5400 blocks instead of 120, so a single hit
 # exposes 32-45 blocks on its own.  Each block re-stages the frame's peaks (the loop above is
 # repeated ky times), which is why this pays ~7x rather than ~ky.

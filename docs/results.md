@@ -98,8 +98,8 @@ The roadmap carried "CUDA-graph the M5 anneal (~29% of the sparse frame; launch-
 15 sequential 3×3 solves)". Both numbers are now dead:
 
 - `ANNEAL_ITERS` default went **15 → 3** (commit 9310fa3): blind holds (85 vs 84 same_lattice, 78
-  gated) and consensus holds (117/120), while the anneal stage drops 7.8 → 2.5 ms (3.1×). The 15-iter
-  default was over-provisioned.
+  gated) and consensus holds (117/120 at the ≥10-reflection gate, offline hybrid), while the anneal
+  stage drops 7.8 → 2.5 ms (3.1×). The 15-iter default was over-provisioned.
 - PR #29's profile then measured the anneal at **1.49 ms = 11.8%** of the blind frame, not 29%. M3
   refine was the bottleneck at 65.8% — which is what motivated the fused-M3 work (PRs #30 / #39).
 

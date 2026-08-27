@@ -546,6 +546,46 @@ def test_perturbations_are_restored():
     assert not bad, "FACTS was left perturbed:\n" + "\n".join(bad)
 
 
+def _main_quiet(argv, *, default_targets=None, pdf_targets=None) -> int:
+    """Run the real main() with module targets patched and its chatter swallowed.
+
+    These exist because the missing/unreadable-target behavior was only ever verified by MANUAL
+    injection (documented in #168's PR body) -- the committed suite never called main(), so a
+    refactor could silently restore green-on-missing (Copilot review of #168, round 2).
+    """
+    import contextlib
+    import io
+    saved_d, saved_p = _cn.DEFAULT_TARGETS[:], _cn.PDF_TARGETS[:]
+    try:
+        if default_targets is not None:
+            _cn.DEFAULT_TARGETS[:] = default_targets
+        if pdf_targets is not None:
+            _cn.PDF_TARGETS[:] = pdf_targets
+        with contextlib.redirect_stdout(io.StringIO()):
+            return _cn.main(["check_numbers.py", *argv])
+    finally:
+        _cn.DEFAULT_TARGETS[:] = saved_d
+        _cn.PDF_TARGETS[:] = saved_p
+
+
+def test_main_fails_on_missing_requested_targets():
+    """An explicit path and a --pdf entry that do not exist must FAIL, not skip."""
+    assert _main_quiet(["/nonexistent/nowhere.md"]) == 1
+    assert _main_quiet(["--pdf"], default_targets=[_cn.REPO / "docs/lineage.md"],
+                       pdf_targets=[Path("/nonexistent/deck.pdf")]) == 1
+
+
+def test_main_fails_on_missing_or_unreadable_in_repo_defaults():
+    """A renamed in-repo docs page, or one replaced by a directory, is a failure in the default
+    run -- while an absent OUT-of-repo default stays a skip, which is what keeps the bare CI
+    runner green (it has no ~/git/papers)."""
+    ok = _cn.REPO / "docs/lineage.md"
+    assert _main_quiet([], default_targets=[ok, _cn.REPO / "docs/zz-renamed-away.md"]) == 1
+    assert _main_quiet([], default_targets=[ok, _cn.REPO / "docs"]) == 1, (
+        "a directory at a requested target path passed as if it were guarded")
+    assert _main_quiet([], default_targets=[ok, Path("/nonexistent/outside/papers.tex")]) == 0
+
+
 if __name__ == "__main__":
     tests = (test_closed_form_mle_matches_brute_force,
              test_bounds_ordered_and_bracket_the_estimate,
@@ -567,7 +607,9 @@ if __name__ == "__main__":
              test_submission_files_are_default_targets,
              test_check_arithmetic_is_green_on_the_shipped_table,
              test_each_arithmetic_guard_fires_when_its_facts_are_perturbed,
-             test_perturbations_are_restored)
+             test_perturbations_are_restored,
+             test_main_fails_on_missing_requested_targets,
+             test_main_fails_on_missing_or_unreadable_in_repo_defaults)
     ok = 0
     for t in tests:
         try:

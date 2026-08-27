@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import unicodedata
@@ -570,12 +571,36 @@ DEFAULT_TARGETS = [
     REPO / "README.md",
     REPO / "ROADMAP.md",
     REPO / "GLINT_REPORT.md",
+    # ...and the docs/ tree + CONTRIBUTING.md, unguarded until 2026-08-27. The front-door trio
+    # above was added 2026-07-21 for exactly this failure mode, and the same drift then re-ran one
+    # directory over: docs/onboarding.md taught the retired 34 ms blind figure -- and the "about
+    # 2x" ratio derived from it -- long after every guarded file had been swept to 26 ms, and its
+    # definition-of-done bar still said "~71% gated" (the pre-2026-08-02 rounding relic) while
+    # FACTS read 77% (92/120). Onboarding and contribution docs are where numbers become what a
+    # NEW collaborator believes, which makes them deliverables in the only sense that matters here.
+    # All four were verified green before being wired in, same protocol as the manuscript above.
+    REPO / "CONTRIBUTING.md",
+    REPO / "docs/onboarding.md",
+    REPO / "docs/results.md",
+    REPO / "docs/lineage.md",
+    # ...and the fourth docs file, which the first version of this list missed while its comment
+    # claimed the tree was covered: perlmutter_cnn.md is linked as the active NERSC recipe from
+    # lineage.md and train_cnn.py and carries quantitative training settings (Copilot review of
+    # #168). Verified green before wiring in, same protocol as the other three.
+    REPO / "docs/perlmutter_cnn.md",
 ]
 PDF_TARGETS = [
     HOME / "git/slides/glint/glint_summary.pdf",
     HOME / "git/slides/glint/glint_pitch.pdf",
     HOME / "git/slides/drp/drp_gpu.pdf",
-    HOME / "git/slides/fftindex/glint_origin_summary.pdf",
+    # glint_summary.pdf, NOT glint_origin_summary.pdf (swapped 2026-08-27): build.py in that deck
+    # emits a .pptx, and for weeks the only PDF beside the origin deck was a .BROKEN-1of12 stub --
+    # so this entry named a file that did not exist, and the shared None path in main() folded
+    # "target missing" into the pdftotext skip, turning the entry into a no-op that exited green.
+    # (An origin PDF reappeared 2026-08-27 while this fix was in flight; the deck effort that
+    # rebuilds it can re-add the entry once that build is owned. --pdf now FAILS on a missing
+    # deck, so a dead entry can never again pass silently -- see main().)
+    HOME / "git/slides/fftindex/glint_summary.pdf",
 ]
 
 
@@ -1777,10 +1802,19 @@ def main(argv: list[str]) -> int:
         return 0
 
     paths = [Path(a) for a in argv[1:] if not a.startswith("--")]
+    # A target the CALLER ASKED FOR must exist: an explicit path on the command line, or a
+    # PDF_TARGETS entry once --pdf is passed. Of DEFAULT_TARGETS, the IN-REPO files must exist
+    # too -- they live in this checkout, so "missing" can only mean renamed or deleted, and a
+    # renamed docs page would otherwise drop out of the guard as a green SKIP forever (Copilot
+    # review of #168). Only the OUT-OF-REPO defaults stay skippable: the CI runner has no
+    # ~/git/papers or ~/Desktop, and ci.yml documents that scope out loud.
+    must_exist = set(paths)
     if not paths:
         paths = list(DEFAULT_TARGETS)
+        must_exist = {p for p in DEFAULT_TARGETS if p.is_relative_to(REPO)}
         if "--pdf" in argv:
             paths += PDF_TARGETS
+            must_exist |= set(PDF_TARGETS)
 
     fails, advisories = check_arithmetic()
     if fails:
@@ -1792,10 +1826,41 @@ def main(argv: list[str]) -> int:
 
     checked = skipped = 0
     for path in paths:
+        # A MISSING requested target is a FAILURE, not a skip (split 2026-08-27). Until then this
+        # loop had ONE None path for three different situations -- file absent, pdftotext absent,
+        # file unreadable -- and the difference is the whole guard: a target that does not exist
+        # is an entry checking NOTHING. PDF_TARGETS carried a deck whose only "PDF" was a .BROKEN
+        # stub, and --pdf exited green over it for weeks. pdftotext-unavailable stays a skip,
+        # because that is this MACHINE lacking a tool, not the TARGET lacking a file; and missing
+        # DEFAULT_TARGETS stay skips because the bare CI runner never has the out-of-repo files
+        # (see must_exist above and the ci.yml comment).
+        if not path.exists():
+            if path in must_exist:
+                fails.append(f"  MISSING TARGET {path} -- the entry guards nothing; restore the "
+                             f"file or remove it from the target list deliberately\n")
+                print(f"  MISSING {path} (nonexistent target -- counted as a failure)")
+            else:
+                print(f"  SKIP {path} (missing)")
+                skipped += 1
+            continue
+        if path in must_exist and not path.is_file():
+            # exists() passed but this is a directory or a special file -- for a requested
+            # target that is the same defect as a missing file: an entry checking nothing
+            # (Copilot review of #168, round 2).
+            fails.append(f"  UNREADABLE TARGET {path} -- exists but is not a regular file\n")
+            print(f"  UNREADABLE {path} (not a regular file -- counted as a failure)")
+            continue
         text = _read(path)
         if text is None:
-            print(f"  SKIP {path} (missing, or pdftotext unavailable)")
-            skipped += 1
+            # Two different situations still share the None: the MACHINE lacking pdftotext (a
+            # skip -- ci.yml documents that scope) and the TARGET being unreadable or failing
+            # conversion. For a requested target only the first is excusable.
+            if path in must_exist and not (path.suffix == ".pdf" and shutil.which("pdftotext") is None):
+                fails.append(f"  UNREADABLE TARGET {path} -- read/conversion failed\n")
+                print(f"  UNREADABLE {path} (read or pdftotext conversion failed -- counted as a failure)")
+            else:
+                print(f"  SKIP {path} (pdftotext unavailable, or file unreadable)")
+                skipped += 1
             continue
         checked += 1
         found = scan(path, text) + check_required(path, text)

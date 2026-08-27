@@ -145,19 +145,24 @@ paper. Verification detail and the exact in-tree derivation chain are in
 Used as libraries or invoked as external programs; no source is copied into this repository.
 
 **Distributed dependency closure:** numpy (BSD-3-Clause), scipy (BSD-3-Clause), torch
-(BSD-3-Clause). Optional accelerators, imported under `try`/`except`: cupy (MIT), numba
-(BSD-2-Clause).
+(BSD-3-Clause), h5py (BSD-3-Clause; imported at function scope, without a guard, by the shipped
+HDF5/CXI reading paths — `glint/predict.py`, `glint/lute_bridge.py`). Optional accelerators,
+imported under `try`/`except`: cupy (MIT), numba (BSD-2-Clause). mpi4py (BSD-3-Clause) is imported
+at function scope, without a guard, only by the optional multi-GPU fan-out in
+`glint/warmup_batch.py` — required solely when that path is used.
 
 **Research and validation paths only (`experiments/`, `lute/`; not distributed):** DIALS and
-cctbx/scitbx/iotbx/rstbx/simtbx (BSD-3-Clause), pyFAI (MIT), pyopencl (MIT), GSAS-II, h5py, mpi4py,
+cctbx/scitbx/iotbx/rstbx/simtbx (BSD-3-Clause), pyFAI (MIT), pyopencl (MIT), GSAS-II,
 scikit-learn, joblib (BSD-3-Clause), matplotlib (PSF-based), pydantic, pytest (MIT), requests
 (Apache-2.0), psana / Detector / PSCalib.
 
-**Research-path dependencies with UNRESOLVED licences** (imported or invoked from `experiments/`
-and `lute/` only; no source copied here; none distributed): **LUTE** (`slac-lcls/lute` — the
+**Research-path dependencies with UNRESOLVED licences** (no source copied here; none distributed;
+import sites per entry): **LUTE** (`slac-lcls/lute` — the
 in-tree `lute/` directory is GLINT's own task package that installs *into* an external LUTE
 checkout), **envbridge** (SLAC cross-conda bridge, used by `experiments/xtc_bridge/`),
-**radial_integration** (S3DF tool referenced by radial benchmarks), **krtc** (Kerberos ticket
+**radial_integration** (S3DF tool referenced by radial benchmarks; also imported by the shipped
+`glint/gpu_pool.py` under a guarded `try`/`except` that falls back silently, so it is used only
+when a local checkout is present — its source is never copied or distributed), **krtc** (Kerberos ticket
 helper used by `experiments/elog_query.py`), and **peaknet** together with its pretrained weights
 (`peaknet-673m.bin`, 2.69 GB — "673M" is the model's parameter scale, not the file size; recorded
 in `experiments/peaknet/build_peaknet.py`; the weights carry their own, also unresolved,

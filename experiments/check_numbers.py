@@ -86,6 +86,17 @@ FACTS: dict[str, float | str] = {
     "glint_blind_rate_pct":        77,  # = round(100 * glint1_strict_of120 / 120)
     "xgandalf_blind_strict_of120": 86,  # xgandalf blind, SAME bar, SAME peak list -- a different indexer
     "xgandalf_blind_rate_pct":     72,  # = round(100 * xgandalf_blind_strict_of120 / 120)
+    # The SAME two blind arms at the CORRECT-LATTICE bar -- lattice right, no coverage requirement.
+    # Added 2026-08-27 because the strict pair above is device-sensitive at +/-1 (see the note on
+    # glint1_strict_of120) while these are not: 115 reproduced identically on CPU at HEAD, at
+    # 8da091b and at 7ca3b49, and 115/120 is the same figure the decks were corrected to. Scored by
+    # experiments/score_glint_gate.py and experiments/xgandalf/score_xg_gate.py -- one gate
+    # function, so the two arms cannot drift apart. The GAP IS WIDER HERE than at the strict bar
+    # (115 vs 94, against 92 vs 86), which is worth knowing before quoting only the strict pair.
+    "glint1_lattice_of120":       115,  # GLINT-(1) blind, correct reduced cell, no coverage bar
+    "glint1_lattice_rate_pct":     96,  # = round(100 * glint1_lattice_of120 / 120)
+    "xgandalf_lattice_of120":      94,  # xgandalf blind, same bar, same peak list
+    "xgandalf_lattice_rate_pct":   78,  # = round(100 * xgandalf_lattice_of120 / 120)
     # The SAME two blind arms extended to 480 frames of the same run (2026-08-17). Identical peak
     # finder (pf8 out of the CrystFEL stream), identical gate, and the published 120 embedded as a
     # subset that reproduces 92 and 86 EXACTLY -- that reproduction is the control that makes these
@@ -1498,11 +1509,21 @@ def check_arithmetic() -> list[str]:
     # points -- 92 -> 95 frames moves the rate 77 -> 79 and would have slipped through silently. Rates
     # are integers here; compare them as integers.
     for _pct_key, _cnt_key in (("glint_blind_rate_pct", "glint1_strict_of120"),
-                               ("xgandalf_blind_rate_pct", "xgandalf_blind_strict_of120")):
+                               ("xgandalf_blind_rate_pct", "xgandalf_blind_strict_of120"),
+                               # the correct-lattice pair, same denominator, same rule
+                               ("glint1_lattice_rate_pct", "glint1_lattice_of120"),
+                               ("xgandalf_lattice_rate_pct", "xgandalf_lattice_of120")):
         _want = round(100.0 * int(F[_cnt_key]) / 120.0)
         if int(F[_pct_key]) != _want:
             bad.append(f"  FACTS: {_pct_key} = {F[_pct_key]}% but {_cnt_key} = {F[_cnt_key]}/120 rounds to "
                        f"{_want}% -- a count and its percentage were edited apart")
+    # The correct-lattice bar is strictly LOOSER than the strict bar (it drops the coverage
+    # requirement), so a count below its own strict count is an edit that crossed two rows.
+    for _lat, _strict, _who in (("glint1_lattice_of120", "glint1_strict_of120", "GLINT-(1)"),
+                                ("xgandalf_lattice_of120", "xgandalf_blind_strict_of120", "xgandalf")):
+        if int(F[_lat]) < int(F[_strict]):
+            bad.append(f"  FACTS: {_who} correct-lattice {F[_lat]}/120 is BELOW its strict "
+                       f"{F[_strict]}/120 -- the looser bar cannot pass fewer frames")
     # Same derivation for the n=480 rows. Note the denominator differs, so this cannot be folded into
     # the loop above -- and folding it would be the exact mistake that makes a percentage stop tracking
     # its count.

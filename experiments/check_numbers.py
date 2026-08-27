@@ -710,7 +710,12 @@ RETIRED = [
          "(...16, 32) would legitimately have reported 32 -- so state it as not reproducing under "
          "the reconstructed protocol rather than as a live measurement",
          f"N* = {FACTS['nstar_r0058']}",
-         exempt=("does not reproduce", "reconstructed protocol", "previously quoted",
+         # Every exempt here must RETIRE the value or state it counterfactually. "reconstructed
+         # protocol" was in this tuple and does neither -- it is the section's ordinary vocabulary,
+         # so the live, wrong sentence "the reconstructed protocol gives N* = 32" sat inside the
+         # exemption and passed silently (Copilot review of #163). The manuscript's real sentence
+         # carries "does not reproduce" and "previously quoted" and stays exempt without it.
+         exempt=("does not reproduce", "previously quoted",
                  "would have correctly reported")),
     Rule("blind-pair-adjacent-retired", r"\b76\s*\\?%[^.]{0,30}?\b71\s*\\?%",
          f"'76% vs 71%' is the RETIRED blind pair -- the counts moved to "
@@ -1169,6 +1174,35 @@ REQUIRED = [
              "protocol (unity scale, native), which reads R_split 33.0 vs 26.7 on this same r0033 "
              "data and is not comparable with this row",
              window=120),
+    # ⚑ THE SAME DEFECT AS THE jungfrau BLOCK ABOVE, REPRODUCED IN THE COMMIT THAT DOCUMENTS IT.
+    # #163 added ten S16 keys to FACTS with provenance and wired them into check_arithmetic, and
+    # stopped there -- so the arithmetic knew 3200 = 400 x 8 and that 96.1% clears the 90% bar,
+    # and NOTHING read the section those numbers came from. Editing S16's draw counts, recovery
+    # percentages, indexed totals or N* left every run green: exactly the "a fact nothing reads is
+    # a comment" failure the jungfrau note twelve lines up was written to prevent, caught in review
+    # of the PR whose stated purpose was to guard S16 (Copilot review of #163).
+    #
+    # THE TRIGGER IS THE SECTION HEADING, which occurs once, in the manuscript, and cannot be
+    # reached by a file that merely mentions subsets or pooling: `\SIsec{S16. Consensus recovery
+    # from random subsets of long runs}`. Whole-file window -- the section runs to ~2000 chars and
+    # the claims are spread across all of it, so any character window would fail open on reflow.
+    Required("s16-subset-recovery-facts",
+             r"Consensus\s+recovery\s+from\s+random\s+subsets",
+             (_lit(f"{FACTS['subset_draws_total']:d}"),
+              _lit(f"{FACTS['recov_r0278_n12_pct']:g}") + r"\s*\\?%",
+              _lit(f"{FACTS['recov_r0278_n16_pct']:g}") + r"\s*\\?%",
+              _lit(f"{FACTS['recov_r0058_n16_pct']:g}") + r"\s*\\?%",
+              r"N\^?\{?\\star\}?\s*=\s*" + _lit(f"{FACTS['nstar_r0278']:d}")),
+             f"SI S16 states its measurement, so the file carrying it must state the banked values: "
+             f"{FACTS['subset_draws_total']} draws per point "
+             f"({FACTS['subset_draws_per_n']} subsets x {FACTS['subset_seeds']} seeds), pooled "
+             f"recovery {FACTS['recov_r0278_n12_pct']}% at N=12 and "
+             f"{FACTS['recov_r0278_n16_pct']}% at N=16 for r0278, "
+             f"{FACTS['recov_r0058_n16_pct']}% at N=16 for r0058, and N* = "
+             f"{FACTS['nstar_r0278']} on both runs. The 89.8/96.1 pair is not decoration: it is "
+             "what makes N* a measurement rather than a choice, since N* is DEFINED as the "
+             "smallest tested N reaching 90%. If a value really moved, edit FACTS and re-run every "
+             "target -- do not edit the section"),
     # cxidb-45, and NOT "Proteinase K": build_pitch.py discusses Proteinase K indexing (the DIALS
     # head-to-head) without ever merging it, so keying on the protein name would demand merge
     # statistics from a deck that correctly does not quote any. `cxidb-45` names the serial set and
@@ -1581,18 +1615,39 @@ def check_arithmetic() -> list[str]:
         if int(F[_pct_key]) != _want:
             bad.append(f"  FACTS: {_pct_key} = {F[_pct_key]}% but {_cnt_key} = {F[_cnt_key]}/120 rounds to "
                        f"{_want}% -- a count and its percentage were edited apart")
-    close("subset_draws_total = per_n * seeds", float(F["subset_draws_total"]),
-          float(F["subset_draws_per_n"]) * float(F["subset_seeds"]))
+    # EXACT, not close(). This is a counting identity over integers -- 400 subsets on each of 8
+    # seeds is 3200 draws and nothing else -- and close()'s 3% band would pass any total from 3104
+    # to 3296 against it (Copilot review of #163). The percentage/count loop just above compares
+    # with `!=` for the same reason; close() is for ratios of measured times, where 3% is the
+    # measurement's own scatter.
+    if int(F["subset_draws_total"]) != int(F["subset_draws_per_n"]) * int(F["subset_seeds"]):
+        bad.append(f"  FACTS: subset_draws_total = {F['subset_draws_total']} but "
+                   f"{F['subset_draws_per_n']} per N x {F['subset_seeds']} seeds = "
+                   f"{int(F['subset_draws_per_n']) * int(F['subset_seeds'])} -- exact integers")
     # N* is DEFINED as the smallest tested N reaching 90%, so the recoveries either side of it must
     # bracket the bar. This is the invariant that makes N*=16 a measurement rather than a choice:
     # if r0278's N=12 figure ever rises to >=90, N* is 12 and the paper's sentence is wrong.
     if float(F["recov_r0278_n12_pct"]) >= 90.0:
         bad.append(f"  FACTS: recov_r0278_n12_pct = {F['recov_r0278_n12_pct']}% is AT OR ABOVE the "
                    f"90% bar, so N* for r0278 would be 12, not {F['nstar_r0278']}")
+    # The bracket has to be tied to the N the recovery was MEASURED AT, or it does not constrain
+    # N* at all: the loop below reads recov_*_n16_pct and reported nstar_* only in its message, so
+    # editing either N* to 24 left the checker green while the evidence still said 16 (Copilot
+    # review of #163). The needed relation is an equality -- the key is literally named n16.
     for _k, _n in (("recov_r0278_n16_pct", "nstar_r0278"), ("recov_r0058_n16_pct", "nstar_r0058")):
+        if int(F[_n]) != 16:
+            bad.append(f"  FACTS: {_n} = {F[_n]} but the only recovery banked for it is {_k}, "
+                       f"measured at N=16 -- an N* moved without the measurement that fixes it")
         if float(F[_k]) < 90.0:
             bad.append(f"  FACTS: {_k} = {F[_k]}% is BELOW the 90% bar, so {_n} = {F[_n]} does not "
                        f"follow from it -- N* is the smallest tested N that REACHES the bar")
+    # ⚑ ASYMMETRY, DELIBERATE AND WORTH KNOWING: r0278's N* is bracketed on BOTH sides (89.8% at
+    # N=12 below, 96.1% at N=16 above), r0058's only from above (91.2% at N=16). No sub-16 point
+    # was recorded for r0058, so "smallest tested N" is, for that run, an assertion rather than a
+    # measurement -- and the manuscript has the same gap: SI S16 says r0058 "crosses the 90% level
+    # by N*=16" and shows no point below it. Not inventable here; flagged for the S16 rewrite that
+    # resolves the \FIXME. If the sweep is re-run, bank recov_r0058_n12_pct and extend the bracket
+    # above rather than deleting this note.
     # The correct-lattice bar is strictly LOOSER than the strict bar (it drops the coverage
     # requirement), so a count below its own strict count is an edit that crossed two rows.
     for _lat, _strict, _who in (("glint1_lattice_of120", "glint1_strict_of120", "GLINT-(1)"),

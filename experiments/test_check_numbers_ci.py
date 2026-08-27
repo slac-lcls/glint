@@ -520,6 +520,86 @@ def test_blind_pair_rules_fire_and_stay_silent():
             f"{label}: fired={fired}, expected {must_fire} -- {text!r}")
 
 
+def _s16_prose(**edit) -> str:
+    """SI S16's result sentence, as the manuscript writes it, with values substitutable."""
+    v = dict(draws=f"{_cn.FACTS['subset_draws_total']:d}",
+             n12=f"{_cn.FACTS['recov_r0278_n12_pct']:g}",
+             n16a=f"{_cn.FACTS['recov_r0278_n16_pct']:g}",
+             n16b=f"{_cn.FACTS['recov_r0058_n16_pct']:g}",
+             nstar=f"{_cn.FACTS['nstar_r0278']:d}")
+    v.update(edit)                       # update, not **edit: an override is the whole point here
+    return (f"\\SIsec{{S16. Consensus recovery from random subsets of long runs}}\n"
+            f"Both runs cross the $90\\%$ level by $N^{{\\star}}={v['nstar']}$: pooled recovery is "
+            f"${v['n12']}\\%$ at $N=12$ and ${v['n16a']}\\%$ at $N=16$ for r0278, and "
+            f"${v['n16b']}\\%$ at $N=16$ for r0058 (${v['draws']}$ draws per point).")
+
+
+def test_s16_required_passes_on_the_measured_values():
+    """The section as written must be clean -- otherwise the rule is unsatisfiable, not a guard."""
+    assert not _required_fires(_s16_prose(), "s16-subset-recovery-facts")
+
+
+def test_s16_required_fires_on_every_edited_claim():
+    """The finding: #163 banked ten S16 numbers and no rule read the section they came from.
+
+    One perturbation per needle, because a Required entry that fires on only some of its values is
+    the same fail-open as no entry at all -- the case `test_every_merge_fact_is_read_by_a_required
+    _rule` exists to catch for the merge block.
+    """
+    for edit in (dict(draws="3000"), dict(n12="90.4"), dict(n16a="95.1"),
+                 dict(n16b="89.9"), dict(nstar="32")):
+        assert _required_fires(_s16_prose(**edit), "s16-subset-recovery-facts"), (
+            f"S16 rule stayed silent on {edit}")
+
+
+def test_s16_required_stays_silent_without_its_trigger():
+    """Scoping. Files that discuss subsets or pooled consensus without carrying S16 must pass."""
+    for probe in ("The consensus vote pools N-best hypotheses over random subsets of frames.",
+                  "Recovery of the all-frame cell improves with the number of pooled frames.",
+                  _jungfrau_prose()):
+        assert not _required_fires(probe, "s16-subset-recovery-facts"), probe
+
+
+def test_nstar32_rule_fires_live_and_stays_exempt_when_retired():
+    """The retired N*=32, in all three states -- the probes #163 shipped without.
+
+    The middle case is the one Copilot's review turned up: "reconstructed protocol" had been put in
+    the exempt tuple, and it neither retires the value nor states it counterfactually, so the live
+    and WRONG sentence below sat inside the exemption and passed. The exempts that remain are the
+    ones that actually retire it, and the manuscript's real sentence carries both.
+    """
+    assert _fires("The pooled sweep gives $N^{\\star} = 32$ for r0058.", "nstar-32-retired")
+    assert _fires("The reconstructed protocol gives $N^{\\star} = 32$ for r0058.",
+                  "nstar-32-retired"), "a live wrong claim rode the section's own vocabulary out"
+    for retired in (
+            "the previously quoted $N^{\\star}=32$ for r0058 does not reproduce here",
+            "a coarser grid whose next tested point after 16 was 32 would have correctly "
+            "reported $N^{\\star}=32$"):
+        assert not _fires(retired, "nstar-32-retired"), retired
+    assert not _fires(f"Both runs give $N^{{\\star}} = {_cn.FACTS['nstar_r0058']}$.",
+                      "nstar-32-retired")
+
+
+def test_every_test_in_this_file_is_registered():
+    """The __main__ runner lists its tests by hand, so a new one is silent until it is added.
+
+    Caught the moment it happened: the four S16 tests above were written, passed under pytest, and
+    the `python experiments/...` run -- which is the form CI uses -- reported 21/21 without ever
+    calling them. A test that is never called is worse than no test, because the count goes up.
+    Reads the tuple out of the source rather than importing it, since it is built inside
+    `if __name__ == "__main__"` and does not exist when pytest collects this module. Anchored on
+    the INDENTED assignment and taken from the last match: an unanchored split matched the literal
+    inside this function first and read its own body as the registry (every test then reported
+    unregistered, which is at least a loud way to be wrong).
+    """
+    src = Path(__file__).read_text(encoding="utf-8")
+    body = re.split(r"^ +tests = \(", src, flags=re.M)[-1].split(")\n", 1)[0]
+    registered = set(re.findall(r"\btest_\w+", body))
+    defined = set(re.findall(r"^def (test_\w+)", src, re.M))
+    assert not (defined - registered), (
+        f"defined but never run by the __main__ runner: {sorted(defined - registered)}")
+
+
 def test_submission_files_are_default_targets():
     """The files that GO TO THE JOURNAL must be scanned by default -- all three of them.
 
@@ -604,6 +684,11 @@ if __name__ == "__main__":
              test_required_whole_file_form_catches_a_value_leaving_the_file,
              test_required_stays_silent_without_its_trigger,
              test_blind_pair_rules_fire_and_stay_silent,
+             test_s16_required_passes_on_the_measured_values,
+             test_s16_required_fires_on_every_edited_claim,
+             test_s16_required_stays_silent_without_its_trigger,
+             test_nstar32_rule_fires_live_and_stays_exempt_when_retired,
+             test_every_test_in_this_file_is_registered,
              test_submission_files_are_default_targets,
              test_check_arithmetic_is_green_on_the_shipped_table,
              test_each_arithmetic_guard_fires_when_its_facts_are_perturbed,

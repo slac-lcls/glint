@@ -155,6 +155,23 @@ def integrate_spots(data, pred, half=3, gap=2, ring=3, bg_mode="clipmean"):
                       the mean; the gap grows as the data get sparser (+14.7 at lambda=0.3). Kept
                       because every intensity GLINT produced before this change used it, so it is
                       the only way to reproduce those numbers.
+
+                      ON REAL DATA THE OFFSET IS 13x THE SYNTHETIC ESTIMATE, and it games R_split
+                      (the glint#129 A/B: cxil1015922 r0033, 2,547,616 reflection pairs, job
+                      35836938). Cheetah-corrected frames have a near-zero float annulus with a
+                      long right tail -- nothing like Poisson counts -- so the median under-
+                      subtracts by +49.7 counts/reflection there, not +3.79. That offset pads
+                      R_split's denominator without touching its numerator, so raw R_split REWARDS
+                      the bias: ~90% of the median arm's 6.3-point R_split "advantage" vanished
+                      when the measured offset was added back onto every merged clipmean I (33.0%
+                      -> 27.2%), while CC* did not move under the shift. Two rules follow: never
+                      judge a background estimator by raw R_split, and quote ``bg_mode`` next to
+                      the CrystFEL version and flags with any merge number this route produced. At
+                      matched intensity scale the real residual on that data was -0.005 CC* under
+                      unity (concentrated in the weak high-resolution shells; inside repeat spread
+                      under partiality) and +0.5-0.9 points R_split -- measured, single-dataset,
+                      and NOT evidence that the median is the better estimator, since its raw
+                      advantage is exactly the defect glint#131 identified.
       ``"mean"``      the plain mean: unbiased, and destroyed by one hot pixel in the annulus.
                       Diagnostic only -- it is the reference the other two are measured against.
     """

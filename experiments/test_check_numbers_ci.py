@@ -478,6 +478,9 @@ ARITHMETIC_PERTURBATIONS = [
     # identity must fire on a fractional per-N count, not truncate it to a pass.
     ({"subset_draws_total": 3250},                    "subset_draws_total"),
     ({"subset_draws_per_n": 400.9},                   "subset_draws_total"),
+    # seeds was the one input of the draw identity never perturbed -- a literal 8 in place of the
+    # FACTS lookup left every case above green (Copilot review of #163, round 4)
+    ({"subset_seeds": 7},                             "subset_draws_total"),
     ({"recov_r0278_n12_pct": 90.4},                   "would be 12"),
     ({"nstar_r0278": 32},                             "moved without the measurement"),
     ({"nstar_r0058": 24},                             "moved without the measurement"),
@@ -539,7 +542,7 @@ def _s16_prose(**edit) -> str:
     context-free, would test a weaker rule than the one that ships.
     """
     v = dict(per_n=f"{_cn.FACTS['subset_draws_per_n']:d}",
-             seeds="eight",
+             seeds=_cn._numword(_cn.FACTS['subset_seeds']),   # co-moves with FACTS, like the needle
              idx278=f"{_cn.FACTS['indexed_r0278']:d}",
              idx058=f"{_cn.FACTS['indexed_r0058']:d}",
              draws=f"{_cn.FACTS['subset_draws_total']:d}",
@@ -631,6 +634,15 @@ def test_nstar32_exemption_is_sentence_scoped():
              "The reconstructed protocol gives $N^{\\star}=32$ for r0058.")
     assert _fires(mixed, "nstar-32-retired"), (
         "a live N*=32 rode the previous sentence's retirement vocabulary out")
+    question = ("Was the previously quoted $N^{\\star}=32$ reproduced? "
+                "The protocol gives $N^{\\star}=32$ for r0058.")
+    assert _fires(question, "nstar-32-retired"), (
+        "a '?' sentence end was read as one sentence -- the live second claim passed (round 4)")
+    one_sentence = ("The previously quoted $N^{\\star}=32$ does not reproduce, "
+                    "but the reconstructed protocol gives $N^{\\star}=32$ for r0058.")
+    assert _fires(one_sentence, "nstar-32-retired"), (
+        "a comma joined a retirement and a live claim into one sentence and both were exempted "
+        "(round 4) -- the exemption must be clause-scoped, not sentence-scoped")
     decimal_span = ("The previously quoted $N^{\\star}=32$ (recovery 93.4\\% at $N=24$) "
                     "does not reproduce here.")
     assert not _fires(decimal_span, "nstar-32-retired"), (

@@ -632,13 +632,18 @@ class Rule:
     needs: tuple[str, ...] = ()      # if set: a match is OK when one of these is nearby
     exempt: tuple[str, ...] = ()     # a match is OK when one of these is nearby (e.g. "LEGACY")
     window: int = 240                # how far to look for `needs` / `exempt`, in characters
-    # Scope `exempt` to the SENTENCE containing the match instead of the character window. The
+    # Scope `exempt` to the CLAUSE containing the match instead of the character window. The
     # window form lets one properly-retired mention exempt a SEPARATE live claim in the same
     # paragraph -- "The previously quoted N*=32 does not reproduce. The reconstructed protocol
-    # gives N*=32." passes whole, because the second match sits within 240 chars of the first
-    # sentence's retirement vocabulary (Copilot review of #163, round 3). Sentence boundaries are
-    # `.` followed by whitespace/EOF, so decimals ("93.4%") do not truncate the segment.
-    sentence_exempt: bool = False
+    # gives N*=32." passes whole (round 3) -- and full-sentence scope fails the same way one
+    # step later, through a comma: "...does not reproduce, but the reconstructed protocol gives
+    # N*=32." is ONE sentence, so a sentence-level exemption covers both matches (round 4). The
+    # clause boundaries are sentence enders (., ?, ! followed by whitespace/EOF -- decimals like
+    # "93.4%" do not split) plus , ; : -- so the retirement words must sit in the same clause as
+    # the value they retire. The cost is deliberate: a retirement phrased across a comma
+    # ("N*=32, as previously quoted, does not reproduce") false-fires and the message says how
+    # to rephrase; the guard prefers a rare loud false positive to a silent fail-open.
+    clause_exempt: bool = False
     flags: int = re.I
     _rx: re.Pattern = field(init=False, repr=False)
 
@@ -726,12 +731,14 @@ RETIRED = [
          # so the live, wrong sentence "the reconstructed protocol gives N* = 32" sat inside the
          # exemption and passed silently (Copilot review of #163). The manuscript's real sentence
          # carries "does not reproduce" and "previously quoted" and stays exempt without it.
-         # sentence_exempt, because the window form fails open one step later: a properly retired
-         # mention exempts a SEPARATE live N*=32 within 240 chars of it (round 3). The retirement
-         # must sit in the SAME SENTENCE as the value it retires.
+         # clause_exempt, because the window form fails open one step later (a properly retired
+         # mention exempts a SEPARATE live N*=32 within 240 chars, round 3) and full-sentence
+         # scope one step after that (a comma joins a retirement and a live claim into one
+         # sentence, round 4). The retirement must sit in the SAME CLAUSE as the value it
+         # retires.
          exempt=("does not reproduce", "previously quoted",
                  "would have correctly reported"),
-         sentence_exempt=True),
+         clause_exempt=True),
     Rule("blind-pair-adjacent-retired", r"\b76\s*\\?%[^.]{0,30}?\b71\s*\\?%",
          f"'76% vs 71%' is the RETIRED blind pair -- the counts moved to "
          f"{FACTS['glint1_strict_of120']}/120 and {FACTS['xgandalf_blind_strict_of120']}/120 while "
@@ -1112,6 +1119,16 @@ AMBIGUOUS = [
 # test would force one of the two to be excluded. They interpolate FACTS for the reason
 # blind-rate-swap's `instead` does: a hard-coded number here is a second copy of the measurement,
 # and second copies drift.
+def _numword(n) -> str:
+    """The prose rendering of a small count, so a needle built from FACTS accepts the manuscript's
+    "eight random seeds" AND tracks a corrected FACTS value instead of a hardcoded word -- a
+    hardcoded "eight" bypassed the source of truth: correcting subset_seeds and the total together
+    kept the arithmetic green while the rule still demanded eight (Copilot review of #163, r4)."""
+    words = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight",
+             9: "nine", 10: "ten", 11: "eleven", 12: "twelve"}
+    return words.get(int(n), str(int(n)))
+
+
 def _lit(v: str) -> str:
     """A FACTS value as a regex matching the number AS WRITTEN, not as a digit-run inside another.
 
@@ -1211,7 +1228,7 @@ REQUIRED = [
     Required("s16-subset-recovery-facts",
              r"Consensus\s+recovery\s+from\s+random\s+subsets",
              (_lit(f"{FACTS['subset_draws_per_n']:d}") + r"\$?\s+draws\s+per\s+\$?N",
-              r"(?:eight|8)\s+random\s+seeds",
+              rf"(?:{_numword(FACTS['subset_seeds'])}|{FACTS['subset_seeds']:d})\s+random\s+seeds",
               r"r0278[^.]{0,30}?" + _lit(f"{FACTS['indexed_r0278']:d}"),
               r"r0058[^.]{0,30}?" + _lit(f"{FACTS['indexed_r0058']:d}"),
               _lit(f"{FACTS['subset_draws_total']:d}") + r"\$?\s+draws\s+per\s+point",
@@ -1220,9 +1237,9 @@ REQUIRED = [
               # gap fails TWICE here -- open on "89.8% at N=12 for r0058 and ... for r0278" (it
               # lazily scans past the wrong run tag, round 3), and closed on the REAL manuscript,
               # whose gap contains the decimal in "96.1%" -- so the sentence boundary is a period
-              # followed by whitespace, exactly as _in_sentence defines it, not any period.
+              # followed by whitespace, exactly as _in_clause's sentence enders, not any period.
               _lit(f"{FACTS['recov_r0278_n12_pct']:g}")
-              + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*12\$?(?:(?!r0058)(?!\.\s)[\s\S]){0,80}?"
+              + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*12\$?(?:(?!r0058)(?![.?!]\s)[\s\S]){0,80}?"
                 r"for\s+r0278",
               _lit(f"{FACTS['recov_r0278_n16_pct']:g}")
               + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*16\$?\s+for\s+r0278",
@@ -1324,16 +1341,21 @@ def _near(hay: str, pos: int, words: tuple[str, ...], window: int) -> bool:
     return any(w.lower() in seg for w in words)
 
 
-def _in_sentence(hay: str, pos: int, words: tuple[str, ...]) -> bool:
-    """Like _near, but the segment is the sentence containing `pos` (see Rule.sentence_exempt).
+_CLAUSE_END = re.compile(r"[.?!](?=\s|$)|[,;:]")     # see Rule.clause_exempt for why each is here
 
-    A sentence end is a period followed by whitespace or EOF, so decimals and version numbers do
-    not split the segment; parentheses and LaTeX markup pass through untouched.
+
+def _in_clause(hay: str, pos: int, words: tuple[str, ...]) -> bool:
+    """Like _near, but the segment is the CLAUSE containing `pos` (see Rule.clause_exempt).
+
+    Boundaries are sentence enders -- ., ? or ! followed by whitespace or EOF, so decimals and
+    version numbers do not split -- plus , ; and :. `?`/`!` matter: "Was the quoted N*=32
+    reproduced? The protocol gives N*=32." is two sentences, and a period-only boundary read
+    them as one, exempting the live second claim (Copilot review of #163, round 4).
     """
     lo = 0
-    for m in re.finditer(r"\.(?=\s|$)", hay[:pos]):
+    for m in _CLAUSE_END.finditer(hay[:pos]):
         lo = m.end()
-    m = re.search(r"\.(?=\s|$)", hay[pos:])
+    m = _CLAUSE_END.search(hay[pos:])
     hi = pos + m.start() + 1 if m else len(hay)
     seg = hay[lo:hi].lower()
     return any(w.lower() in seg for w in words)
@@ -1361,8 +1383,8 @@ def scan(path: Path, text: str) -> list[str]:
     for group, rules in (("RETIRED", RETIRED), ("OVERCLAIM", OVERCLAIM), ("AMBIGUOUS", AMBIGUOUS)):
         for rule in rules:
             for m in rule._rx.finditer(norm):
-                if rule.exempt and (_in_sentence(norm, m.start(), rule.exempt)
-                                    if rule.sentence_exempt
+                if rule.exempt and (_in_clause(norm, m.start(), rule.exempt)
+                                    if rule.clause_exempt
                                     else _near(norm, m.start(), rule.exempt, rule.window)):
                     continue
                 if rule.needs and _near(norm, m.start(), rule.needs, rule.window):

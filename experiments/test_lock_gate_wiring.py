@@ -148,6 +148,24 @@ def test_live_gate_defaults_and_window_are_pinned():
     got = StreamDriver._inliers(None, q, M)
     assert got == 2, f"_inliers counted {got} of the straddle set, expected 2"
 
+    # ...and finally that _inliers READS the constant rather than merely agreeing with it. Every
+    # probe above is fixed at the current 0.15, so re-inlining the original `< 0.15` literal --
+    # the exact regression this PR exists to prevent -- leaves them all green (Copilot review of
+    # #170, round 4). Only moving the constant and watching the behavior follow can tell the two
+    # apart: with the window widened to 0.20 every row's residual (0.149, 0.151, 0.15, 0.149,
+    # 0.151) falls inside, so the count must rise 2 -> 5. Restored in a finally, so a failure
+    # here cannot leak a bogus tolerance into the rest of the suite.
+    import glint.stream_driver as _sd
+    _saved = _sd.HKL_TOL
+    try:
+        _sd.HKL_TOL = 0.20
+        widened = StreamDriver._inliers(None, q, M)
+    finally:
+        _sd.HKL_TOL = _saved
+    assert widened == 5, (
+        f"_inliers counted {widened} at a widened window, expected 5 -- it is not reading "
+        "HKL_TOL, so the canonical constant is decorative and a re-inlined literal would pass")
+
 
 if __name__ == "__main__":
     tests = (test_blind_driver_gets_the_pool_keyed_gate_by_default,

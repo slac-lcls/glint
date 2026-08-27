@@ -482,6 +482,45 @@ ARITHMETIC_PERTURBATIONS = [
 ]
 
 
+GLINT_FAST = ROOT / "glint" / "glint_fast.py"
+
+# (source-mutation, expected fragment of the failure) -- the gate tie's FUNCTIONAL half.
+# ARITHMETIC_PERTURBATIONS moves FACTS and proves the tie notices; these move the SHIPPED SOURCE
+# and prove the tie notices that too, which is the half a FACTS perturbation cannot reach:
+# re-inlining a literal into matched()'s default or a gpass() operand leaves FACTS and the
+# declarations in perfect agreement while the shipped gate diverges from the published one
+# (Copilot review of #170, round 4). The expression case belongs here for the same reason: the
+# tie's regex read only a numeric PREFIX, so "GATE_TOL = 0.15 + 0.01" parsed as 0.15 (round 3).
+GATE_SOURCE_MUTATIONS = [
+    ("GATE_TOL = 0.15  ", "GATE_TOL = 0.15 + 0.01  ",     "GATE_TOL could not be located"),
+    ("def matched(M, q, tol=GATE_TOL):", "def matched(M, q, tol=0.15):",
+     "matched()'s tol default no longer reads GATE_TOL"),
+    (">= GATE_FRAC)", ">= 0.25)",  "gpass()'s fraction test no longer reads GATE_FRAC"),
+    (">= GATE_MIN)",  ">= 10)",    "gpass()'s count test no longer reads GATE_MIN"),
+]
+
+
+def test_gate_tie_catches_a_severed_functional_use():
+    """Move the SHIPPED SOURCE, not FACTS, and the tie must still fail.
+
+    Restored in a finally: a failure here must not leave a mutated glint_fast.py behind for the
+    rest of the suite (or the working tree).
+    """
+    original = GLINT_FAST.read_text(encoding="utf-8")
+    try:
+        for old, new, expect in GATE_SOURCE_MUTATIONS:
+            assert old in original, f"anchor vanished from glint_fast.py: {old!r}"
+            GLINT_FAST.write_text(original.replace(old, new, 1), encoding="utf-8")
+            bad, _ = _cn.check_arithmetic()
+            assert any(expect in b for b in bad), (
+                f"severing {old!r} produced no failure mentioning {expect!r}; got:\n"
+                + ("\n".join(bad) or "  (nothing at all -- the functional check is gone)"))
+    finally:
+        GLINT_FAST.write_text(original, encoding="utf-8")
+    bad, _ = _cn.check_arithmetic()
+    assert not any("gate" in b.lower() for b in bad), "glint_fast.py was not restored cleanly"
+
+
 def test_check_arithmetic_is_green_on_the_shipped_table():
     bad, _ = _cn.check_arithmetic()
     assert not bad, "the shipped FACTS table contradicts itself:\n" + "\n".join(bad)
@@ -612,6 +651,7 @@ if __name__ == "__main__":
              test_required_stays_silent_without_its_trigger,
              test_blind_pair_rules_fire_and_stay_silent,
              test_submission_files_are_default_targets,
+             test_gate_tie_catches_a_severed_functional_use,
              test_check_arithmetic_is_green_on_the_shipped_table,
              test_each_arithmetic_guard_fires_when_its_facts_are_perturbed,
              test_perturbations_are_restored,

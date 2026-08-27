@@ -1350,7 +1350,11 @@ def check_arithmetic() -> list[str]:
     # reported there: a silently skipped check is a comment).
     for _cname, _fkey in (("GATE_TOL", "gate_tol"), ("GATE_FRAC", "gate_frac"),
                           ("GATE_MIN", "gate_min")):
-        _gm = re.search(rf"^{_cname}\s*=\s*([\d.]+)", _gf_s, re.M)
+        # ANCHORED TO END OF LINE: the bare ([\d.]+) form read only the numeric PREFIX, so
+        # "GATE_TOL = 0.15 + 0.01" was parsed as 0.15 and the guard stayed green while the
+        # shipped gate was 0.16 (Copilot review of #170, round 3). A trailing comment is allowed;
+        # anything else -- an expression, a name, a call -- now fails closed as unlocatable.
+        _gm = re.search(rf"^{_cname}\s*=\s*([\d.]+)\s*(?:#.*)?$", _gf_s, re.M)
         if not _gf_s:
             bad.append(f"  FACTS: {_gf_p} unreadable, so {_fkey} is unchecked and the strict gate "
                        "is defined by nothing")
@@ -1361,6 +1365,26 @@ def check_arithmetic() -> list[str]:
             bad.append(f"  FACTS: {_fkey} is {F[_fkey]} but glint_fast ships {_cname} = "
                        f"{_gm.group(1)}; the shipped gate is no longer the published gate, so "
                        "every gated rate in the paper is defined by a constant nobody measured")
+
+    # ...and that the constants are actually USED by the two functions that define the gate.
+    # The loop above proves only that FACTS matches the DECLARATIONS: re-inlining a literal into
+    # matched()'s default or either gpass() operand left the suite and the guard green while the
+    # shipped strict gate diverged from the published one (Copilot review of #170, round 4) --
+    # the same "agrees with the value" vs "reads the constant" gap the _inliers pin closes for the
+    # live gate. It has to be a SOURCE check for matched(): its `tol=GATE_TOL` default is bound
+    # once at def time, so no runtime patch can reach it.
+    if _gf_s:
+        _uses = ((r"def\s+matched\s*\([^)]*\btol\s*=\s*GATE_TOL\b", "matched()'s tol default",
+                  "GATE_TOL"),
+                 (r"def\s+gpass\b[\s\S]{0,400}?\bGATE_FRAC\b", "gpass()'s fraction test",
+                  "GATE_FRAC"),
+                 (r"def\s+gpass\b[\s\S]{0,400}?\bGATE_MIN\b", "gpass()'s count test",
+                  "GATE_MIN"))
+        for _pat, _where, _cname in _uses:
+            if not re.search(_pat, _gf_s):
+                bad.append(f"  FACTS: {_where} no longer reads {_cname} in glint/glint_fast.py -- "
+                           f"the canonical constant is decorative there, so the shipped gate can "
+                           f"drift from the published one with every check still green")
 
     # The peak-weight block's headline is "every soft weighting is SIGNIFICANTLY worse", which is a
     # claim about p-values; check them as such, from the stored splits, and require the reconciling

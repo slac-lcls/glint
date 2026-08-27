@@ -472,6 +472,13 @@ ARITHMETIC_PERTURBATIONS = [
     # one reaches this check and nothing else.
     ({"pk45_ccstar": 0.915},                          "collapsed into one number"),
     ({"jungfrau_ccstar": 0.90},                       "collapsed into one number"),
+    # THE GATE SOURCE-TIE, one perturbation per constant: the tie compares FACTS to the shipped
+    # glint_fast source, so perturbing FACTS away from the source must produce the drift message.
+    # Without these, deleting the tie loop left both the unit suite and the guard green -- and
+    # preventing exactly that drift is the feature (Copilot review of #170, round 2).
+    ({"gate_tol": 0.16},                              "gate_tol"),
+    ({"gate_frac": 0.26},                             "gate_frac"),
+    ({"gate_min": 12},                                "gate_min"),
     # THE S16 GUARDS, one perturbation per branch -- they were mutation-verified by hand when
     # added and never encoded, so removing any of them left the committed suite green (Copilot
     # review of #163, round 2). The 400.9 case is the int()-truncation trap specifically: the
@@ -493,6 +500,60 @@ ARITHMETIC_PERTURBATIONS = [
     ({"recov_r0278_n16_pct": 88.0},                   "BELOW the 90% bar"),
     ({"recov_r0058_n16_pct": 88.0},                   "BELOW the 90% bar"),
 ]
+
+
+GLINT_FAST = ROOT / "glint" / "glint_fast.py"
+
+# (source-mutation, expected fragment of the failure) -- the gate tie's FUNCTIONAL half.
+# ARITHMETIC_PERTURBATIONS moves FACTS and proves the tie notices; these move the SHIPPED SOURCE
+# and prove the tie notices that too, which is the half a FACTS perturbation cannot reach:
+# re-inlining a literal into matched()'s default or a gpass() operand leaves FACTS and the
+# declarations in perfect agreement while the shipped gate diverges from the published one
+# (Copilot review of #170, round 4). The expression case belongs here for the same reason: the
+# tie's regex read only a numeric PREFIX, so "GATE_TOL = 0.15 + 0.01" parsed as 0.15 (round 3).
+GATE_SOURCE_MUTATIONS = [
+    ("GATE_TOL = 0.15  ", "GATE_TOL = 0.15 + 0.01  ", ("GATE_TOL", "could not be located")),
+    ("def matched(M, q, tol=GATE_TOL):", "def matched(M, q, tol=0.15):",
+     ("matched()", "tol default", "GATE_TOL")),
+    ("m = matched_strict(M, q)", "m = matched(M, q)", ("gpass(", "matched_strict")),
+    # The RETURN EXPRESSION, which a regex over the source could not distinguish from the same
+    # word in the docstring above it (Copilot review of #170, round 5) -- the tie reads the
+    # parsed body now, so this severing is visible.
+    ("return int((np.abs(r).max(1) < GATE_TOL).sum())",
+     "return int((np.abs(r).max(1) < 0.15).sum())", ("matched_strict(", "GATE_TOL")),
+    # The refactor that defeats a NAME-PRESENCE check: reference the constant, then compare
+    # against a literal. Only inspecting the comparison itself sees it.
+    ("    return int((np.abs(r).max(1) < GATE_TOL).sum())",
+     "    tol = GATE_TOL\n    return int((np.abs(r).max(1) < 0.16).sum())",
+     ("matched_strict(", "GATE_TOL")),
+    (">= GATE_FRAC)", ">= 0.25)", ("gpass(", "GATE_FRAC")),
+    (">= GATE_MIN)",  ">= 10)",   ("gpass(", "GATE_MIN")),
+]
+
+
+def test_gate_tie_catches_a_severed_functional_use():
+    """Move the SHIPPED SOURCE, not FACTS, and the tie must still fail.
+
+    Restored in a finally: a failure here must not leave a mutated glint_fast.py behind for the
+    rest of the suite (or the working tree).
+    """
+    original = GLINT_FAST.read_text(encoding="utf-8")
+    try:
+        for old, new, expect in GATE_SOURCE_MUTATIONS:
+            assert old in original, f"anchor vanished from glint_fast.py: {old!r}"
+            GLINT_FAST.write_text(original.replace(old, new, 1), encoding="utf-8")
+            bad, _ = _cn.check_arithmetic()
+            # TOKENS, not a prose fragment. Matching the guard's sentence verbatim made this
+            # test fail three separate times today purely because the MESSAGE was reworded while
+            # the check kept working -- a red build that says nothing about the code under test.
+            # The tokens are what the failure must identify: which function, and which constant.
+            assert any(all(tok in b for tok in expect) for b in bad), (
+                f"severing {old!r} produced no failure naming all of {expect!r}; got:\n"
+                + ("\n".join(bad) or "  (nothing at all -- the functional check is gone)"))
+    finally:
+        GLINT_FAST.write_text(original, encoding="utf-8")
+    bad, _ = _cn.check_arithmetic()
+    assert not any("gate" in b.lower() for b in bad), "glint_fast.py was not restored cleanly"
 
 
 def test_check_arithmetic_is_green_on_the_shipped_table():
@@ -873,6 +934,7 @@ if __name__ == "__main__":
              test_nstar32_rule_fires_live_and_stays_exempt_when_retired,
              test_every_test_in_this_file_is_registered,
              test_submission_files_are_default_targets,
+             test_gate_tie_catches_a_severed_functional_use,
              test_check_arithmetic_is_green_on_the_shipped_table,
              test_each_arithmetic_guard_fires_when_its_facts_are_perturbed,
              test_perturbations_are_restored,

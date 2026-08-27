@@ -20,7 +20,7 @@ WT = "/sdf/home/s/smarches/glint_streamfix_wt"
 sys.path.insert(0, WT)
 sys.path.insert(0, WT + "/experiments")
 import glint.glint_fast as gf
-from glint.glint_fast import matched
+from glint.glint_fast import matched_strict
 from glint.multishot import same_lattice
 from glint.lattice import cell_to_Ar, cell_params
 from glint.predict import _canonical_axes
@@ -29,7 +29,7 @@ import glint.stream_driver as sd
 
 from cell_refine_measure import (strict_gate, push_blind_q, frac_of, dist_line, cell_of, refit,
                                  Mc_from_cell, register, run_arm, score, dev,
-                                 LYSO, LYSO_CELL, GATE_FRAC, TOL, FRAMES_PATH)
+                                 LYSO, LYSO_CELL, GATE_FRAC, FRAMES_PATH)
 
 
 def mcnemar(a_ok, b_ok):
@@ -133,7 +133,7 @@ def main():
         for rule in ("naive", "robust", "symm"):
             head, rest = post[:K], post[K:]
             r_head = register(frames, head, drv.Mc)
-            pool = [(cell_of(r_head[i]), matched(r_head[i], frames[i], TOL) / len(frames[i]))
+            pool = [(cell_of(r_head[i]), matched_strict(r_head[i], frames[i]) / len(frames[i]))
                     for i in head if r_head[i] is not None and abs(np.linalg.det(r_head[i])) >= 1.0]
             C = refit(pool, rule)
             if C is None:

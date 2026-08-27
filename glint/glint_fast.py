@@ -536,7 +536,22 @@ def load(p):
     return fr
 
 
-def matched(M, q, tol=0.15):
+# The paper's strict gate, in one place: a frame counts as indexed iff same_lattice(M, truth)
+# AND matched_strict(M, q)/len(q) >= GATE_FRAC AND matched_strict(M, q) >= GATE_MIN, where
+# matched_strict() counts peaks with |q @ M - round(q @ M)| < GATE_TOL componentwise. These
+# three values are PUBLISHED (every gated rate in the paper is defined by them) and are tied
+# to check_numbers.py FACTS by a source regex, so changing them here fails the guard until the
+# deliverables are re-measured. matched_strict() is separated from the configurable matched()
+# so that gpass() is never accidentally routed through the QDIST=1 reciprocal-distance scorer,
+# which ignores GATE_TOL entirely (Copilot review of glint#170).
+# The ~12 experiment scripts that still inline the same triple are historical copies of THIS
+# definition; new code should import these names instead of re-declaring them.
+GATE_TOL = 0.15                      # near-integer window on q @ M, per component
+GATE_FRAC = 0.25                     # minimum matched fraction of the frame's peaks
+GATE_MIN = 10                        # minimum matched reflection count
+
+
+def matched(M, q, tol=GATE_TOL):
     if M is None:
         return 0
     r = q @ M - np.rint(q @ M)
@@ -545,9 +560,26 @@ def matched(M, q, tol=0.15):
     return int((np.abs(r).max(1) < tol).sum())
 
 
+def matched_strict(M, q):
+    """THE PUBLISHED GATE's matcher: componentwise |q@M - round(q@M)| < GATE_TOL, ALWAYS.
+
+    Separate from `matched` because that one is deliberately configurable -- with QDIST=1 it
+    switches to a reciprocal-distance ball at QDTOL and stops consulting GATE_TOL at all. That is
+    a legitimate knob for indexing/scoring experiments, but it must never reach the strict gate:
+    routed through `matched`, `gpass` would have applied the published GATE_FRAC/GATE_MIN
+    thresholds to counts produced by a different matching rule, and every source tie would still
+    have read green (Copilot review of glint#170). Under the shipped default QDIST=0 the two
+    functions are identical, so no published number moves.
+    """
+    if M is None:
+        return 0
+    r = q @ M - np.rint(q @ M)
+    return int((np.abs(r).max(1) < GATE_TOL).sum())
+
+
 def gpass(M, q):
     if M is None or not same_lattice(M, LYSO): return (0, 0)
-    m = matched(M, q); return (int(m / len(q) >= 0.25), int(m >= 10))
+    m = matched_strict(M, q); return (int(m / len(q) >= GATE_FRAC), int(m >= GATE_MIN))
 
 
 if __name__ == "__main__":

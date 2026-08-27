@@ -34,6 +34,7 @@ flags. Do not silence a rule to make a deliverable pass.
 """
 from __future__ import annotations
 
+import ast
 import os
 import re
 import shutil
@@ -64,6 +65,15 @@ FACTS: dict[str, float | str] = {
     "fused_fps":           3800.0,  # = 1000/fused_b120_ms
     "saturating_batch":    64,      # one block per frame; 108 SMs on an A100
     "indexing_rate":       "75/114",
+    # The strict gate every "indexed" count in the paper is defined by: same_lattice(M, truth) AND
+    # matched frac >= gate_frac AND matched >= gate_min, with matched counting peaks at
+    # |q @ M - round| < gate_tol per component. Canonical home: glint/glint_fast.py GATE_TOL /
+    # GATE_FRAC / GATE_MIN beside matched()/gpass(). Read from the source below (same device as
+    # pw_qpow_default): if the shipped constants move, every gated rate above is measured against
+    # a gate the paper does not describe.
+    "gate_tol":            0.15,    # near-integer window on q @ M, per component
+    "gate_frac":           0.25,    # minimum matched fraction of the frame's peaks
+    "gate_min":            10,      # minimum matched reflection count
     # Percentages are ROUNDED, not floored (changed 2026-08-02). tab:summary previously mixed the two:
     # DIALS printed 27% for 32/120 = 26.67 (rounded) while GLINT-(1) printed 76% for 92/120 = 76.67
     # (floored), so three "correct" values for one measurement were in circulation. Counts are now
@@ -1553,7 +1563,16 @@ def check_arithmetic() -> list[str]:
     # the source rather than to a comment about the source. Same defect the M3 block had: a fact
     # nothing reads is a comment, and this one silently defines what "binary" even means here.
     _gf_p = Path(__file__).resolve().parent.parent / "glint" / "glint_fast.py"
-    _gf_s = _gf_p.read_text(encoding="utf-8") if _gf_p.exists() else ""
+    # try/except, not an exists() gate: read_text can raise past exists() (permissions, encoding,
+    # a transient FS) and an exception here crashes the whole guard instead of producing the
+    # per-constant "unreadable" reports the QPOW and gate ties promise (Copilot review of #170).
+    try:
+        _gf_s = _gf_p.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        # UnicodeError too: read_text(encoding="utf-8") raises UnicodeDecodeError -- which is NOT
+        # an OSError -- on invalid UTF-8, and that is precisely an "unreadable file" for a source
+        # tie (Copilot review of #170, round 2).
+        _gf_s = ""
     _qm = re.search(r'QPOW = float\(os\.environ\.get\("QPOW", "([\d.]+)"\)\)', _gf_s)
     if not _gf_s:
         bad.append(f"  FACTS: {_gf_p} unreadable, so pw_qpow_default is unchecked and the peak-"
@@ -1565,6 +1584,114 @@ def check_arithmetic() -> list[str]:
         bad.append(f"  FACTS: pw_qpow_default is {F['pw_qpow_default']} but glint_fast ships "
                    f"{_qm.group(1)}; the 'binary' arm is no longer the shipped weight, so every "
                    "weighting comparison is against a baseline nobody runs")
+
+    # The strict gate, tied to its canonical source the same way. glint_fast's GATE_TOL/GATE_FRAC/
+    # GATE_MIN (beside matched()/gpass()) define what "indexed" means for every gated rate in the
+    # paper; ~a dozen experiment scripts inline the same triple, but this is the copy new code is
+    # told to import, so this is the copy that must not drift. Reuses _gf_p/_gf_s from the QPOW
+    # tie above (the unreadable-file case is reported per-constant here for the same reason it is
+    # reported there: a silently skipped check is a comment).
+    for _cname, _fkey in (("GATE_TOL", "gate_tol"), ("GATE_FRAC", "gate_frac"),
+                          ("GATE_MIN", "gate_min")):
+        # ANCHORED TO END OF LINE: the bare ([\d.]+) form read only the numeric PREFIX, so
+        # "GATE_TOL = 0.15 + 0.01" was parsed as 0.15 and the guard stayed green while the
+        # shipped gate was 0.16 (Copilot review of #170, round 3). A trailing comment is allowed;
+        # anything else -- an expression, a name, a call -- now fails closed as unlocatable.
+        _gm = re.search(rf"^{_cname}\s*=\s*([\d.]+)\s*(?:#.*)?$", _gf_s, re.M)
+        if not _gf_s:
+            bad.append(f"  FACTS: {_gf_p} unreadable, so {_fkey} is unchecked and the strict gate "
+                       "is defined by nothing")
+        elif _gm is None:
+            bad.append(f"  FACTS: {_cname} could not be located in glint/glint_fast.py -- the "
+                       f"{_fkey} check is dead; fix the pattern rather than dropping it")
+        elif float(_gm.group(1)) != float(F[_fkey]):
+            bad.append(f"  FACTS: {_fkey} is {F[_fkey]} but glint_fast ships {_cname} = "
+                       f"{_gm.group(1)}; the shipped gate is no longer the published gate, so "
+                       "every gated rate in the paper is defined by a constant nobody measured")
+
+    # ...and that the constants are actually USED by the two functions that define the gate.
+    # The loop above proves only that FACTS matches the DECLARATIONS: re-inlining a literal into
+    # matched()'s default or either gpass() operand left the suite and the guard green while the
+    # shipped strict gate diverged from the published one (Copilot review of #170, round 4) --
+    # the same "agrees with the value" vs "reads the constant" gap the _inliers pin closes for the
+    # live gate. It has to be a SOURCE check for matched(): its `tol=GATE_TOL` default is bound
+    # once at def time, so no runtime patch can reach it.
+    # ...and that the constants are actually USED by the functions that define the gate, read
+    # from the PARSED TREE rather than by regex. A regex over the source was satisfied by the
+    # word GATE_TOL appearing in matched_strict's DOCSTRING, so re-inlining the return
+    # comparison as `< 0.15` left the tie green -- the check was passing on prose (Copilot review
+    # of #170, round 5). ast walks the body only, so only real references count.
+    if _gf_s:
+        try:
+            _tree = ast.parse(_gf_s)
+        except SyntaxError as _exc:
+            _tree = None
+            bad.append(f"  FACTS: glint/glint_fast.py does not parse ({_exc}), so the strict-gate "
+                       "functional checks are unchecked")
+        _fns = ({n.name: n for n in ast.walk(_tree) if isinstance(n, ast.FunctionDef)}
+                if _tree is not None else {})
+
+        def _fn_body(fn):
+            """Statements in the body with the leading docstring removed."""
+            return (fn.body[1:] if (fn.body and isinstance(fn.body[0], ast.Expr)
+                                    and isinstance(fn.body[0].value, ast.Constant)
+                                    and isinstance(fn.body[0].value.value, str))
+                    else fn.body)
+
+        def _in_comparator(fn, name):
+            """True if `name` is a Name node on either side of any Compare in the body.
+
+            A plain body-names check is satisfied by `tol = GATE_TOL` followed by a return
+            comparison against a literal: the constant is referenced but the gate threshold is
+            not. Checking that it appears in a Compare node (either as `left` or in
+            `comparators`) closes that gap (Copilot review of #170, round 6).
+            """
+            for stmt in _fn_body(fn):
+                for node in ast.walk(stmt):
+                    if isinstance(node, ast.Compare):
+                        for sub in [node.left, *node.comparators]:
+                            if any(isinstance(n, ast.Name) and n.id == name
+                                   for n in ast.walk(sub)):
+                                return True
+            return False
+
+        def _called_in_body(fn, name):
+            """True if `name` is used as a called function anywhere in the body."""
+            for stmt in _fn_body(fn):
+                for node in ast.walk(stmt):
+                    if isinstance(node, ast.Call):
+                        func = node.func
+                        if isinstance(func, ast.Name) and func.id == name:
+                            return True
+            return False
+
+        # Each entry: (fn_name, needed_name, check_fn, description_of_what_is_pinned).
+        # Constants must appear in comparators (not merely referenced), so that
+        # `tol = GATE_TOL; return ... < 0.15` is caught; function references need only
+        # appear as a call site.
+        for _fn, _need, _check, _what in (
+                ("matched_strict", "GATE_TOL", _in_comparator, "the strict window"),
+                ("gpass", "matched_strict", _called_in_body, "the strict matcher"),
+                ("gpass", "GATE_FRAC", _in_comparator, "the fraction bar"),
+                ("gpass", "GATE_MIN", _in_comparator, "the count bar")):
+            if _tree is None:
+                break
+            if _fn not in _fns:
+                bad.append(f"  FACTS: glint/glint_fast.py defines no {_fn}() -- the strict gate's "
+                           f"canonical path is gone, so {_what} is defined by nothing")
+            elif not _check(_fns[_fn], _need):
+                bad.append(f"  FACTS: {_fn}()'s BODY no longer uses {_need} in the required "
+                           f"position in glint/glint_fast.py -- {_what} has been re-inlined or "
+                           "indirected, so the shipped gate can drift from the published one with "
+                           "every other check green")
+        # matched() stays configurable, but its default must remain the canonical constant.
+        _m = _fns.get("matched")
+        if _tree is not None and _m is not None:
+            _defs = [d for d in _m.args.defaults if isinstance(d, ast.Name) and d.id == "GATE_TOL"]
+            if not _defs:
+                bad.append("  FACTS: matched()'s tol default is no longer GATE_TOL in "
+                           "glint/glint_fast.py -- the configurable scorer has stopped defaulting "
+                           "to the published window")
 
     # The peak-weight block's headline is "every soft weighting is SIGNIFICANTLY worse", which is a
     # claim about p-values; check them as such, from the stored splits, and require the reconciling

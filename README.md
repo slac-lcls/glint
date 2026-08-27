@@ -26,7 +26,7 @@ committed here, and what does not reproduce from this checkout at all.
 pip install -e .        # from a checkout; CPU works, CUDA is used automatically if available
 ```
 
-Requires Python ≥ 3.9 and `numpy`, `scipy`, `torch` (installed automatically).
+Requires Python ≥ 3.9 and `numpy`, `scipy`, `torch`, `h5py` (installed automatically).
 
 ## Command-line
 

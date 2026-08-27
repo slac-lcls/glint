@@ -14,8 +14,8 @@ B=64 -- 0.17 at B=120 -- integrate
 (the anneal and refine kernels take one thread-block per frame, so the batch sets GPU occupancy;
 obj splits its candidates across blocks since #165 but that did not remove the need to batch).
 B=64 is the driver default and is NOT a saturation point: B=120 measures 26% faster (0.214 ->
-0.170 ms/frame fp64), so the batch is a latency/throughput trade, not a knee. While
-integration is per-frame and needs THAT frame's pixels. Uploading the frame twice would cost ~3-5 ms
+0.170 ms/frame fp64), so the batch is a latency/throughput trade, not a knee. Integration is
+per-frame and needs THAT frame's pixels. Uploading the frame twice would cost ~3-5 ms
 for a 16 Mpix frame, an order of magnitude more than either kernel. So the driver holds a ring of B
 frames resident on the device, indexes them as one batch, and then integrates each against the
 pixels that are still sitting there.

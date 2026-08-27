@@ -1321,6 +1321,17 @@ def _near(hay: str, pos: int, words: tuple[str, ...], window: int) -> bool:
     return any(w.lower() in seg for w in words)
 
 
+def _near_sentence(hay: str, pos: int, words: tuple[str, ...]) -> bool:
+    """Whether one of `words` occurs in the sentence or clause containing `pos`."""
+    before = hay[:pos]
+    start = max(before.rfind("\n\n") + 2,
+                max((m.end() for m in re.finditer(r"[.!?;](?:\s|$)", before)), default=0))
+    after = re.search(r"[.!?;](?:\s|$)", hay[pos:])
+    end = pos + after.start() + 1 if after else len(hay)
+    seg = hay[start:end].lower()
+    return any(word.lower() in seg for word in words)
+
+
 def scan(path: Path, text: str) -> list[str]:
     """Return a list of human-readable failures for one file."""
     fails: list[str] = []
@@ -1347,7 +1358,7 @@ def scan(path: Path, text: str) -> list[str]:
                     continue
                 if rule.needs and _near(norm, m.start(), rule.needs, rule.window):
                     continue
-                if rule.needs_all and all(_near(norm, m.start(), group, rule.window)
+                if rule.needs_all and all(_near_sentence(norm, m.start(), group)
                                           for group in rule.needs_all):
                     continue
                 ln = lineno(m.start())

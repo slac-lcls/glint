@@ -23,6 +23,7 @@ dependencies = [
     "numpy>=1.21",
     "scipy>=1.7",
     "torch>=1.12",          # CPU works out of the box; CUDA is used automatically if present
+    "h5py>=3",              # imported unguarded by the shipped HDF5/CXI paths (--images, --integrate)
 ]
 
 [project.scripts]

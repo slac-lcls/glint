@@ -98,7 +98,7 @@ cd glint
 
 ## 2. Environments
 
-GLINT is pure Python (numpy/scipy/torch); CUDA is used automatically when present, CPU otherwise.
+GLINT is pure Python (numpy/scipy/torch/h5py); CUDA is used automatically when present, CPU otherwise.
 
 | where | setup |
 |---|---|

@@ -631,7 +631,11 @@ RETIRED = [
     # running green over a retired pair. Keyed on the two numerals ADJACENT to each other, which is
     # what makes it the pair rather than either legitimate lone number (91/120 offline = 76%, the
     # 85/120 lattice-bar ceiling = 71%).
-    Rule("blind-pair-adjacent-retired", r"\b76\s*\\?%[^.\n]{0,30}?\b71\s*\\?%",
+    # `[^.]`, NOT `[^.\n]`: ordinary Markdown/LaTeX wrapping puts a newline between the two
+    # numerals ("76% vs\n71%"), and a class that excludes \n is defeated by reflowing the very
+    # paragraph it guards. That is the same defect the stream-band rule had (see :824) -- caught
+    # there by the #154 review and reintroduced here, which is why it is spelled out twice.
+    Rule("blind-pair-adjacent-retired", r"\b76\s*\\?%[^.]{0,30}?\b71\s*\\?%",
          f"'76% vs 71%' is the RETIRED blind pair -- the counts moved to "
          f"{FACTS['glint1_strict_of120']}/120 and {FACTS['xgandalf_blind_strict_of120']}/120 while "
          "the percentages stayed written down. Quote the counts, and say which n you mean: at "

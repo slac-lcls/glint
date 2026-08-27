@@ -17,9 +17,11 @@ The DAG runs end to end on real data and produces a mergeable dataset. On `cxil1
 CC\* 0.915 / R_split 31.6% at 2.1 Å. On sparse cxidb-17 frames GLINT-① indexes 361 of 480 blind
 against xgandalf's 350 at the same gate — a match, not a lead (McNemar *p* = 0.18).
 
-[**STATUS.md**](STATUS.md) holds the evidence: every measurement with the run that produced it, the
-negative results, and — the part worth reading before trusting a number here — the assumptions that
-have never been tested. Two of those bound what is below:
+Those merge numbers come from job `35507050` and are pinned, with their protocol, in
+`experiments/check_numbers.py` (`--facts`); quote them from there.
+[**STATUS.md**](STATUS.md) holds the evidence for the *LUTE integration itself* — every measurement
+with the run that produced it, the negative results, and, the part worth reading before trusting a
+number here, the assumptions that have never been tested. Two of those bound what is below:
 
 * **`peakfinder: pf8` is not calibrated for your detector until you calibrate it.** The calibrated
   object is the *pair* (`thr_adu`, `min_snr`), not `min_snr` alone: peakfinder8 applies an absolute
@@ -41,8 +43,12 @@ intensities: what a refiner needs, not what a merger needs. Set one of:
 
 * **`integrate: true`** — GLINT predicts and box-integrates its own reflections and writes real
   I/sigma, so the stream goes straight to `PartialatorMerger` with no CrystFEL step.
-* **`tofile:`** — hand the orientations to `indexamajig --indexing=file` (below). CrystFEL's
-  prediction refinement imposes the lattice symmetry, which gives the better merge.
+* **`tofile:`** — hand the orientations to `indexamajig --indexing=file` (below), so CrystFEL's
+  prediction refinement imposes the lattice symmetry.
+
+Which of the two merges *better* is **unresolved**: the only head-to-head
+([glint#129](https://github.com/slac-lcls/glint/issues/129)) ran them at unmatched integration
+settings, and matching those closed the CC\* gap. Choose on dependencies.
 
 Both are configured below. (`tofile:` was once called `fromfile:`; the old name is still accepted
 and maps to it, because GLINT *writes* that file while CrystFEL's reader flag is what it was named
@@ -93,11 +99,12 @@ Copies `glint_index.py` -> `lute/io/models/`, exports it, and registers
 > pattern quoted above (`sys.version_info.major` interpolated into a `site-packages` path); a
 > patched upstream that no longer derives the tree from the ambient interpreter will not trip it.
 
-## Best merge: hand CrystFEL the refined solution
+## Merge through CrystFEL: hand it the refined solution
 Set `tofile:` (+ `lattice: tPc` for tetragonal) in the `IndexGLINT` config; GLINT emits a
 `--indexing=file` solution, then:
     indexamajig --indexing=file --fromfile-input-file=glint.sol --tolerance=10,10,10,3 ...
-CrystFEL's refiner imposes the lattice symmetry -> best merge (validated: beats xgandalf on cxidb-17).
+CrystFEL's refiner imposes the lattice symmetry, which GLINT's own integrator does not. That is the
+concrete thing this route buys; it is not established that the merge comes out better (glint#129).
 
 `lattice:` applies **only** to the `--tofile` solution file. The GLINT stream header always reports
 `lattice_type = triclinic / centering = P`, so set partialator's point group explicitly (`-y`) in the
@@ -129,9 +136,11 @@ straight into the stream -- no `indexamajig` step. Needs image data: with `peaks
 The integration itself is cheap: the whole-frame float64 upcast that used to dominate it is gone
 (~105x on a 16 Mpix frame), and what remains is a gather over the predicted boxes. That gather runs
 on the host in numpy on this route — the fused GPU box-integration lives on the streaming driver's
-device path, not here. **Trade-off:** the `tofile` route above still merges better,
-because CrystFEL's prediction refinement imposes the lattice symmetry. Use `integrate` when you want a
-GPU pipeline with no CrystFEL dependency; use `tofile` when merge quality is what matters.
+device path, not here. **Trade-off, stated as what is actually known:** `tofile` buys CrystFEL's
+prediction refinement, which imposes the lattice symmetry; `integrate` buys a pipeline with no
+CrystFEL dependency and, on the one comparison run, ~5x the observations per crystal. Their merge
+quality has NOT been separated -- glint#129's head-to-head used unmatched integration settings, and
+once matched the CC\* difference closed. Do not pick one expecting a quality win.
 
 ## Self-contained front end: drop FindPeaksSFX
 Set `images` (raw `.cxi` or a `.list`) instead of `peaks` and GLINT peak-finds on the GPU itself, so

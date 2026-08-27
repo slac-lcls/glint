@@ -10,7 +10,8 @@ drops into the existing CrystFEL-based merging flow (`partialator`).
 On one NVIDIA A100, over 480 sparse cxidb-17 lysozyme frames, GLINT **matches** the strongest blind
 indexer we tested — 361 of 480 frames against xgandalf's 350 at the same gate, a difference that is
 not significant (McNemar *p* = 0.18) — at **~450×** the throughput. Deriving the cell by consensus
-costs nothing against being handed it: 458 of 480 frames (95%) index at the ≥10-reflection bar.
+rather than being handed it costs nothing at that gate (361 against 357 with the cell supplied) and
+about ten frames at the looser ≥10-reflection bar (458 against 468 of 480).
 
 **New here?** [`docs/onboarding.md`](docs/onboarding.md) has a short primer on *what crystallographic
 indexing is and what GLINT does*, plus how to set up, run, and contribute.
@@ -53,13 +54,20 @@ placeholder `I=0.00` intensities — everything a *refiner* needs and nothing a 
 the two settings below turns it into a mergeable dataset; which one you want depends on whether you
 want CrystFEL in the pipeline:
 
-* **`integrate: true`** — GPU end to end, no CrystFEL step. GLINT predicts and box-integrates its
-  own reflections and writes real I/σ, so the stream flows straight through the concatenator to
-  `PartialatorMerger`. This is the configuration of the validated end-to-end run.
+* **`integrate: true`** — no CrystFEL step. GLINT predicts and box-integrates its own reflections
+  and writes real I/σ, so the stream flows straight through the concatenator to
+  `PartialatorMerger`. Prediction runs on the GPU; the box gather itself is host numpy on this
+  route. This is the configuration of the validated end-to-end run.
 * **`tofile:`** — hand the orientations to `indexamajig --indexing=file`, added as a task between
-  `GLINTIndexer` and `StreamFileConcatenator`. CrystFEL's prediction refinement imposes the lattice
-  symmetry, which still gives the **better merge**. Note that `tofile:` alone is not enough: without
-  the added task the DAG concatenates the placeholder stream.
+  `GLINTIndexer` and `StreamFileConcatenator`, so CrystFEL's prediction refinement imposes the
+  lattice symmetry. Note that `tofile:` alone is not enough: without the added task the DAG
+  concatenates the placeholder stream.
+
+Which merges *better* is not settled — see
+[glint#129](https://github.com/slac-lcls/glint/issues/129), where the only head-to-head ran the two
+routes at unmatched integration settings. Matching them closed the CC\* gap, and the R_split
+difference that remains is explained by multiplicity and a selection cut rather than by intensity
+quality. Choose on dependencies, not on an expected quality ranking.
 
 Configuration for both, including the traps worth knowing on the `tofile:` route, is in
 [`lute/README.md`](lute/README.md). Install the Task into a LUTE tree with

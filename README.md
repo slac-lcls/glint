@@ -16,6 +16,10 @@ about ten frames at the looser ≥10-reflection bar (458 against 468 of 480).
 **New here?** [`docs/onboarding.md`](docs/onboarding.md) has a short primer on *what crystallographic
 indexing is and what GLINT does*, plus how to set up, run, and contribute.
 
+**Checking the paper?** [`REPRODUCING.md`](REPRODUCING.md) maps every table and figure to the
+script, data and command that regenerates it — including what reproduces on a laptop from data
+committed here, and what does not reproduce from this checkout at all.
+
 ## Install
 
 ```bash

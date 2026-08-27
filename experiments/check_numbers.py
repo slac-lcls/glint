@@ -72,6 +72,17 @@ FACTS: dict[str, float | str] = {
     # nothing, which is precisely how the pair drifted: 76/71 stayed written into the rule text below
     # while the measurement moved to 77/72, and every run stayed green because no code connected them.
     "glint1_strict_of120":         92,  # GLINT-(1), blind + cross-frame consensus, >=25%-of-spots bar
+    # ⚑ THIS INTEGER IS DEVICE-SENSITIVE, measured 2026-08-27. The same pipeline on CPU returns 91,
+    # bit-deterministically, and it is NOT code drift: 91 comes back identically at HEAD, at 8da091b
+    # (pre-#126 binarisation) and at 7ca3b49 -- the very commit that recorded this 92 -- with the
+    # same consensus cell and the same support each time. The cause is the gate's marginality, not
+    # a defect: TWO of the 120 frames sit within 0.002 of the 0.25 boundary and are ONE PEAK from
+    # flipping (frame 118 at 79/318 = 0.2484, frame 89 at 34/137 = 0.2482), so a single peak
+    # crossing the 0.15 hkl-residual tolerance -- routine between CUDA and CPU kernels -- moves the
+    # published count. azimuth_validate.py's reconciliation block independently records 93 for this
+    # same arm at the same gate, which is the same effect in the other direction. So the honest
+    # reading of this key is "92 +/- 1, A100": quote it with the device, and do not treat a 91 or a
+    # 93 from a re-run as a contradiction. Nothing here is retired; the value stands as measured.
     "glint_blind_rate_pct":        77,  # = round(100 * glint1_strict_of120 / 120)
     "xgandalf_blind_strict_of120": 86,  # xgandalf blind, SAME bar, SAME peak list -- a different indexer
     "xgandalf_blind_rate_pct":     72,  # = round(100 * xgandalf_blind_strict_of120 / 120)

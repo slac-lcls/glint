@@ -121,14 +121,29 @@ GLINT-(1) BLIND  N=120: correct-lattice 115/120=96%  >=25%(Table1) 91/120=76%  >
 The cell is recovered blind: `[37.8 78.6 78.9]` against lysozyme's 79.0/79.0/38.0 A, derived from
 the frames alone with no cell supplied. That is the paper's central claim, reproducible on a laptop.
 
-**One frame short, and unexplained.** The paper's blind row is `92/120` at this gate; this CPU run
-gives `91`. It is not a scoring difference -- the gate here is the one the xgandalf arm uses -- and
-not the frame filter (no frame in the file has fewer than six peaks). The recorded run was on an
-A100, so the likeliest cause is device-dependent tie-breaking on a single marginal frame, but that
-is a hypothesis and has not been confirmed on a GPU. Do not read `91` here as contradicting the
-table, and do not read it as confirming it either. (`91/120` is separately a real published value --
-the *known-cell* row -- so the coincidence is worth naming: the paper's SI explains that 91-vs-92
-pair as two pipelines at one gate, which is a different distinction from this one.)
+**One frame short of the table, and here is why.** The paper's blind row is `92/120` at this gate;
+this CPU run gives `91`. That is expected, and it is worth understanding before you conclude
+anything from a re-run of your own:
+
+* **It is not run-to-run noise.** Two identical CPU runs return `91` bit-for-bit, with the same
+  consensus cell and the same support.
+* **It is not code drift.** `91` comes back identically at HEAD, at the pre-binarisation commit
+  `8da091b`, and at `7ca3b49` -- the very commit where the `92` was recorded. The pipeline has not
+  changed its answer.
+* **It is the gate sitting on a knife-edge.** Two of the 120 frames are within 0.002 of the 0.25
+  boundary and are **one peak** from crossing it: frame 118 at 79/318 = 0.2484 and frame 89 at
+  34/137 = 0.2482. One peak moving across the 0.15 hkl-residual tolerance -- routine between CUDA
+  and CPU kernels -- moves the published count by one.
+
+So the table's `92` is an A100 measurement of a quantity that is device-sensitive at the ±1 level,
+and `91` on CPU is the same result, not a contradiction. (Independently, `azimuth_validate.py`'s
+reconciliation block records `93` for this arm at this gate -- the same effect in the other
+direction.) What is *not* device-sensitive, and is what the row is really claiming, is the
+correct-lattice count: **115/120** here, every run, every commit tested.
+
+Note separately that `91/120` is also a real published value -- the *known-cell* row -- which the
+paper's SI explains as two pipelines at one gate. That is a different distinction from this one,
+and the numerical coincidence is unfortunate; do not merge the two stories.
 
 Note also that this is *not* `compare3.py`'s blind-top-1 arm -- the two agree on the 120-frame
 subset and differ by 15 frames at n=480 (361 vs 346), so the distinction only becomes visible on

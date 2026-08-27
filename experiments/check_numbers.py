@@ -1314,30 +1314,19 @@ REQUIRED = [
               # ...and the gap before "by" is limited to one or two plain words without
               # punctuation, so "but not by N*=16" cannot satisfy the needle -- "level, but not
               # by" fails because the comma breaks the word-whitespace sequence (round 11).
-              # NOR MAY EITHER WORD BE A NEGATOR: punctuation-free negation slipped through,
-              # because in "level not by" the two allowed \w+ tokens are "level" and "not" and
-              # the needle stayed green while the sentence denied the claim outright (round 12).
-              # A negator list rather than a whitelist of bridge words: the bridge is prose that
-              # may legitimately be reworded ("level", "recovery", "of trials"), whereas the
-              # words that INVERT the claim are a short closed set.
-              # THE GAP BEFORE THE THRESHOLD IS A WHITELIST, NOT A BLACKLIST -- and that choice
-              # is the point. Rounds 12-14 each extended a list of forbidden words (not/never,
-              # then except/unless/fail, then below/under/less), and each fix was immediately
-              # evadable by a synonym: "a threshold NEAR the 90% level", "a WEAKER 90% proxy
-              # level", "ROUGHLY HALF the 90% recovery level" all still matched afterwards.
-              # Blacklisting prose cannot converge, because the ways to qualify a number are
-              # unbounded while any list is finite.
+              # ...and the SAME whitelist on the far side, for the same reason. This bridge was
+              # still a blacklist after round 12, and round 15 walked through it with "level
+              # WHETHER by N*=16 or only later" -- conditional wording, not negation, so no
+              # negator list would ever have contained it. The reviewer's own conclusion was that
+              # "adding individual negators will remain bypassable", which is the round-14
+              # finding arrived at independently.
               #
-              # What IS bounded is the legitimate variation: between "cross" and the threshold
-              # the manuscript has an article and LaTeX math punctuation, nothing else. Allowing
-              # only that closes every evasion above at once and cannot be widened by a synonym.
-              # The trade is deliberate and stated: a genuine rewording that inserts a noun
-              # phrase here FIRES and needs a human to look, which is the correct outcome for a
-              # guard whose whole job is that these numbers are stated in their real context.
-              r"[Bb]oth\s+runs\s+cross(?:\s+(?:the|a|an))?\s*\$?\s*"
-              r"90\s*\\?%"
-              r"(?:\s+(?!(?:not|never|only|rarely|barely|hardly|nor|without|un\w+)\b)\w+){1,2}"
-              r"\s+\bby\b\s+"
+              # The supported noun phrases are what the manuscript and its plausible rewordings
+              # actually use -- "level", "recovery", "recovery level" -- and nothing else reaches
+              # "by". Same stated trade as the other side: a genuine rewording fires and a human
+              # looks.
+              r"[Bb]oth\s+runs\s+cross(?:\s+(?:the|a|an))?\s*\$?\s*90\s*\\?%"
+              r"(?:\s+(?:recovery|level|mark|threshold)){1,2}\s+\bby\b\s+"
               r"N\^?\{?\\star\}?\s*=\s*" + _lit(f"{FACTS['nstar_r0278']:d}")),
              f"SI S16 states its measurement, so the file carrying it must state the banked values "
              f"IN CONTEXT: {FACTS['subset_draws_per_n']} draws per N over "

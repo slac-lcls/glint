@@ -699,7 +699,10 @@ def test_s16_needles_bind_values_to_what_they_count():
     # Negation WITHOUT punctuation, which the comma-breaking constraint alone did not stop:
     # in "level not by", the two permitted \w+ tokens are "level" and "not" (round 12).
     for neg in ("Both runs cross the $90\\%$ level not by",
-                "Both runs cross the $90\\%$ level never by"):
+                "Both runs cross the $90\\%$ level never by",
+                # CONDITIONAL, not negation -- no negator list would ever have held "whether",
+                # which is why this bridge is a whitelist now too (round 15).
+                "Both runs cross the $90\\%$ level whether by"):
         assert _required_fires(_s16_prose(cross=neg), "s16-subset-recovery-facts"), (
             f"punctuation-free negation satisfied the both-runs needle: {neg!r}")
     # ...and the bridge must still admit legitimate rewordings, or the guard becomes a style rule.

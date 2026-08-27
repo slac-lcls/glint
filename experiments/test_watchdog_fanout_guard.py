@@ -204,6 +204,7 @@ def test_refused_verdict_cannot_relock_through_a_dead_batch():
     _flush_catching(drv)
     assert gate.calls == 1 and drv.n_gate_refused == 1, (gate.calls, drv.n_gate_refused)
     assert drv.n_relock == 0, "the gate refused; nothing may lock"
+    assert drv.n_gate_deferred == 0, "a SCORED refusal is not a deferral -- the subset must not count it"
 
     drv._fanout = _boom                                         # batch 2: dead fan-out, no voters
     _load(drv, [frame_on(B, rng) for _ in range(5)])
@@ -212,6 +213,15 @@ def test_refused_verdict_cannot_relock_through_a_dead_batch():
     assert drv.n_relock == 0 and not drv.extra, \
         "a voter-less batch must not commit the previously refused verdict"
     assert drv.n_gate_refused == 2, "the voter-less verdict is a refusal, same bookkeeping"
+    # The split, exercised end to end through the real watchdog path -- not by assigning the
+    # attribute (Copilot review of #164, round 4): batch 1's scored refusal and batch 2's
+    # no-voter deferral must land in different buckets, and stats() must report both. Removing
+    # the increment in _watchdog leaves gate_deferred_no_voters at zero forever, which is
+    # exactly what this catches.
+    assert drv.n_gate_deferred == 1, "the voter-less deferral did not reach its own counter"
+    s = drv.stats()
+    assert s["gate_refused"] == 2 and s["gate_deferred_no_voters"] == 1, (
+        s.get("gate_refused"), s.get("gate_deferred_no_voters"))
 
 
 def test_healthy_fanout_is_untouched():

@@ -724,7 +724,8 @@ class StreamDriver:
         # buffer forever. None (gate off) => nothing is retained => bit-identical.
         self._gate_buf = deque(maxlen=256) if alias_gate is not None else None
         self._gate_last_support = -1                     # re-gate only when new votes arrived (see _gate_lock)
-        self.n_gate_refused = 0                          # blind locks the gate turned down
+        self.n_gate_refused = 0                          # proposed locks NOT committed (total)
+        self.n_gate_deferred = 0                         # ...the no-voter subset of those (watchdog)
         # Opt-in lock-quality probe (glint.spurious_meter.null_margin): on each relock, measure how far
         # the new cell's overlap sits above the random-orientation floor on its supporting frames -- a
         # live "is this lock resting on real signal" z. lock_min_z (if set) refuses a too-weak lock.
@@ -1434,7 +1435,8 @@ class StreamDriver:
                 # REFUSED, precisely on the batch with the least evidence (Copilot review of #156).
                 # Refuse instead: same bookkeeping, histogram kept, a later batch with real
                 # supporting frames confirms or refuses on its own evidence.
-                self.n_gate_refused += 1
+                self.n_gate_refused += 1                     # total keeps its #83 semantics...
+                self.n_gate_deferred += 1                    # ...and the subset is now separable
                 return
             Mg = self._alias_gate.confirm_frames(Mn, voters)
             if Mg is None:
@@ -1527,8 +1529,15 @@ class StreamDriver:
     def stats(self, thr=0.0):
         if self._blind:                                         # not yet locked -- warm-up in progress
             _, sup, lead = self._rc.verdict()
+            # gate_refused belongs HERE most of all. `_gate_lock` runs only on the blind path
+            # (_push_blind, warmup_batch), and a refusal is precisely what leaves the driver blind
+            # -- so the moment this counter is the whole explanation of what the operator is
+            # looking at is the moment the locked branch below never runs. Reporting it only after
+            # a successful lock would have hidden it at the one time it answers the question
+            # "there is support but no cell -- why?" (Copilot review of glint#164).
             return dict(locked=False, pushed=self.n_pushed, warmup_indexed=self.n_warmup,
-                        consensus_support=sup, consensus_lead=lead)
+                        consensus_support=sup, consensus_lead=lead,
+                        gate_refused=self.n_gate_refused)
         s = self.acc.stats(thr=thr, n_theoretical=self.n_theoretical)
         s.update(locked=True, locked_after=self.locked_after, consensus_support=self.consensus_support,
                  pushed=self.n_pushed, indexed=self.n_indexed, integrated=self.n_integrated,
@@ -1537,6 +1546,22 @@ class StreamDriver:
                  # must never be silent, and a rising count is the signal that the cell has drifted
                  # away from the sample (or that min_inlier_frac is set too high for this run).
                  gate_rejected=self.n_gate_rejected,
+                 # alias-gate REFUSALS, in the broad sense: proposed locks that were NOT
+                 # committed. Counted since glint#83 but never reported, so the one diagnostic
+                 # that says "a cell was proposed and turned down" was invisible to anyone
+                 # watching a live run. The total has two sources -- the alias gate actually
+                 # scoring a cell and refusing it, and the watchdog deferring a verdict whose
+                 # batch carried no supporting voters (every entry rescued, votes elsewhere, or a
+                 # dead fan-out; the #156 fix) -- and the neighbours CANNOT disambiguate them: a
+                 # healthy fan-out defers too, so a flat n_fanout_errors proves nothing (Copilot
+                 # review of glint#164, round 3). The subset is therefore reported under its own
+                 # key: gate_refused - gate_deferred_no_voters = verdicts the gate itself scored
+                 # and rejected, which is the "alias hypotheses are being held back" diagnostic;
+                 # gate_deferred_no_voters rising alone means verdicts are outliving their
+                 # evidence, not that aliases are being generated. The total keeps its #83
+                 # semantics so nothing downstream moves.
+                 gate_refused=self.n_gate_refused,
+                 gate_deferred_no_voters=self.n_gate_deferred,
                  # fan-out invocations (retry cascade or watchdog) that raised and were degraded to
                  # the miss path (glint#147). Reported unconditionally for the same reason: a dead
                  # fan-out silently turns every retry/relock mechanism off, and this counter is the

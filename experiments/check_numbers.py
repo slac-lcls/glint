@@ -523,6 +523,12 @@ DEFAULT_TARGETS = [
     # ⚑ Both were VERIFIED GREEN before being added, so wiring them in blocked nothing; the rules
     # added alongside them are what makes the targets mean something (see the note below).
     HOME / "git/papers/glint/glint_rewrite_JAC_refined.tex",
+    # ...and its SI, missed when the manuscript was added: the SI carries PARALLEL copies of the
+    # dataset tables, and on 2026-08-26 -- the first day it was ever scanned -- its copy of the
+    # Jungfrau row still read the retired `93% (support 54/60)` that the main text had already
+    # been corrected out of. A guarded manuscript with an unguarded SI just moves the drift one
+    # file over (fixed in papers d300440; caught by the jungfrau rules the moment they saw it).
+    HOME / "git/papers/glint/glint_SI.tex",
     HOME / "git/papers/glint/cover_letter_JAC.tex",
     # source of truth for the Confluence "epixUHR 4M -- DRP per-event processing time" comment;
     # the comment is produced by pasting this file through Insert > Markup > Markdown

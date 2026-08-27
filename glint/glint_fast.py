@@ -557,9 +557,26 @@ def matched(M, q, tol=GATE_TOL):
     return int((np.abs(r).max(1) < tol).sum())
 
 
+def matched_strict(M, q):
+    """THE PUBLISHED GATE's matcher: componentwise |q@M - round(q@M)| < GATE_TOL, ALWAYS.
+
+    Separate from `matched` because that one is deliberately configurable -- with QDIST=1 it
+    switches to a reciprocal-distance ball at QDTOL and stops consulting GATE_TOL at all. That is
+    a legitimate knob for indexing/scoring experiments, but it must never reach the strict gate:
+    routed through `matched`, `gpass` would have applied the published GATE_FRAC/GATE_MIN
+    thresholds to counts produced by a different matching rule, and every source tie would still
+    have read green (Copilot review of glint#170). Under the shipped default QDIST=0 the two
+    functions are identical, so no published number moves.
+    """
+    if M is None:
+        return 0
+    r = q @ M - np.rint(q @ M)
+    return int((np.abs(r).max(1) < GATE_TOL).sum())
+
+
 def gpass(M, q):
     if M is None or not same_lattice(M, LYSO): return (0, 0)
-    m = matched(M, q); return (int(m / len(q) >= GATE_FRAC), int(m >= GATE_MIN))
+    m = matched_strict(M, q); return (int(m / len(q) >= GATE_FRAC), int(m >= GATE_MIN))
 
 
 if __name__ == "__main__":

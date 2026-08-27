@@ -1376,6 +1376,14 @@ def check_arithmetic() -> list[str]:
     if _gf_s:
         _uses = ((r"def\s+matched\s*\([^)]*\btol\s*=\s*GATE_TOL\b", "matched()'s tol default",
                   "GATE_TOL"),
+                 # The STRICT matcher must read GATE_TOL directly and must be what gpass calls:
+                 # `matched` honours QDIST and stops consulting GATE_TOL entirely, so a gpass
+                 # routed through it applies the published thresholds to a different rule while
+                 # every tie above still reads green (round 8).
+                 (r"def\s+matched_strict\b[\s\S]{0,400}?\bGATE_TOL\b",
+                  "matched_strict()'s window", "GATE_TOL"),
+                 (r"def\s+gpass\b[\s\S]{0,400}?\bmatched_strict\s*\(",
+                  "gpass()'s matcher", "matched_strict"),
                  (r"def\s+gpass\b[\s\S]{0,400}?\bGATE_FRAC\b", "gpass()'s fraction test",
                   "GATE_FRAC"),
                  (r"def\s+gpass\b[\s\S]{0,400}?\bGATE_MIN\b", "gpass()'s count test",

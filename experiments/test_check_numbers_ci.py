@@ -482,6 +482,12 @@ ARITHMETIC_PERTURBATIONS = [
     # FACTS lookup left every case above green (Copilot review of #163, round 4)
     ({"subset_seeds": 7},                             "subset_draws_total"),
     ({"recov_r0278_n12_pct": 90.4},                   "would be 12"),
+    # EXACTLY the bar, and a FRACTIONAL N: these pin the two operators the implementation
+    # promises. 90.4 fires under both `>= 90` and `> 90`, so it cannot catch the boundary being
+    # loosened; 90.0 can. And 32/24 fire whether or not the comparison truncates through int(),
+    # so only a fractional N catches a reintroduced int() (Copilot review of #163, round 9).
+    ({"recov_r0278_n12_pct": 90.0},                   "AT OR ABOVE"),
+    ({"nstar_r0278": 16.4},                           "moved without the measurement"),
     ({"nstar_r0278": 32},                             "moved without the measurement"),
     ({"n_cross90_r0058": 24},                             "moved without the measurement"),
     ({"recov_r0278_n16_pct": 88.0},                   "BELOW the 90% bar"),
@@ -716,6 +722,11 @@ def test_nstar32_exemption_is_clause_scoped():
     assert _fires(conjunction, "nstar-32-retired"), (
         "two matches in ONE clause shared the retirement phrase and both were exempted -- with "
         "no way to tell which occurrence it qualifies, the guard must refuse (round 7)")
+    unrelated = ("The old recovery does not reproduce but the reconstructed protocol gives "
+                 "$N^{\\star}=32$")
+    assert _fires(unrelated, "nstar-32-retired"), (
+        "an unrelated failure earlier in the clause suppressed a live claim -- the retirement "
+        "phrase must FOLLOW the value it retires (round 9)")
     standalone = "The previously quoted $N^{\\star}=32$ for r0058 remains correct."
     assert _fires(standalone, "nstar-32-retired"), (
         "'previously quoted' alone suppressed the rule -- an exempt must RETIRE the value, and "

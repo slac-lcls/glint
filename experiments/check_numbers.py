@@ -650,6 +650,14 @@ class Rule:
     # ("N*=32, as previously quoted, does not reproduce") false-fires and the message says how
     # to rephrase; the guard prefers a rare loud false positive to a silent fail-open.
     clause_exempt: bool = False
+    # Phrases that must appear AFTER the match to exempt it, as opposed to `exempt`, which may
+    # sit anywhere in the clause. The split is not fussiness -- it is what the two shapes of a
+    # retirement actually look like. A POST-qualifier attaches backwards ("N*=32 ... does not
+    # reproduce"), so an instance of it BEFORE the match is qualifying something else: "The old
+    # recovery does not reproduce but the protocol gives N*=32" is a live claim (Copilot review
+    # of #163, round 9). A PRE-qualifier attaches forwards ("would have correctly reported
+    # N*=32") and is legitimate exactly where a post-qualifier is not.
+    exempt_after: tuple[str, ...] = ()
     flags: int = re.I
     _rx: re.Pattern = field(init=False, repr=False)
 
@@ -746,7 +754,11 @@ RETIRED = [
          # scope one step after that (a comma joins a retirement and a live claim into one
          # sentence, round 4). The retirement must sit in the SAME CLAUSE as the value it
          # retires.
-         exempt=("does not reproduce", "would have correctly reported"),
+         # "would have correctly reported" attaches FORWARD ("...would have correctly reported
+         # N*=32"), so it may precede; "does not reproduce" attaches BACKWARD and must follow the
+         # value it retires, or an unrelated failure earlier in the clause suppresses a live claim.
+         exempt=("would have correctly reported",),
+         exempt_after=("does not reproduce",),
          clause_exempt=True),
     Rule("blind-pair-adjacent-retired", r"\b76\s*\\?%[^.]{0,30}?\b71\s*\\?%",
          f"'76% vs 71%' is the RETIRED blind pair -- the counts moved to "
@@ -1402,6 +1414,14 @@ def _in_clause(hay: str, pos: int, words: tuple[str, ...], rx: "re.Pattern | Non
     m = _CLAUSE_END.search(hay[pos:])
     hi = pos + m.start() + 1 if m else len(hay)
     seg = hay[lo:hi]
+    # DIRECTION MATTERS: the phrase must follow the value it retires. A bare substring test
+    # over the clause let an UNRELATED failure suppress a live claim -- "The old recovery does
+    # not reproduce but the reconstructed protocol gives N*=32" has one match and the phrase in
+    # the same clause, so the retired value passed while "does not reproduce" qualified something
+    # else entirely (Copilot review of #163, round 9). Requiring the phrase AFTER the match
+    # matches how a retirement is actually written ("the previously quoted N*=32 ... does not
+    # reproduce") and rejects the counterexample, where it precedes.
+    #
     # TWO MATCHES IN ONE CLAUSE = NO EXEMPTION. A conjunction needs no punctuation, so "The
     # protocol gives N*=32 but the previously quoted N*=32 does not reproduce" is a single clause
     # carrying a live claim AND a retired one; scoping by segment alone exempts both (Copilot
@@ -1410,8 +1430,27 @@ def _in_clause(hay: str, pos: int, words: tuple[str, ...], rx: "re.Pattern | Non
     # anyway. This is the conservative direction: it can only ever ADD a report.
     if rx is not None and len(rx.findall(seg)) > 1:
         return False
-    seg = seg.lower()
-    return any(w.lower() in seg for w in words)
+    return any(w.lower() in seg.lower() for w in words)
+
+
+def _after_match(hay: str, pos: int, words: tuple[str, ...],
+                 rx: "re.Pattern | None" = None) -> bool:
+    """Does one of `words` follow `pos`, within the clause? See Rule.exempt_after.
+
+    Carries the SAME multi-match refusal as _in_clause -- it is a property of the clause, not of
+    one exemption path, and gating only the other path let a two-match clause exempt its first
+    occurrence through here instead.
+    """
+    if not words:
+        return False
+    lo = 0
+    for m in _CLAUSE_END.finditer(hay[:pos]):
+        lo = m.end()
+    m = _CLAUSE_END.search(hay[pos:])
+    hi = pos + m.start() + 1 if m else len(hay)
+    if rx is not None and len(rx.findall(hay[lo:hi])) > 1:
+        return False
+    return any(w.lower() in hay[pos:hi].lower() for w in words)
 
 
 def scan(path: Path, text: str) -> list[str]:
@@ -1436,9 +1475,13 @@ def scan(path: Path, text: str) -> list[str]:
     for group, rules in (("RETIRED", RETIRED), ("OVERCLAIM", OVERCLAIM), ("AMBIGUOUS", AMBIGUOUS)):
         for rule in rules:
             for m in rule._rx.finditer(norm):
-                if rule.exempt and (_in_clause(norm, m.start(), rule.exempt, rule._rx)
-                                    if rule.clause_exempt
-                                    else _near(norm, m.start(), rule.exempt, rule.window)):
+                _exempted = (_in_clause(norm, m.start(), rule.exempt, rule._rx)
+                             if rule.clause_exempt
+                             else _near(norm, m.start(), rule.exempt, rule.window))
+                if not _exempted and rule.exempt_after:
+                    _exempted = _after_match(norm, m.start(), rule.exempt_after,
+                                             rule._rx if rule.clause_exempt else None)
+                if (rule.exempt or rule.exempt_after) and _exempted:
                     continue
                 if rule.needs and _near(norm, m.start(), rule.needs, rule.window):
                     continue

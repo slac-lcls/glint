@@ -145,7 +145,7 @@ def test_coverage_is_at_least_nominal():
 # these patterns against the actual files, not hypotheticals:
 #   * a 200-character Jungfrau window reaches past \bottomrule into tab:realindex's footnote and
 #     fires on the row that was just CORRECTED to 96%/1506/1563;
-#   * `5\.8\s*%` without a (?<![\d.]) guard fires inside the cxidb-83 cell "105.8/105.8/75.5 A";
+#   * `5\.8\s*%` without a (?<![\d.]) guard fires inside the cxidb-62 cell "105.8/105.8/75.5 A";
 #   * `29` beside "throughput" fires on GLINT_REPORT.md's banner date "Snapshot: 2026-06-29."
 # Each is trap (a) or a window-width variant of it, and each would have shipped as a false positive.
 import importlib.util as _ilu
@@ -182,7 +182,7 @@ INJECTIONS = [
      "cupy full path (346--1,136 us), 11-node captured graph (~22 us, flat)"),
     ("warmup-5.8pct",
      r"swept from 120 to 3000 frames the warm-up falls from $5.8\%$ of the run",
-     r"cxidb-83: a $105.8/105.8/75.5$~\AA\ cell, warm-up a fixed five frames"),
+     r"cxidb-62: a $105.8/105.8/75.5$~\AA\ cell, warm-up a fixed five frames"),
     ("integ-fused-6-32x",
      r"fused GPU box-integration (frame resident) & 7.6 & 0.33 & 6--32$\times$ \\",
      r"fused GPU box-integration (frame resident) & 7.6 & 0.33 & 23$\times$ \\"),

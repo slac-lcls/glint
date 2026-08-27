@@ -54,10 +54,14 @@ from glint.spurious_meter import HKL_TOL as _SPURIOUS_HKL_TOL
 # equality was a comment until now, so check it where either side would break it. All of
 # spurious_meter's lattice meters are calibrated against this exact window.
 HKL_TOL = 0.15
-assert HKL_TOL == _SPURIOUS_HKL_TOL, (
-    "stream_driver.HKL_TOL and spurious_meter.HKL_TOL have drifted apart "
-    f"({HKL_TOL} vs {_SPURIOUS_HKL_TOL}); the live gate and the spurious meters must count "
-    "inliers at the same window")
+# An explicit raise, not `assert`: python -O strips asserts, and an invariant that vanishes under
+# optimization is a comment with extra steps -- the exact defect this check exists to fix
+# (Copilot review of #170).
+if HKL_TOL != _SPURIOUS_HKL_TOL:
+    raise ImportError(
+        "stream_driver.HKL_TOL and spurious_meter.HKL_TOL have drifted apart "
+        f"({HKL_TOL} vs {_SPURIOUS_HKL_TOL}); the live gate and the spurious meters must count "
+        "inliers at the same window")
 try:
     import glint.replica_gpu_batch as rgb                     # the q-only batch indexer (needs torch)
 except Exception:                                            # pragma: no cover - CPU-only unit env (no torch)

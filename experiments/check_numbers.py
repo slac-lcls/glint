@@ -1320,7 +1320,13 @@ def check_arithmetic() -> list[str]:
     # the source rather than to a comment about the source. Same defect the M3 block had: a fact
     # nothing reads is a comment, and this one silently defines what "binary" even means here.
     _gf_p = Path(__file__).resolve().parent.parent / "glint" / "glint_fast.py"
-    _gf_s = _gf_p.read_text(encoding="utf-8") if _gf_p.exists() else ""
+    # try/except, not an exists() gate: read_text can raise past exists() (permissions, encoding,
+    # a transient FS) and an exception here crashes the whole guard instead of producing the
+    # per-constant "unreadable" reports the QPOW and gate ties promise (Copilot review of #170).
+    try:
+        _gf_s = _gf_p.read_text(encoding="utf-8")
+    except OSError:
+        _gf_s = ""
     _qm = re.search(r'QPOW = float\(os\.environ\.get\("QPOW", "([\d.]+)"\)\)', _gf_s)
     if not _gf_s:
         bad.append(f"  FACTS: {_gf_p} unreadable, so pw_qpow_default is unchecked and the peak-"

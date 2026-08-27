@@ -1797,14 +1797,18 @@ def main(argv: list[str]) -> int:
 
     paths = [Path(a) for a in argv[1:] if not a.startswith("--")]
     # A target the CALLER ASKED FOR must exist: an explicit path on the command line, or a
-    # PDF_TARGETS entry once --pdf is passed. DEFAULT_TARGETS deliberately stay skippable --
-    # the CI runner has no ~/git/papers or ~/Desktop, and ci.yml documents that scope out loud.
+    # PDF_TARGETS entry once --pdf is passed. Of DEFAULT_TARGETS, the IN-REPO files must exist
+    # too -- they live in this checkout, so "missing" can only mean renamed or deleted, and a
+    # renamed docs page would otherwise drop out of the guard as a green SKIP forever (Copilot
+    # review of #168). Only the OUT-OF-REPO defaults stay skippable: the CI runner has no
+    # ~/git/papers or ~/Desktop, and ci.yml documents that scope out loud.
     must_exist = set(paths)
     if not paths:
         paths = list(DEFAULT_TARGETS)
+        must_exist = {p for p in DEFAULT_TARGETS if p.is_relative_to(REPO)}
         if "--pdf" in argv:
             paths += PDF_TARGETS
-            must_exist = set(PDF_TARGETS)
+            must_exist |= set(PDF_TARGETS)
 
     fails, advisories = check_arithmetic()
     if fails:

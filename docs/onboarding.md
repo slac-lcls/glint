@@ -98,7 +98,7 @@ cd glint
 
 ## 2. Environments
 
-GLINT is pure Python (numpy/scipy/torch); CUDA is used automatically when present, CPU otherwise.
+GLINT is pure Python (numpy/scipy/torch/h5py); CUDA is used automatically when present, CPU otherwise.
 
 | where | setup |
 |---|---|
@@ -145,8 +145,8 @@ not the same problem at two speeds.**
 | **Blind** | 3 free vectors — lengths *and* directions *and* mutual angles | generate candidate vectors, then assemble a basis out of them |
 | **Known cell** | 3 rotation DOF — lengths and angles are given | rotate a known basis until it fits |
 
-Blind indexing is *combinatorial*; known-cell is *registration*. Per frame that is worth about 2× on its
-own — blind 34 ms vs the per-frame rescue `index_known_gpu_cell` at 16.5 ms. The dramatic number,
+Blind indexing is *combinatorial*; known-cell is *registration*. Per frame that is worth ~1.6× on its
+own — blind 26 ms vs the per-frame rescue `index_known_gpu_cell` at 16.5 ms. The dramatic number,
 ~0.36 ms/frame, belongs to the *batched, fused* known-cell engine (`replica_gpu_batch.index_fused`) and is
 amortized over a batch, not the per-frame rescue this diagram shows. More important than either is that
 the known-cell pass indexes frames the blind pass could not (see "why rescue works", below).
@@ -292,8 +292,8 @@ Useful flags: `--cell "a b c al be ga"` (known cell) · `--nbest N` (consensus h
   python experiments/test_cli_smoke.py     # expect ALL PASS (6/6)
   ```
 - **No indexing-rate regression.** Any change to the front end / consensus / rescue must hold the
-  rate on the 120 sparse cxidb frames (blind ~71% gated; hybrid consensus ~96% at ≥10 reflections)
-  and 100% on the 10-cell dense sweep. The `experiments/` harness has the scripts (run on GPU via
+  rate on the 120 sparse cxidb frames — blind 77% (92/120) at the strict ≥25%-of-spots bar, and 96%
+  (115/120) at the correct-lattice bar — and 100% on the 10-cell dense sweep. The `experiments/` harness has the scripts (run on GPU via
   `srun`, below). If a change is meant to be bit-identical, verify it is.
 - Keep the change scoped; put throwaway analysis in `experiments/`, not the shipped `glint/` package.
 
@@ -301,7 +301,8 @@ Useful flags: `--cell "a b c al be ga"` (known cell) · `--nbest N` (consensus h
 
 - **S3DF GPU:** `srun -p ampere -A lcls:default@ampere -q preemptable --gres=gpu:a100:1 --pty bash`
 - **NERSC GPU:** `srun -A lcls_g -C gpu -q interactive -N1 -n1 --gpus 1 -t 30 --pty bash`
-- **Datasets:** cxidb-17 lysozyme + cxidb-45 Proteinase K (S3DF), cxidb_62 hexagonal (NERSC) —
+- **Datasets:** cxidb-17 lysozyme + cxidb-45 Proteinase K (S3DF; its 290-frame merge is
+  CC* 0.90, R_split 31%, ⟨I/σ⟩ 7.8), cxidb_62 hexagonal (NERSC) —
   ask for exact paths; they're the standard test/benchmark sets.
 
 ## 7. Good first tasks

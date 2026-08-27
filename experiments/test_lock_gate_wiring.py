@@ -103,11 +103,76 @@ def test_new_options_stay_at_the_end_of_the_signature():
     assert params[-len(tail):] == tail, params[-len(tail):]
 
 
+def test_live_gate_defaults_and_window_are_pinned():
+    """The LIVE gate (_fits: min_inliers count AND min_inlier_frac fraction, counting peaks at the
+    _inliers near-integer window) shipped with min_inlier_frac=0.15, min_inliers=0 and a 0.15
+    window, and until now nothing pinned any of the three: reset the defaults or nudge the window
+    and the whole suite stayed green. Same defect this file exists for, one signature over.
+
+    The window is asserted through BOTH names on purpose: stream_driver.HKL_TOL is the gate's own
+    constant, spurious_meter.HKL_TOL is the meters' declared mirror of it, and the paper's 0.15 is
+    what both must equal. stream_driver also asserts the pair equal at import, so if that module-
+    scope check is ever deleted, this test still catches a split."""
+    p = inspect.signature(StreamDriver.__init__).parameters
+    assert p["min_inlier_frac"].default == 0.15, p["min_inlier_frac"].default
+    assert p["min_inliers"].default == 0, p["min_inliers"].default
+    from glint.spurious_meter import HKL_TOL
+    from glint.stream_driver import HKL_TOL as DRIVER_HKL_TOL
+    assert HKL_TOL == 0.15, HKL_TOL
+    assert DRIVER_HKL_TOL == HKL_TOL, (DRIVER_HKL_TOL, HKL_TOL)
+    # ...and the BEHAVIOR, not just the declarations: comparing the two constants leaves this
+    # green if _inliers grows its own literal again (Copilot review of #170, round 2). With M the
+    # identity, each q row's residual is its own fractional part, so the window is probed
+    # directly from both sides, and the max(1) rule is exercised -- a row inside the window on
+    # one component and outside on another must NOT count.
+    #
+    # THE EXACT EDGE IS TESTABLE, and it is the row that pins the COMPARISON OPERATOR: without it
+    # `<` and `<=` are indistinguishable, since every other row is strictly inside or strictly
+    # outside. It cannot be written as a decimal literal -- 1.15 stores as 1.1499999... and
+    # silently probes the wrong side -- but HKL_TOL ITSELF works: round() subtracts exactly zero
+    # from it, so the residual comes back bit-identical to the constant, whatever float that is,
+    # and `residual < HKL_TOL` is False for the shipped strict `<` and True for `<=` (Copilot
+    # review of #170, round 3, correcting this comment's earlier claim that the edge was
+    # untestable -- it was untestable the way I first tried, not in general).
+    #
+    # It must be HKL_TOL BARE, not 1 + HKL_TOL: measured, 1.15 - round(1.15) = 0.1499999999999999,
+    # which is strictly BELOW the constant and counts as an inlier, so the offset form silently
+    # tests the wrong side exactly like the decimal literal did. Only round()-subtracts-zero
+    # preserves the bits.
+    M = np.eye(3)
+    q = np.array([[1.149, 2.0, 3.0],      # max residual 0.149  -> in
+                  [1.151, 2.0, 3.0],      # 0.151               -> out
+                  [HKL_TOL, 2.0, 3.0],    # residual == HKL_TOL -> out under strict <, in under <=
+                  [1.10, 2.149, 2.851],   # all inside          -> in
+                  [1.149, 2.151, 3.0]])   # mixed: max rules    -> out
+    got = StreamDriver._inliers(None, q, M)
+    assert got == 2, f"_inliers counted {got} of the straddle set, expected 2"
+
+    # ...and finally that _inliers READS the constant rather than merely agreeing with it. Every
+    # probe above is fixed at the current 0.15, so re-inlining the original `< 0.15` literal --
+    # the exact regression this PR exists to prevent -- leaves them all green (Copilot review of
+    # #170, round 4). Only moving the constant and watching the behavior follow can tell the two
+    # apart: with the window widened to 0.20 every row's residual (0.149, 0.151, 0.15, 0.149,
+    # 0.151) falls inside, so the count must rise 2 -> 5. Restored in a finally, so a failure
+    # here cannot leak a bogus tolerance into the rest of the suite.
+    import glint.stream_driver as _sd
+    _saved = _sd.HKL_TOL
+    try:
+        _sd.HKL_TOL = 0.20
+        widened = StreamDriver._inliers(None, q, M)
+    finally:
+        _sd.HKL_TOL = _saved
+    assert widened == 5, (
+        f"_inliers counted {widened} at a widened window, expected 5 -- it is not reading "
+        "HKL_TOL, so the canonical constant is decorative and a re-inlined literal would pass")
+
+
 if __name__ == "__main__":
     tests = (test_blind_driver_gets_the_pool_keyed_gate_by_default,
              test_overrides_are_forwarded_including_the_inert_one,
              test_known_cell_driver_builds_no_vote_histogram,
-             test_new_options_stay_at_the_end_of_the_signature)
+             test_new_options_stay_at_the_end_of_the_signature,
+             test_live_gate_defaults_and_window_are_pinned)
     ok = 0
     for t in tests:
         try:

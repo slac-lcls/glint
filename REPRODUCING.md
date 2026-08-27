@@ -62,7 +62,7 @@ Everything here runs from a clean checkout on CPU. The scoring and gate-arithmet
 only `numpy` and `scipy`; running GLINT itself additionally needs `torch` (CPU build is fine).
 
 ```bash
-python3 -m pip install -e .        # installs numpy/scipy/torch -- do this in a fresh environment
+python3 -m pip install -e .        # installs numpy/scipy/torch/h5py -- do this in a fresh environment
 ```
 
 That install is what brings in the dependencies. The `PYTHONPATH=.` on the commands below only

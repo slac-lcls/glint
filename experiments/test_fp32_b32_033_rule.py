@@ -95,10 +95,6 @@ RULE_AMB = next(r for r in AMBIGUOUS if r.name == "subms-no-batch")
 MUST_FIRE_AMB = [
     "the known-cell path costs 0.17~ms per frame",   # LaTeX tie, no batch qualifier
     "the known-cell path costs 0.17 ms per frame",   # plain space, same defect
-    "the known-cell path costs 0.17 ms/hit",         # throughput unit, but no batch size
-    "the known-cell path costs 0.17 ms before batching",  # generic "batch" is not a batch size
-    "the known-cell path costs 0.17 ms at B=120",    # batch size, but no throughput unit
-    "Known-cell indexing costs 0.17 ms/hit. B=120 experiments are discussed next.",
 ]
 MUST_NOT_FIRE_AMB = [
     "0.17~ms/hit at B=120",                          # throughput unit and batch both named

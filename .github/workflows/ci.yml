@@ -85,6 +85,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_consensus_degenerate.py
 
+      - name: experiments/test_consensus_order.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_consensus_order.py
+
       - name: experiments/test_stream_gate_lock.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_stream_gate_lock.py
@@ -144,6 +148,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_geom_bridge.py
 
+      - name: experiments/test_cli_smoke.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_cli_smoke.py
+
       # ~50s, by far the slowest step here: it refines over 540 synthetic frames. Kept because
       # it is the only cover of the geometry-refinement solver, but it is the first candidate
       # to trim if this job gets tight.
@@ -156,10 +164,11 @@ jobs:
       # was enforced on one machine and not in CI. Editing a stored split left CI green.
       #
       # What runs HERE is check_arithmetic() in full (which is where those assertions live) plus
-      # the three in-repo docs, now resolved from the checkout instead of ~/git/glint. The paper
-      # and the decks live outside the repo and are reported as SKIP -- 3 checked, 6 skipped on a
-      # bare runner. That is the honest scope: this step cannot catch a number drifting in
-      # glint.tex, and the pre-push hook still has to.
+      # the in-repo docs (README/ROADMAP/GLINT_REPORT, CONTRIBUTING.md and docs/, 8 files as of
+      # 2026-08-27), now resolved from the checkout instead of ~/git/glint. The paper and the
+      # decks live outside the repo and are reported as SKIP -- 8 checked, 8 skipped on a bare
+      # runner. That is the honest scope: this step cannot catch a number drifting in
+      # glint_rewrite_JAC_refined.tex, and the pre-push hook still has to.
       - name: experiments/check_numbers.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/check_numbers.py

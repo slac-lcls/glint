@@ -27,14 +27,19 @@ XG = os.environ.get("GLINT_XG", "/sdf/home/s/smarches/git/glint/experiments/xgan
 sys.path.insert(0, WT)
 sys.path.insert(0, WT + "/experiments")
 import glint.glint_fast as gf
-from glint.glint_fast import matched, index_blind_nbest
+from glint.glint_fast import matched_strict, index_blind_nbest
 from glint.multishot import same_lattice
 from glint.replica_gpu import index_known_gpu_cell
 import glint.replica_gpu_batch as rgb
 import glint.stream_driver as sd
 
 LYSO = gf.LYSO
-GATE_FRAC, GATE_MIN, TOL = 0.25, 10, 0.15
+# Canonical gate constants, not a re-declaration: the triple lives in glint/glint_fast.py next to
+# matched_strict()/gpass() and is source-tied to check_numbers.py FACTS there. The STRICT
+# matcher is the one to call here: plain matched() honours QDIST and, in that mode, ignores
+# the tolerance it is handed entirely (Copilot review of glint#170), so a script claiming to
+# report the canonical gate would silently report a different one.
+GATE_FRAC, GATE_MIN, TOL = gf.GATE_FRAC, gf.GATE_MIN, gf.GATE_TOL
 FRAMES_PATH = os.environ.get("GLINT_FRAMES", os.path.join(WT, "experiments", "frames_cxidb_clean.txt"))
 
 
@@ -44,7 +49,7 @@ def strict_gate(M, q, truth=None):
     truth = LYSO if truth is None else truth
     if not same_lattice(M, truth):
         return False
-    m = matched(M, q)
+    m = matched_strict(M, q)
     return (m / len(q) >= GATE_FRAC) and (m >= GATE_MIN)
 
 

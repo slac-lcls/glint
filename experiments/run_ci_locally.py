@@ -40,6 +40,7 @@ STEPS = [
     "experiments/test_panel_stack_integrate.py",
     "experiments/test_geom_data_key.py",
     "experiments/test_consensus_degenerate.py",
+    "experiments/test_consensus_order.py",
     "experiments/test_stream_gate_lock.py",
     "experiments/test_lock_probe.py",
     "experiments/test_running_consensus.py",
@@ -50,6 +51,7 @@ STEPS = [
     "experiments/test_watchdog_fanout_guard.py",
     "experiments/test_retry_cascade.py",
     "experiments/test_geom_bridge.py",
+    "experiments/test_cli_smoke.py",
     "experiments/test_geom_refine.py",
     # Skips without a GPU and exits 0 (glint#123). Running it here is still worth the second it
     # costs: the module body resolves HKLGrid/_panel_geom/recip_from_M/cell_to_Ar at import, so a

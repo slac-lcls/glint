@@ -683,6 +683,10 @@ def test_s16_needles_bind_values_to_what_they_count():
     recast = _s16_prose(cross="Both runs used")
     assert _required_fires(recast, "s16-subset-recovery-facts"), (
         "the threshold claim was replaced while the number survived")
+    negated_by = _s16_prose(cross="Both runs cross the $90\\%$ level, but not by")
+    assert _required_fires(negated_by, "s16-subset-recovery-facts"), (
+        "'but not by N*=16' satisfied the both-runs needle -- 'by' must be pinned "
+        "immediately before N* with only whitespace, not admitted through an arbitrary gap (round 11)")
 
 
 def test_needles_reject_signs_and_unbounded_digits():
@@ -733,6 +737,11 @@ def test_nstar32_exemption_is_clause_scoped():
     assert _fires(wrong_side_before, "nstar-32-retired"), (
         "a forward-attaching qualifier AFTER the match suppressed a live claim -- "
         "'would have correctly reported' must precede the value it retires (round 10)")
+    wrong_object_before = ("The original sweep would have correctly reported 16 but the "
+                           "reconstructed protocol gives $N^{\\star}=32$")
+    assert _fires(wrong_object_before, "nstar-32-retired"), (
+        "the pre-qualifier already attaches to 16 mid-clause -- it must end IMMEDIATELY before "
+        "the retired value, not merely somewhere earlier in the clause (round 11)")
     counterfactual = ("a coarser grid whose next tested point after 16 was 32 would have "
                       "correctly reported $N^{\\star}=32$")
     assert not _fires(counterfactual, "nstar-32-retired"), (

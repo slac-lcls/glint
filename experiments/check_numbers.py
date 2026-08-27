@@ -1311,7 +1311,10 @@ REQUIRED = [
               # ...and "by" in ORDER, because without it the gaps admitted "Both runs cross
               # 90% only AFTER N*=16", which contradicts the guarded claim while satisfying every
               # token in it (round 10).
-              r"[Bb]oth\s+runs\s+cross[^.]{0,40}?90\s*\\?%[^.]{0,25}?\bby\b[^.]{0,25}?"
+              # ...and the gap before "by" is limited to one or two plain words without
+              # punctuation, so "but not by N*=16" cannot satisfy the needle -- "level, but not
+              # by" fails because the comma breaks the word-whitespace sequence (round 11).
+              r"[Bb]oth\s+runs\s+cross[^.]{0,40}?90\s*\\?%\s+\w+(?:\s+\w+)?\s+\bby\b\s+"
               r"N\^?\{?\\star\}?\s*=\s*" + _lit(f"{FACTS['nstar_r0278']:d}")),
              f"SI S16 states its measurement, so the file carrying it must state the banked values "
              f"IN CONTEXT: {FACTS['subset_draws_per_n']} draws per N over "
@@ -1444,7 +1447,13 @@ def _in_clause(hay: str, pos: int, words: tuple[str, ...], rx: "re.Pattern | Non
 
 def _before_match(hay: str, pos: int, words: tuple[str, ...],
                   rx: "re.Pattern | None" = None) -> bool:
-    """Does one of `words` PRECEDE `pos` within the clause? See Rule.exempt_before."""
+    """Does one of `words` end IMMEDIATELY before `pos` within the clause?
+
+    "Immediately" means only whitespace may separate the qualifier from the matched value; any
+    non-whitespace intervening text means the qualifier attaches to something else in the clause
+    (e.g. 'would have correctly reported 16 but ... gives N*=32' must not be exempted because the
+    qualifier already attaches to 16, not to N*=32). See Rule.exempt_before.
+    """
     if not words:
         return False
     lo = 0
@@ -1454,7 +1463,12 @@ def _before_match(hay: str, pos: int, words: tuple[str, ...],
     hi = pos + m.start() + 1 if m else len(hay)
     if rx is not None and len(rx.findall(hay[lo:hi])) > 1:
         return False
-    return any(w.lower() in hay[lo:pos].lower() for w in words)
+    seg = hay[lo:pos]
+    for w in words:
+        idx = seg.lower().rfind(w.lower())
+        if idx >= 0 and not seg[idx + len(w):].strip():
+            return True
+    return False
 
 
 def _after_match(hay: str, pos: int, words: tuple[str, ...],

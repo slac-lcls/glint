@@ -512,19 +512,22 @@ GLINT_FAST = ROOT / "glint" / "glint_fast.py"
 # (Copilot review of #170, round 4). The expression case belongs here for the same reason: the
 # tie's regex read only a numeric PREFIX, so "GATE_TOL = 0.15 + 0.01" parsed as 0.15 (round 3).
 GATE_SOURCE_MUTATIONS = [
-    ("GATE_TOL = 0.15  ", "GATE_TOL = 0.15 + 0.01  ",     "GATE_TOL could not be located"),
+    ("GATE_TOL = 0.15  ", "GATE_TOL = 0.15 + 0.01  ", ("GATE_TOL", "could not be located")),
     ("def matched(M, q, tol=GATE_TOL):", "def matched(M, q, tol=0.15):",
-     "matched()'s tol default is no longer GATE_TOL"),
-    ("m = matched_strict(M, q)", "m = matched(M, q)",
-     "gpass()'s BODY no longer references matched_strict"),
+     ("matched()", "tol default", "GATE_TOL")),
+    ("m = matched_strict(M, q)", "m = matched(M, q)", ("gpass(", "matched_strict")),
     # The RETURN EXPRESSION, which a regex over the source could not distinguish from the same
     # word in the docstring above it (Copilot review of #170, round 5) -- the tie reads the
     # parsed body now, so this severing is visible.
     ("return int((np.abs(r).max(1) < GATE_TOL).sum())",
-     "return int((np.abs(r).max(1) < 0.15).sum())",
-     "matched_strict()'s BODY no longer references GATE_TOL"),
-    (">= GATE_FRAC)", ">= 0.25)",  "gpass()'s BODY no longer references GATE_FRAC"),
-    (">= GATE_MIN)",  ">= 10)",    "gpass()'s BODY no longer references GATE_MIN"),
+     "return int((np.abs(r).max(1) < 0.15).sum())", ("matched_strict(", "GATE_TOL")),
+    # The refactor that defeats a NAME-PRESENCE check: reference the constant, then compare
+    # against a literal. Only inspecting the comparison itself sees it.
+    ("    return int((np.abs(r).max(1) < GATE_TOL).sum())",
+     "    tol = GATE_TOL\n    return int((np.abs(r).max(1) < 0.16).sum())",
+     ("matched_strict(", "GATE_TOL")),
+    (">= GATE_FRAC)", ">= 0.25)", ("gpass(", "GATE_FRAC")),
+    (">= GATE_MIN)",  ">= 10)",   ("gpass(", "GATE_MIN")),
 ]
 
 
@@ -540,8 +543,12 @@ def test_gate_tie_catches_a_severed_functional_use():
             assert old in original, f"anchor vanished from glint_fast.py: {old!r}"
             GLINT_FAST.write_text(original.replace(old, new, 1), encoding="utf-8")
             bad, _ = _cn.check_arithmetic()
-            assert any(expect in b for b in bad), (
-                f"severing {old!r} produced no failure mentioning {expect!r}; got:\n"
+            # TOKENS, not a prose fragment. Matching the guard's sentence verbatim made this
+            # test fail three separate times today purely because the MESSAGE was reworded while
+            # the check kept working -- a red build that says nothing about the code under test.
+            # The tokens are what the failure must identify: which function, and which constant.
+            assert any(all(tok in b for tok in expect) for b in bad), (
+                f"severing {old!r} produced no failure naming all of {expect!r}; got:\n"
                 + ("\n".join(bad) or "  (nothing at all -- the functional check is gone)"))
     finally:
         GLINT_FAST.write_text(original, encoding="utf-8")

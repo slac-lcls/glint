@@ -1314,7 +1314,15 @@ REQUIRED = [
               # ...and the gap before "by" is limited to one or two plain words without
               # punctuation, so "but not by N*=16" cannot satisfy the needle -- "level, but not
               # by" fails because the comma breaks the word-whitespace sequence (round 11).
-              r"[Bb]oth\s+runs\s+cross[^.]{0,40}?90\s*\\?%\s+\w+(?:\s+\w+)?\s+\bby\b\s+"
+              # NOR MAY EITHER WORD BE A NEGATOR: punctuation-free negation slipped through,
+              # because in "level not by" the two allowed \w+ tokens are "level" and "not" and
+              # the needle stayed green while the sentence denied the claim outright (round 12).
+              # A negator list rather than a whitelist of bridge words: the bridge is prose that
+              # may legitimately be reworded ("level", "recovery", "of trials"), whereas the
+              # words that INVERT the claim are a short closed set.
+              r"[Bb]oth\s+runs\s+cross[^.]{0,40}?90\s*\\?%"
+              r"(?:\s+(?!(?:not|never|only|rarely|barely|hardly|nor|without|un\w+)\b)\w+){1,2}"
+              r"\s+\bby\b\s+"
               r"N\^?\{?\\star\}?\s*=\s*" + _lit(f"{FACTS['nstar_r0278']:d}")),
              f"SI S16 states its measurement, so the file carrying it must state the banked values "
              f"IN CONTEXT: {FACTS['subset_draws_per_n']} draws per N over "

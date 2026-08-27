@@ -683,6 +683,17 @@ def test_s16_needles_bind_values_to_what_they_count():
     recast = _s16_prose(cross="Both runs used")
     assert _required_fires(recast, "s16-subset-recovery-facts"), (
         "the threshold claim was replaced while the number survived")
+    # Negation WITHOUT punctuation, which the comma-breaking constraint alone did not stop:
+    # in "level not by", the two permitted \w+ tokens are "level" and "not" (round 12).
+    for neg in ("Both runs cross the $90\\%$ level not by",
+                "Both runs cross the $90\\%$ level never by"):
+        assert _required_fires(_s16_prose(cross=neg), "s16-subset-recovery-facts"), (
+            f"punctuation-free negation satisfied the both-runs needle: {neg!r}")
+    # ...and the bridge must still admit legitimate rewordings, or the guard becomes a style rule.
+    for ok_bridge in ("Both runs cross $90\\%$ recovery by",
+                      "Both runs cross the $90\\%$ recovery level by"):
+        assert not _required_fires(_s16_prose(cross=ok_bridge), "s16-subset-recovery-facts"), (
+            f"a legitimate rewording of the bridge was rejected: {ok_bridge!r}")
     negated_by = _s16_prose(cross="Both runs cross the $90\\%$ level, but not by")
     assert _required_fires(negated_by, "s16-subset-recovery-facts"), (
         "'but not by N*=16' satisfied the both-runs needle -- 'by' must be pinned "

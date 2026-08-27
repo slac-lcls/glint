@@ -807,7 +807,12 @@ RETIRED = [
     Rule("fused-fps-3800",
          r"(?<![\d.])3[,.]?800\b|3\.8[\s~]*kHz",
          "3.8 kHz was 1000/0.26; against the measured 0.17 ms/frame it is ~5.9 kHz", "~5.9 kHz"),
-    Rule("ffbidx-12x", r"(?<![\d.])12\s*(?:×|x|\\times)(?=[^\n]{0,80}(?:ffbidx|pipelined))",
+    # BOTH orderings: the lookahead alone accepted "ffbidx is 12x faster", where the comparator
+    # precedes the number. Same one-directional gap as the fp32 pairing rules further down --
+    # a retired value must not be able to hide behind sentence structure.
+    Rule("ffbidx-12x",
+         r"(?<![\d.])12\s*(?:×|x|\\times)(?=[^\n]{0,80}(?:ffbidx|pipelined))"
+         r"|(?:ffbidx|pipelined)[^\n]{0,80}?(?<![\d.])12\s*(?:×|x|\\times)",
          "12x was ffbidx_pipelined_ms/0.26; against 0.17 it is ~18x", "~18x"),
     Rule("speedup-160", r"(?<![\d.])160\s*(?:×|x|\\times)",
          "the scalar->GPU blind ratio follows 2342/26, not 2342/15", "~90x"),
@@ -1258,7 +1263,9 @@ AMBIGUOUS = [
                 "integrat", "box-integ", "un-attributed", "unattributed")),
     # The RATIO evades the rule above. 100x was 26 / 0.26, so it is retired with the old B=120 timing;
     # the current 25.7 / 0.17 is ~151x. A batch qualifier no longer makes the old derivation current.
-    Rule("ratio-100x", r"100\s*x\s*(?:less|cheaper|fewer|faster)",
+    # (?<![\d.]) so "1100x cheaper" is not read as the retired "100x" -- the same numeric-boundary
+    # convention every other rule in this file uses; this one was written without it.
+    Rule("ratio-100x", r"(?<![\d.])100\s*x\s*(?:less|cheaper|fewer|faster)",
          "the ~100x discovery-vs-registration ratio used the retired 0.26 ms B=120 figure; "
          "25.7 / 0.17 is ~151x",
          "say '~151x less cost when batched at B=120'", window=400),

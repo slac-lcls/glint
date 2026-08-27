@@ -108,7 +108,19 @@ MUST_FIRE_RATIO = [
 ]
 MUST_NOT_FIRE_RATIO = [
     "registration is 151x cheaper when batched at B=120",
+    # numeric boundary: the rule was written without the (?<![\d.]) every other rule here uses,
+    # so an unrelated 1100x read as the retired 100x (Copilot, round 6).
+    "the new engine is 1100x cheaper than before",
 ]
+
+# ffbidx-12x matched only the ordering "12x ... ffbidx"; with the comparator FIRST the retired
+# speedup was invisible. Same one-directional gap as the fp32 pairing rules (Copilot, round 6).
+RULE12 = next(r for r in RETIRED if r.name == "ffbidx-12x")
+MUST_FIRE_12 = [
+    "this is 12x faster than pipelined ffbidx",
+    "ffbidx is 12x slower than the fused engine",
+]
+MUST_NOT_FIRE_12 = ["the anneal is 12x faster than the numpy loop"]
 
 
 def _check_via_scan(fire, silent, label):
@@ -144,13 +156,14 @@ def main():
            + _check(RULE26, MUST_FIRE_TIE, MUST_NOT_FIRE_TIE, "fused-b120-0.26")
            + _check(RULE38, MUST_FIRE_38, [], "fused-fps-3800")
            + _check_via_scan(MUST_FIRE_AMB, MUST_NOT_FIRE_AMB, "subms-no-batch")
-           + _check_via_scan(MUST_FIRE_RATIO, MUST_NOT_FIRE_RATIO, "ratio-100x"))
+           + _check_via_scan(MUST_FIRE_RATIO, MUST_NOT_FIRE_RATIO, "ratio-100x")
+           + _check(RULE12, MUST_FIRE_12, MUST_NOT_FIRE_12, "ffbidx-12x"))
     if bad:
         print(f"{len(bad)} failure(s)"); print("\n".join(bad)); return 1
     nf = (len(MUST_FIRE)+len(MUST_FIRE_16)+len(MUST_FIRE_TIE)+len(MUST_FIRE_38)
-          + len(MUST_FIRE_AMB) + len(MUST_FIRE_RATIO))
+          + len(MUST_FIRE_AMB)+len(MUST_FIRE_RATIO)+len(MUST_FIRE_12) + len(MUST_FIRE_RATIO))
     ns = (len(MUST_NOT_FIRE)+len(MUST_NOT_FIRE_16)+len(MUST_NOT_FIRE_TIE)
-          + len(MUST_NOT_FIRE_AMB) + len(MUST_NOT_FIRE_RATIO))
+          + len(MUST_NOT_FIRE_AMB)+len(MUST_NOT_FIRE_RATIO)+len(MUST_NOT_FIRE_12) + len(MUST_NOT_FIRE_RATIO))
     print(f"drift-rule battery OK -- {nf} fire, {ns} stay silent")
     return 0
 

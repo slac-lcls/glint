@@ -255,6 +255,30 @@ FACTS: dict[str, float | str] = {
     # `lyso_glint_int.stream` gives 1476/1563 (94.4%) and the Aug rerun 1506/1563, while the Aug
     # rerun reports the consensus support UNSET, so 54/60 has no source at all. RETIRED rules
     # `jungfrau-93pct` and `jungfrau-support-54-60` catch both in the files.
+    # --- SI S16: consensus recovery from random subsets of long runs (added to the paper by Yuan
+    # 2026-08-27; banked here the same day because a whole new SI section arrived carrying ten
+    # quantitative claims that nothing was watching -- the same gap #159 closed for the SI file).
+    # Source: the 2026-08-24 reconstruction and its adversarial self-review, which CORRECTED the
+    # previously published N*=32 for r0058 down to 16. The correction is protocol-conditional and
+    # the paper says so: the original sweep's N grid was never recorded, and a coarse grid whose
+    # next point after 16 was 32 would legitimately have reported 32. Do not restate 32 as a live
+    # measurement -- see the retired rule below.
+    "subset_draws_per_n":      400,  # random N-frame subsets drawn per N
+    "subset_seeds":              8,  # seeds 0-7
+    "subset_draws_total":     3200,  # = subset_draws_per_n * subset_seeds
+    "nstar_r0278":              16,  # smallest tested N reaching 90% recovery of the all-frame cell
+    # ⚑ NAMED FOR WHAT WAS MEASURED, not for N*. Round 7 narrowed the PROSE around this key while
+    # leaving it called `nstar_r0058`, and the name is itself a claim: FACTS defines N* as the
+    # smallest tested N reaching the bar, and no sub-16 point was ever recorded for r0058, so a
+    # key called nstar asserted a measurement that does not exist (Copilot review of #163, r8).
+    # r0278 keeps `nstar_` because its crossing IS bracketed (89.8% at 12, 96.1% at 16). Rename
+    # this back only if a below-threshold r0058 point is measured and banked beside it.
+    "n_cross90_r0058":          16,  # smallest N at which r0058 was MEASURED to exceed 90%
+    "recov_r0278_n12_pct":    89.8,  # BELOW the 90% bar, which is why N*=16 and not 12
+    "recov_r0278_n16_pct":    96.1,
+    "recov_r0058_n16_pct":    91.2,
+    "indexed_r0278":          1785,  # indexed frames the subsets are drawn from
+    "indexed_r0058":          2319,
     "jungfrau_frames_total":  1563,  # MEASURED: 404+373+409+377 over the four r0033 .cxi files
     "jungfrau_blind_of1563":  1506,  # blind indexed                        (job 35507050)
     "jungfrau_blind_rate_pct":  96,  # = round(100 * jungfrau_blind_of1563 / jungfrau_frames_total)
@@ -624,6 +648,26 @@ class Rule:
     needs: tuple[str, ...] = ()      # if set: a match is OK when one of these is nearby
     exempt: tuple[str, ...] = ()     # a match is OK when one of these is nearby (e.g. "LEGACY")
     window: int = 240                # how far to look for `needs` / `exempt`, in characters
+    # Scope `exempt` to the CLAUSE containing the match instead of the character window. The
+    # window form lets one properly-retired mention exempt a SEPARATE live claim in the same
+    # paragraph -- "The previously quoted N*=32 does not reproduce. The reconstructed protocol
+    # gives N*=32." passes whole (round 3) -- and full-sentence scope fails the same way one
+    # step later, through a comma: "...does not reproduce, but the reconstructed protocol gives
+    # N*=32." is ONE sentence, so a sentence-level exemption covers both matches (round 4). The
+    # clause boundaries are sentence enders (., ?, ! followed by whitespace/EOF -- decimals like
+    # "93.4%" do not split) plus , ; : -- so the retirement words must sit in the same clause as
+    # the value they retire. The cost is deliberate: a retirement phrased across a comma
+    # ("N*=32, as previously quoted, does not reproduce") false-fires and the message says how
+    # to rephrase; the guard prefers a rare loud false positive to a silent fail-open.
+    clause_exempt: bool = False
+    # Phrases that must appear AFTER the match to exempt it, as opposed to `exempt`, which may
+    # sit anywhere in the clause. The split is not fussiness -- it is what the two shapes of a
+    # retirement actually look like. A POST-qualifier attaches backwards ("N*=32 ... does not
+    # reproduce"), so an instance of it BEFORE the match is qualifying something else: "The old
+    # recovery does not reproduce but the protocol gives N*=32" is a live claim (Copilot review
+    # of #163, round 9). A PRE-qualifier attaches forwards ("would have correctly reported
+    # N*=32") and is legitimate exactly where a post-qualifier is not.
+    exempt_after: tuple[str, ...] = ()
     flags: int = re.I
     _rx: re.Pattern = field(init=False, repr=False)
 
@@ -692,6 +736,40 @@ RETIRED = [
     # numerals ("76% vs\n71%"), and a class that excludes \n is defeated by reflowing the very
     # paragraph it guards. That is the same defect the stream-band rule had (see :824) -- caught
     # there by the #154 review and reintroduced here, which is why it is spelled out twice.
+    # r0058's N* was published as 32 and the 2026-08-24 reconstruction puts it at 16. The paper
+    # keeps 32 visible in ONE place -- the note explaining that it does not reproduce -- so the
+    # exempts below are the reconstruction's own vocabulary, not a blanket escape.
+    # `32(?!\.?\d)` rejected 320 and 32.5 correctly but ALSO went quiet on "N*=32.0", which is
+    # the retired claim written with a trailing zero (round 8). A zero-valued decimal suffix is
+    # the same number, so only a NONZERO decimal disqualifies the match.
+    Rule("nstar-32-retired",
+         r"N\^?\{?\\star\}?\s*=\s*32(?!\d)(?!\.\d*[1-9])|N\*\s*=\s*32(?!\d)(?!\.\d*[1-9])",
+         f"N* = 32 for r0058 is SUPERSEDED: the symmetric pooled treatment on the protocol-matching "
+         f"pool gives {FACTS['n_cross90_r0058']} for r0058 and {FACTS['nstar_r0278']} for r0278. It is "
+         "protocol-conditional -- the original N grid was never recorded and a coarse grid "
+         "(...16, 32) would legitimately have reported 32 -- so state it as not reproducing under "
+         "the reconstructed protocol rather than as a live measurement",
+         # The replacement carries the qualification ITSELF: a bare "N* = 16" here would have the
+         # `say:` line advising exactly the flat assertion the `why:` above forbids (Copilot
+         # review of #163, round 2). Whoever follows this advice verbatim stays inside the rule.
+         f"N* = {FACTS['n_cross90_r0058']} under the reconstructed protocol (the previously quoted "
+         f"32 does not reproduce)",
+         # Every exempt here must RETIRE the value or state it counterfactually. "reconstructed
+         # protocol" was in this tuple and does neither -- it is the section's ordinary vocabulary,
+         # so the live, wrong sentence "the reconstructed protocol gives N* = 32" sat inside the
+         # exemption and passed silently (Copilot review of #163). The manuscript's real sentence
+         # carries "does not reproduce" and "previously quoted" and stays exempt without it.
+         # clause_exempt, because the window form fails open one step later (a properly retired
+         # mention exempts a SEPARATE live N*=32 within 240 chars, round 3) and full-sentence
+         # scope one step after that (a comma joins a retirement and a live claim into one
+         # sentence, round 4). The retirement must sit in the SAME CLAUSE as the value it
+         # retires.
+         # "would have correctly reported" attaches FORWARD ("...would have correctly reported
+         # N*=32"), so it may precede; "does not reproduce" attaches BACKWARD and must follow the
+         # value it retires, or an unrelated failure earlier in the clause suppresses a live claim.
+         exempt=("would have correctly reported",),
+         exempt_after=("does not reproduce",),
+         clause_exempt=True),
     Rule("blind-pair-adjacent-retired", r"\b76\s*\\?%[^.]{0,30}?\b71\s*\\?%",
          f"'76% vs 71%' is the RETIRED blind pair -- the counts moved to "
          f"{FACTS['glint1_strict_of120']}/120 and {FACTS['xgandalf_blind_strict_of120']}/120 while "
@@ -1072,13 +1150,32 @@ AMBIGUOUS = [
 # test would force one of the two to be excluded. They interpolate FACTS for the reason
 # blind-rate-swap's `instead` does: a hard-coded number here is a second copy of the measurement,
 # and second copies drift.
+def _numword(n) -> str:
+    """The prose rendering of a small count, so a needle built from FACTS accepts the manuscript's
+    "eight random seeds" AND tracks a corrected FACTS value instead of a hardcoded word -- a
+    hardcoded "eight" bypassed the source of truth: correcting subset_seeds and the total together
+    kept the arithmetic green while the rule still demanded eight (Copilot review of #163, r4)."""
+    words = {2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight",
+             9: "nine", 10: "ten", 11: "eleven", 12: "twelve"}
+    return words.get(int(n), str(int(n)))
+
+
 def _lit(v: str) -> str:
     """A FACTS value as a regex matching the number AS WRITTEN, not as a digit-run inside another.
 
     Same trap (a) the RETIRED patterns document: \\b treats a decimal point as a boundary, so
     `\\b1506\\b` happily matches inside `1506.4`, and a bare `31` matches the tail of `531`.
+
+    The trailing guard rejects a DECIMAL extension too, not merely a following digit: `(?![\\d])`
+    let "1785" match inside "1785.4 indexed frames", so a malformed edited count still satisfied
+    every needle built from it (Copilot review of #163, round 6). `\\.?\\d` keeps a sentence-final
+    "1785." matching while rejecting "1785.4"; fixing it HERE fixes every caller.
+
+    The lookbehind excludes a leading SIGN for the same reason it excludes a digit: "-1785
+    indexed frames" and "-0.90" contain the positive literal, so a sign-flipped claim satisfied
+    every needle built from the value (Copilot review of #163, round 8).
     """
-    return rf"(?<![\d.]){re.escape(v)}(?![\d])"
+    return rf"(?<![\d.\-\u2212]){re.escape(v)}(?!\.?\d)"
 
 
 @dataclass
@@ -1149,6 +1246,89 @@ REQUIRED = [
              "protocol (unity scale, native), which reads R_split 33.0 vs 26.7 on this same r0033 "
              "data and is not comparable with this row",
              window=120),
+    # ⚑ THE SAME DEFECT AS THE jungfrau BLOCK ABOVE, REPRODUCED IN THE COMMIT THAT DOCUMENTS IT.
+    # #163 added ten S16 keys to FACTS with provenance and wired them into check_arithmetic, and
+    # stopped there -- so the arithmetic knew 3200 = 400 x 8 and that 96.1% clears the 90% bar,
+    # and NOTHING read the section those numbers came from. Editing S16's draw counts, recovery
+    # percentages, indexed totals or N* left every run green: exactly the "a fact nothing reads is
+    # a comment" failure the jungfrau note twelve lines up was written to prevent, caught in review
+    # of the PR whose stated purpose was to guard S16 (Copilot review of #163).
+    #
+    # THE TRIGGER IS THE SECTION HEADING, which occurs once, in the manuscript, and cannot be
+    # reached by a file that merely mentions subsets or pooling: `\SIsec{S16. Consensus recovery
+    # from random subsets of long runs}`. Whole-file window -- the section runs to ~2000 chars and
+    # the claims are spread across all of it, so any character window would fail open on reflow.
+    # THE NEEDLES BIND EACH VALUE TO ITS N AND ITS RUN, not merely to the file. Independent
+    # file-wide needles pass under a SWAP -- exchange 89.8 and 96.1 in the section and every
+    # needle is still present while N=12 now exceeds the bar and N*=16 is false (Copilot review
+    # of #163, round 2). The context words are taken from the manuscript's own phrasing; a
+    # rewording that keeps the claims true keeps these words. And ALL TEN banked claims get a
+    # needle, because the manuscript states all ten -- a banked fact whose statement in the
+    # deliverable nothing demands is exactly the "decorative FACTS" defect this entry fixes.
+    Required("s16-subset-recovery-facts",
+             r"Consensus\s+recovery\s+from\s+random\s+subsets",
+             (_lit(f"{FACTS['subset_draws_per_n']:d}") + r"\$?\s+draws\s+per\s+\$?N",
+              # Both branches bounded: the numeric one through _lit (an unbounded "8" was found
+              # inside "18 random seeds", round 8) and the word through \b.
+              r"(?:\b" + _numword(FACTS["subset_seeds"]) + r"\b|"
+              + _lit(f"{FACTS['subset_seeds']:d}") + r")\s+random\s+seeds",
+              # ONE needle for both counts, because the manuscript labels only the first:
+              # "r0278, with 1785 indexed frames, and r0058, with 2319". Two loose per-run
+              # needles accepted "r0278 (1785 shots; 1700 indexed frames)" -- the value merely
+              # had to appear shortly after the run ID, never bound to what it counts (Copilot
+              # review of #163, round 7). Spanning the sentence binds run -> count -> label.
+              # The gaps are tempered against DIGITS, not merely against sentence ends: a
+              # plain [^.] gap let a second number sit between the value and its label, so
+              # "r0278 (1785 shots; 1700 indexed frames)" still matched -- the count was near
+              # the label, not bound to it. No digit may intervene between a run and its count,
+              # or between that count and "indexed frames".
+              r"r0278(?:(?!\d)[^.]){0,20}?" + _lit(f"{FACTS['indexed_r0278']:d}")
+              + r"(?:(?!\d)[^.]){0,40}?indexed\s+frames[^.]{0,40}?"
+              + r"r0058(?:(?!\d)[^.]){0,20}?" + _lit(f"{FACTS['indexed_r0058']:d}")
+              # ...and the SECOND count must be bound to the label as well. Matching the bare
+              # number left "r0058, with 2319 shots." green even though the guarded claim -- that
+              # 2319 are INDEXED FRAMES -- had disappeared (round 8). It may inherit the label by
+              # coordination, which is what the manuscript does ("and r0058, with $2319$."), or
+              # repeat it; anything else between the count and the sentence end is a relabelling.
+              + r"(?:\$?\s*\.|\$?\s*indexed\s+frames)",
+              _lit(f"{FACTS['subset_draws_total']:d}") + r"\$?\s+draws\s+per\s+point",
+              # The N=12 clause shares its trailing "for r0278" with the N=16 clause, so the bind
+              # is a tempered gap: an intervening r0058 or a sentence end breaks it. A plain [^.]
+              # gap fails TWICE here -- open on "89.8% at N=12 for r0058 and ... for r0278" (it
+              # lazily scans past the wrong run tag, round 3), and closed on the REAL manuscript,
+              # whose gap contains the decimal in "96.1%" -- so the sentence boundary is a period
+              # followed by whitespace, exactly as _in_clause's sentence enders, not any period.
+              _lit(f"{FACTS['recov_r0278_n12_pct']:g}")
+              + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*12\$?"
+                r"(?:(?!for\s+r(?!0278\b))(?![.?!]\s)[\s\S]){0,80}?for\s+r0278",
+              _lit(f"{FACTS['recov_r0278_n16_pct']:g}")
+              + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*16\$?\s+for\s+r0278",
+              _lit(f"{FACTS['recov_r0058_n16_pct']:g}")
+              + r"\s*\\?%\$?\s+at\s+\$?N\s*=\s*16\$?\s+for\s+r0058",
+              # BOTH-RUNS is part of the claim: a bare "N*=16" needle is satisfied by a section
+              # that quietly narrows the assertion to one run (round 3). The needle requires the
+              # relationship the manuscript states -- "both runs cross the 90% level by N*=16" --
+              # so dropping either run from the claim is a firing, not a wording change.
+              # ...and the THRESHOLD language with it: "Both runs" + the bare number accepted
+              # "Both runs used N*=16 as an arbitrary cap", which keeps the guarded value while
+              # replacing the measured claim it stands for (round 7).
+              r"[Bb]oth\s+runs\s+cross[^.]{0,40}?90\s*\\?%[^.]{0,40}?"
+              r"N\^?\{?\\star\}?\s*=\s*" + _lit(f"{FACTS['nstar_r0278']:d}")),
+             f"SI S16 states its measurement, so the file carrying it must state the banked values "
+             f"IN CONTEXT: {FACTS['subset_draws_per_n']} draws per N over "
+             f"{FACTS['subset_seeds']} random seeds ({FACTS['subset_draws_total']} draws per "
+             f"point) on r0278 ({FACTS['indexed_r0278']} indexed frames) and r0058 "
+             f"({FACTS['indexed_r0058']}); pooled recovery "
+             f"{FACTS['recov_r0278_n12_pct']}% at N=12 and "
+             f"{FACTS['recov_r0278_n16_pct']}% at N=16 for r0278, "
+             f"{FACTS['recov_r0058_n16_pct']}% at N=16 for r0058; N* = "
+             f"{FACTS['nstar_r0278']} -- both runs CROSS the 90% level by that N under the "
+             f"reconstructed protocol, which is the claim the evidence supports: r0278's crossing "
+             f"is bracketed on both sides (below the bar at N=12, above at N=16) while r0058 has "
+             f"no sub-16 point banked, so 'smallest tested N' is established for r0278 only. Each "
+             "percentage is bound to its N and run because a swapped pair passes value-only "
+             "needles while falsifying N*. If a value really moved, edit FACTS and re-run every "
+             "target -- do not edit the section"),
     # cxidb-45, and NOT "Proteinase K": build_pitch.py discusses Proteinase K indexing (the DIALS
     # head-to-head) without ever merging it, so keying on the protein name would demand merge
     # statistics from a deck that correctly does not quote any. `cxidb-45` names the serial set and
@@ -1227,6 +1407,62 @@ def _near(hay: str, pos: int, words: tuple[str, ...], window: int) -> bool:
     return any(w.lower() in seg for w in words)
 
 
+_CLAUSE_END = re.compile(r"[.?!](?=\s|$)|[,;:]")     # see Rule.clause_exempt for why each is here
+
+
+def _in_clause(hay: str, pos: int, words: tuple[str, ...], rx: "re.Pattern | None" = None) -> bool:
+    """Like _near, but the segment is the CLAUSE containing `pos` (see Rule.clause_exempt).
+
+    Boundaries are sentence enders -- ., ? or ! followed by whitespace or EOF, so decimals and
+    version numbers do not split -- plus , ; and :. `?`/`!` matter: "Was the quoted N*=32
+    reproduced? The protocol gives N*=32." is two sentences, and a period-only boundary read
+    them as one, exempting the live second claim (Copilot review of #163, round 4).
+    """
+    lo = 0
+    for m in _CLAUSE_END.finditer(hay[:pos]):
+        lo = m.end()
+    m = _CLAUSE_END.search(hay[pos:])
+    hi = pos + m.start() + 1 if m else len(hay)
+    seg = hay[lo:hi]
+    # DIRECTION MATTERS: the phrase must follow the value it retires. A bare substring test
+    # over the clause let an UNRELATED failure suppress a live claim -- "The old recovery does
+    # not reproduce but the reconstructed protocol gives N*=32" has one match and the phrase in
+    # the same clause, so the retired value passed while "does not reproduce" qualified something
+    # else entirely (Copilot review of #163, round 9). Requiring the phrase AFTER the match
+    # matches how a retirement is actually written ("the previously quoted N*=32 ... does not
+    # reproduce") and rejects the counterexample, where it precedes.
+    #
+    # TWO MATCHES IN ONE CLAUSE = NO EXEMPTION. A conjunction needs no punctuation, so "The
+    # protocol gives N*=32 but the previously quoted N*=32 does not reproduce" is a single clause
+    # carrying a live claim AND a retired one; scoping by segment alone exempts both (Copilot
+    # review of #163, round 7). Nothing can tell which occurrence the retirement qualifies, so the
+    # guard refuses rather than guesses -- the author splits the sentence, which is clearer prose
+    # anyway. This is the conservative direction: it can only ever ADD a report.
+    if rx is not None and len(rx.findall(seg)) > 1:
+        return False
+    return any(w.lower() in seg.lower() for w in words)
+
+
+def _after_match(hay: str, pos: int, words: tuple[str, ...],
+                 rx: "re.Pattern | None" = None) -> bool:
+    """Does one of `words` follow `pos`, within the clause? See Rule.exempt_after.
+
+    Carries the SAME multi-match refusal as _in_clause -- it is a property of the clause, not of
+    one exemption path, and gating only the other path let a two-match clause exempt its first
+    occurrence through here instead.
+    """
+    if not words:
+        return False
+    lo = 0
+    for m in _CLAUSE_END.finditer(hay[:pos]):
+        lo = m.end()
+    m = _CLAUSE_END.search(hay[pos:])
+    hi = pos + m.start() + 1 if m else len(hay)
+    if rx is not None and len(rx.findall(hay[lo:hi])) > 1:
+        return False
+    return any(w.lower() in hay[pos:hi].lower() for w in words)
+
+
 def scan(path: Path, text: str) -> list[str]:
     """Return a list of human-readable failures for one file."""
     fails: list[str] = []
@@ -1249,7 +1485,13 @@ def scan(path: Path, text: str) -> list[str]:
     for group, rules in (("RETIRED", RETIRED), ("OVERCLAIM", OVERCLAIM), ("AMBIGUOUS", AMBIGUOUS)):
         for rule in rules:
             for m in rule._rx.finditer(norm):
-                if rule.exempt and _near(norm, m.start(), rule.exempt, rule.window):
+                _exempted = (_in_clause(norm, m.start(), rule.exempt, rule._rx)
+                             if rule.clause_exempt
+                             else _near(norm, m.start(), rule.exempt, rule.window))
+                if not _exempted and rule.exempt_after:
+                    _exempted = _after_match(norm, m.start(), rule.exempt_after,
+                                             rule._rx if rule.clause_exempt else None)
+                if (rule.exempt or rule.exempt_after) and _exempted:
                     continue
                 if rule.needs and _near(norm, m.start(), rule.needs, rule.window):
                     continue
@@ -1650,6 +1892,44 @@ def check_arithmetic() -> list[str]:
         if int(F[_pct_key]) != _want:
             bad.append(f"  FACTS: {_pct_key} = {F[_pct_key]}% but {_cnt_key} = {F[_cnt_key]}/120 rounds to "
                        f"{_want}% -- a count and its percentage were edited apart")
+    # EXACT, not close(). This is a counting identity over integers -- 400 subsets on each of 8
+    # seeds is 3200 draws and nothing else -- and close()'s 3% band would pass any total from 3104
+    # to 3296 against it (Copilot review of #163). The percentage/count loop just above compares
+    # with `!=` for the same reason; close() is for ratios of measured times, where 3% is the
+    # measurement's own scatter. RAW values, no int() coercion: int() would truncate a fractional
+    # edit (subset_draws_per_n = 400.9 x 8 -> int 400 x 8 = 3200) and the "exact" identity would
+    # fail open on exactly the malformed value it exists to reject (Copilot review, round 2).
+    if F["subset_draws_total"] != F["subset_draws_per_n"] * F["subset_seeds"]:
+        bad.append(f"  FACTS: subset_draws_total = {F['subset_draws_total']} but "
+                   f"{F['subset_draws_per_n']} per N x {F['subset_seeds']} seeds = "
+                   f"{F['subset_draws_per_n'] * F['subset_seeds']} -- exact counts")
+    # N* is DEFINED as the smallest tested N reaching 90%, so the recoveries either side of it must
+    # bracket the bar. This is the invariant that makes N*=16 a measurement rather than a choice:
+    # if r0278's N=12 figure ever rises to >=90, N* is 12 and the paper's sentence is wrong.
+    if float(F["recov_r0278_n12_pct"]) >= 90.0:
+        bad.append(f"  FACTS: recov_r0278_n12_pct = {F['recov_r0278_n12_pct']}% is AT OR ABOVE the "
+                   f"90% bar, so N* for r0278 would be 12, not {F['nstar_r0278']}")
+    # The bracket has to be tied to the N the recovery was MEASURED AT, or it does not constrain
+    # N* at all: the loop below reads recov_*_n16_pct and reported nstar_* only in its message, so
+    # editing either N* to 24 left the checker green while the evidence still said 16 (Copilot
+    # review of #163). The needed relation is an equality -- the key is literally named n16.
+    for _k, _n in (("recov_r0278_n16_pct", "nstar_r0278"), ("recov_r0058_n16_pct", "n_cross90_r0058")):
+        if F[_n] != 16:                          # raw compare -- int() would truncate 16.4 to a pass
+            bad.append(f"  FACTS: {_n} = {F[_n]} but the only recovery banked for it is {_k}, "
+                       f"measured at N=16 -- an N* moved without the measurement that fixes it "
+                       f"(and any corrected N* stays protocol-conditional; see nstar-32-retired)")
+        if float(F[_k]) < 90.0:
+            bad.append(f"  FACTS: {_k} = {F[_k]}% is BELOW the 90% bar, so {_n} = {F[_n]} does not "
+                       f"follow from it -- N* is the smallest tested N that REACHES the bar. "
+                       f"(For r0278 that is bracketed both sides; for r0058 only the crossing at "
+                       f"N=16 is measured, so its claim is 'crosses by 16', not 'smallest'.)")
+    # ⚑ ASYMMETRY, DELIBERATE AND WORTH KNOWING: r0278's N* is bracketed on BOTH sides (89.8% at
+    # N=12 below, 96.1% at N=16 above), r0058's only from above (91.2% at N=16). No sub-16 point
+    # was recorded for r0058, so "smallest tested N" is, for that run, an assertion rather than a
+    # measurement -- and the manuscript has the same gap: SI S16 says r0058 "crosses the 90% level
+    # by N*=16" and shows no point below it. Not inventable here; flagged for the S16 rewrite that
+    # resolves the \FIXME. If the sweep is re-run, bank recov_r0058_n12_pct and extend the bracket
+    # above rather than deleting this note.
     # The correct-lattice bar is strictly LOOSER than the strict bar (it drops the coverage
     # requirement), so a count below its own strict count is an edit that crossed two rows.
     for _lat, _strict, _who in (("glint1_lattice_of120", "glint1_strict_of120", "GLINT-(1)"),

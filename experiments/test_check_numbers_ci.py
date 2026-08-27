@@ -666,6 +666,12 @@ def test_s16_needles_bind_values_to_what_they_count():
         f"r0278 (${_cn.FACTS['indexed_r0278']}$ shots; 1700 indexed frames)")
     assert _required_fires(mislabelled, "s16-subset-recovery-facts"), (
         "the indexed count was accepted without being bound to 'indexed frames'")
+    other_prep = _s16_prose(at12="at $N=12$ on r0058")
+    assert _required_fires(other_prep, "s16-subset-recovery-facts"), (
+        "a run ID written with a different preposition slipped the tempered gap (round 10)")
+    only_after = _s16_prose(cross="Both runs cross the $90\\%$ level only after")
+    assert _required_fires(only_after, "s16-subset-recovery-facts"), (
+        "'cross 90% only after N*=16' satisfied the needle while contradicting the claim")
     other_run = _s16_prose(at12="at $N=12$ for r9999")
     assert _required_fires(other_run, "s16-subset-recovery-facts"), (
         "an unrelated run tag let the N=12 bind scan onward to r0278")
@@ -722,6 +728,15 @@ def test_nstar32_exemption_is_clause_scoped():
     assert _fires(conjunction, "nstar-32-retired"), (
         "two matches in ONE clause shared the retirement phrase and both were exempted -- with "
         "no way to tell which occurrence it qualifies, the guard must refuse (round 7)")
+    wrong_side_before = ("The reconstructed protocol gives $N^{\\star}=32$ but the original "
+                         "sweep would have correctly reported 16")
+    assert _fires(wrong_side_before, "nstar-32-retired"), (
+        "a forward-attaching qualifier AFTER the match suppressed a live claim -- "
+        "'would have correctly reported' must precede the value it retires (round 10)")
+    counterfactual = ("a coarser grid whose next tested point after 16 was 32 would have "
+                      "correctly reported $N^{\\star}=32$")
+    assert not _fires(counterfactual, "nstar-32-retired"), (
+        "the manuscript's real counterfactual form must stay exempt")
     unrelated = ("The old recovery does not reproduce but the reconstructed protocol gives "
                  "$N^{\\star}=32$")
     assert _fires(unrelated, "nstar-32-retired"), (

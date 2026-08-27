@@ -1639,19 +1639,19 @@ def check_arithmetic() -> list[str]:
                     else fn.body)
 
         def _in_comparator(fn, name):
-            """True if `name` is a Name node in the comparators of any Compare in the body.
+            """True if `name` is a Name node on either side of any Compare in the body.
 
             A plain body-names check is satisfied by `tol = GATE_TOL` followed by a return
             comparison against a literal: the constant is referenced but the gate threshold is
-            not. Checking that it appears as an actual comparator closes that gap (Copilot
-            review of #170, round 6).
+            not. Checking that it appears in a Compare node (either as `left` or in
+            `comparators`) closes that gap (Copilot review of #170, round 6).
             """
             for stmt in _fn_body(fn):
                 for node in ast.walk(stmt):
                     if isinstance(node, ast.Compare):
-                        for comp in node.comparators:
+                        for sub in [node.left, *node.comparators]:
                             if any(isinstance(n, ast.Name) and n.id == name
-                                   for n in ast.walk(comp)):
+                                   for n in ast.walk(sub)):
                                 return True
             return False
 

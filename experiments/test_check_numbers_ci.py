@@ -624,12 +624,12 @@ def test_s16_required_fires_on_narrowed_or_moved_claims():
         "moving the N=12 recovery to r0058 stayed green -- the tempered bind is not tempering")
 
 
-def test_nstar32_exemption_is_sentence_scoped():
+def test_nstar32_exemption_is_clause_scoped():
     """Round-3 finding: the 240-char exemption window let one properly retired mention exempt a
-    SEPARATE live N*=32 claim in the same paragraph. The exemption is now sentence-scoped, so the
-    mixed probe fires on its second sentence while each single-sentence retirement stays exempt --
-    and a decimal inside the sentence must not truncate the scope (sentence ends are '.' followed
-    by whitespace, not any '.')."""
+    SEPARATE live N*=32 claim in the same paragraph, and full-sentence scope then failed the same
+    way through a comma. The exemption is CLAUSE-scoped, so each probe below fires on its live
+    claim while a self-contained retirement stays exempt -- and a decimal must not truncate the
+    scope (sentence ends are '.', '?' or '!' followed by whitespace, never a bare '.')."""
     mixed = ("The previously quoted $N^{\\star}=32$ for r0058 does not reproduce here. "
              "The reconstructed protocol gives $N^{\\star}=32$ for r0058.")
     assert _fires(mixed, "nstar-32-retired"), (
@@ -777,7 +777,7 @@ if __name__ == "__main__":
              test_s16_required_fires_on_every_edited_claim,
              test_s16_required_fires_on_swapped_context,
              test_s16_required_fires_on_narrowed_or_moved_claims,
-             test_nstar32_exemption_is_sentence_scoped,
+             test_nstar32_exemption_is_clause_scoped,
              test_s16_required_stays_silent_without_its_trigger,
              test_nstar32_rule_fires_live_and_stays_exempt_when_retired,
              test_every_test_in_this_file_is_registered,

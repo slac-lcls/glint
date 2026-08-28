@@ -1,9 +1,21 @@
 """End-to-end POWDER pipeline: real cf.geom -> synthetic 2-D powder image -> radial.py ring average
 (the drp-benchmarks primitive) -> 1-D ring detection -> blind cell indexing (powder_index). Closes the
 loop the powder_index docstring describes (radial-average front end)."""
-import sys, numpy as np, cupy
-sys.path.insert(0,"/sdf/home/s/smarches/git/glint/experiments"); sys.path.insert(0,"/sdf/home/s/smarches/git/glint")
-sys.path.insert(0,"/sdf/home/s/smarches/drp_check/radial_integration")  # LAST -> wins for the name radial
+import os
+import sys
+from pathlib import Path
+
+import cupy
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))
+try:
+    radial_dir = os.environ["DRP_RADIAL_DIR"]
+except KeyError:
+    raise SystemExit("set DRP_RADIAL_DIR to the radial_integration checkout")
+sys.path.insert(0, radial_dir)
 from radial import RadialIntegrator
 import powder_index as P
 from scipy.signal import find_peaks

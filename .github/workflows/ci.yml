@@ -269,6 +269,8 @@ jobs:
   torch-cpu-tests:
     name: torch-CPU tests (${{ matrix.torch }}, Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       matrix:
         include:

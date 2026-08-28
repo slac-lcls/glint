@@ -10,9 +10,12 @@ from scipy.signal import find_peaks
 from scipy.ndimage import minimum_filter1d
 from glint.lute_bridge import lambda_from_eV
 G={}
-for line in open("/sdf/home/s/smarches/git/glint/experiments/cf.geom"):
-    line=line.split(";")[0].strip()
-    if "=" in line: k,v=line.split("=",1); G[k.strip()]=v.strip()
+if len(sys.argv) != 2:
+    raise SystemExit("usage: powder_pipeline.py GEOM")
+with open(sys.argv[1], encoding="utf-8") as geom:
+    for line in geom:
+        line=line.split(";")[0].strip()
+        if "=" in line: k,v=line.split("=",1); G[k.strip()]=v.strip()
 gf=lambda k:float(G[k]); H=W=3000
 res=gf("res");cx=gf("p0/corner_x");cy=gf("p0/corner_y");clen=gf("clen");lam=lambda_from_eV(gf("photon_energy"))
 ss,fs=np.mgrid[0:H,0:W].astype(np.float64); x=(cx+fs)/res;y=(cy+ss)/res;z=np.full_like(x,clen);rn=np.sqrt(x*x+y*y+z*z)

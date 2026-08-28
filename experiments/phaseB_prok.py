@@ -127,8 +127,8 @@ for h5 in H5S:
         M, ninl = refine_orient(q, M, tol_abs=0.012 * qmax)   # predict-refine the orientation
         M = canonicalize(M)
         pred = predict_spots(M, panels, clen, lam, dmin=DMIN, tol=TOL)
-        I, sig, peak, bg = integrate_spots(img, pred, half=3, gap=2, ring=3)
-        keep = (I > 0) & np.isfinite(sig) & (sig > 0)
+        I, sig, peak, bg = integrate_spots(img, pred, half=3, gap=2, ring=3, bg_mode="median")  # pin: the estimator the published rows were measured under (default flipped to clipmean in glint#131)
+        keep = (I > 0) & np.isfinite(sig) & (sig > 0)   # pre-glint#130 selection the published rows used; the library paths no longer drop I<=0
         pred, I, sig, peak, bg = pred[keep], I[keep], sig[keep], peak[keep], bg[keep]
         results.append({"image": os.path.basename(h5), "event": n_seen, "M": M,
                         "pred": pred, "I": I, "sigma": sig, "peak": peak, "bg": bg})

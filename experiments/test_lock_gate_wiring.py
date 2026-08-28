@@ -99,8 +99,16 @@ def test_new_options_stay_at_the_end_of_the_signature():
     test is for. `bg_mode` was appended rather than filed next to the other integration options
     where `half`/`gap`/`ring` live, for exactly the reason above."""
     params = list(inspect.signature(StreamDriver.__init__).parameters)
-    tail = ["lock_frac", "lock_lead", "lock_pool_switch", "retry_cascade", "retry_nbest", "bg_mode"]
-    assert params[-len(tail):] == tail, params[-len(tail):]
+    expect = ["self", "Mc", "panels", "clen_m", "wavelength_A", "shape", "dtype", "mask", "B",
+              "dmin", "tol", "half", "gap", "ring", "min_peaks", "snr_bins", "pf_kw", "use_gpu",
+              "lock_support", "lock_gap", "adaptive_gap", "warmup_nbest", "adaptive_relock",
+              "min_inliers", "min_inlier_frac", "warm_topk", "warm_floor", "double_hit",
+              "geom_refine", "geom_refine_kw", "rescue_buffer", "fanout", "alias_gate",
+              "lock_probe", "probe_null", "lock_min_z", "warmup_rescue", "qc_frac_threshold",
+              "stream_out", "stream_geom_text", "stream_image", "stream_symmetry", "stream_peaks",
+              "lock_frac", "lock_lead", "lock_pool_switch", "retry_cascade", "retry_nbest",
+              "bg_mode"]
+    assert params == expect, (params, expect)
 
 
 def test_live_gate_defaults_and_window_are_pinned():

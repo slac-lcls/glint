@@ -204,6 +204,7 @@ fi
 
 # --- install ------------------------------------------------------------------------------------
 [ "${SKIP_COPY:-0}" -eq 1 ] || cp "$SRC" "$TARGET"
+[ "${SKIP_COPY:-0}" -eq 1 ] || { sed -i.bak 's#"/sdf/home/s/smarches/git/glint/lute/glint_launch.sh"#"'"$HERE"'/glint_launch.sh"#' "$TARGET" && rm -f "$TARGET.bak"; }
 grep -q "from .glint_index import" "$LUTE/lute/io/models/__init__.py" || \
   echo "from .glint_index import *" >> "$LUTE/lute/io/models/__init__.py"
 grep -q "IndexGLINT" "$LUTE/lute/managed_tasks.py" || \

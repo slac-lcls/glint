@@ -33,8 +33,8 @@ PCIe transfer (~1.2 ms/16 MB) dominates the compute.
 Origin: the "sparse matrix as accumarray" radial-averaging technique (build a sparse operator once, then a
 matvec per frame) goes back to S. Marchesini's 2013 GPU code *"GPU sparse, accumarray, non-uniform grid"*
 (MATLAB Central File Exchange #44423; ``gcsparse`` COO/CSR via NVIDIA cusp, with a NUFFT companion for the
-non-uniform-grid interpolation). It was reprototyped in cupy by the SLAC LCLS DRP team in this repo's
-``radial_integration/testing2.py`` (``index2avg_op``); this module generalises it into a reusable CPU/GPU
+non-uniform-grid interpolation). It was reprototyped in cupy by the SLAC LCLS DRP team in the external
+``slac-lcls/drp-benchmarks`` repository (``radial_integration/testing2.py``, ``index2avg_op``; not vendored here); this module generalises it into a reusable CPU/GPU
 primitive with pixel-splitting, corrections (``norm``) and batching.
 
 The existing LCLS CPU integrator, smalldata_tools ``ana_funcs/azimuthalBinning.py``, does the same

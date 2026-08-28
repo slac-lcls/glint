@@ -262,3 +262,24 @@ jobs:
         if: ${{ !cancelled() }}
         run: python test_shard.py
         working-directory: experiments/xtc_bridge
+
+  torch-cpu-tests:
+    name: torch-CPU tests (CPU-only torch, no GPU, no data)
+    runs-on: ubuntu-latest
+    steps:
+      # slac-lcls requires every action pinned to a full-length commit SHA, not a tag.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065   # v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies (CPU-only torch)
+        run: |
+          python -m pip install --upgrade pip numpy scipy
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      # The scatter_reduce_(amin) shim under lattice-candidate dedup: a wrong answer does not
+      # crash, it silently changes WHICH candidates survive (glint_index.py::_first_index_per_group).
+      - name: glint/test_first_index_per_group.py
+        run: python -m glint.test_first_index_per_group

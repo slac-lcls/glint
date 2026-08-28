@@ -219,6 +219,19 @@ INJECTIONS = [
      # \b892\b would have accepted neither of these; (?<![\d.])892(?![\d.]) refuses both for the
      # stated reason. The run ID is the case that passed by luck for months.
      "runs mfxl1038923 r0278 and r0058, and a rate of 892.5 shots/s on the LEGACY bench"),
+    # fps-29's lookahead is same-line by design (the ISO-date trap in its note), so the deck
+    # statcard -- unit label on the source line BEFORE the bare quoted numeral -- walked past it.
+    # The negative is the SAME statcard carrying the corrected 39.
+    ("fps-29-statcard",
+     '("Throughput  (frames / s, one A100)",{"size":13,"bold":True,"color":ICE})]),\n'
+     '    ("29",{"size":52,"bold":True,"color":TEAL}),',
+     '("Throughput  (frames / s, one A100)",{"size":13,"bold":True,"color":ICE})]),\n'
+     '    ("39",{"size":52,"bold":True,"color":TEAL}),'),
+    # The negative is the COMMENTED mark -- the legitimate parking spot for reviewer feedback,
+    # which is exactly the shape the submission tex ships at :240.
+    ("hl-rendering",
+     "\\hl{What is the definition of acceptance rate?}",
+     "text before the note % \\hl{What is the definition of acceptance rate?}"),
 ]
 
 
@@ -238,7 +251,10 @@ def test_rule_names_are_unique_and_carry_replacements():
     names = [r.name for g in (_cn.RETIRED, _cn.OVERCLAIM, _cn.AMBIGUOUS) for r in g]
     assert len(names) == len(set(names)), f"duplicate rule name(s): {sorted({n for n in names if names.count(n) > 1})}"
     for name, _, _ in INJECTIONS:
-        rule = next(r for r in _cn.RETIRED if r.name == name)
+        # all three groups, not just RETIRED: every injected rule HAPPENED to be retired until
+        # hl-rendering (OVERCLAIM) joined, and the RETIRED-only lookup died with StopIteration.
+        rule = next(r for g in (_cn.RETIRED, _cn.OVERCLAIM, _cn.AMBIGUOUS) for r in g
+                    if r.name == name)
         assert rule.instead, f"{name} has no `instead` text"
 
 
@@ -261,6 +277,50 @@ def test_stream_band_rule_crosses_a_latex_hard_wrap():
     assert not old.search(_cn._normalize(wrapped)), (
         "the OLD [^.\\n] window now catches this, so this case no longer tests the fix -- pick "
         "one it misses, or retire the assertion honestly")
+
+
+def test_fps29_statcard_covers_the_deck_shape_fps29_cannot_see():
+    """The companion exists BECAUSE fps-29 is same-line by construction.
+
+    fps-29's lookahead is [^\\n]{0,60}, kept that way so GLINT_REPORT.md's banner date cannot
+    collide (its own note). The deck statcard inverts the geometry -- the unit label sits on the
+    source line BEFORE the bare quoted numeral -- so this pins all four sides at once: the old
+    rule demonstrably misses the statcard (else the companion is dead weight and the two should
+    be folded), the companion catches it, the ISO-date banner trap that shaped fps-29 stays
+    silent, and the corrected 39 statcard stays silent.
+    """
+    card = ('("Throughput  (frames / s, one A100)",{"size":13,"bold":True,"color":ICE})]),\n'
+            '    ("29",{"size":52,"bold":True,"color":TEAL}),')
+    assert _fires(card, "fps-29-statcard"), "the statcard shape is not caught"
+    assert not _fires(card, "fps-29"), (
+        "fps-29 now sees across the newline, so the companion no longer tests anything -- fold "
+        "the two rules or retire this assertion honestly")
+    banner = "**Snapshot: 2026-06-29. The throughput figures here are superseded.**"
+    assert not _fires(banner, "fps-29-statcard"), "the ISO-date banner trap regressed"
+    assert not _fires(card.replace('("29"', '("39"'), "fps-29-statcard"), \
+        "fired on the corrected 39 statcard"
+
+
+def test_hl_rendering_fires_on_marks_and_spares_comments_and_the_macro_def():
+    """A rendering \\hl{ must fail the guard; a commented one and the \\newcommand must not.
+
+    The refusals are load-bearing, not politeness: the submission tex legitimately carries the
+    \\newcommand{\\FIXME}[1]{\\hl{...}} definition (:46) and a %-commented reviewer note (:240),
+    so a rule without both escapes has no satisfiable green state on the very file it guards.
+    The \\newcommand refusal is a lookahead INSIDE the pattern rather than exempt=("newcommand",)
+    because the window/clause exempts reach across newlines -- a real mark on the line after the
+    definition would have been exempted by its neighbour.
+    """
+    assert _fires("\\hl{draft}", "hl-rendering"), "line-start mark not caught"
+    assert _fires("text \\hl{x}", "hl-rendering"), "mid-line mark not caught"
+    assert not _fires("% \\hl{x}", "hl-rendering"), "fired on a commented mark"
+    assert not _fires("text % \\hl{x}", "hl-rendering"), "fired past a trailing %"
+    assert not _fires("\\newcommand{\\FIXME}[1]{\\hl{[FIXME: #1]}}", "hl-rendering"), \
+        "fired on the macro-definition line"
+    # ...and the corridor case the lookahead exists for: a REAL mark on the line right after the
+    # definition must still fire, which exempt=("newcommand",) would have suppressed.
+    both = "\\newcommand{\\FIXME}[1]{\\hl{[FIXME: #1]}}\n\\hl{draft}"
+    assert _fires(both, "hl-rendering"), "a mark adjacent to the macro def was exempted"
 
 
 def test_consensus_117_accepts_the_form_its_own_advice_requests():
@@ -968,6 +1028,8 @@ if __name__ == "__main__":
              test_no_new_rule_fires_on_corrected_text,
              test_rule_names_are_unique_and_carry_replacements,
              test_stream_band_rule_crosses_a_latex_hard_wrap,
+             test_fps29_statcard_covers_the_deck_shape_fps29_cannot_see,
+             test_hl_rendering_fires_on_marks_and_spares_comments_and_the_macro_def,
              test_consensus_117_accepts_the_form_its_own_advice_requests,
              test_guard_advice_is_not_itself_retired,
              test_advice_check_covers_the_exempt_rules,

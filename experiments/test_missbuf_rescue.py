@@ -149,9 +149,50 @@ def test_default_off_is_inert():
     assert drv.n_rescued == 0 and drv.stats()["n_rescued"] == 0   # no buffer -> no rescue
 
 
+def test_second_relock_appends_and_duplicate_is_refused():
+    """Pins BOTH halves of the add-vs-replace contract: a re-vote of an already-active lattice is
+    refused (the same_lattice guard over _all_cells), and a second genuinely new cell APPENDS a
+    second extra entry while the primary lock is never reassigned."""
+    M_C = _rot(1.3) @ np.diag([1 / 85.0, 1 / 85.0, 1 / 41.0])   # a THIRD tetragonal cell, 85/85/41
+    good2 = np.full((10, 3), 9.0)                               # sentinel q for cell C's frames
+
+    def fake_blind2(q, k, rng):
+        if q is not None and q.shape == good2.shape and np.allclose(q, 9.0):
+            return [(M_C.copy(), 1.0)] + [(_cell(rng), 0.3) for _ in range(k - 1)]
+        return [(_cell(rng), 0.5) for _ in range(k)]
+
+    rng = np.random.default_rng(11)
+    drv = _driver()
+    drv._blind_index = lambda q, k: _fake_blind(q, k, rng)
+    missed = list(range(8))
+    for j, i in enumerate(missed):
+        drv._q[i] = _GOOD.copy() if j < 5 else rng.normal(size=(10, 3))
+    Mc0 = np.array(drv.Mc, float)
+    drv._watchdog(missed)
+    assert drv.n_relock == 1 and len(drv.extra) == 1, (drv.n_relock, len(drv.extra))
+    # (a) a SECOND watchdog pass voting the ALREADY-ACTIVE cell B must be refused, not re-appended
+    for j, i in enumerate(missed):
+        drv._q[i] = _GOOD.copy() if j < 5 else rng.normal(size=(10, 3))
+    drv._watchdog(missed)
+    assert drv.n_relock == 1 and len(drv.extra) == 1, \
+        f"duplicate lattice re-locked: n_relock={drv.n_relock}, extra={len(drv.extra)}"
+    # (b) a second GENUINELY NEW cell C must APPEND, leaving both B and the primary in place. The
+    # refused pass above deliberately left its B votes in the histogram (a refusal keeps
+    # accumulating), so C needs a clear majority over that remnant: all 8 frames vote C.
+    drv._blind_index = lambda q, k: fake_blind2(q, k, rng)
+    for i in missed:
+        drv._q[i] = good2.copy()
+    drv._watchdog(missed)
+    assert drv.n_relock == 2 and len(drv.extra) == 2, (drv.n_relock, len(drv.extra))
+    assert np.allclose(_axes(drv.extra[0]["Mc"]), [45, 95, 95], rtol=0.05)
+    assert np.allclose(_axes(drv.extra[1]["Mc"]), [41, 85, 85], rtol=0.05)
+    assert np.allclose(np.array(drv.Mc, float), Mc0), "the primary lock must never be replaced"
+
+
 if __name__ == "__main__":
     tests = (test_watchdog_serial_default_locks, test_watchdog_fanout_matches_serial,
-             test_rescue_counts_recurring, test_default_off_is_inert)
+             test_rescue_counts_recurring, test_default_off_is_inert,
+             test_second_relock_appends_and_duplicate_is_refused)
     ok = 0
     for t in tests:
         try:

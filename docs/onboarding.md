@@ -29,7 +29,8 @@ rotation on top.
 random, unknown orientation, so you see only the thin curved slice of the reciprocal lattice that meets
 the **Ewald sphere** — typically **a few tens to a couple of hundred spots** (GLINT's own cxidb corpus
 stratifies sparse `<70` / moderate `70–150` / dense `>150`; the front end's floor is `--min-peaks 6`, and
-~100 strongest peaks is the working point), with noise and spurious peaks, and (the hard case) often
+no peak cap is applied by default: `--top-peaks 0` keeps every peak, and the optional `M3_CAP`
+only cheapens the M3 ascent without dropping peaks from scoring), with noise and spurious peaks, and (the hard case) often
 **no unit cell known in advance** — "blind". Many classical indexers need the cell; blind +
 sparse is where most methods fall over.
 

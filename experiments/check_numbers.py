@@ -1256,7 +1256,7 @@ OVERCLAIM = [
     # exempts reach across newlines, so a real mark on the line AFTER the definition would have
     # been exempted by its neighbour -- exactly the corridor the copilot-suppressed-comments
     # review warned an exemption can open.
-    Rule("hl-rendering", r"(?m)^(?![^%\n]*\\newcommand)[^%\n]*\\hl\{",
+    Rule("hl-rendering", r"(?m)^(?![^%\n]*\\newcommand)(?:\\.|[^%\\\n])*\\hl\{",
          "a rendering \\hl{ editorial mark must never ship in a .tex deliverable; it prints a "
          "highlighted author note in the journal PDF",
          "resolve the note and delete the mark, or comment the line out with %"),

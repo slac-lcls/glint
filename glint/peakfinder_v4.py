@@ -65,8 +65,8 @@ def _scatter_max(xp, rows, values, n):
 # centroids) on real detector data, while never looking broken (`seed` is unaffected, being far from
 # its threshold).
 #
-# PFV4_FP32=1 selects the SHIFTED-DATA form instead: subtract a constant K taken from the ring's own
-# corner before accumulating, so the sums carry O(sigma) rather than O(mu). Algebraically identical,
+# PFV4_FP32=1 selects the SHIFTED-DATA form instead: subtract a constant K taken from a valid ring
+# sample before accumulating, so the sums carry O(sigma) rather than O(mu). Algebraically identical,
 # and measured bit-identical to fp64 in `grow` AND `seed` at every pedestal (10/500/2000/8000 ADU) and
 # size (1024/2048/4096 square) tested. 1.26x on the kernel; ~5% end-to-end, since the kernel is
 # memory-bound (~80 loads/pixel) rather than fp64-ALU-bound -- the load count, not the precision, is
@@ -82,9 +82,10 @@ def _pfv4_kernel(fp32=None):
     fp32 = FP32_RING if fp32 is None else bool(fp32)
     if fp32 not in _PFV4:
         import cupy
-        acc, val = ("float", "(I[j]-K)") if fp32 else ("double", "I[j]")
-        shift = "int ky=max(yy-r,0), kx=max(xx-r,0); float K = I[ky*W+kx];" if fp32 else ""
+        acc, val = ("float", "(g>0 ? (haveK ? I[j]-K : (K=I[j], haveK=1, 0.0f)) : 0.0f)") if fp32 else ("double", "I[j]")
+        shift = "float K=0.0f; int haveK=0;" if fp32 else ""
         unshift = " + K" if fp32 else ""
+        variance = "mbar*mbar" if fp32 else "(double)mu*mu"
         _PFV4[fp32] = cupy.RawKernel(r"""
         extern "C" __global__ void pfv4_stats(const float* I, const float* good, int H, int W, int r, int lmr,
             float thr_low, float thr_high, float min_sig,
@@ -105,7 +106,7 @@ def _pfv4_kernel(fp32=None):
           }
           __ACC__ mbar = nn>0.5 ? s/nn : 0;
           float mu = nn>0.5 ? (float)(mbar__UNSHIFT__) : 0.0f;
-          float vv = nn>0.5 ? (float)(sq/nn - mbar*mbar) : 0.0f; if(vv<0.0f) vv=0.0f;
+          float vv = nn>0.5 ? (float)(sq/nn - __MEAN_SQ__) : 0.0f; if(vv<0.0f) vv=0.0f;
           float sg = sqrtf(vv); int valid = (good[idx]>0.5f) && (nn>0.5) && (sg>min_sig);
           float sb = Ic - mu; float sn = valid ? sb/(sg+1e-12f) : 0.0f;
           int islm = 1;                                        // local maximum over the (2*lmr+1) neighbourhood
@@ -116,7 +117,8 @@ def _pfv4_kernel(fp32=None):
           grow[idx] = (valid && sn > thr_low) ? 1 : 0;
           seed[idx] = (valid && sn > thr_high && islm) ? 1 : 0;
         }""".replace("__ACC__", acc).replace("__VAL__", val)
-             .replace("__SHIFT__", shift).replace("__UNSHIFT__", unshift), "pfv4_stats")
+             .replace("__SHIFT__", shift).replace("__UNSHIFT__", unshift)
+             .replace("__MEAN_SQ__", variance), "pfv4_stats")
     return _PFV4[fp32]
 
 

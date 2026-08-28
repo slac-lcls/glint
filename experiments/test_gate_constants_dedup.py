@@ -100,6 +100,17 @@ def glint_fast_imports(tree):
     return out
 
 
+def glint_fast_aliases(tree):
+    """Names bound to the glint_fast MODULE itself (`import glint.glint_fast as gf` -> {'gf'})."""
+    out = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name.split(".")[-1] == "glint_fast" and a.asname:
+                    out.add(a.asname)
+    return out
+
+
 def module_assigns(tree):
     """{name: value node} for top-level assignments, tuple targets unpacked element-wise."""
     out = {}
@@ -117,30 +128,37 @@ def module_assigns(tree):
     return out
 
 
-def bound_to_canon(local, canon, assigns, imports):
-    """True iff `local` is the canonical constant: gf.<canon> attribute, a name already bound to
-    it by an import (aliased or not), or absent from assigns because the ImportFrom itself binds
-    it. A numeric literal on the right-hand side is exactly what must fail."""
+def bound_to_canon(local, canon, assigns, imports, aliases):
+    """True iff `local` is the canonical constant: an attribute of the glint_fast module alias
+    (`gf.<canon>` -- the OWNER is checked, so `settings.<canon>` does not pass), a name already
+    bound to it by an ImportFrom (aliased or not), or absent from assigns because the ImportFrom
+    itself binds it. A numeric literal on the right-hand side is exactly what must fail."""
     v = assigns.get(local)
     if v is None:
         return imports.get(local) == canon
     if isinstance(v, ast.Attribute):
-        return v.attr == canon
+        return v.attr == canon and (
+            (isinstance(v.value, ast.Name) and v.value.id in aliases)
+            or (isinstance(v.value, ast.Attribute) and v.value.attr == "glint_fast"))
     if isinstance(v, ast.Name):
         return imports.get(v.id) == canon
     return False            # ast.Constant (a re-inlined literal) and anything else
 
 
 def compare_literals(scope_node, forbidden):
-    """Every raw numeric comparator inside `scope_node` whose value is a gate value."""
+    """Every comparison inside `scope_node` that CONTAINS a raw gate value anywhere in it.
+
+    The whole Compare subtree is walked -- left side included -- so `0.25 <= m / len(q)`,
+    `m / len(q) - 0.25 >= 0` and other re-arrangements are caught, not just the plain
+    `... >= 0.25` comparator form (Copilot review of glint#172)."""
     hits = []
     for node in ast.walk(scope_node):
         if not isinstance(node, ast.Compare):
             continue
-        for cmp_ in node.comparators:
-            if isinstance(cmp_, ast.Constant) and not isinstance(cmp_.value, bool) \
-                    and cmp_.value in forbidden:
-                hits.append(f"line {cmp_.lineno}: compares against literal {cmp_.value!r}")
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Constant) and not isinstance(sub.value, bool) \
+                    and sub.value in forbidden:
+                hits.append(f"line {node.lineno}: comparison contains gate literal {sub.value!r}")
     return hits
 
 
@@ -171,14 +189,15 @@ def source_half():
         return
     forbidden = set(canon.values())
 
-    for path, aliases, gate_fn, scope in FILES:
+    for path, names, gate_fn, scope in FILES:
         tree = parse(path)
         imports = glint_fast_imports(tree)
         assigns = module_assigns(tree)
+        aliases = glint_fast_aliases(tree)
 
-        for local, cname in aliases.items():
+        for local, cname in names.items():
             check(f"{path}: {local} is glint_fast.{cname}",
-                  bound_to_canon(local, cname, assigns, imports))
+                  bound_to_canon(local, cname, assigns, imports, aliases))
 
         if scope == "main":
             blk = main_block(tree)

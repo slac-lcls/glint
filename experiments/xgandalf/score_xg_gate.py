@@ -2,10 +2,16 @@
 Table 1s exact gate: correct lattice (same_lattice vs LYSO) AND >=25% spots indexed
 (matched-frac, TOL=0.15); also report correct-lattice-only and >=10 refl, and mean ms.
 Sanity: xg_blind120.txt should reproduce the papers ~71%."""
+import os
 import sys
 import numpy as np
+# THIS checkout first, resolved from __file__ the way score_glint_gate.py does: with the fixed
+# /sdf checkout ahead of it, `glint` (and now the canonical GATE_* below) could resolve from a
+# stale clone while score_glint_gate.py read the current one -- the exact drift the shared
+# constants exist to prevent (Copilot review of glint#172).
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
-sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
+sys.path.insert(0, ROOT)
 from glint.multishot import same_lattice
 from glint.lattice import cell_to_Ar
 # The gate's canonical home (glint#170): the same three constants gpass() applies, and the same

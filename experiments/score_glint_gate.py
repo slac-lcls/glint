@@ -10,9 +10,11 @@ glint#161). This is that scorer, applying the identical rule:
     AND >=25% spots   |q @ M - round(q @ M)|_max < TOL      -- matched fraction >= 0.25
     AND >=10 refl     ...and at least ten of them
 
-TOL = 0.15 and the 0.25 fraction are read from score_xg_gate.py rather than restated, so the two
-arms cannot drift apart -- comparing indexers under different gates is the exact mistake the
-three-column output exists to make visible.
+TOL, MIN_FRAC and MIN_REFL are imported from the gate's canonical home -- GATE_TOL / GATE_FRAC /
+GATE_MIN in glint/glint_fast.py, the same constants gpass() applies -- rather than restated, and
+score_xg_gate.py imports the same three names, so the two arms cannot drift apart -- comparing
+indexers under different gates is the exact mistake the three-column output exists to make
+visible.
 
 Blind by default; `--cell` scores the known-cell arm instead.
 
@@ -34,11 +36,11 @@ sys.path.insert(0, ROOT)
 
 from glint.lattice import cell_to_Ar                                        # noqa: E402
 from glint.multishot import same_lattice                                    # noqa: E402
+# The gate's canonical home (glint#170); see the note above. Aliased, not copied, so this scorer
+# cannot drift from gpass().
+from glint.glint_fast import GATE_TOL as TOL, GATE_FRAC as MIN_FRAC, GATE_MIN as MIN_REFL  # noqa: E402
 
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
-TOL = 0.15            # same as experiments/xgandalf/score_xg_gate.py; see the note above
-MIN_FRAC = 0.25
-MIN_REFL = 10
 
 
 def gate(M, q):

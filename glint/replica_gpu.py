@@ -9,7 +9,7 @@ The numpy replica is ~127 ms/frame; this targets a few ms on the A100.
 import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-from glint.glint_fast import anneal_batch_t
+from glint.glint_fast import anneal_batch_t, matched_strict, GATE_FRAC, GATE_MIN
 from glint.lattice import cell_to_Ar
 from glint.multishot import same_lattice
 
@@ -305,8 +305,8 @@ if __name__ == "__main__":
         M = index_known_gpu(q)
         if M is None or not same_lattice(M, LYSO):
             continue
-        m = int((np.abs(q @ M - np.rint(q @ M)).max(1) < 0.15).sum())
-        f25 += m / len(q) >= 0.25; fN += m >= 10
+        m = matched_strict(M, q)                # the published gate's matcher (glint_fast.GATE_TOL)
+        f25 += m / len(q) >= GATE_FRAC; fN += m >= GATE_MIN
     if DEV == "cuda": torch.cuda.synchronize()
     dt = time.time() - t0
     print(f"replica_GPU (known-cell)  device={DEV}  N={n}  {1e3*dt/n:.1f} ms/frame  ({n/dt:.0f} f/s)")

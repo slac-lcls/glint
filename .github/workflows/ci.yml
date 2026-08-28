@@ -185,6 +185,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_fp32_b32_033_rule.py
 
+      # The strict acceptance gate has ONE home (glint/glint_fast.py GATE_TOL/GATE_FRAC/GATE_MIN,
+      # glint#170); this asserts every formerly-inlined copy still IMPORTS it -- a re-inlined
+      # 0.15/0.25/10, or a strict_gate() helper routed back through the configurable matched()
+      # (the QDIST footgun), fails here. The AST half runs on this torch-less runner; the import
+      # half self-skips without torch, like test_gate_project.py's GPU half.
+      - name: experiments/test_gate_constants_dedup.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_gate_constants_dedup.py
+
 
       # The GPU comparison itself cannot run here, but its PASS/FAIL RULES can: without cupy this
       # runs compare_outputs' sabotage self-test (NaN/inf in each of the four outputs, tolerance

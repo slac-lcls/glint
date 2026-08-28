@@ -8,8 +8,10 @@ sys.path.insert(0, "/sdf/home/s/smarches/git/glint")
 sys.path.insert(0, "/sdf/home/s/smarches/git/glint/experiments")
 from glint.multishot import same_lattice
 from glint.lattice import cell_to_Ar
+# The gate's canonical home (glint#170): the same three constants gpass() applies, and the same
+# names experiments/score_glint_gate.py imports -- one gate, so the two arms cannot drift apart.
+from glint.glint_fast import GATE_TOL as TOL, GATE_FRAC, GATE_MIN
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
-TOL = 0.15
 
 def read_frames(path):
     frames = {}
@@ -39,7 +41,7 @@ def gate(M, q):
     if M is None or not same_lattice(M, LYSO):
         return (0,0,0)
     H = q @ M; inl = np.abs(H - np.rint(H)).max(1) < TOL; m = int(inl.sum())
-    return (1, int(m/len(q) >= 0.25), int(m >= 10))
+    return (1, int(m/len(q) >= GATE_FRAC), int(m >= GATE_MIN))
 
 frames = read_frames("frames_cxidb_clean.txt")
 for tag, path in [("BLIND","xg_blind120.txt"), ("KNOWN-CELL","xg_known120.txt")]:

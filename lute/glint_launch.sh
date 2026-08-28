@@ -1,8 +1,71 @@
 #!/bin/bash
 # GLINT launcher for the LUTE `IndexGLINT` ThirdPartyTask: activate the GLINT GPU (torch) env and run
-# the productized glint CLI. LUTE builds the flags (--peaks/--geom/--cell/--mode/--fromfile/...) and
-# invokes:  glint_launch.sh <flags>.  Point IndexGLINTParameters.executable at this script.
+# the right GLINT entry point. LUTE builds the flags from IndexGLINTParameters and invokes:
+#   glint_launch.sh <flags>
+# Point IndexGLINTParameters.executable at this script.
+#
+# TWO DESTINATIONS, because the three frame sources are not one program:
+#   `peaks` / `images`  -> glint.glint_cli                       (peak stream, or raw .cxi)
+#   `exp` (+ `run`)     -> experiments/xtc_bridge/glint_xtc.py   (raw xtc; psana1 in-process, or
+#                                                                 psana2 in conda2 over envbridge)
+#
+# Flags are FILTERED per destination rather than forwarded wholesale. glint_xtc.py's argparse rejects
+# unknown flags, and several glint_cli options carry non-empty defaults (e.g. --peakfinder stored) so
+# LUTE emits them on every run -- forwarding blindly would kill the xtc route on a flag the user never
+# set. Whitelisting keeps the failure loud and local: an xtc flag missing from the list below is
+# rejected by argparse rather than silently ignored.
+set -o pipefail
 source /sdf/group/lcls/ds/ana/sw/conda1/manage/bin/psconda.sh >/dev/null 2>&1
-conda activate ana-4.0.58-py3-minipytorch >/dev/null 2>&1
+# BOTH ANA RELEASES NOW WORK. These are the only two ana envs carrying torch at all:
+#   ana-4.0.58-py3-minipytorch  torch 2.1.0   cupy yes  -- CANNOT parse Jungfrau.ConfigV4
+#   ana-4.0.59-py3-minipytorch  torch 1.11.0  cupy yes  -- parses it
+# 4.0.58 drops a detector whose ConfigV it cannot read, silently, so psana.Detector() raises a
+# KeyError that reads like a mistyped name (cxilu8823 r0226, Jungfrau4M); the reader turns that into
+# a message naming the real cause. 4.0.59 reads it, at the price of a torch DOWNGRADE.
+#
+# That downgrade used to be fatal -- GLINT called Tensor.scatter_reduce_ (torch 1.12+) and
+# torch.backends.mps (also 1.12+), so under 4.0.59 indexing died with AttributeError before writing
+# anything. Both are gone: see glint/glint_index.py::_first_index_per_group. Every torch API the
+# glint package uses was then probed against BOTH envs (S3DF jobs 34277932 / 34278651) and nothing
+# else is missing on 1.11.
+#
+# 4.0.58 stays the default because it is the newer torch and covers every detector whose ConfigV it
+# can parse, which is all of them except the newest. For one it cannot see, just switch:
+#     GLINT_ANA_ENV=ana-4.0.59-py3-minipytorch
+# The shim is exact, not approximate -- with it, 4.0.58 reproduces its own pre-shim stream byte for
+# byte (sha 728ce3c5bd6572a4, job 34278559).
+conda activate "${GLINT_ANA_ENV:-ana-4.0.58-py3-minipytorch}" >/dev/null 2>&1
 cd "$(dirname "$0")/.." || exit 1                       # repo root (so `glint` imports)
-exec python -m glint.glint_cli "$@"
+
+for a in "$@"; do                                       # does this invocation name the xtc source?
+    if [ "$a" = "--exp" ]; then XTC=1; fi
+done
+
+if [ -z "$XTC" ]; then
+    exec python -m glint.glint_cli "$@"                 # unchanged: the peaks / images routes
+fi
+
+# Everything glint_xtc.py accepts. Each takes a value; LUTE emits no bare switches on this route.
+XTC_SWITCHES="--integrate"    # value-less flags
+XTC_FLAGS=" --exp --run --det --zdist --wavelength --psana --geom --calib-dir --cell --nbest \
+--min-peaks --max-events --peakfinder --min-pix --son-min --thr-high --thr-low --pf8-min-snr --int-dmin --int-tol --bg-mode --reader-env --energy-det -o --out "
+args=(); dropped=()
+i=1
+while [ $i -le $# ]; do
+    a="${!i}"; j=$((i + 1)); v="${!j}"
+    case " $XTC_SWITCHES " in                           # bare switches take NO value
+        *" $a "*) args+=("$a"); i=$((i + 1)); continue ;;
+    esac
+    case "$XTC_FLAGS" in
+        *" $a "*) args+=("$a" "$v") ;;
+        *)        dropped+=("$a") ;;
+    esac
+    i=$((i + 2))
+done
+# Report what was dropped. These are glint_cli-only options with no meaning for raw xtc (--peaks,
+# --images, --peakfinder, --top-peaks, --integrate, --tofile, --image-dir, --event-axis, -N ...). Staying silent
+# would let a run look as though it had honoured a setting the indexer never received.
+if [ ${#dropped[@]} -gt 0 ]; then
+    echo "glint_launch: xtc route; dropped flags that do not apply to glint_xtc.py: ${dropped[*]}" >&2
+fi
+exec python experiments/xtc_bridge/glint_xtc.py "${args[@]}"

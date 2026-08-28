@@ -16,7 +16,21 @@
 # Install:                   experiments/hooks/install.sh
 set -u
 
-CHECKER="${GLINT_NUMCHECK_PATH:-$HOME/git/glint/experiments/check_numbers.py}"
+# Prefer the checker in the repo BEING PUSHED. A hardcoded path here made the guard blind to the one
+# change it most needs to see: a FACTS edit. glint-claude is a worktree of glint, so it shares this
+# hook, and with $HOME/git/glint hardcoded a push of stream_ms 4.16 -> 3.64 was validated against the
+# OTHER checkout's 4.16 -- under which the deliverables still quoting 4.16 look correct. It printed
+# OK and let through the 12 sites it exists to catch. Fall back to the canonical checkout only for
+# repos that do not carry the checker at all (papers/glint, where the hook runs strict).
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+[ -n "$REPO_ROOT" ] || REPO_ROOT="$PWD"          # hooks run from the top of the working tree
+if [ -n "${GLINT_NUMCHECK_PATH:-}" ]; then
+    CHECKER="$GLINT_NUMCHECK_PATH"
+elif [ -f "$REPO_ROOT/experiments/check_numbers.py" ]; then
+    CHECKER="$REPO_ROOT/experiments/check_numbers.py"
+else
+    CHECKER="$HOME/git/glint/experiments/check_numbers.py"
+fi
 MODE="${GLINT_NUMCHECK:-@MODE@}"
 
 [ "$MODE" = "off" ] && exit 0
@@ -26,7 +40,8 @@ if [ ! -f "$CHECKER" ]; then
     exit 0
 fi
 
-echo "pre-push: checking deliverable numbers ..."
+# Say WHICH checker ran. The failure above was silent precisely because it did not.
+echo "pre-push: checking deliverable numbers ($CHECKER) ..."
 if python3 "$CHECKER" --pdf; then
     exit 0
 fi

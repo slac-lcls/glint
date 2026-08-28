@@ -9,10 +9,10 @@ so it sorts frames by peak count and routes each batch to the smallest of a few 
 is BIT-IDENTICAL to index_known_gpu_cell_batch (per-frame independence + masked padding) and ~1.3x
 faster on real cxidb / ~1.5x at deployment peak-caps. Enabled by the analytic solve/det (cuSOLVER
 is uncapturable and forces a stream sync)."""
-import os, sys
+import os, sys, warnings
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("CDIRS", "16384")
 import numpy as np, torch
-from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, _axes_from_cell,
+from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, AXIS0_DEDUP_COS, _axes_from_cell,
                                _third_axis, _fib_halfsphere, _azimuth_grid)
 from glint.multishot import same_lattice
 
@@ -165,7 +165,8 @@ def _stage_compute(Q, m, P):
     for k in range(NC):
         idx = alive.int().argmax(1)
         chosen[:, k, :] = Vs[ar, idx]
-        dk = dirs2[ar, idx]; alive = alive & (torch.abs(torch.einsum('fpc,fc->fp', dirs2, dk)) < 0.985)
+        dk = dirs2[ar, idx]                                # dedup radius: see AXIS0_DEDUP_COS (replica_gpu.py)
+        alive = alive & (torch.abs(torch.einsum('fpc,fc->fp', dirs2, dk)) < AXIS0_DEDUP_COS)
     # --- orientation sweep per anchor ---
     C = chosen; cn = C / C.norm(dim=2, keepdim=True)
     tmp = torch.where(cn[..., :1].abs() < 0.9, _EX, _EY)
@@ -297,31 +298,58 @@ index_batch = index_known_gpu_cell_batch   # alias
 def index_fused(frames, Mc, B=32):
     """Fully-fused known-cell indexer: custom fused CUDA kernels (cupy RawKernel, nvrtc-JIT) for the
     anneal/obj/refine per-candidate hot loops + an on-device cpu_stage (batched buerger same_lattice),
-    replacing the many small per-stage torch kernels AND the host tail. ~0.36 ms/frame fp32 / ~0.63
-    fp64 on one A100 -- 2.2x (fp64) to 6.7x (fp32) over index_all_graph -- with per-frame output
-    IDENTICAL (bit-exact fp64; rate + lattice identical fp32, 75/114 on 120 cxidb) to the stock engine.
+    replacing the many small per-stage torch kernels AND the host tail. At B=32 on one A100: 0.31
+    ms/frame fp32 / 0.33 fp64 -- 6.6x (fp32) / 4.3x (fp64) over index_all_graph -- with per-frame output
+    numerically equivalent in fp64 (max|ΔM| 1.42e-13; rate + lattice identical in both precisions,
+    80/115 on 120 cxidb) to the stock engine.
     Sorts frames by peak count so each batch pads to its own tight Pmax. Requires cupy on a GPU; falls
     back to index_all_graph (graph path) when cupy is unavailable or on CPU.
 
-    Throughput scales with the batch B: each frame is one thread-block, so B sets GPU occupancy.
-    B>=64 saturates an A100 (120 cxidb frames: B=32 -> 0.33/0.45 ms/fr fp32/fp64; B=64 -> 0.21/0.31;
-    B=120 -> 0.16/0.26). Output is batch-invariant -- the kernels loop each frame's real peak count,
-    not Pmax, so a looser per-batch pad costs no work (fp64 bit-identical across B)."""
+    Throughput scales with the batch B: anneal and refine give each frame one thread-block, so B
+    still sets their occupancy (obj splits its candidates across blockIdx.y since #165, but that did
+    NOT remove the need to batch -- measured, B=16 is 0.579 ms/fr against B=120's 0.170).
+    120 cxidb frames: B=32 -> 0.31/0.33 ms/fr fp32/fp64; B=64 -> 0.19/0.21; B=120 -> 0.14/0.17.
+    B=96 is no better than B=64 in either precision, but that is batch-count quantisation, not
+    occupancy -- 120 frames at B=96 is a ragged 96+24 while B=120 is one batch. Output is
+    batch-invariant -- the kernels loop each frame's real peak count, not Pmax, so a looser
+    per-batch pad costs no ARITHMETIC (fp64 bit-identical across B). It is not unconditionally free:
+    every block reserves Pmax*3*_IB dynamic shared memory, which caps resident blocks per SM.
+    MEASURED (A100, fp64, K=4096, real P pinned at 200, only the pad varied): flat to Pmax 800
+    (1.00x), 1.02x at 1600, 1.29x at 3200 -- the reservation only bites once residency falls to ~4
+    blocks/SM. At the peak counts this code sees (cxidb-17 tops out at 554: ~13 KB/block, ~12
+    blocks/SM) the pad really is free.
+
+    Each frame's peaks are staged in dynamic shared memory, so a frame with more peaks than the
+    device can hold in one block (fused_kernels.max_peaks(): ~6954 fp64 / 13909 fp32 on an A100)
+    cannot use the fused kernels. Such frames are split out and run ONE AT A TIME through the stock
+    torch path instead, which has no shared-memory limit -- same answer, just slower. Nothing about
+    an oversized frame raises: an indexer that dies on a dense frame takes StreamDriver.flush() with
+    it, so a frame that cannot be indexed is returned as a miss (None)."""
     if DEV != "cuda":
         return index_all_graph(frames, Mc, B)
     try:
         from glint import fused_kernels as _fk
     except Exception:
         return index_all_graph(frames, Mc, B)
+    cap = _fk.max_peaks()
     order = sorted(range(len(frames)), key=lambda i: len(frames[i]))   # tight per-batch Pmax
+    fits = [j for j in order if len(frames[j]) <= cap]
+    over = [j for j in order if len(frames[j]) > cap]
     out = [None] * len(frames)
     _fk.patch(anneal=True, obj=True, refine=True, cpu=True)
     try:
-        for s in range(0, len(order), B):
-            chunk = order[s:s + B]
+        for s in range(0, len(fits), B):
+            chunk = fits[s:s + B]
             res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc)
             for j, r in zip(chunk, res):
                 out[j] = r
     finally:
         _fk.unpatch()
+    for j in over:                     # unpatched: the stock ops, one frame at a time. The stock
+        try:                           # path materialises (F, NC*NANG, Pmax) tensors, so at these
+            out[j] = index_known_gpu_cell_batch([frames[j]], Mc)[0]   # peak counts F must stay 1.
+        except Exception as e:                                        # OOM, etc: a miss, not a death
+            warnings.warn(f"index_fused: frame with {len(frames[j])} peaks failed on the non-fused "
+                          f"fallback ({type(e).__name__}: {e}); returning it as a miss", RuntimeWarning)
+            out[j] = None
     return out

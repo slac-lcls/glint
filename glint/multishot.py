@@ -20,6 +20,7 @@ from scipy.spatial import cKDTree
 
 from .index import IndexResult, _triplets, detect_batch, refine, search_basis
 from .lattice import reduced_params
+from .running_consensus import consensus_accept
 from .peakfind import find_peaks_classical
 from .transform import fft_volume
 
@@ -317,29 +318,134 @@ def index_shots_batch_known(gs, qmaxs, M_ref, n="auto", min_len=3.0, topk=12,
 
 
 def _grp_reduced(reps, RP, rtol, ctol, vtol):
-    """Greedy same_lattice grouping over (rep_index, weight) pairs using cached RP[idx]=((l,c),det)."""
-    groups = []                                               # [rep_index, total_weight]
+    """Greedy same_lattice grouping over (rep_index, weight) pairs using cached RP[idx]=((l,c),det).
+
+    Returns [rep_index, total_weight, member_indices] for the winner, plus the runner-up weight.
+
+    The runner-up is what tells a decisive lock from a coin-flip between two near-equal clusters --
+    the winner's own count cannot, and `max()` alone threw that information away. MEMBERSHIP is kept
+    for the same reason: `rep_index` is whichever member happened to CREATE the group, an arbitrary
+    choice that is fine for deciding which lattice won and poor for deciding what it is.
+
+    THAT ARBITRARY CHOICE IS ALSO AN ORDER DEPENDENCE, because the group test compares against the
+    SEED (`RP[grp[0]]`) and tolerance matching is not transitive: whichever hypothesis arrives first
+    defines the group, so the same SET of hypotheses partitions differently under a different input
+    order. Measured on mfxl1038923 by permuting the pool order alone (nothing else changed): support
+    624-979 on r0278 (1.57x) and 608-1268 on r0058 (2.09x), and on r0058 4 of 20 orderings REFUSED
+    outright, because a fragmented cluster falls under min_frac/min_lead. The winning LATTICE is
+    robust to this (0 of 36 answering permutations disagreed, axes within 1.2%) -- it is the SUPPORT
+    that moves, which is the number the acceptance gates read and the paper quotes.
+
+    SO THE GROUPS ARE SEEDED DENSEST-NEIGHBOURHOOD-FIRST, ties broken on the reduced-cell key, which
+    makes the partition a function of the SET alone. GLINT_CONSENSUS_STABLE=0 restores the old
+    order-dependent behaviour for reproducing pre-2026-08-08 results.
+
+    Seeding centrally is the point, not merely seeding deterministically. Sorting by the cell key is
+    also deterministic and is strictly WORSE than the arbitrary order it replaces (measured on the
+    test pool: support 56, against 81-133 for random orders), because a lexicographic sort starts at
+    the EDGE of the distribution and a boundary seed reaches only one side of its own cluster,
+    slicing it into tolerance-wide slabs. Seeding from the most populated neighbourhood instead gives
+    129 on that pool -- the top of the random range -- and drops the runner-up cluster from 38 to 8,
+    i.e. it stops fragmenting the true cluster, which improves the min_lead margin as well.
+
+    Density is counted on a coarse grid at the grouping tolerances (geometric in the lengths, linear
+    in the angle cosines), which is O(n) rather than the O(n^2) of true neighbour counting. The grid
+    is only a seeding heuristic; group membership is still decided by the same tolerance test, so a
+    hypothesis landing on the wrong side of a grid boundary costs nothing but seed priority.
+
+    COST OF THE SWITCH, measured: support moves 891 -> 846 on r0278 and 1117 -> 1060 on r0058 (~5%),
+    same lattice, cells within 0.7%. A support is now a property of the data instead of the order it
+    was read in, which is what makes it quotable at all."""
+    if os.environ.get("GLINT_CONSENSUS_STABLE", "1") == "1":
+        def _key(i):
+            (l, c), d = RP[i]
+            return (tuple(l), tuple(c), d)
+
+        _ck = {}
+
+        def _cellof(i):
+            """Quantised cell key, for counting how dense each hypothesis's neighbourhood is.
+
+            A DEGENERATE hypothesis -- an edge that is zero, negative or non-finite -- has no
+            meaningful log: np.log gives -inf or nan, and round() of that raises OverflowError
+            rather than returning a number. Those hypotheses are real. They appear in N-best pools
+            on noisy data, and this took down a 3000-frame Jungfrau 16M run at its sixth threshold,
+            after 15 minutes of reading, in code that only ever ran on cleaner pools before.
+
+            They get a sentinel key instead: excluded from the density counts and sorted last, which
+            is exactly the seeding order they had before densest-seeding existed (glint#102). The
+            grouping loop below is unchanged and still sees them."""
+            if i in _ck:
+                return _ck[i]
+            (l, c), _ = RP[i]
+            k = None
+            if (all(np.isfinite(x) and x > 0 for x in l) and all(np.isfinite(y) for y in c)):
+                k = (tuple(int(round(float(np.log(x)) / np.log1p(rtol))) for x in l)
+                     + tuple(int(round(float(y) / ctol)) for y in c))
+            _ck[i] = k
+            return k
+
+        dens = {}
+        for idx, w in reps:
+            k = _cellof(idx)
+            if k is not None:                      # a degenerate cell seeds nothing
+                dens[k] = dens.get(k, 0) + w
+        reps = sorted(reps, key=lambda t: (-dens.get(_cellof(t[0]), 0), _key(t[0])))
+    groups = []                                               # [rep_index, total_weight, members]
     for idx, w in reps:
         (li, ci), di = RP[idx]
         for grp in groups:
             (lj, cj), dj = RP[grp[0]]
             if (abs(di - dj) <= vtol * dj and bool(np.all(np.abs(li - lj) <= rtol * lj))
                     and bool(np.all(np.abs(ci - cj) <= ctol))):
-                grp[1] += w
+                grp[1] += w; grp[2].append(idx)
                 break
         else:
-            groups.append([idx, w])
-    return max(groups, key=lambda g: g[1])                    # [rep_index, total_weight]
+            groups.append([idx, w, [idx]])
+    ranked = sorted(groups, key=lambda g: g[1], reverse=True)
+    return ranked[0], (ranked[1][1] if len(ranked) > 1 else 0)
 
 
-def _consensus_exact(valid, min_support, rtol, ctol, vtol):
+def _accept(win, runner, n_pool, min_support, min_frac, min_lead, min_gap=0):
+    """Thin alias for running_consensus.consensus_accept -- see there for what each test means.
+
+    The rule deliberately lives in running_consensus (the lighter module, on the streaming hot path)
+    and is imported here rather than duplicated: the two consensus paths previously enforced
+    different SUBSETS of it and disagreed on the same data, which is the bug this indirection exists
+    to prevent recurring. Keep this a pass-through; do not add a test here without adding it there.
+    """
+    return consensus_accept(win, runner, n_pool, min_support, min_frac, min_lead, min_gap)
+
+
+def _rep_of(valid, ridx, members, medoid):
+    """Which member of the winning group to report as THE cell.
+
+    `ridx` is whichever member created the group, i.e. an artifact of iteration order. The medoid is
+    the member closest to the group's median fingerprint, so it is what the group agrees on rather
+    than what it happened to start from. Measured on mfxx49820 r0016 (833 agreeing hypotheses): the
+    arbitrary rep gave 38.3/79.1/80.3 against a truth of 38.4/79.3/79.5 (max dev 1.01%), the medoid
+    38.3/79.3/79.7 (0.26%). Same lattice either way -- this cannot change WHICH lattice won, only
+    which member speaks for it."""
+    if not medoid or len(members) < 2:
+        return valid[ridx]
+    # explicit None test, NOT `x or fallback`: these are numpy arrays, and `or` on one raises
+    # "truth value of an array is ambiguous" rather than falling through
+    med = group_medoid([valid[i] for i in members])
+    return valid[ridx] if med is None else med
+
+
+def _consensus_exact(valid, min_support, rtol, ctol, vtol, min_frac=0.0, min_lead=1.0,
+                     min_gap=0, medoid=True):
     """One Buerger reduction per hypothesis, then greedy same_lattice grouping (reference / CONSENSUS_EXACT=1)."""
     RP = [(reduced_params(M), abs(np.linalg.det(M))) for M in valid]
-    ridx, cnt = _grp_reduced(list(enumerate([1] * len(valid))), RP, rtol, ctol, vtol)
-    return (valid[ridx] if cnt >= min_support else None), cnt
+    (ridx, cnt, mem), runner = _grp_reduced(list(enumerate([1] * len(valid))), RP, rtol, ctol, vtol)
+    ok = _accept(cnt, runner, len(valid), min_support, min_frac, min_lead, min_gap)
+    rep = _rep_of(valid, ridx, mem, medoid)
+    return (rep if ok else None), cnt
 
 
-def _consensus_fast(valid, min_support, rtol, ctol, vtol, sig_tol=0.5):
+def _consensus_fast(valid, min_support, rtol, ctol, vtol, min_frac=0.0, min_lead=1.0,
+                    min_gap=0, medoid=True, sig_tol=0.5):
     """Bucket hypotheses by a cheap rotation/perm-invariant signature (sqrt-eig of the Gram G=M^T M, no
     Buerger), run ONE reduced_params per bucket, then group the bucket reps weighted by bucket count.
     ~10x fewer Buerger reductions; sig_tol keeps genuinely-distinct lattices in separate buckets."""
@@ -355,12 +461,46 @@ def _consensus_fast(valid, min_support, rtol, ctol, vtol, sig_tol=0.5):
             b[1] += 1
     reps = [tuple(buckets[k]) for k in order]                 # [(rep_index, count), ...]
     RP = {idx: (reduced_params(valid[idx]), abs(np.linalg.det(valid[idx]))) for idx, _ in reps}
-    ridx, cnt = _grp_reduced(reps, RP, rtol, ctol, vtol)
-    return (valid[ridx] if cnt >= min_support else None), cnt
+    (ridx, cnt, mem), runner = _grp_reduced(reps, RP, rtol, ctol, vtol)
+    ok = _accept(cnt, runner, len(valid), min_support, min_frac, min_lead, min_gap)
+    rep = _rep_of(valid, ridx, mem, medoid)
+    return (rep if ok else None), cnt
 
 
-def consensus_cell(Ms, min_support=3, rtol=0.05, ctol=0.06, vtol=0.10):
+def group_medoid(cells):
+    """The most TYPICAL cell of an already-same-lattice group, by reduced-param distance.
+
+    `_grp_reduced` returns whichever member happened to create the group -- an arbitrary choice that
+    is fine for deciding WHETHER a lattice won, and poor for deciding WHAT it is. This picks the
+    member closest to the group's median fingerprint instead.
+
+    It returns a REAL member rather than a synthesized average on purpose: `reduced_params` sorts
+    lengths and cosines INDEPENDENTLY, so the axis-to-angle pairing is destroyed and a cell cannot be
+    rebuilt from an averaged fingerprint without inventing a pairing. A medoid needs no such
+    reconstruction and carries a valid orientation.
+
+    Distance mixes a RELATIVE length term with an ABSOLUTE cosine term, mirroring how same_lattice
+    already compares the two (rtol on lengths, ctol on cosines), so the units are commensurate.
+    """
+    cells = [c for c in cells if c is not None]
+    if not cells:
+        return None
+    if len(cells) == 1:
+        return cells[0]
+    RP = [reduced_params(np.asarray(c, float)) for c in cells]
+    L = np.array([r[0] for r in RP]); C = np.array([r[1] for r in RP])
+    Lm, Cm = np.median(L, axis=0), np.median(C, axis=0)
+    d = (np.abs(L - Lm) / np.maximum(Lm, 1e-9)).max(1) + np.abs(C - Cm).max(1)
+    return cells[int(np.argmin(d))]
+
+
+def consensus_cell(Ms, min_support=3, rtol=0.05, ctol=0.06, vtol=0.10, min_frac=0.0,
+                   min_lead=1.0, min_gap=0, medoid=True):
     """Group recovered bases by shared lattice; return (representative M, support).
+
+    min_frac / min_lead default to OFF (0.0 / 1.0), so every existing caller keeps its exact
+    behaviour; see _accept for what they test and why an absolute min_support alone is not enough
+    once the pooled-hypothesis count changes by an order of magnitude.
 
     Default = per-hypothesis path (`_consensus_exact`): reduced_params cached once per hypothesis (was
     ~0.9s of repeated Buerger reductions in same_lattice; now ~5x less), PROVABLY bit-exact. CONSENSUS_FAST=1
@@ -371,8 +511,10 @@ def consensus_cell(Ms, min_support=3, rtol=0.05, ctol=0.06, vtol=0.10):
     if not valid:
         return None, 0
     if os.environ.get("CONSENSUS_FAST", "0") == "1" and len(valid) > 8:
-        return _consensus_fast(valid, min_support, rtol, ctol, vtol)
-    return _consensus_exact(valid, min_support, rtol, ctol, vtol)
+        return _consensus_fast(valid, min_support, rtol, ctol, vtol, min_frac, min_lead, min_gap,
+                               medoid)
+    return _consensus_exact(valid, min_support, rtol, ctol, vtol, min_frac, min_lead, min_gap,
+                            medoid)
 
 
 def index_known(g, qmax, M_ref, tol_frac=0.02, topk=15, min_inlier_frac=0.5):

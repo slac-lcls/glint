@@ -1,4 +1,4 @@
-"""Build EXACT assembled-image -> lab coordinate maps for mfxl1038923 r278 from psana's
+"""Build EXACT assembled-image -> lab coordinate maps for the $GLINT_EXP r278 run from psana's
 real calibrated geometry (real distance, panel tilts, exact beam center), so PeakNet
 peaks in assembled (row,col) convert to q with no flat-detector guessing. Also grab the
 real photon energy (CXI energy=0). Saves AX,AY,AZ (assembled HxW, meters) + lam.
@@ -9,10 +9,14 @@ the CXI's 1667x1668 grid; get_pixel_coord_indexes() gives each panel pixel's ass
 
   source .../psconda.sh ; python extract_geom_1038.py
 """
-import sys, numpy as np
+import os, sys, numpy as np
 from psana import DataSource
 
-EXP, RUN = "mfxl1038923", 278
+EXP = os.environ.get("GLINT_EXP")   # beamtime ID: proprietary, so not committed
+if not EXP:
+    sys.exit("set GLINT_EXP=<experiment id>; the ID is deliberately not in this file "
+             "(proprietary beamtime data -- see experiments/README_beamtime.md)")
+RUN = int(os.environ.get("GLINT_RUN", "278"))
 ds = DataSource(exp=EXP, run=RUN)
 myrun = next(ds.runs())
 

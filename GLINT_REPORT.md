@@ -4,6 +4,14 @@
 lysozyme frames + 60 rich DIALS frames. All numbers below are measured, gated, and
 reproduced from the experiment scripts in `experiments/`.*
 
+> **Snapshot: 2026-06-29. The throughput figures here are superseded.** The known-cell
+> engine has since been CUDA-graphed and fused (issue #5, PRs #14/#15/#16): the 16.5 ms
+> row below is now **0.17 ms/hit** at batch 120, i.e. ~18× *faster* than pipelined ffbidx
+> rather than slower, and §7's "remaining gap to ffbidx" is closed.
+> For current numbers use `python experiments/check_numbers.py --facts`, which is the
+> single source of truth and self-checks its own arithmetic. The *analysis* below — failure
+> modes, ablations, the accuracy-ceiling argument — still stands.
+
 ## 1. Summary
 
 GLINT indexes sparse single-shot diffraction **blind** (no unit cell supplied) by a
@@ -12,19 +20,19 @@ axes, assemble + anneal cells, derive the unit cell across frames by consensus, 
 rescue blind failures with a GPU known-cell indexer.
 
 The contribution is a point on the speed/accuracy frontier that neither incumbent
-occupies: **blind, at xgandalf's accuracy, ~340× faster, and ~95% index-identical to
+occupies: **blind, at xgandalf's accuracy, ~450× faster, and ~95% index-identical to
 ffbidx when both solve.**
 
 | indexer | mode | indexing rate | ms/frame | frames/s |
 |---|---|---|---|---|
-| **GLINT-①** | **blind** | **~71% / 94% ≥10 refl** | **34** | **30** |
-| xgandalf | blind | 71% | 11,542 | 0.087 |
+| **GLINT-①** | **blind** | **77% (92/120) / 94% ≥10 refl** | **34** | **30** |
+| xgandalf | blind | 72% (86/120) | 11,542 | 0.087 |
 | ffbidx | known-cell | 75% | 4.4 | 226 |
 | GLINT (known-cell mode) | cell given | matches ffbidx | 16.5 | 60 |
 
 *(120 sparse cxidb frames, one A100, same gate: correct lattice AND indexes ≥25% of
 spots / ≥10 reflections. "GLINT-①" = blind + consensus cell + GPU rescue. Rich DIALS-60:
-GLINT-① = 47 ms/frame, 21 f/s, 100/100.)*
+GLINT-① = 21 f/s (47 ms/frame), 100/100.)*
 
 ## 2. Architecture (M1–M6)
 
@@ -33,8 +41,8 @@ and GPU-batchable). There are two paths:
 
 - **Blind path** (`glint_fast.py::index_blind_fast`) — the contribution. ffbidx cannot
   run blind, so these modules are xgandalf-lineage + original, not ffbidx.
-- **Known-cell path** (`replica_gpu.py`) — a faithful GPU port of ffbidx, used only to
-  rescue blind failures.
+- **Known-cell path** (`replica_gpu.py`) — a GPU reimplementation of ffbidx's method, used
+  only to rescue blind failures.
 
 | module | ffbidx | GLINT-blind | provenance |
 |---|---|---|---|
@@ -47,11 +55,18 @@ and GPU-batchable). There are two paths:
 | consensus | — (per-frame) | derive cell across frames | original — no ffbidx analog |
 
 Only **M3 (cos ascent)** and **M5 (ifss)** are literally shared crystallography. The
-known-cell rescue path *is* ffbidx (replicated, then GPU-batched).
+known-cell rescue path *reimplements* ffbidx's method, then GPU-batches it.
+
+> **Provenance.** "Reimplements" is meant strictly: every line here is GLINT's own
+> torch/cupy, and no ffbidx, xgandalf, CrystFEL or psana source is present in this
+> repository. What is shared with those projects is the published *method*, which is cited.
+> The lineage is not clean-room — `replica_gpu.py` was written while reading ffbidx's
+> C++/CUDA source — so "reimplemented" is the accurate word and "independently derived"
+> would not be.
 
 ## 3. Throughput: the engineering wins
 
-The blind pipeline went from **2342 ms/frame (scalar) → 34 ms/frame (~69×)**, all
+The blind pipeline went from **2342 ms/frame (scalar) → 26 ms/frame (~90×)**, all
 validated bit-equal or better in accuracy:
 
 | lever | before | after | speedup |

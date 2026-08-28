@@ -25,9 +25,15 @@ def _load_frames(args):
         images = [{"image": os.path.basename(args.qframes), "event": i} for i in range(len(frames))]
     elif args.images:
         from glint.lute_bridge import frames_from_cxi
+        rf = None
+        if getattr(args, "ring_focus", False):
+            cv = " ".join(args.cell).split() if args.cell else []
+            if len(cv) < 6:
+                sys.exit("error: --ring-focus needs --cell \"a b c al be ga\"")
+            rf = ([float(v) for v in cv[:6]], args.ring_qlow)
         frames, images = frames_from_cxi(args.images, args.geom, wavelength_A=args.wavelength,
-                                         n=args.N, min_peaks=args.min_peaks,
-                                         peakfinder=args.peakfinder, top_n=args.top_peaks)
+                                         n=args.N, min_peaks=args.min_peaks, data_key=args.data_path,
+                                         peakfinder=args.peakfinder, top_n=args.top_peaks, ring_focus=rf)
     else:
         geom = parse_geom(args.geom)
         if geom["wavelength_A"] is None and args.wavelength is None:
@@ -63,6 +69,11 @@ def main():
                          "peakfinder8/Cheetah peaks (/entry_1/result_1, no redundant peak-find); 'pf8' TBD")
     ap.add_argument("--top-peaks", type=int, default=0,
                     help="with --images: keep only the N strongest peaks/frame (0=all; guards over-finding)")
+    ap.add_argument("--ring-focus", action="store_true",
+                    help="with --images + --cell: search only the cell's powder-ring annuli (low-order shells, "
+                         "|q|<=--ring-qlow) -- a known-cell scan / blank-veto throughput lever")
+    ap.add_argument("--ring-qlow", type=float, default=0.15,
+                    help="--ring-focus low-order shell cutoff in 1/A (default 0.15 ~ d>6.7 A)")
     ap.add_argument("--device", choices=("auto", "cpu"), default="auto")
     ap.add_argument("--nbest", type=int, default=3,
                     help="keep N-best cell hypotheses/frame for consensus (1 = top-1 only)")
@@ -75,17 +86,36 @@ def main():
     ap.add_argument("--integrate", action="store_true",
                     help="native predict+integrate -> a stream with REAL I/sigma, self-contained (no CrystFEL). "
                          "With --images the frames are read straight from the stacked .cxi by event; with --peaks "
-                         "supply the per-frame image files via --image-dir. For the best (refined) merge use --fromfile")
+                         "supply the per-frame image files via --image-dir. For the best (refined) merge use --tofile")
     ap.add_argument("--image-dir", default=".", help="base directory for per-file frame images (--integrate with --peaks)")
+    ap.add_argument("--data-path", help="HDF5 dataset path of the frame images (overrides the .geom "
+                    "'data =' key; default: the .geom key, else /data/data with --peaks, "
+                    "/entry_1/data_1/data with --images)")
     ap.add_argument("--int-dmin", type=float, default=2.0, help="--integrate resolution limit in A (default 2.0)")
     ap.add_argument("--int-tol", type=float, default=0.006,
                     help="--integrate Ewald excitation-error gate in 1/A (stills partiality window; default 0.006)")
-    ap.add_argument("--fromfile", metavar="SOL",
-                    help="also emit a CrystFEL --indexing=file solution file (the refined-merge handoff): "
+    # The escape hatch for glint#131. Without it "median" is reachable only from Python, which makes
+    # every intensity GLINT produced before that change irreproducible through the shipped routes.
+    # Only the --peaks route can face this: --images goes through integrate_cxi, whose .cxi layout
+    # is (event, ss, fs) by definition of that front end.
+    ap.add_argument("--event-axis", choices=("auto", "event", "panel"), default="auto",
+                    help="--integrate --peaks: what the leading axis of a 3-D image dataset means. "
+                         "auto (default) asks the file's per-event metadata and refuses to guess "
+                         "when a multi-panel geometry makes it ambiguous; event|panel say so "
+                         "outright (glint#136)")
+    ap.add_argument("--bg-mode", choices=("clipmean", "median", "mean"), default="clipmean",
+                    help="--integrate annulus background estimator: clipmean (default, MAD-clipped "
+                         "mean), median (what shipped before glint#131 -- use it to reproduce "
+                         "pre-#131 intensities), mean (unbiased but not robust; diagnostic)")
+    ap.add_argument("--tofile", metavar="SOL",
+                    help="WRITE a CrystFEL --indexing=file solution file (the refined-merge handoff): "
                          "run 'indexamajig --indexing=file --fromfile-input-file=SOL --tolerance=10,10,10,3' "
                          "so CrystFEL refines+integrates the GLINT orientations (best merge)")
+    # Was --fromfile, which named the flag after CrystFEL's READER (--fromfile-input-file) even though
+    # GLINT is the WRITER -- so it read backwards from this side. Kept working, hidden from --help.
+    ap.add_argument("--fromfile", metavar="SOL", help=argparse.SUPPRESS)
     ap.add_argument("--lattice", default="aP",
-                    help="Bravais lattice code for --fromfile (e.g. tPc tetragonal, aP triclinic); default aP")
+                    help="Bravais lattice code for --tofile (e.g. tPc tetragonal, aP triclinic); default aP")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
     if (args.peaks or args.images) and not args.geom:
@@ -126,33 +156,47 @@ def main():
             from glint.predict import integrate_cxi
             from glint.lute_bridge import parse_geom as _pg
             nint, tot = integrate_cxi(results, args.geom, wavelength_A=args.wavelength,
-                                      dmin=args.int_dmin, tol=args.int_tol)
-            _, _g = _pg(args.geom)
+                                      dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
+                                      data_key=args.data_path)
+            _panels, _g = _pg(args.geom)
+            _pnames = [p["name"] for p in _panels]
             def _f(v, d):
                 try:
                     return float(v)
                 except (TypeError, ValueError):
                     return d
             write_stream_integrated(results, args.out,
-                                    photon_eV=_f(_g.get("photon_energy"), 9392.7), clen_m=_f(_g.get("clen"), 0.15))
+                                    photon_eV=_f(_g.get("photon_energy"), 9392.7), clen_m=_f(_g.get("clen"), 0.15),
+                                    panel_names=_pnames)
         else:                                                    # per-file images (legacy detectors)
             from glint.predict import integrate_frames
             from glint.geom import parse_geom
             geomd = parse_geom(args.geom); gg = geomd.get("global", {})
             nint, tot = integrate_frames(results, geomd, image_dir=args.image_dir,
-                                         dmin=args.int_dmin, tol=args.int_tol)
+                                         data_path=args.data_path,          # None -> the .geom 'data =' key (glint#143)
+                                         dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
+                                         event_axis={"auto": None, "event": True,
+                                                     "panel": False}[args.event_axis])
+            _pnames = list(geomd.get("panels", {}).keys())
             write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
-                                    photon_eV=float(gg.get("photon_energy", 9392.7)), clen_m=float(gg.get("clen", 0.15)))
+                                    photon_eV=float(gg.get("photon_energy", 9392.7)), clen_m=float(gg.get("clen", 0.15)),
+                                    panel_names=_pnames or None)
     else:
-        write_stream(results, args.out)
+        # the .geom is what makes the stream readable at all -- see stream.write_stream
+        write_stream(results, args.out,
+                     geom_text=open(args.geom).read() if args.geom else None)
     _report(stats, args.out)
     if args.integrate:
         print(f"  integrated         : {nint} frames / {tot} reflections (real I/sigma) -> {args.out}")
-    if args.fromfile:
+    sol_path = args.tofile or args.fromfile
+    if sol_path:
+        if args.fromfile and not args.tofile:
+            print("  note: --fromfile is deprecated, use --tofile (GLINT WRITES this file; "
+                  "'fromfile' was named for CrystFEL, which reads it)", file=sys.stderr)
         from glint.predict import write_fromfile
-        nsol = write_fromfile(results, args.fromfile, args.lattice)
-        print(f"  fromfile solutions : {nsol} ({args.lattice}) -> {args.fromfile}"
-              f"  [indexamajig --indexing=file --fromfile-input-file={args.fromfile} --tolerance=10,10,10,3]")
+        nsol = write_fromfile(results, sol_path, args.lattice)
+        print(f"  solution file      : {nsol} ({args.lattice}) -> {sol_path}"
+              f"  [indexamajig --indexing=file --fromfile-input-file={sol_path} --tolerance=10,10,10,3]")
 
 
 if __name__ == "__main__":

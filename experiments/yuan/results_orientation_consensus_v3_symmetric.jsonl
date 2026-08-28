@@ -1,0 +1,160 @@
+{"i": 0, "method": "COM_alone", "m": 1, "frac": 0.0, "dt": 5.197435099631548}
+{"i": 0, "method": "PTS_alone", "m": 1, "frac": 0.45454545454545453, "dt": 8.409928534179926}
+{"i": 0, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 9.441391803324223}
+{"i": 0, "method": "PTS_consensus", "m": 2, "frac": 0.22727272727272727, "support": 2, "min_support": 2, "dt": 15.888609506189823}
+{"i": 0, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 18.604402393102646}
+{"i": 0, "method": "PTS_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 31.443912602961063}
+{"i": 0, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 2, "min_support": 5, "dt": 44.36924287676811}
+{"i": 0, "method": "PTS_consensus", "m": 8, "frac": 0.0, "support": 2, "min_support": 5, "dt": 70.5213817358017}
+{"i": 1, "method": "COM_alone", "m": 1, "frac": 0.041666666666666664, "dt": 6.478082165122032}
+{"i": 1, "method": "PTS_alone", "m": 1, "frac": 0.6666666666666666, "dt": 16.454524040222168}
+{"i": 1, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 12.737014420330524}
+{"i": 1, "method": "PTS_consensus", "m": 2, "frac": 0.5833333333333334, "support": 2, "min_support": 2, "dt": 28.609139319509268}
+{"i": 1, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 23.53878629207611}
+{"i": 1, "method": "PTS_consensus", "m": 4, "frac": 0.6770833333333334, "support": 4, "min_support": 3, "dt": 55.6035797894001}
+{"i": 1, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 3, "min_support": 5, "dt": 48.41769674792886}
+{"i": 1, "method": "PTS_consensus", "m": 8, "frac": 0.65625, "support": 8, "min_support": 5, "dt": 111.41974801570177}
+{"i": 2, "method": "COM_alone", "m": 1, "frac": 0.08695652173913043, "dt": 6.5927477441728115}
+{"i": 2, "method": "PTS_alone", "m": 1, "frac": 0.6086956521739131, "dt": 13.850933842360973}
+{"i": 2, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 13.799539487808943}
+{"i": 2, "method": "PTS_consensus", "m": 2, "frac": 0.6086956521739131, "support": 2, "min_support": 2, "dt": 27.706220034509897}
+{"i": 2, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 26.066612273454666}
+{"i": 2, "method": "PTS_consensus", "m": 4, "frac": 0.6304347826086957, "support": 4, "min_support": 3, "dt": 54.469002924859524}
+{"i": 2, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 3, "min_support": 5, "dt": 48.849921468645334}
+{"i": 2, "method": "PTS_consensus", "m": 8, "frac": 0.6358695652173914, "support": 7, "min_support": 5, "dt": 107.49943005666137}
+{"i": 3, "method": "COM_alone", "m": 1, "frac": 0.0, "dt": 6.878286015242338}
+{"i": 3, "method": "PTS_alone", "m": 1, "frac": 0.34782608695652173, "dt": 13.691258255392313}
+{"i": 3, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 11.505387883633375}
+{"i": 3, "method": "PTS_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 27.6774243414402}
+{"i": 3, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 27.18388991802931}
+{"i": 3, "method": "PTS_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 54.51843477785587}
+{"i": 3, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 3, "min_support": 5, "dt": 52.12609253451228}
+{"i": 3, "method": "PTS_consensus", "m": 8, "frac": 0.0, "support": 4, "min_support": 5, "dt": 108.80409593507648}
+{"i": 4, "method": "COM_alone", "m": 1, "frac": 0.08, "dt": 6.996355399489403}
+{"i": 4, "method": "PTS_alone", "m": 1, "frac": 0.24, "dt": 14.12898277118802}
+{"i": 4, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 12.532859977334738}
+{"i": 4, "method": "PTS_consensus", "m": 2, "frac": 0.26, "support": 2, "min_support": 2, "dt": 27.932738214731216}
+{"i": 4, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 27.155419055372477}
+{"i": 4, "method": "PTS_consensus", "m": 4, "frac": 0.22, "support": 3, "min_support": 3, "dt": 56.71672884002328}
+{"i": 4, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 2, "min_support": 5, "dt": 55.69504252821207}
+{"i": 4, "method": "PTS_consensus", "m": 8, "frac": 0.195, "support": 7, "min_support": 5, "dt": 113.3200538046658}
+{"i": 5, "method": "COM_alone", "m": 1, "frac": 0.04, "dt": 7.125148102641106}
+{"i": 5, "method": "PTS_alone", "m": 1, "frac": 0.24, "dt": 13.767221674323082}
+{"i": 5, "method": "COM_consensus", "m": 2, "frac": 0.06, "support": 2, "min_support": 2, "dt": 12.481079801917076}
+{"i": 5, "method": "PTS_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 27.680561743676662}
+{"i": 5, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 26.780883487313986}
+{"i": 5, "method": "PTS_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 55.952735118567944}
+{"i": 5, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 3, "min_support": 5, "dt": 54.38840368762612}
+{"i": 5, "method": "PTS_consensus", "m": 8, "frac": 0.0, "support": 4, "min_support": 5, "dt": 111.73115207999945}
+{"i": 6, "method": "COM_alone", "m": 1, "frac": 0.0, "dt": 6.820810429751873}
+{"i": 6, "method": "PTS_alone", "m": 1, "frac": 0.7241379310344828, "dt": 14.942760679870844}
+{"i": 6, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 13.673926070332527}
+{"i": 6, "method": "PTS_consensus", "m": 2, "frac": 0.7241379310344828, "support": 2, "min_support": 2, "dt": 29.907818365842104}
+{"i": 6, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 23.67074202746153}
+{"i": 6, "method": "PTS_consensus", "m": 4, "frac": 0.7586206896551724, "support": 4, "min_support": 3, "dt": 61.658758357167244}
+{"i": 6, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 2, "min_support": 5, "dt": 50.326466985046864}
+{"i": 6, "method": "PTS_consensus", "m": 8, "frac": 0.6939655172413793, "support": 7, "min_support": 5, "dt": 125.76241671293974}
+{"i": 7, "method": "COM_alone", "m": 1, "frac": 0.0, "dt": 7.121852766722441}
+{"i": 7, "method": "PTS_alone", "m": 1, "frac": 0.21428571428571427, "dt": 14.57730932533741}
+{"i": 7, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 14.808618929237127}
+{"i": 7, "method": "PTS_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 29.186830580234528}
+{"i": 7, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 28.422648910433054}
+{"i": 7, "method": "PTS_consensus", "m": 4, "frac": 0.16071428571428573, "support": 3, "min_support": 3, "dt": 58.115220449864864}
+{"i": 7, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 2, "min_support": 5, "dt": 58.248842261731625}
+{"i": 7, "method": "PTS_consensus", "m": 8, "frac": 0.16071428571428573, "support": 5, "min_support": 5, "dt": 122.33982548862696}
+{"i": 8, "method": "COM_alone", "m": 1, "frac": 0.03333333333333333, "dt": 7.123674236238003}
+{"i": 8, "method": "PTS_alone", "m": 1, "frac": 0.23333333333333334, "dt": 15.8144516274333}
+{"i": 8, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 12.55802308768034}
+{"i": 8, "method": "PTS_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 32.3709585480392}
+{"i": 8, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 29.062587328255177}
+{"i": 8, "method": "PTS_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 64.68839189782739}
+{"i": 8, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 2, "min_support": 5, "dt": 57.82383864372969}
+{"i": 8, "method": "PTS_consensus", "m": 8, "frac": 0.0, "support": 2, "min_support": 5, "dt": 132.29615712538362}
+{"i": 9, "method": "COM_alone", "m": 1, "frac": 0.03225806451612903, "dt": 6.789614837616682}
+{"i": 9, "method": "PTS_alone", "m": 1, "frac": 0.6451612903225806, "dt": 16.854753348976374}
+{"i": 9, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 14.6521767526865}
+{"i": 9, "method": "PTS_consensus", "m": 2, "frac": 0.6451612903225806, "support": 2, "min_support": 2, "dt": 34.610200963914394}
+{"i": 9, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 29.070191118866205}
+{"i": 9, "method": "PTS_consensus", "m": 4, "frac": 0.6451612903225806, "support": 3, "min_support": 3, "dt": 68.63746483623981}
+{"i": 9, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 2, "min_support": 5, "dt": 55.490433271974325}
+{"i": 9, "method": "PTS_consensus", "m": 8, "frac": 0.6129032258064516, "support": 5, "min_support": 5, "dt": 137.5901183448732}
+{"i": 10, "method": "COM_alone", "m": 1, "frac": 0.06666666666666667, "dt": 5.703349057585001}
+{"i": 10, "method": "PTS_alone", "m": 1, "frac": 0.3333333333333333, "dt": 16.29808769747615}
+{"i": 10, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 14.267997670918703}
+{"i": 10, "method": "PTS_consensus", "m": 2, "frac": 0.36666666666666664, "support": 2, "min_support": 2, "dt": 31.737522702664137}
+{"i": 10, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 28.804739471524954}
+{"i": 10, "method": "PTS_consensus", "m": 4, "frac": 0.35833333333333334, "support": 4, "min_support": 3, "dt": 65.3564998395741}
+{"i": 10, "method": "COM_consensus", "m": 8, "frac": 0.05, "support": 5, "min_support": 5, "dt": 57.16913057863712}
+{"i": 10, "method": "PTS_consensus", "m": 8, "frac": 0.35833333333333334, "support": 7, "min_support": 5, "dt": 135.69360991194844}
+{"i": 11, "method": "COM_alone", "m": 1, "frac": 0.0, "dt": 7.453500244766474}
+{"i": 11, "method": "PTS_alone", "m": 1, "frac": 0.2857142857142857, "dt": 15.333897192031145}
+{"i": 11, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 14.406997807323933}
+{"i": 11, "method": "PTS_consensus", "m": 2, "frac": 0.2857142857142857, "support": 2, "min_support": 2, "dt": 29.28979616984725}
+{"i": 11, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 25.699221804738045}
+{"i": 11, "method": "PTS_consensus", "m": 4, "frac": 0.30357142857142855, "support": 4, "min_support": 3, "dt": 58.542665150016546}
+{"i": 11, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 2, "min_support": 5, "dt": 59.4644949734211}
+{"i": 11, "method": "PTS_consensus", "m": 8, "frac": 0.3169642857142857, "support": 8, "min_support": 5, "dt": 114.70397654548287}
+{"i": 12, "method": "COM_alone", "m": 1, "frac": 0.03333333333333333, "dt": 7.228468429297209}
+{"i": 12, "method": "PTS_alone", "m": 1, "frac": 0.6666666666666666, "dt": 17.04824848473072}
+{"i": 12, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 14.600849065929651}
+{"i": 12, "method": "PTS_consensus", "m": 2, "frac": 0.6166666666666667, "support": 2, "min_support": 2, "dt": 34.297362111508846}
+{"i": 12, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 29.813627742230892}
+{"i": 12, "method": "PTS_consensus", "m": 4, "frac": 0.6333333333333333, "support": 4, "min_support": 3, "dt": 66.08886739239097}
+{"i": 12, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 2, "min_support": 5, "dt": 59.323771834373474}
+{"i": 12, "method": "PTS_consensus", "m": 8, "frac": 0.6041666666666666, "support": 8, "min_support": 5, "dt": 131.65561009198427}
+{"i": 13, "method": "COM_alone", "m": 1, "frac": 0.029411764705882353, "dt": 6.924948029220104}
+{"i": 13, "method": "PTS_alone", "m": 1, "frac": 0.5588235294117647, "dt": 19.542266611009836}
+{"i": 13, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 15.04113283008337}
+{"i": 13, "method": "PTS_consensus", "m": 2, "frac": 0.19117647058823528, "support": 2, "min_support": 2, "dt": 37.31828352808952}
+{"i": 13, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 27.05389605462551}
+{"i": 13, "method": "PTS_consensus", "m": 4, "frac": 0.19117647058823528, "support": 4, "min_support": 3, "dt": 74.34687772393227}
+{"i": 13, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 2, "min_support": 5, "dt": 57.87833704426885}
+{"i": 13, "method": "PTS_consensus", "m": 8, "frac": 0.18382352941176472, "support": 7, "min_support": 5, "dt": 151.60723618790507}
+{"i": 14, "method": "COM_alone", "m": 1, "frac": 0.027777777777777776, "dt": 7.622138258069754}
+{"i": 14, "method": "PTS_alone", "m": 1, "frac": 0.3055555555555556, "dt": 19.302365697920322}
+{"i": 14, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 14.649061255156994}
+{"i": 14, "method": "PTS_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 38.371530160307884}
+{"i": 14, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 28.38536625355482}
+{"i": 14, "method": "PTS_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 76.47793753445148}
+{"i": 14, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 4, "min_support": 5, "dt": 58.571990095078945}
+{"i": 14, "method": "PTS_consensus", "m": 8, "frac": 0.0, "support": 4, "min_support": 5, "dt": 154.99506618455052}
+{"i": 15, "method": "COM_alone", "m": 1, "frac": 0.0, "dt": 7.5589882880449295}
+{"i": 15, "method": "PTS_alone", "m": 1, "frac": 0.5, "dt": 19.967299953103065}
+{"i": 15, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 14.817482303828001}
+{"i": 15, "method": "PTS_consensus", "m": 2, "frac": 0.5833333333333334, "support": 2, "min_support": 2, "dt": 38.98535264283419}
+{"i": 15, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 30.282924197614193}
+{"i": 15, "method": "PTS_consensus", "m": 4, "frac": 0.6111111111111112, "support": 4, "min_support": 3, "dt": 79.99694821983576}
+{"i": 15, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 3, "min_support": 5, "dt": 60.58285477384925}
+{"i": 15, "method": "PTS_consensus", "m": 8, "frac": 0.59375, "support": 8, "min_support": 5, "dt": 159.1938748806715}
+{"i": 16, "method": "COM_alone", "m": 1, "frac": 0.0, "dt": 7.180222827941179}
+{"i": 16, "method": "PTS_alone", "m": 1, "frac": 0.6470588235294118, "dt": 17.24634625762701}
+{"i": 16, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 14.172837398946285}
+{"i": 16, "method": "PTS_consensus", "m": 2, "frac": 0.6176470588235294, "support": 2, "min_support": 2, "dt": 37.5687237419188}
+{"i": 16, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 27.70815911144018}
+{"i": 16, "method": "PTS_consensus", "m": 4, "frac": 0.6176470588235294, "support": 4, "min_support": 3, "dt": 76.5677778981626}
+{"i": 16, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 3, "min_support": 5, "dt": 60.28843943402171}
+{"i": 16, "method": "PTS_consensus", "m": 8, "frac": 0.625, "support": 8, "min_support": 5, "dt": 154.84970330819488}
+{"i": 17, "method": "COM_alone", "m": 1, "frac": 0.030303030303030304, "dt": 7.81701910123229}
+{"i": 17, "method": "PTS_alone", "m": 1, "frac": 0.18181818181818182, "dt": 19.39807901158929}
+{"i": 17, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 14.34759410098195}
+{"i": 17, "method": "PTS_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 36.83629389107227}
+{"i": 17, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 1, "min_support": 3, "dt": 30.274507086724043}
+{"i": 17, "method": "PTS_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 73.66468651592731}
+{"i": 17, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 2, "min_support": 5, "dt": 59.639605801552534}
+{"i": 17, "method": "PTS_consensus", "m": 8, "frac": 0.0, "support": 4, "min_support": 5, "dt": 148.66326649859548}
+{"i": 18, "method": "COM_alone", "m": 1, "frac": 0.05128205128205128, "dt": 7.740071278065443}
+{"i": 18, "method": "PTS_alone", "m": 1, "frac": 0.20512820512820512, "dt": 20.18674599006772}
+{"i": 18, "method": "COM_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 15.09075739979744}
+{"i": 18, "method": "PTS_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 41.125659853219986}
+{"i": 18, "method": "COM_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 30.881017073988914}
+{"i": 18, "method": "PTS_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 81.54272212088108}
+{"i": 18, "method": "COM_consensus", "m": 8, "frac": 0.0, "support": 4, "min_support": 5, "dt": 58.6610398106277}
+{"i": 18, "method": "PTS_consensus", "m": 8, "frac": 0.0, "support": 4, "min_support": 5, "dt": 164.143192473799}
+{"i": 19, "method": "COM_alone", "m": 1, "frac": 0.10344827586206896, "dt": 8.02306591719389}
+{"i": 19, "method": "PTS_alone", "m": 1, "frac": 0.29310344827586204, "dt": 29.187276627868414}
+{"i": 19, "method": "COM_consensus", "m": 2, "frac": 0.09482758620689655, "support": 2, "min_support": 2, "dt": 16.399334620684385}
+{"i": 19, "method": "PTS_consensus", "m": 2, "frac": 0.0, "support": 1, "min_support": 2, "dt": 58.54617461189628}
+{"i": 19, "method": "COM_consensus", "m": 4, "frac": 0.09913793103448276, "support": 4, "min_support": 3, "dt": 31.898074328899384}
+{"i": 19, "method": "PTS_consensus", "m": 4, "frac": 0.0, "support": 2, "min_support": 3, "dt": 112.0596929192543}
+{"i": 19, "method": "COM_consensus", "m": 8, "frac": 0.09051724137931035, "support": 7, "min_support": 5, "dt": 63.546000346541405}
+{"i": 19, "method": "PTS_consensus", "m": 8, "frac": 0.2413793103448276, "support": 5, "min_support": 5, "dt": 228.86582535877824}

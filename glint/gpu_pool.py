@@ -1,0 +1,469 @@
+"""Idle GPU pool manager for parallel blind rescue + diagnostics on sample changes.
+
+When a new cell locks in the streaming driver, activate idle GPUs to:
+1. Blind re-index the miss-buffer (frames waiting on the old cell) in parallel
+2. Gather outcast diagnostics (spurious meter, vote distribution, etc.)
+3. (Optional) pre-warm for the next sample
+
+Additionally, periodically inject ground-truth reference frames (e.g., lysozyme) to:
+- Validate blind/known-cell indexing paths
+- Detect system drift or degradation
+- Verify spurious-meter is working correctly
+- Monitor detector geometry stability via fast radial integration
+
+Non-blocking: results land asynchronously in a diagnostics queue.
+"""
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
+import numpy as np
+
+try:
+    import cupy as cp
+    import torch
+    _HAVE_TORCH = True
+except Exception:
+    _HAVE_TORCH = False
+
+try:
+    # Import fast radial integrator from drp-benchmarks if available
+    import sys
+    from pathlib import Path
+    _drp_radial = None
+    _drp_search_paths = [
+        Path.home() / 'git' / 'drp-benchmarks' / 'radial_integration',
+        '/sdf/group/lcls/ds/tools/drp-benchmarks/radial_integration',
+    ]
+    for path in _drp_search_paths:
+        if path.exists():
+            sys.path.insert(0, str(path.parent))
+            try:
+                from radial_integration.radial import RadialIntegrator
+                _drp_radial = RadialIntegrator
+                break
+            except ImportError:
+                pass
+except Exception:
+    pass
+
+
+def _to_host(a):
+    """cupy array -> numpy; anything else passes through."""
+    return a.get() if hasattr(a, 'get') else a
+
+
+def _profile_corr(profile, baseline):
+    """Pearson correlation of two radial profiles over the bins both resolve.
+
+    Empty bins come back NaN from the integrator (zero denominator), so compare only
+    where both profiles are finite. A profile with no variance (flat, or too few live
+    bins) carries no geometry information -- report 0.0 rather than a NaN that would
+    silently compare as neither stable nor drifted.
+    """
+    profile = np.asarray(profile, dtype=float).ravel()
+    baseline = np.asarray(baseline, dtype=float).ravel()
+    if profile.shape != baseline.shape:
+        raise ValueError(f"profile shape {profile.shape} != baseline {baseline.shape}")
+    ok = np.isfinite(profile) & np.isfinite(baseline)
+    if ok.sum() < 3:
+        return 0.0
+    a, b = profile[ok], baseline[ok]
+    if a.std() == 0 or b.std() == 0:
+        return 0.0
+    return float(np.corrcoef(a, b)[0, 1])
+
+
+class GPUPoolDiagnostics:
+    """Async results from idle-GPU diagnostic tasks."""
+
+    def __init__(self, max_history=1000):
+        self.max_history = max_history
+        self.results = deque(maxlen=max_history)
+        self.lock = threading.Lock()
+
+    def append(self, frame_id, gpu_id, task_type, result):
+        """Thread-safe append of a diagnostic result."""
+        with self.lock:
+            self.results.append({
+                'frame_id': frame_id,
+                'gpu_id': gpu_id,
+                'task_type': task_type,  # 'blind_rescue' | 'spurious_meter' | 'vote_dist'
+                'result': result,
+                'timestamp': np.datetime64('now')
+            })
+
+    def drain(self):
+        """Drain all results and return as list."""
+        with self.lock:
+            if not self.results:
+                return []
+            out = list(self.results)
+            self.results.clear()
+            return out
+
+
+class GPUPool:
+    """Manage idle GPUs for parallel tasks during streaming."""
+
+    def __init__(self, n_gpus=None, use_threading=True, diagnostics_queue=None,
+                 reference_cell=None, reference_every=100, detector_geometry=None):
+        """
+        Args:
+            n_gpus: number of idle GPUs available (None = auto-detect or default to 1)
+            use_threading: if True, spawn tasks in threads; else run synchronously
+            diagnostics_queue: optional GPUPoolDiagnostics queue to collect results
+            reference_cell: 3x3 matrix of reference cell (e.g., lysozyme) for ground-truth validation
+            reference_every: inject reference validation every N frames (default 100)
+            detector_geometry: optional detector geometry (q_per_pixel array or geometry object)
+                               for fast radial integration validation
+        """
+        if n_gpus is None:
+            n_gpus = 1  # Conservative default
+        self.n_gpus = n_gpus
+        self.use_threading = use_threading and n_gpus > 1
+        self.diag = diagnostics_queue or GPUPoolDiagnostics()
+        self.executor = ThreadPoolExecutor(max_workers=self.n_gpus - 1) if self.use_threading else None
+        self.active_tasks = []
+
+        # Reference validation
+        self.reference_cell = reference_cell
+        self.reference_every = reference_every
+        self.frame_count = 0
+        self.reference_validations = deque(maxlen=1000)
+
+        # Geometry validation (fast radial integration if available)
+        self._integrator = None
+        self._reference_profile = None
+        self._geom_init_error = None
+        if detector_geometry is not None and _drp_radial is not None:
+            try:
+                # Assume geometry is either q_per_pixel array or has a q_per_pixel attribute
+                q_per_pixel = getattr(detector_geometry, 'q_per_pixel', detector_geometry)
+                self._integrator = _drp_radial(q_per_pixel, nbin=100)
+            except Exception as e:
+                # Record it: a geometry check the caller asked for and did not get is a
+                # configuration problem, not something to swallow.
+                self._geom_init_error = str(e)
+
+    def should_inject_reference(self):
+        """Check if it's time to inject a reference validation frame."""
+        self.frame_count += 1
+        return (self.reference_cell is not None and
+                self.reference_every > 0 and
+                self.frame_count % self.reference_every == 0)
+
+    def validate_reference(self, q, blind_indexer=None, known_indexer=None,
+                          spurious_meter=None, same_lattice_fn=None, image=None):
+        """
+        Validate indexing paths against ground-truth reference frame.
+
+        Args:
+            q: reciprocal-space peak vectors (N×3)
+            image: the reference frame's raw detector image (H×W), for the geometry
+                   check. The radial profile is an image quantity -- the peak list
+                   alone cannot produce it -- so without this the geometry check is
+                   skipped.
+            blind_indexer: function(qs) -> list[M or None] for blind search
+            known_indexer: function(qs, Mc) -> list[M or None] for known-cell
+            spurious_meter: function(q, M) -> dict with z, wall, blank
+            same_lattice_fn: function(M1, M2) -> bool for lattice comparison
+
+        Returns:
+            dict with validation results or None if not time to validate
+        """
+        # `is None`, not truthiness: reference_cell is a 3x3 array and `not array` raises.
+        # No torch gate here -- each test below is already conditional on its callback, and
+        # the geometry check is pure numpy, so it must stay available on a CPU-only host.
+        if self.reference_cell is None:
+            return None
+
+        def task():
+            try:
+                result = {
+                    'frame_type': 'reference',
+                    'reference_cell': 'ref',  # name placeholder
+                    'timestamp': np.datetime64('now'),
+                    'blind': {},
+                    'known_cell': {},
+                    'spurious': {}
+                }
+
+                # Test 1: Blind indexing
+                if blind_indexer:
+                    nb = blind_indexer([q])
+                    if nb and nb[0] is not None:
+                        M = np.asarray(nb[0], float)
+                        result['blind']['found'] = True
+                        result['blind']['score'] = float(np.mean(np.abs(q @ M - np.round(q @ M))))
+                        if same_lattice_fn:
+                            result['blind']['matches_ref'] = same_lattice_fn(M, self.reference_cell)
+                    else:
+                        result['blind']['found'] = False
+                        result['blind']['score'] = None
+
+                # Test 2: Known-cell indexing (should hit reference cell)
+                if known_indexer:
+                    Ms = known_indexer([q], self.reference_cell)
+                    if Ms and Ms[0] is not None:
+                        result['known_cell']['hit'] = True
+                        hf = q @ Ms[0]
+                        result['known_cell']['inliers'] = int((np.abs(hf - np.round(hf)).max(1) < 0.15).sum())
+                    else:
+                        result['known_cell']['hit'] = False
+                        result['known_cell']['inliers'] = 0
+
+                # Test 3: Spurious meter (reference should be very clean signal)
+                if spurious_meter:
+                    meter = spurious_meter(q, self.reference_cell)
+                    result['spurious']['z'] = meter.get('z', None)
+                    result['spurious']['wall'] = meter.get('wall', False)  # should be False
+                    result['spurious']['blank'] = meter.get('blank', False)  # should be False
+
+                # Test 4: Geometry validation via fast radial integration
+                result['geometry'] = {}
+                if self._geom_init_error is not None:
+                    result['geometry']['error'] = self._geom_init_error
+                    result['geometry']['stability'] = 'error'
+                elif self._integrator is not None and image is not None:
+                    try:
+                        # Fast radial integration (cupy/CPU CSR matvec). integrate()
+                        # returns (q_centres, I) -- we compare profiles, not the q axis.
+                        _, I_q = self._integrator.integrate(image)
+                        I_q = np.asarray(_to_host(I_q), dtype=float).ravel()
+                        if self._reference_profile is None:
+                            # Seed reference profile on first injection
+                            self._reference_profile = I_q
+                            result['geometry']['profile_correlation'] = 1.0
+                            result['geometry']['stability'] = 'seeded'
+                        else:
+                            result['geometry']['profile_correlation'] = _profile_corr(
+                                I_q, self._reference_profile)
+                            corr = result['geometry']['profile_correlation']
+                            result['geometry']['stability'] = (
+                                'stable' if corr > 0.95 else
+                                'drift' if corr < 0.90 else
+                                'monitor'
+                            )
+                    except Exception as e:
+                        # A configured check that raised is a failure, not a silent skip.
+                        result['geometry']['error'] = str(e)
+                        result['geometry']['stability'] = 'error'
+
+                # Overall validation
+                all_agree = (
+                    result['blind'].get('found', False) and
+                    result['blind'].get('matches_ref', False) and
+                    result['known_cell'].get('hit', False) and
+                    result['known_cell'].get('inliers', 0) > 50 and
+                    result['spurious'].get('z', -1) > 3.0 and
+                    not result['spurious'].get('wall', True) and
+                    not result['spurious'].get('blank', True) and
+                    # 'drift' is the fault we are looking for; 'error' means the check
+                    # was configured but could not run, which must not read as healthy.
+                    result['geometry'].get('stability') not in ('drift', 'error')
+                )
+                result['validation'] = {'all_agree': all_agree}
+
+                self.diag.append(self.frame_count, 0, 'reference_validation', result)
+                self.reference_validations.append(result)
+                return result
+            except Exception as e:
+                self.diag.append(self.frame_count, 0, 'reference_validation', {'error': str(e)})
+                return None
+
+        if self.use_threading:
+            return self.executor.submit(task)
+        else:
+            return task()
+
+    def activate_on_new_cell(self, frame_id, miss_buffer, Mn, blind_indexer=None, spurious_meter=None):
+        """
+        Activate idle GPUs when a new cell locks.
+
+        Args:
+            frame_id: current frame number
+            miss_buffer: list of (q_vectors, old_frame_id) tuples to re-index
+            Mn: newly locked cell (3×3 matrix)
+            blind_indexer: function(qs) -> list[M or None]
+            spurious_meter: function(q, M) -> dict with z, wall, etc.
+
+        Returns:
+            List of future objects (if threading) or results (if sync)
+        """
+        if not _HAVE_TORCH or not blind_indexer:
+            return []
+
+        results = []
+
+        # Task 1: Blind re-index miss-buffer in parallel
+        if miss_buffer and self.n_gpus > 1:
+            qs = [q for q, _ in miss_buffer]
+            task = self._spawn_blind_rescue(frame_id, qs, Mn, blind_indexer)
+            results.append(task)
+
+        # Task 2: Gather spurious meter on rejected frames (if spurious_meter is wired)
+        if miss_buffer and spurious_meter and self.n_gpus > 2:
+            task = self._spawn_spurious_sweep(frame_id, miss_buffer, Mn, spurious_meter)
+            results.append(task)
+
+        # Store for later collection
+        if self.use_threading:
+            self.active_tasks.extend(results)
+
+        return results
+
+    def _spawn_blind_rescue(self, frame_id, qs, Mn, blind_indexer):
+        """Blind re-index buffered misses in parallel."""
+        def task():
+            try:
+                # Batch the blind indexing across GPUs (each GPU gets a chunk)
+                chunk_size = max(1, len(qs) // self.n_gpus)
+                rescued = 0
+                for i in range(0, len(qs), chunk_size):
+                    chunk = qs[i:i+chunk_size]
+                    Ms = blind_indexer(chunk)  # returns list[M or None]
+                    rescued += sum(1 for M in Ms if M is not None)
+
+                result = {
+                    'qs_count': len(qs),
+                    'rescued': rescued,
+                    'rescue_rate': rescued / len(qs) if qs else 0.0
+                }
+                self.diag.append(frame_id, 0, 'blind_rescue', result)
+                return result
+            except Exception as e:
+                self.diag.append(frame_id, 0, 'blind_rescue', {'error': str(e)})
+                return None
+
+        if self.use_threading:
+            return self.executor.submit(task)
+        else:
+            return task()
+
+    def _spawn_spurious_sweep(self, frame_id, miss_buffer, Mn, spurious_meter):
+        """Gather spurious meter diagnostics on rejected frames."""
+        def task():
+            try:
+                zs = []
+                wall_count = 0
+                blank_count = 0
+
+                for q, old_frame_id in miss_buffer:
+                    r = spurious_meter(q, Mn)
+                    z = r.get('z', None)
+                    if z is not None:
+                        zs.append(z)
+                    if r.get('wall', False):
+                        wall_count += 1
+                    if r.get('blank', False):
+                        blank_count += 1
+
+                result = {
+                    'z_median': np.median(zs) if zs else None,
+                    'z_min': min(zs) if zs else None,
+                    'z_max': max(zs) if zs else None,
+                    'wall_fraction': wall_count / len(miss_buffer) if miss_buffer else 0.0,
+                    'blank_fraction': blank_count / len(miss_buffer) if miss_buffer else 0.0,
+                }
+                self.diag.append(frame_id, 0, 'spurious_sweep', result)
+                return result
+            except Exception as e:
+                self.diag.append(frame_id, 0, 'spurious_sweep', {'error': str(e)})
+                return None
+
+        if self.use_threading:
+            return self.executor.submit(task)
+        else:
+            return task()
+
+    def collect_results(self, timeout=0.1):
+        """
+        Non-blocking collect of completed async tasks.
+
+        Args:
+            timeout: max wait time in seconds for any single task
+
+        Returns:
+            dict summarizing results collected
+        """
+        if not self.use_threading:
+            return {'tasks_run': 0}
+
+        completed = []
+        for future in as_completed(self.active_tasks, timeout=timeout):
+            try:
+                completed.append(future.result())
+            except Exception as e:
+                completed.append({'error': str(e)})
+
+        # Remove completed from active list
+        self.active_tasks = [f for f in self.active_tasks if not f.done()]
+
+        return {
+            'tasks_completed': len(completed),
+            'tasks_pending': len(self.active_tasks),
+            'results': completed
+        }
+
+    def reference_stats(self):
+        """Summary of reference validations (QA metrics)."""
+        if not self.reference_validations:
+            return {'count': 0}
+
+        validations = list(self.reference_validations)
+        all_pass = sum(1 for v in validations if v.get('validation', {}).get('all_agree', False))
+        blind_found = sum(1 for v in validations if v.get('blind', {}).get('found', False))
+        kc_hit = sum(1 for v in validations if v.get('known_cell', {}).get('hit', False))
+        z_scores = [v.get('spurious', {}).get('z') for v in validations
+                   if v.get('spurious', {}).get('z') is not None]
+
+        # Geometry correlation metrics (if available)
+        geom_corrs = [v.get('geometry', {}).get('profile_correlation') for v in validations
+                     if v.get('geometry', {}).get('profile_correlation') is not None]
+        geom_stable = sum(1 for v in validations
+                         if v.get('geometry', {}).get('stability') == 'stable')
+        geom_drift = sum(1 for v in validations
+                        if v.get('geometry', {}).get('stability') == 'drift')
+        geom_error = sum(1 for v in validations
+                        if v.get('geometry', {}).get('stability') == 'error')
+
+        stats = {
+            'count': len(validations),
+            'all_pass': all_pass,
+            'pass_rate': all_pass / len(validations) if validations else 0.0,
+            'blind_hit_rate': blind_found / len(validations) if validations else 0.0,
+            'known_cell_hit_rate': kc_hit / len(validations) if validations else 0.0,
+            'spurious_z_median': float(np.median(z_scores)) if z_scores else None,
+            'spurious_z_min': float(np.min(z_scores)) if z_scores else None,
+            'spurious_z_max': float(np.max(z_scores)) if z_scores else None,
+        }
+
+        # Add geometry metrics if available
+        if geom_corrs:
+            stats.update({
+                'geometry_profile_correlation_median': float(np.median(geom_corrs)),
+                'geometry_profile_correlation_min': float(np.min(geom_corrs)),
+                'geometry_stable_count': geom_stable,
+                'geometry_drift_count': geom_drift,
+            })
+        # Surface a broken check even when no correlation was ever produced -- otherwise
+        # a geometry check that never ran is indistinguishable from one that passed.
+        if geom_error:
+            stats['geometry_error_count'] = geom_error
+
+        return stats
+
+    def stats(self):
+        """Summary of GPU pool state."""
+        return {
+            'n_gpus': self.n_gpus,
+            'use_threading': self.use_threading,
+            'active_tasks': len(self.active_tasks),
+            'diag_history': len(self.diag.results),
+            'reference': self.reference_stats()
+        }
+
+    def shutdown(self):
+        """Shutdown the thread pool."""
+        if self.executor:
+            self.executor.shutdown(wait=True)

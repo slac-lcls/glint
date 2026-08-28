@@ -2,8 +2,10 @@
   anneal_fused  -- the 20/10-iter anneal (bit-exact fp64, ports anneal_b+solve3x3)
   obj_fused     -- obj_b scoring (inlier count + log2 sub-score) for K axis-vector candidates
   refine_fused  -- refine_b (S-step sin-gradient) for K axis-vector candidates
-All share the pattern: one thread-BLOCK per frame, one thread per candidate (k-strided), the frame's
-peaks staged in shared memory once, per-candidate state in registers.  Launch on torch's CURRENT
+anneal/refine: one thread-BLOCK per frame, one thread per candidate (k-strided).  obj since #165:
+grid=(F, ceil(K/block)) -- it runs at K >> block, so the candidate axis gets its own grid dimension
+and EACH of those blocks stages the frame's peaks (see the obj section).  All stage that frame's
+peaks in shared memory, per-candidate state in registers.  Launch on torch's CURRENT
 stream (cupy ExternalStream) -> correct ordering, no host sync.  Precision follows KC_FP (rgb.FP)."""
 import numpy as np, torch, cupy as cp
 import glint.replica_gpu_batch as rgb
@@ -63,6 +65,26 @@ extern "C" __global__ void anneal_fused(
 
 # ---------------------------------------------------------------------------------- obj -----------
 # proj = V.Q_p ; d=|proj-round|; inl += (d<TRIMH); sub += log2(clamp(d,TRIML,TRIMH)+DELTA); sub/=npk
+#
+# Unlike anneal/refine, obj runs at K >> block: _stage_compute calls it with K = 4096 and 5760 while
+# block is 128, so one block per frame made every thread walk 32-45 candidates SERIALLY.  ONE frame
+# then exposes a single 128-thread block -- 0.06% of an A100's ~221k slots (108 SM x 2048) -- and a
+# whole 120-frame batch only 15,360 threads, ~7%.  That is why per-frame cost kept falling out to
+# large B: the batch axis was the ONLY source of occupancy.
+# Splitting the candidate axis over blockIdx.y gives 3840/5400 blocks instead of 120, so a single hit
+# exposes 32-45 blocks on its own.  Each block re-stages the frame's peaks (the loop above is
+# repeated ky times), which is why this pays ~7x rather than ~ky.
+#
+# It does NOT remove the need to batch, and I predicted that it would.  Measured end-to-end: B=16
+# after the split (0.579 ms/fr) is still slower than B=120 before it (0.261), and the spread across
+# B WIDENS from 2.92x to 3.41x.  anneal_fused and refine_fused still take one block per frame, so
+# they keep setting occupancy from the batch axis.
+#
+# BIT-EXACT by construction: it only re-maps which thread owns which candidate.  Each k is still
+# summed over p in the same order by a single thread, and no partial results are combined across
+# threads or blocks -- so inl and sub are identical, not merely equivalent.  Do NOT copy this to
+# anneal_fused/refine_fused: they run at K <= block, where ky collapses to 1 and there is nothing to
+# split (a warp-per-candidate mapping is the lever there, and it is NOT bit-exact).
 _OBJ = r"""
 extern "C" __global__ void obj_fused(
     const DT* __restrict__ V, const DT* __restrict__ Q, const int* __restrict__ npk,
@@ -74,7 +96,7 @@ extern "C" __global__ void obj_fused(
         const DT* qp = Q + ((long)f*Pmax + p)*3; Qs[3*p]=qp[0]; Qs[3*p+1]=qp[1]; Qs[3*p+2]=qp[2]; }
     __syncthreads();
     DT invn = (DT)1.0 / (DT)(P < 1 ? 1 : P);
-    for (int k = threadIdx.x; k < K; k += blockDim.x) {
+    for (int k = blockIdx.y*blockDim.x + threadIdx.x; k < K; k += gridDim.y*blockDim.x) {
         const DT* vp = V + ((long)f*K + k)*3; DT v0=vp[0],v1=vp[1],v2=vp[2];
         int inl = 0; DT sub = 0;
         for (int p = 0; p < P; ++p) {
@@ -119,6 +141,66 @@ _SC = (lambda x: np.float32(x)) if IS32 else (lambda x: np.float64(x))
 _IB = 4 if IS32 else 8
 _cp = cp.asarray
 
+# The stock torch ops, captured at import BEFORE patch() can swap them out: they are the fallback
+# for frames whose peaks do not fit in shared memory (see _smem_cap below).  Bound here rather than
+# read off rgb at call time so a fallback inside a patched region cannot recurse into itself.
+_ORIG = {"anneal_b": rgb.anneal_b, "obj_b": rgb.obj_b, "refine_b": rgb.refine_b}
+
+# ------------------------------------------------------------- dynamic shared memory (issue #69) --
+# All three kernels stage the frame's peaks in dynamic shared memory as Pmax*3*_IB bytes.  CUDA caps
+# a launch's dynamic shared memory at 48 KB per block unless the FUNCTION opts in via
+# cudaFuncSetAttribute(cudaFuncAttributeMaxDynamicSharedMemorySize, N) -- so without the opt-in
+# Pmax > 48*1024/(3*_IB) = 2048 (fp64) / 4096 (fp32) failed the launch with CUDA_ERROR_INVALID_VALUE,
+# which propagated out of index_fused and killed StreamDriver.flush().  Opt in to whatever the device
+# itself reports as its per-block maximum (A100: 166,912 B, 3.4x the default), and treat that number
+# as a real ceiling: above it the peaks genuinely do not fit, so fall back to the stock torch ops
+# rather than raise.  (Lifting the ceiling entirely would mean tiling the peak loop, which is a
+# different change: even 163 KB runs out near 7k/14k peaks.)
+_DEFAULT_SMEM = 48 * 1024
+_SMEM_CAP = None
+
+
+def _smem_cap():
+    """Bytes of dynamic shared memory the three kernels may request on this device, opting them in
+    once on first use.  Returns the 48 KB default if there is no device or the driver refuses."""
+    global _SMEM_CAP
+    if _SMEM_CAP is None:
+        cap = _DEFAULT_SMEM
+        try:
+            want = int(cp.cuda.Device().attributes.get("MaxSharedMemoryPerBlockOptin", 0) or 0)
+            if want > cap:
+                for k in (_KA, _KO, _KR):
+                    k.max_dynamic_shared_size_bytes = want   # -> cudaFuncSetAttribute, per function
+                cap = want
+        except Exception:
+            pass                                             # no GPU / opt-in unsupported: 48 KB
+        _SMEM_CAP = cap
+    return _SMEM_CAP
+
+
+def max_peaks():
+    """Largest Pmax the fused kernels can stage on this device (3 coords x _IB bytes per peak)."""
+    return _smem_cap() // (3 * _IB)
+
+
+def _fallback(call, F, chunk=1):
+    """Run a stock op over `chunk`-frame slices and concatenate along the frame axis.
+
+    The stock ops materialise (F, K, Pmax) intermediates -- _stage_compute calls obj_b with thousands
+    of candidates -- so at the peak counts that send us here a whole padded batch is tens of GB and
+    OOMs, which is the F-scaled allocation index_fused's own over-lane avoids by passing one frame at
+    a time.  The wrappers cannot see their caller's batching (run_fused / a direct patch() user hands
+    them the full batch), so they slice it themselves.  Frames index INDEPENDENTLY -- the kernels are
+    grid=(F,), one block per frame, and F is a pure batch axis in the stock ops too -- so this changes
+    nothing but the allocation.  chunk=1 deliberately: this path only runs in the rare oversized
+    regime, where not dying matters more than throughput."""
+    if F <= chunk:
+        return call(0, F)
+    outs = [call(i, min(i + chunk, F)) for i in range(0, F, chunk)]
+    if isinstance(outs[0], tuple):
+        return tuple(torch.cat([o[j] for o in outs], 0) for j in range(len(outs[0])))
+    return torch.cat(outs, 0)
+
 
 def _stream():
     return cp.cuda.ExternalStream(torch.cuda.current_stream().cuda_stream)
@@ -126,6 +208,9 @@ def _stream():
 
 def anneal_fused(M0, Q, m, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02, block=128):
     F, K = M0.shape[0], M0.shape[1]; Pmax = Q.shape[1]
+    if Pmax > max_peaks():                                   # will not fit in shared memory
+        return _fallback(lambda a, b: _ORIG["anneal_b"](M0[a:b], Q[a:b], m[a:b],
+                                                        thr0, contract, max_iter, min_thr), F)
     npk = m.sum(1).to(torch.int32).contiguous()
     M0f = M0.reshape(F, K, 9).contiguous(); Mout = torch.empty_like(M0f)
     with _stream():
@@ -137,18 +222,23 @@ def anneal_fused(M0, Q, m, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02, 
 
 def obj_fused(V, Q, m, block=128):
     F, K = V.shape[0], V.shape[1]; Pmax = Q.shape[1]
+    if Pmax > max_peaks():
+        return _fallback(lambda a, b: _ORIG["obj_b"](V[a:b], Q[a:b], m[a:b]), F)
     npk = m.sum(1).to(torch.int32).contiguous()
     Vc = V.contiguous()
     inl = torch.empty(F, K, dtype=torch.int32, device=V.device)
     sub = torch.empty(F, K, dtype=V.dtype, device=V.device)
+    ky = min(max(1, -(-K // block)), 65535)              # candidates split across blockIdx.y
     with _stream():
-        _KO((F,), (block,), (_cp(Vc), _cp(Q.contiguous()), _cp(npk), _cp(inl), _cp(sub),
+        _KO((F, ky), (block,), (_cp(Vc), _cp(Q.contiguous()), _cp(npk), _cp(inl), _cp(sub),
              np.int32(F), np.int32(K), np.int32(Pmax)), shared_mem=Pmax*3*_IB)
     return inl.long(), sub
 
 
 def refine_fused(V, Q, m, steps=30, block=128):
     F, K = V.shape[0], V.shape[1]; Pmax = Q.shape[1]
+    if Pmax > max_peaks():
+        return _fallback(lambda a, b: _ORIG["refine_b"](V[a:b], Q[a:b], m[a:b], steps), F)
     npk = m.sum(1).to(torch.int32).contiguous()
     qmax = (Q.norm(dim=2) * m).amax(1).clamp(min=1e-9); npkf = m.sum(1).clamp(min=1)
     lr = (1.0 / (4 * PI**2 * npkf * qmax**2)).to(V.dtype).contiguous()

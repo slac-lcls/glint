@@ -1,4 +1,4 @@
-"""Run fftindex on REAL mfx100848724 SFX frames via psana2 (exact geometry, no .geom).
+"""Run fftindex on REAL MFX SFX frames ($GLINT_EXP) via psana2 (exact geometry, no .geom).
 Peakfind on calibrated jungfrau -> q (psana per-pixel coords) -> index_shot. The data's
 cell is unknown, so the test is CONSISTENCY: does fftindex recover the same cell across
 frames? A dominant cell both validates fftindex on real data AND reveals the cell."""
@@ -25,7 +25,11 @@ THR = float(sys.argv[2]) if len(sys.argv) > 2 else 200.0
 ZDIST = float(os.environ.get("ZDIST", "0.246"))         # detector distance [m] (Brewster: 246mm)
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)      # tetragonal lysozyme (run 51)
 
-ds = DataSource(exp="mfx100848724", run=51)
+EXP = os.environ.get("GLINT_EXP")   # beamtime ID: proprietary, so not committed
+if not EXP:
+    sys.exit("set GLINT_EXP=<experiment id>; the ID is deliberately not in this file "
+             "(proprietary beamtime data -- see experiments/README_beamtime.md)")
+ds = DataSource(exp=EXP, run=int(os.environ.get("GLINT_RUN", "51")))
 myrun = next(ds.runs())
 det = myrun.Detector("jungfrau")
 eb = myrun.Detector("ebeamh")

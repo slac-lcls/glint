@@ -67,7 +67,8 @@ _installed_content() {
 }
 
 EXPECTED="$(mktemp)"
-trap 'rm -f "$EXPECTED"' EXIT
+COMMITTED="$(mktemp)"
+trap 'rm -f "$EXPECTED" "$COMMITTED"' EXIT
 _installed_content < "$SRC" > "$EXPECTED"
 
 # --- activation-trap check (glint#128) -----------------------------------------------------------
@@ -175,8 +176,9 @@ if [ -f "$TARGET" ]; then
         # which would make every deployed copy look diverged and the guard cry wolf every run.
         MATCH=""
         for c in $(git -C "$ROOT" log --all --format=%H -- lute/glint_index.py 2>/dev/null); do
-            COMMIT_SHA="$(git -C "$ROOT" show "$c:lute/glint_index.py" 2>/dev/null | shasum -a 256 | cut -d' ' -f1)"
-            INSTALLED_COMMIT_SHA="$(git -C "$ROOT" show "$c:lute/glint_index.py" 2>/dev/null | _installed_content | shasum -a 256 | cut -d' ' -f1)"
+            git -C "$ROOT" show "$c:lute/glint_index.py" > "$COMMITTED" 2>/dev/null
+            COMMIT_SHA="$(_sha "$COMMITTED")"
+            INSTALLED_COMMIT_SHA="$(_installed_content < "$COMMITTED" | shasum -a 256 | cut -d' ' -f1)"
             if [ "$COMMIT_SHA" = "$TGT_SHA" ] || [ "$INSTALLED_COMMIT_SHA" = "$TGT_SHA" ]; then
                 MATCH="$c"; break
             fi

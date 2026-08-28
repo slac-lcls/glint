@@ -36,6 +36,6 @@ ms = 1e3 * (time.perf_counter() - t0) / n
 hh = [gate(res["M"], q) for res, q in zip(results, frames)]
 h25 = sum(a for a, _ in hh); h10 = sum(b for _, b in hh)
 
-print(f"bare rescue engine  (index_known_gpu_cell): >=25% {r25}/{n}={100*r25//n}%  >=10refl {r10}/{n}={100*r10//n}%")
-print(f"GLINT-(1) KNOWN-CELL (hybrid Mc_known=LYSO): >=25% {h25}/{n}={100*h25//n}%  >=10refl {h10}/{n}={100*h10//n}%  {ms:.1f} ms/frame")
+print(f"bare rescue engine  (index_known_gpu_cell): >=25% {r25}/{n}={round(100*r25/n)}%  >=10refl {r10}/{n}={round(100*r10/n)}%")
+print(f"GLINT-(1) KNOWN-CELL (hybrid Mc_known=LYSO): >=25% {h25}/{n}={round(100*h25/n)}%  >=10refl {h10}/{n}={round(100*h10/n)}%  {ms:.1f} ms/frame")
 print(f"  (hybrid n_idx cell-consistent = {stats['n_idx']}/{n}; n_resc {stats['n_resc']}, n_nbest {stats.get('n_nbest')})")

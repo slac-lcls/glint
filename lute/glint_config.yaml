@@ -42,6 +42,10 @@ IndexGLINT:
     #   Then run glint_dag_images.yaml, which has no FindPeaksSFX node.
     # images: "{{ work_dir }}/run.cxi"
     # peakfinder: "stored"                        # v4 | pf9 | stored (reuse the .cxi's peakfinder8 peaks)
-    # top_peaks: 100                              # `images` only; ~100 strongest is the sweet spot
+    # top_peaks: 200                              # `images` only -- OPTIONAL guard against over-
+    #                                              finding on background, NOT a speedup. Leave UNSET
+    #                                              by default: measured on 120 real cxidb frames,
+    #                                              100 costs ~11 pts of correct-lattice, 200 costs ~2
+    #                                              (glint#137; see glint_index.py's field doc)
 
 # ... StreamFileConcatenator / PartialatorMerger / HKLManipulator: (copy from the standard example) ...

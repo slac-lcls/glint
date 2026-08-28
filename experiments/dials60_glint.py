@@ -20,6 +20,6 @@ hh = [gate(r["M"], q) for r, q in zip(res, frames)]
 res2, st2 = hybrid_index(frames, warmup=False)
 hb = [gate(r["M"], q) for r, q in zip(res2, frames)]
 S = lambda xs, i: sum(x[i] for x in xs)
-print("DIALS-60 GLINT blind-fast      >=25%% %d/%d=%d%%  >=10refl %d/%d=%d%%" % (S(gb,0),n,100*S(gb,0)//n,S(gb,1),n,100*S(gb,1)//n))
-print("DIALS-60 GLINT-1 known-cell    >=25%% %d/%d=%d%%  >=10refl %d/%d=%d%%" % (S(hh,0),n,100*S(hh,0)//n,S(hh,1),n,100*S(hh,1)//n))
-print("DIALS-60 GLINT-1 blind-hybrid  >=25%% %d/%d=%d%%  >=10refl %d/%d=%d%%  support %s" % (S(hb,0),n,100*S(hb,0)//n,S(hb,1),n,100*S(hb,1)//n,st2['support']))
+print("DIALS-60 GLINT blind-fast      >=25%% %d/%d=%d%%  >=10refl %d/%d=%d%%" % (S(gb,0),n,round(100*S(gb,0)/n),S(gb,1),n,round(100*S(gb,1)/n)))
+print("DIALS-60 GLINT-1 known-cell    >=25%% %d/%d=%d%%  >=10refl %d/%d=%d%%" % (S(hh,0),n,round(100*S(hh,0)/n),S(hh,1),n,round(100*S(hh,1)/n)))
+print("DIALS-60 GLINT-1 blind-hybrid  >=25%% %d/%d=%d%%  >=10refl %d/%d=%d%%  support %s" % (S(hb,0),n,round(100*S(hb,0)/n),S(hb,1),n,round(100*S(hb,1)/n),st2['support']))

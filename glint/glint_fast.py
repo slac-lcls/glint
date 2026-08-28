@@ -78,11 +78,90 @@ from glint.multishot import same_lattice
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 NTOP = int(os.environ.get("NTOP", "30"))                    # ② candidate-pool size (M4 width)
 KEEP = int(os.environ.get("KEEP", "44"))                    # distinct_maxima retained
-STEPS = int(os.environ.get("STEPS", "8"))                   # M3 ascent steps. Default 8 = blind saturation (same_lattice 84/120, the ceiling; hybrid 117/120) and blind-SAFE; still 4x faster than the old 80 default (front-end 10.8 vs 83ms) at equal-or-better rate. STEPS=5 ties hybrid (118, rescue-buffered) + ~10% faster but blind-standalone drops to 77 -> not blind-safe. Sweep 2026-07-12: blind saturates >=8, 16-80 flat within +-3-frame noise.
+# M3 ascent steps. 8 is a THROUGHPUT choice: no arm from 4 to 80 is measurably better, and the
+# longer ones cost real time. See below for what that does and does not license as a claim.
+#
+# RE-MEASURED at n=480 (experiments/steps_sweep.py, 13 arms 2->80, strict bar, exact McNemar
+# against this default):
+#   STEPS      2     3     4     5     6     8    10    12    16    24    32    48    80
+#   blind    257   268   284   276   279   282   280   285   288   290   289   281   293
+#   hybrid   342   354   361   360   363   361   355   355   358   359   366   365   362
+#
+# NO SIGNIFICANT DIFFERENCE IS DETECTED anywhere from 4 to 80, in either channel (blind p >= 0.17,
+# hybrid p >= 0.32). The one arm that does differ is STEPS=2, and it is WORSE (blind p = 0.008,
+# hybrid p = 0.003).
+#
+# That is deliberately NOT phrased as "the step count is inert". Failing to reject is not evidence
+# of no difference, and 12 arms per channel were compared without correction -- under Bonferroni
+# (0.05/12 = 0.0042) even STEPS=2 survives in hybrid only. What the data DO bound is the SIZE of
+# any effect that went undetected, and that comes in two flavours which must not be conflated:
+#
+#   per arm, 95%          blind [-4.0%, +5.4%]   hybrid [-3.7%, +3.4%]
+#   ANY arm, 95% jointly  blind [-5.8%, +7.4%]   hybrid [-5.3%, +5.0%]
+#
+# The second row is the one that licenses a sentence about "any" arm. The first is a set of
+# pointwise intervals, and the min/max of twelve of those is not a simultaneous bound however
+# natural it looks to read it as one -- the joint row is Bonferroni over the 24 arm x channel
+# comparisons this block presents. Widest single interval: blind STEPS=4 (6.3 points), hybrid
+# STEPS=6 (5.2). STEPS=80 and 32 have the highest UPPER endpoints, which is a different thing.
+#
+# Those are Tango (1998) SCORE intervals for the paired difference -- asymptotic, not exact; the
+# word "exact" belongs to the McNemar p-values above and not to these. The first version of this
+# comment quoted a Clopper-Pearson interval on the conditional discordant share, which ignores the
+# randomness in how many discordant pairs there are: coverage 93.6% at one of these splits and
+# 59.3% in the sparse regime several hybrid arms sit in. It called itself exact and was neither.
+#
+# The engineering conclusion does not need equivalence, only the absence of a reason to pay: no
+# arm is detectably better than 8, and the joint bound on how much better the best of them could
+# secretly be is +7.4% blind (~35 of 480 frames) for 1.62x the front-end cost (6.1 -> 9.8
+# ms/frame). Nothing in the data argues for spending that. A positive claim -- that some arm IS
+# better, or that they are equivalent -- needs a larger n or a pre-registered margin; neither was
+# run, and "inert" would be asserting the null.
+#
+# This RETIRES three claims the previous comment made from an n=120 sweep, all of them sample noise
+# read as structure:
+#   "blind saturates >=8"          -- 284 at STEPS=4 vs 282 at 8, p = 0.894.
+#   "16-80 flat within +-3 frames" -- that range spans 281-293 at n=480.
+#   "STEPS=5 ... drops to 77, not  -- 276 vs 282, p = 0.441. No such cliff.
+#    blind-safe"
+# It also does NOT bear on the wider claim that M3 rests on under-optimising: that came from
+# CG/BB/Newton/LM scoring lower, and a different OPTIMISER is not more steps of the same one.
+# Untested here.
+STEPS = int(os.environ.get("STEPS", "8"))
 QDIST = os.environ.get("QDIST", "0") == "1"                  # D2: reciprocal-distance inlier (sigma-matched)
 QDTOL = float(os.environ.get("QDTOL", "0.004"))             # inlier radius in 1/A (q-space)
 DETREJ = os.environ.get("DETREJ", "0") == "1"               # D1: reject degenerate cell (OFF: regressed deflate)
-QPOW = float(os.environ.get("QPOW", "1.0"))                 # M2 weight w_i=|q_i|^-QPOW (GLINT 1; xgandalf paper 2)
+# M2/M3 peak weight, w_i = |q_i|^-QPOW (GLINT 1; xgandalf paper 2). Purely GEOMETRIC: peak
+# INTENSITY does not enter, so a 110k-count reflection and a 500-count one at the same |q| have
+# equal say. Every method in this family binarises this way -- xgandalf, TORO, ffbidx -- and none
+# appears to have published a test of it, so: MEASURED, n=480, cxidb-17, pf8 intensities, w scaled
+# by f(I) and renormalised so only the SHAPE of the weighting varies (experiments/weight_sweep.py).
+#
+#   f(I)        n_eff/N   blind   hybrid       n_eff/N = Kish effective sample size, 1.0 = uniform
+#   1 (binary)    1.000     282      361       <- the control, and the winner outright
+#   (I/med)^.25   0.907     253      351
+#   rank          0.754     227      331
+#   sqrt(I/med)   0.693     200      327
+#   log1p(I/med)  0.631     192      329
+#   med/I         0.526     251      356       <- the falsifier arm; see below
+#   I/med         0.336     116      319
+#
+# EVERY soft weighting is significantly worse at blind indexing (exact McNemar vs binary, all
+# p <= 0.003; the gentlest, ^0.25, still costs 29 frames). Hybrid is more forgiving -- consensus
+# and rescue absorb a bad blind cell -- but never better.
+#
+# WHY, and this is the part worth keeping: across the arms that up-weight strong peaks the blind
+# rate is an almost perfect linear function of the effective sample size (Pearson r = +0.997).
+# The weighting is not extracting information, it is discarding peaks. `med/I` was included as a
+# falsifier -- if up-weighting strong peaks helped, down-weighting them had to hurt -- and it is
+# the one arm off that line, costing 31 frames at n_eff 0.526 where sqrt costs 82 at a HIGHER
+# 0.693. So direction matters too, the way geometry suggests: strong peaks are the low-order
+# minority, and concentrating a 9-parameter lattice fit on them costs coverage as well as count.
+#
+# Scope: one dataset, one peak finder, one intensity definition (pf8's integrated count, not a
+# background-subtracted I/sigma). It says binarisation is right here, not that no intensity
+# estimate could ever help.
+QPOW = float(os.environ.get("QPOW", "1.0"))
 TOL = float(os.environ.get("TOL", "0.18"))                  # M2/M3 hard inlier window |q.v-round|<TOL (xgandalf eps)
 QHI = float(os.environ.get("QHI", "0"))                     # erf^2 high-q apodize: taper edge / qmax (0=off)
 QLO = float(os.environ.get("QLO", "0"))                     # erf^2 low-q (beamstop) apodize: edge / qmax (0=off)
@@ -457,7 +536,22 @@ def load(p):
     return fr
 
 
-def matched(M, q, tol=0.15):
+# The paper's strict gate, in one place: a frame counts as indexed iff same_lattice(M, truth)
+# AND matched_strict(M, q)/len(q) >= GATE_FRAC AND matched_strict(M, q) >= GATE_MIN, where
+# matched_strict() counts peaks with |q @ M - round(q @ M)| < GATE_TOL componentwise. These
+# three values are PUBLISHED (every gated rate in the paper is defined by them) and are tied
+# to check_numbers.py FACTS by a source regex, so changing them here fails the guard until the
+# deliverables are re-measured. matched_strict() is separated from the configurable matched()
+# so that gpass() is never accidentally routed through the QDIST=1 reciprocal-distance scorer,
+# which ignores GATE_TOL entirely (Copilot review of glint#170).
+# The ~12 experiment scripts that still inline the same triple are historical copies of THIS
+# definition; new code should import these names instead of re-declaring them.
+GATE_TOL = 0.15                      # near-integer window on q @ M, per component
+GATE_FRAC = 0.25                     # minimum matched fraction of the frame's peaks
+GATE_MIN = 10                        # minimum matched reflection count
+
+
+def matched(M, q, tol=GATE_TOL):
     if M is None:
         return 0
     r = q @ M - np.rint(q @ M)
@@ -466,9 +560,26 @@ def matched(M, q, tol=0.15):
     return int((np.abs(r).max(1) < tol).sum())
 
 
+def matched_strict(M, q):
+    """THE PUBLISHED GATE's matcher: componentwise |q@M - round(q@M)| < GATE_TOL, ALWAYS.
+
+    Separate from `matched` because that one is deliberately configurable -- with QDIST=1 it
+    switches to a reciprocal-distance ball at QDTOL and stops consulting GATE_TOL at all. That is
+    a legitimate knob for indexing/scoring experiments, but it must never reach the strict gate:
+    routed through `matched`, `gpass` would have applied the published GATE_FRAC/GATE_MIN
+    thresholds to counts produced by a different matching rule, and every source tie would still
+    have read green (Copilot review of glint#170). Under the shipped default QDIST=0 the two
+    functions are identical, so no published number moves.
+    """
+    if M is None:
+        return 0
+    r = q @ M - np.rint(q @ M)
+    return int((np.abs(r).max(1) < GATE_TOL).sum())
+
+
 def gpass(M, q):
     if M is None or not same_lattice(M, LYSO): return (0, 0)
-    m = matched(M, q); return (int(m / len(q) >= 0.25), int(m >= 10))
+    m = matched_strict(M, q); return (int(m / len(q) >= GATE_FRAC), int(m >= GATE_MIN))
 
 
 if __name__ == "__main__":
@@ -494,4 +605,4 @@ if __name__ == "__main__":
     if not scalar:
         print(f"    GPU front-end (M1-M3) {1e3*acc['gpu_front']/n:7.1f} ms/frame")
         print(f"    GPU M4 batched anneal {1e3*acc['m4_gpu']/n:7.1f} ms/frame  (~{acc['ntri']//n} triplets/frame)")
-    print(f"  ACCURACY    same_lattice {sl}/{n} ({100*sl//n}%)  gated frac>=.25 {g25}/{n} ({100*g25//n}%)  >=10refl {g10}/{n} ({100*g10//n}%)")
+    print(f"  ACCURACY    same_lattice {sl}/{n} ({round(100*sl/n)}%)  gated frac>=.25 {g25}/{n} ({round(100*g25/n)}%)  >=10refl {g10}/{n} ({round(100*g10/n)}%)")   # ROUND (0f456a0), not floor

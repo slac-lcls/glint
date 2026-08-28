@@ -18,8 +18,20 @@ os.environ.setdefault("STEPS", "8")
 import numpy as np
 from glint.glint_fast import index_blind_fast, index_blind_nbest, load
 from glint.replica_gpu import index_known_gpu_cell
-from glint.multishot import consensus_cell, same_lattice
+from glint.multishot import consensus_cell, group_medoid, same_lattice
 from glint.stream import write_stream
+
+
+# Consensus acceptance, on top of consensus_cell's absolute min_support=3. Env-overridable so a run
+# can be re-scored without an edit; set MIN_FRAC=0 / MIN_LEAD=1 to reproduce pre-gate behaviour.
+#   MIN_FRAC -- the winning cluster must be >= this share of the POOLED hypotheses (n_frames*nbest).
+#               2% is ~7 of the 360 hypotheses in the 120-frame benchmark (a no-op there, where the
+#               true cluster runs to the hundreds) but ~126 of 6300 on a multi-thousand-frame run,
+#               which is what a chance 23-cluster needs to clear and cannot.
+#   MIN_LEAD -- the winner must beat the RUNNER-UP cluster by this factor; a near-tie is an
+#               ambiguous lock no matter how big it is.
+CONSENSUS_MIN_FRAC = float(os.environ.get("GLINT_CONSENSUS_MIN_FRAC", "0.02"))
+CONSENSUS_MIN_LEAD = float(os.environ.get("GLINT_CONSENSUS_MIN_LEAD", "1.5"))
 
 
 def _hkl(q, M):
@@ -27,7 +39,8 @@ def _hkl(q, M):
     return r[inl].astype(int), q[inl], int(inl.sum())
 
 
-def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, cascade=None):
+def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, cascade=None,
+                 alias_gate=None, triage_topk=None):
     """Fully-blind hybrid. (1) N-BEST blind-index every frame (top-`nbest` distinct cells, not just
     argmax). (2) consensus over the POOLED N-best hypotheses (aliases scatter, truth clusters ->
     sturdier cell). (3) per frame pick the highest-scored N-best cell consistent with the consensus
@@ -46,10 +59,83 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     top1 = [nb[0][0] if nb else None for nb in NB]
     n_blind = sum(1 for nb in NB if nb)
 
+    n_pool = n_refine = 0
+    vote_idx = list(range(n))          # bound on BOTH branches; the known-cell path never votes
     if Mc_known is not None:
         Mc, support = np.asarray(Mc_known, float), -1
     else:                                                        # consensus over the POOLED hypotheses
-        Mc, support = consensus_cell([c for nb in NB for c, _ in nb])
+        # TRIAGE (opt-in). The streaming path votes over the top-`warm_topk` frames by peak count
+        # (warmup_batch); this path has always pooled EVERY frame, which is the worse position to be
+        # in and not the safer one. The random-agreement floor grows with the number of hypotheses
+        # drawn, so pooling more frames does not buy a sturdier cell past a point -- it buys a bigger
+        # lottery. Measured on mfxx49820 r0016 (2228 frames, unrefined geometry): pooling all 6294
+        # hypotheses locked a WRONG doubled-c cell on a 23-vote cluster, while the triaged vote
+        # REFUSED at every k from 16 to 512, because 1-2 votes out of 48-1536 can never clear
+        # min_support AND the runner-up margin. Triage also picks the STRONGEST diffraction, so the
+        # frames it does keep are the ones most likely to index correctly.
+        #
+        # Default None = pool everything, i.e. bit-identical to before. Set it and the vote is
+        # restricted; the per-frame N-best pick and the rescue below still see every frame, so this
+        # changes only WHO VOTES, never who gets indexed.
+        if triage_topk:
+            from glint.warmup_batch import triage_order            # the SAME selector streaming uses
+            vote_idx = triage_order([len(q) for q in frames], int(triage_topk), floor=1)
+        pool = [c for i in vote_idx for c, _ in NB[i]]
+        # A bare min_support=3 is an ABSOLUTE floor, and this pool is not a fixed size: it is
+        # n_frames x nbest. At 120 frames that is 360 hypotheses; at 2200 it is ~6300, where a
+        # 23-cluster (0.4% of the pool) clears 3 by chance and every downstream frame then gets
+        # rescued onto that wrong cell -- observed on mfxx49820 r0016, which reported "95% indexed"
+        # against a doubled-c lattice. Gate on the SHARE of the pool and on the margin over the
+        # runner-up as well. Both are no-ops on the small-N regime the benchmarks use.
+        Mc, support = consensus_cell(pool, min_frac=CONSENSUS_MIN_FRAC, min_lead=CONSENSUS_MIN_LEAD)
+        n_pool = len(pool)
+        # TRIAGE-THEN-REFINE. Deciding on 32 frames and REPORTING a cell derived from 32 frames are
+        # separate choices, and only the first needs to be small. Measured on mfxx49820 r0016 with
+        # the good geometry: the triaged vote's cell came out 37.9/79.6/81.0 against the full vote's
+        # 38.3/79.1/80.3 (truth 38.4/79.3/79.5) -- both same_lattice, but the triaged one demonstrably
+        # less accurate, because fewer members means less averaging.
+        #
+        # So: the DECISION stays triaged (that is the defence), then the cell is re-picked as the
+        # medoid of every hypothesis on EVERY frame that agrees with it. That is strictly more data
+        # for the same decision, and it cannot change which lattice was chosen -- `same_lattice` is
+        # the filter, so the medoid is by construction the same lattice as Mc.
+        if triage_topk and Mc is not None:
+            agree = [c for nb in NB for c, _ in nb if same_lattice(c, Mc)]
+            if len(agree) > support:                    # more agreeing cells than the vote itself saw
+                Mr = group_medoid(agree)
+                if Mr is not None and same_lattice(Mr, Mc):
+                    Mc, n_refine = Mr, len(agree)
+        # Deterministic complement to the statistical gate above: the vote share cannot tell a cell
+        # from its own index<=N super-cell, because a doubled axis collects exactly the same peaks --
+        # they just sit on every OTHER node. AliasGate scores coverage*occupancy over the derivative
+        # lattices, so a super-cell is caught by its systematically absent nodes. Opt-in: default None
+        # leaves this path bit-identical.
+        #
+        # NB an earlier version of this comment said the streaming driver "has had this since the
+        # alias-gate work". That is WRONG and worth recording: stream_driver's `_alias_gate` is used
+        # only inside `_watchdog` (stream_driver.py:1030,1046), and `_watchdog`'s single call site
+        # (:1114) sits in the `elif slots:` arm of `if slots and not self.adaptive_relock`, with
+        # `adaptive_relock=False` the shipped default (:479). So the gate gets nowhere near the
+        # PRIMARY blind lock (`_push_blind` -> `_lock`) that sets self.Mc -- passing
+        # `alias_gate=AliasGate()` to a default StreamDriver is a silent no-op. Neither path was
+        # protected where it mattered; this call is the first place the gate guards a primary lock.
+        if Mc is not None and alias_gate is not None:
+            # drawn from the SAME frames that voted, so the alias check and the statistical check
+            # are answering about one population rather than two.
+            #
+            # PER FRAME, in each frame's own orientation -- NOT `confirm(Mc, np.vstack(voters))`, which
+            # is what this line used to do and which cannot work: coverage and occupancy are both
+            # computed in the leader's frame, so a pooled cloud of many orientations puts every
+            # candidate at chance coverage and leaves the score a 1/V preference for smaller cells.
+            # Measured on the cxidb-62 lock, that refused the TRUE cell (every half-volume derivative
+            # scored 1.5-1.8x the leader) while the same gate per frame confirmed it 30/40. The frame's
+            # own agreeing N-best hypothesis IS the leader's lattice in that frame's orientation, so
+            # the correct input is already in hand -- no re-indexing.
+            voters = [(frames[i], next(c for c, _ in NB[i] if same_lattice(c, Mc)))
+                      for i in vote_idx
+                      if any(same_lattice(c, Mc) for c, _ in NB[i])]
+            if voters:
+                Mc = alias_gate.confirm_frames(Mc, voters)       # may return a tighter alias, or None
 
     results = []; n_idx = n_resc = n_nb = 0
     for q, nb, t1, meta in zip(frames, NB, top1, images):
@@ -84,7 +170,11 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
                     n_idx += 1; n_casc += 1
     edges = np.round(np.sort(np.linalg.norm(Mc, axis=0)), 1) if Mc is not None else None
     stats = {"n": n, "n_blind": n_blind, "support": support, "edges": edges, "n_nbest": n_nb,
-             "n_resc": n_resc, "n_casc": n_casc, "n_idx": n_idx, "Mc": Mc}
+             "n_resc": n_resc, "n_casc": n_casc, "n_idx": n_idx, "Mc": Mc,
+             "n_pool": n_pool, "support_frac": (support / n_pool) if n_pool else None,
+             "n_voters": len(vote_idx) if Mc_known is None else 0, "triage_topk": triage_topk,
+             "n_refine": n_refine,
+             "consensus_refused": bool(Mc is None and n_pool)}
     return results, stats
 
 
@@ -119,7 +209,15 @@ def _report(stats, out):
         return
     print(f"=== GLINT hybrid (blind+consensus+general-rescue), N={stats['n']} ===")
     print(f"  blind indexed      : {stats['n_blind']}/{stats['n']} ({100*stats['n_blind']//n}%)")
-    print(f"  consensus cell     : {stats['edges']} A  support {stats['support']}")
+    frac = stats.get("support_frac")
+    share = f" = {100*frac:.1f}% of {stats['n_pool']} pooled" if frac is not None else ""
+    if stats.get("consensus_refused"):
+        # Loud on purpose: this is the run reporting that it does NOT have a cell, and every
+        # subsequent frame fell back to its own top-1 rather than being rescued onto a shared one.
+        print(f"  consensus REFUSED  : best cluster {stats['support']}{share} -- below the "
+              f"min_frac/min_lead gate; per-frame top-1 fallback, NO rescue")
+    else:
+        print(f"  consensus cell     : {stats['edges']} A  support {stats['support']}{share}")
     if stats.get("n_nbest"):
         print(f"  N-best recovered   : {stats['n_nbest']} (consensus-consistent non-top-1 hypothesis)")
     print(f"  rescued failures   : {stats['n_resc']}")

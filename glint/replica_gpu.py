@@ -9,17 +9,31 @@ The numpy replica is ~127 ms/frame; this targets a few ms on the A100.
 import os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
-from glint.glint_fast import anneal_batch_t
+from glint.glint_fast import anneal_batch_t, matched_strict, GATE_FRAC, GATE_MIN
 from glint.lattice import cell_to_Ar
 from glint.multishot import same_lattice
 
-DEV = ("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+# cuda -> cpu, with NO mps rung. Apple's MPS backend does not implement float64, and this module
+# computes in float64 throughout (DIRS below is the first of eleven sites), so selecting mps raised
+# `Cannot convert a MPS Tensor to float64` at IMPORT time on every Apple-silicon machine -- and
+# `--device cpu` did not rescue it, because that flag only clears CUDA_VISIBLE_DEVICES. mps was
+# therefore never a working path, only a way for the cpu fallback to be skipped. Same in
+# glint/glint_index.py. (The old ladder was getattr-guarded for torch<1.12, which has no
+# torch.backends.mps at all; removing the rung removes that concern with it.)
+DEV = "cuda" if torch.cuda.is_available() else "cpu"
 LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 LA, LC = 79.02, 37.98
 TRIML, TRIMH, DELTA = 0.05, 0.30, 0.10
 CDIRS = int(os.environ.get("CDIRS", "16384"))
 NANG = int(os.environ.get("NANG", "360"))
 NC = int(os.environ.get("NC", "16"))
+# Greedy dedup radius (cos-angle) for the axis0 candidate pool (axis_candidates_t / c_candidates_t /
+# index_fused): candidates within this angle of an already-accepted (higher-scoring) direction are
+# excluded. At 0.985 (~10 deg) a spurious-boosted nearby impostor can claim the TRUE axis0's
+# neighborhood before the greedy scan reaches it, permanently excluding it -- RADIUS-based, so
+# widening NC never helps. 0.9995 (~1.8 deg): known-cell 494->600/600 at f=0.8 severe spurious load,
+# zero regressions across f=0.3-0.9 (recovers 47-106 frames/point).
+AXIS0_DEDUP_COS = float(os.environ.get("AXIS0_DEDUP_COS", "0.9995"))
 PI = np.pi
 
 
@@ -113,7 +127,7 @@ def c_candidates_t(Q):
     refc = ref.cpu().numpy(); out = []
     for j in order.tolist():
         d = refc[j] / LC
-        if all(abs(d @ (o / LC)) < 0.985 for o in out):
+        if all(abs(d @ (o / LC)) < AXIS0_DEDUP_COS for o in out):
             out.append(refc[j])
         if len(out) >= NC:
             break
@@ -196,7 +210,7 @@ def axis_candidates_t(Q, L0):
     refc = ref.cpu().numpy(); out = []
     for j in order.tolist():
         d = refc[j] / L0
-        if all(abs(d @ (o / L0)) < 0.985 for o in out):
+        if all(abs(d @ (o / L0)) < AXIS0_DEDUP_COS for o in out):
             out.append(refc[j])
         if len(out) >= NC:
             break
@@ -291,8 +305,8 @@ if __name__ == "__main__":
         M = index_known_gpu(q)
         if M is None or not same_lattice(M, LYSO):
             continue
-        m = int((np.abs(q @ M - np.rint(q @ M)).max(1) < 0.15).sum())
-        f25 += m / len(q) >= 0.25; fN += m >= 10
+        m = matched_strict(M, q)                # the published gate's matcher (glint_fast.GATE_TOL)
+        f25 += m / len(q) >= GATE_FRAC; fN += m >= GATE_MIN
     if DEV == "cuda": torch.cuda.synchronize()
     dt = time.time() - t0
     print(f"replica_GPU (known-cell)  device={DEV}  N={n}  {1e3*dt/n:.1f} ms/frame  ({n/dt:.0f} f/s)")

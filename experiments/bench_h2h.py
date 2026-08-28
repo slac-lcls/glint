@@ -42,7 +42,7 @@ if __name__ == "__main__":
     g = np.array([gpass(M, q) for M, q in zip(blind, frames)])
     print(f"=== device={DEV}  N={n} ===")
     print(f"[1] GLINT blind FAST : {1e3*t_blind/n:.1f} ms/frame ({n/t_blind:.1f} f/s)  "
-          f"gated {g[:,0].sum()}/{n} ({100*g[:,0].sum()//n}%) frac, {g[:,1].sum()}/{n} ({100*g[:,1].sum()//n}%) >=10refl")
+          f"gated {g[:,0].sum()}/{n} ({round(100*g[:,0].sum()/n)}%) frac, {g[:,1].sum()}/{n} ({round(100*g[:,1].sum()/n)}%) >=10refl")   # ROUND, matching the hybrid rows below
 
     # --- Stage 2: consensus cell (no cell assumed) ---
     t1 = time.time(); Mc, support = consensus_cell([M for M in blind if M is not None])
@@ -61,8 +61,8 @@ if __name__ == "__main__":
     t_resc = time.time() - t2
     print(f"[3] replica rescue   : {n_resc} failures rescued, {1e3*t_resc/max(n_resc,1):.0f} ms/rescue "
           f"({t_resc:.1f}s total)")
-    print(f"=> ① HYBRID (blind+rescue) gated: frac>=.25 {hyb[0]}/{n} ({100*hyb[0]//n}%)   "
-          f">=10refl {hyb[1]}/{n} ({100*hyb[1]//n}%)")
+    print(f"=> ① HYBRID (blind+rescue) gated: frac>=.25 {hyb[0]}/{n} ({round(100*hyb[0]/n)}%)   "
+          f">=10refl {hyb[1]}/{n} ({round(100*hyb[1]/n)}%)")
     tot = t_blind + t_cons + t_resc
     print(f"=> END-TO-END: {tot:.1f}s for {n} frames = {1e3*tot/n:.0f} ms/frame ({n/tot:.1f} f/s)")
     print(f"   vs xgandalf-blind ~13000 ms/frame (0.077 f/s) on the same sparse data "

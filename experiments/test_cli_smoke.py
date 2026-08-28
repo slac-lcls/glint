@@ -1,6 +1,6 @@
 """B4 fast self-contained CPU smoke test for the productized fftindex/GLINT surface (no GPU, no real
 data, ~1s): geom->panels, spot prediction + integration, the geom<->predict round trip, the CrystFEL
-stream + --fromfile writers, and the CLI entry point. Full blind-index ACCURACY is GPU-validated
+stream + --tofile writers, and the CLI entry point. Full blind-index ACCURACY is GPU-validated
 separately (the 70k-seed search is impractical on CPU); this guards the plumbing so refactors can't
 silently break the product surface.
 
@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory() as d:
 
     rp = subprocess.run([sys.executable, "-m", "glint.glint_cli", "--help"],
                         cwd=ROOT, capture_output=True, text=True, timeout=120)
-    check("glint --help", rp.returncode == 0 and "--fromfile" in rp.stdout and "--mode" in rp.stdout
+    check("glint --help", rp.returncode == 0 and "--tofile" in rp.stdout and "--mode" in rp.stdout
           and "--integrate" in rp.stdout, "entry point + new flags present")
 
 print("\n%s (%d/6 passed)" % ("ALL PASS" if not fails else "FAILED: " + ",".join(fails), 6 - len(fails)))

@@ -122,7 +122,7 @@ def _get_finder(name):
 
 
 def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, data_key=None,
-                    clen_scale=None, peakfinder="v4", top_n=0, **pf_kw):
+                    clen_scale=None, peakfinder="v4", top_n=0, ring_focus=None, **pf_kw):
     """Self-contained GLINT front end: read a .cxi and bridge detector peaks to reciprocal q-vectors -- no
     CrystFEL peak-search stream in between. Returns (frames [(N,3) q in 1/A], images [{image,event}]).
 
@@ -212,6 +212,13 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
     if mask_key and mask_key in f:
         m = f[mask_key]; m = np.asarray(m[0] if m.ndim >= 3 else m)
         cmask = (m == int(str(glob.get("mask_good", "0")), 0))     # True = good pixel
+    if ring_focus is not None:                                     # KNOWN-CELL: search only the powder-ring annuli
+        cell6, qlow = ring_focus
+        c0 = _meta(clen_spec, f, 0, 0.1); sc = clen_scale if clen_scale is not None else (0.001 if abs(c0) > 10 else 1.0)
+        e0 = _meta(en_spec, f, 0, None); wl0 = wavelength_A or (lambda_from_eV(e0) if e0 else None)
+        from glint.ring_mask import ring_qmask
+        rmask = ring_qmask(panels, c0 * sc + coff, wl0, cell6, (data.shape[-2], data.shape[-1]), qlow=qlow)
+        cmask = rmask if cmask is None else (cmask & rmask)
     finder = _get_finder(peakfinder)
     for i in range(nfr):
         img = np.asarray(data[i] if data.ndim >= 3 else data, np.float32)

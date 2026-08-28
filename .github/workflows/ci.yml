@@ -1,0 +1,264 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  cpu-tests:
+    name: CPU-only tests (no GPU, no psana, no data)
+    runs-on: ubuntu-latest
+    steps:
+      # slac-lcls requires every action pinned to a full-length commit SHA, not a tag.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065   # v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        # numpy is all the xtc_bridge scripts need; pytest + pydantic are what
+        # lute/test_glint_index.py needs (it calls pytest.importorskip("pydantic"),
+        # so without pydantic it would silently skip instead of testing anything).
+        # scipy is what importing the glint package itself needs -- cupy and numba
+        # are both guarded by try/except, but scipy is a hard import in multishot,
+        # seed and localize, so without it none of the glint/ tests below can run.
+        # h5py is needed by test_integrate_event.py, which has to WRITE a stacked
+        # multi-event .cxi to test that integration reads the right event out of it
+        # (glint#136). That test skips and exits 0 without h5py, so leaving it out
+        # here would make the step green while testing nothing.
+        run: python -m pip install --upgrade pip numpy scipy pytest pydantic h5py
+
+      - name: lute/test_glint_index.py
+        run: python -m pytest test_glint_index.py -q
+        working-directory: lute
+
+      # Regression tests for glint/ itself. Same script-style contract as the
+      # xtc_bridge ones (print, then sys.exit(1) on failure), but run from the repo
+      # root with PYTHONPATH=. so `import glint` resolves to the worktree.
+      - name: experiments/test_alias_gate.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_alias_gate.py
+
+      - name: experiments/test_pf8_thr_adu.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_pf8_thr_adu.py
+
+      - name: experiments/test_asic_seam_mask.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_asic_seam_mask.py
+
+      - name: experiments/test_negative_intensities.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_negative_intensities.py
+
+      # The peaks-route integrator's event addressing (glint#136). It builds a 3-event .cxi and
+      # checks the three frames integrate to three DIFFERENT intensities -- which is exactly what
+      # the shipped code could not do, and nothing else here would have noticed.
+      - name: experiments/test_integrate_event.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_integrate_event.py
+
+      # The device ladder must never select MPS: replica_gpu's module-level float64 tensors crash
+      # on it at import, and `--device cpu` did not rescue that (glint#161). The SOURCE half of
+      # this test needs no torch, so it really runs here -- which is the point, since this job
+      # installs no torch and a skip-only test would stay green with the defect restored.
+      - name: experiments/test_device_selection.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_device_selection.py
+
+      # Un-assembled multi-panel input integrates slab-locally via the .geom's integer dimN keys
+      # (glint#148): 4 panels sharing 2 slabs, each recovering its OWN planted flux; the 4-D
+      # event+panel path; the no-mapping refusal; and the window-exceeds-slab mismatch error.
+      - name: experiments/test_panel_stack_integrate.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_panel_stack_integrate.py
+
+      # The .geom `data =` key must reach integration (glint#143). parse_geom used to drop it,
+      # so the peaks+--integrate route could never read a non-default dataset path; #142's test
+      # passed data_path explicitly, which is why CI stayed green through the defect.
+      - name: experiments/test_geom_data_key.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_geom_data_key.py
+
+      - name: experiments/test_consensus_degenerate.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_consensus_degenerate.py
+
+      - name: experiments/test_consensus_order.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_consensus_order.py
+
+      - name: experiments/test_stream_gate_lock.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_stream_gate_lock.py
+
+      # Covers the watchdog relock path (rescue + alias gate) that test_stream_gate_lock.py does not
+      # reach. It was already failing on main when it was added -- unrun -- which is how the #112
+      # rescue regression shipped.
+      - name: experiments/test_lock_probe.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_lock_probe.py
+
+      - name: experiments/test_running_consensus.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_running_consensus.py
+
+      # The pool-keyed lock gate ships as a production DEFAULT, which lives only in
+      # StreamDriver.__init__'s signature and its one call site. test_running_consensus.py
+      # above covers the rule; this covers the wiring, and without it dropping those
+      # kwargs passes every other suite here.
+      - name: experiments/test_lock_gate_wiring.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_lock_gate_wiring.py
+
+      # Script-contract fixes: each of these swallowed its own assertion failures and exited 0,
+      # so none could have failed a CI step before now. Exit codes verified by deliberately
+      # breaking an assertion in each. All five run on numpy+scipy alone -- numba, torch and
+      # cupy are import-guarded, and the driver tests inject their own blind indexer/fan-out
+      # rather than reaching for a GPU, so nothing here degrades silently on the CPU runner.
+      - name: experiments/test_multilattice.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_multilattice.py
+
+      - name: experiments/test_warmup_batch.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_warmup_batch.py
+
+      - name: experiments/test_missbuf_rescue.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_missbuf_rescue.py
+
+      # A permanently failing blind fan-out must degrade to the miss path, not crash flush()
+      # (glint#147): survival, the no-votes rule, the failure streak + counter, short-return
+      # padding, and the healthy path staying untouched.
+      - name: experiments/test_watchdog_fanout_guard.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_watchdog_fanout_guard.py
+
+      # The opt-in retry cascade (glint#75). Injects the batched/blind/per-frame indexers through the
+      # same seams test_missbuf_rescue.py uses, so the whole thing runs on numpy alone. Covers both
+      # halves of the contract: flag OFF the gate-failing frame is a miss with no cascade counters at
+      # all, flag ON it is integrated exactly once and is NOT also counted as a miss.
+      - name: experiments/test_retry_cascade.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_retry_cascade.py
+
+      - name: experiments/test_geom_bridge.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_geom_bridge.py
+
+      - name: experiments/test_cli_smoke.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_cli_smoke.py
+
+      # ~50s, by far the slowest step here: it refines over 540 synthetic frames. Kept because
+      # it is the only cover of the geometry-refinement solver, but it is the first candidate
+      # to trim if this job gets tight.
+      - name: experiments/test_geom_refine.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_geom_refine.py
+
+      # THE GUARD ITSELF. Until now check_numbers.py ran only in a local pre-push hook, so every
+      # FACTS assertion in it -- the M3 splits, the pool-gate block, the retired-value rules --
+      # was enforced on one machine and not in CI. Editing a stored split left CI green.
+      #
+      # What runs HERE is check_arithmetic() in full (which is where those assertions live) plus
+      # the in-repo docs (README/ROADMAP/GLINT_REPORT, CONTRIBUTING.md and docs/, 8 files as of
+      # 2026-08-27), now resolved from the checkout instead of ~/git/glint. The paper and the
+      # decks live outside the repo and are reported as SKIP -- 8 checked, 8 skipped on a bare
+      # runner. That is the honest scope: this step cannot catch a number drifting in
+      # glint_rewrite_JAC_refined.tex, and the pre-push hook still has to.
+      - name: experiments/check_numbers.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/check_numbers.py
+
+      # ...and the statistics that guard uses. check_numbers.py imports nothing third-party, so
+      # its Tango score interval for the paired difference is written out by hand; this pins the
+      # closed-form MLE against brute force and the interval against its COVERAGE. Two earlier
+      # hand-written versions passed inspection while being wrong -- one with swapped bounds, one
+      # conditioning on the discordant count and reporting a marginal claim.
+      - name: experiments/test_check_numbers_ci.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_check_numbers_ci.py
+      - name: experiments/test_fp32_b32_033_rule.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_fp32_b32_033_rule.py
+
+      # The strict acceptance gate has ONE home (glint/glint_fast.py GATE_TOL/GATE_FRAC/GATE_MIN,
+      # glint#170); this asserts every formerly-inlined copy still IMPORTS it -- a re-inlined
+      # 0.15/0.25/10, or a strict_gate() helper routed back through the configurable matched()
+      # (the QDIST footgun), fails here. The AST half runs on this torch-less runner; the import
+      # half self-skips without torch, like test_gate_project.py's GPU half.
+      - name: experiments/test_gate_constants_dedup.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_gate_constants_dedup.py
+
+
+      # The GPU comparison itself cannot run here, but its PASS/FAIL RULES can: without cupy this
+      # runs compare_outputs' sabotage self-test (NaN/inf in each of the four outputs, tolerance
+      # boundaries, the exactness rules) and exits 0 on the device half. Those rules shipped
+      # NaN-blind -- `worst > ATOL` reads False on a NaN, so an invalid intensity passed -- and
+      # nothing executed them off a GPU node.
+      - name: experiments/bench_integrate_fused.py (checker self-test, skips the GPU half)
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/bench_integrate_fused.py
+
+      # SKIPS here, deliberately. A green check on this step is NOT coverage of the fused
+      # gate+project kernel: the skip returns before a single HKLGrid is built, so everything
+      # inside main() is untested on this runner and has to be run on a GPU node by hand.
+      # What it does buy is IMPORT-time cover -- the module body still resolves HKLGrid,
+      # _panel_geom, recip_from_M and cell_to_Ar, and still evaluates the module-level
+      # cell_to_Ar call -- so a rename or removal in glint/ fails here instead of lying in
+      # wait. That is worth a step because the file sat broken on main for exactly one reason:
+      # nothing ever executed it. It exits 0 when it skips, so it fails the job only on real rot.
+      - name: experiments/test_gate_project.py (skips without a GPU)
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_gate_project.py
+
+      # Not a test: it checks that run_ci_locally.py's STEPS still matches the steps above, so the
+      # local "run it as poor as CI" harness cannot quietly fall behind this file and start
+      # reporting ALL PASS over a step it no longer runs.
+      - name: experiments/run_ci_locally.py --check-sync
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/run_ci_locally.py --check-sync
+
+
+      # The xtc_bridge tests are plain scripts, not pytest test functions: they
+      # print their own results and sys.exit(1) on failure. They insert their own
+      # directory on sys.path and import sibling modules, so each is run from
+      # experiments/xtc_bridge. Each gets its own step so a failure is attributed
+      # to a file; `if: ${{ !cancelled() }}` keeps later files running after an earlier
+      # failure, and the job still fails overall.
+      - name: experiments/xtc_bridge/test_geom_manifest.py
+        if: ${{ !cancelled() }}
+        run: python test_geom_manifest.py
+        working-directory: experiments/xtc_bridge
+
+      - name: experiments/xtc_bridge/test_geom_provenance.py
+        if: ${{ !cancelled() }}
+        run: python test_geom_provenance.py
+        working-directory: experiments/xtc_bridge
+
+      # Compares GpuCalibrator._common_mode against golden outputs generated once from real psana
+      # (common_mode_golden.npz). This runner has no psana, but the check is NOT a no-op: all five
+      # modes, the bank split and the npix_min boundary run against those goldens, and the test
+      # ASSERTS each mode bit has a nonzero correction in the set -- at the original 64-column
+      # golden geometry the rows mode could never fire (8-px groups < npix_min) and a broken rows
+      # block passed CI; the 192-column goldens + that assert close the gap. Where psana IS
+      # available the same test additionally compares at full detector size and re-derives the
+      # goldens, so a stale golden cannot go unnoticed.
+      - name: experiments/xtc_bridge/test_gpu_calib_cm.py
+        if: ${{ !cancelled() }}
+        run: python test_gpu_calib_cm.py
+        working-directory: experiments/xtc_bridge
+
+      - name: experiments/xtc_bridge/test_gpu_calib_wiring.py
+        if: ${{ !cancelled() }}
+        run: python test_gpu_calib_wiring.py
+        working-directory: experiments/xtc_bridge
+
+      - name: experiments/xtc_bridge/test_shard.py
+        if: ${{ !cancelled() }}
+        run: python test_shard.py
+        working-directory: experiments/xtc_bridge

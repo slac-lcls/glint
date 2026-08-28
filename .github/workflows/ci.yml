@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   cpu-tests:
     name: CPU-only tests (no GPU, no psana, no data)

@@ -41,7 +41,7 @@ QMAX = 0.606                      # 1/A, matches the real set (dmin 1.65 A)
 WAVE_GEN = 1.3                    # A, cxidb lysozyme
 TOL_EXC = 0.004                   # generous Ewald shell -> a POOL; the sample below sets the count
 N_PANEL = 400
-GATE_FRAC, GATE_MIN = 0.25, 10
+GATE_FRAC, GATE_MIN = gf.GATE_FRAC, gf.GATE_MIN
 
 # (label, n_lattice, npk, jitter sigma in |a*|).  Real: solved 0.435, failed 0.275.
 CONDITIONS = [

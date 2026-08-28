@@ -19,7 +19,7 @@ from what_are_the_failures import strict_gate, push_blind_q, LYSO
 import glint.replica_gpu_batch as rgb
 import glint.stream_driver as sd
 
-N_PANEL, GATE_MIN = 400, 10
+N_PANEL, GATE_MIN = 400, gf.GATE_MIN
 
 
 def run_driver(frames, dmin, warmup_rescue, adaptive_relock):

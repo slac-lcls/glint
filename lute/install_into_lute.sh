@@ -60,6 +60,16 @@ SRC="$HERE/glint_index.py"
 TARGET="$LUTE/lute/io/models/glint_index.py"
 [ -d "$LUTE/lute/io/models" ] || { echo "not a LUTE repo: $LUTE"; exit 1; }
 
+_installed_content() {
+    local here_sed
+    here_sed="$(printf '%s' "$HERE" | sed 's/[\\&#]/\\&/g')"
+    sed 's#"/sdf/home/s/smarches/git/glint/lute/glint_launch.sh"#"'"$here_sed"'/glint_launch.sh"#'
+}
+
+EXPECTED="$(mktemp)"
+trap 'rm -f "$EXPECTED"' EXIT
+_installed_content < "$SRC" > "$EXPECTED"
+
 # --- activation-trap check (glint#128) -----------------------------------------------------------
 _activation_is_vulnerable() {
     # $1 = path to an activate_installation. True only if it still shows BOTH hallmarks of the
@@ -153,10 +163,10 @@ _sha() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
 
 # --- provenance guard ---------------------------------------------------------------------------
 if [ -f "$TARGET" ]; then
-    SRC_SHA="$(_sha "$SRC")"
+    SRC_SHA="$(_sha "$EXPECTED")"
     TGT_SHA="$(_sha "$TARGET")"
     if [ "$SRC_SHA" = "$TGT_SHA" ]; then
-        echo "glint_index.py already identical to the repo copy -- nothing to install."
+        echo "glint_index.py already identical to the expected installed copy -- nothing to install."
         echo "  (export + executor lines are re-checked below; both are idempotent)"
         SKIP_COPY=1          # nothing would change: no copy, and no .bak litter per no-op run
     elif ROOT="$(git -C "$HERE" rev-parse --show-toplevel 2>/dev/null)" && [ -n "$ROOT" ]; then
@@ -165,7 +175,9 @@ if [ -f "$TARGET" ]; then
         # which would make every deployed copy look diverged and the guard cry wolf every run.
         MATCH=""
         for c in $(git -C "$ROOT" log --all --format=%H -- lute/glint_index.py 2>/dev/null); do
-            if [ "$(git -C "$ROOT" show "$c:lute/glint_index.py" 2>/dev/null | shasum -a 256 | cut -d' ' -f1)" = "$TGT_SHA" ]; then
+            COMMIT_SHA="$(git -C "$ROOT" show "$c:lute/glint_index.py" 2>/dev/null | shasum -a 256 | cut -d' ' -f1)"
+            INSTALLED_COMMIT_SHA="$(git -C "$ROOT" show "$c:lute/glint_index.py" 2>/dev/null | _installed_content | shasum -a 256 | cut -d' ' -f1)"
+            if [ "$COMMIT_SHA" = "$TGT_SHA" ] || [ "$INSTALLED_COMMIT_SHA" = "$TGT_SHA" ]; then
                 MATCH="$c"; break
             fi
         done
@@ -203,8 +215,7 @@ if [ -f "$TARGET" ]; then
 fi
 
 # --- install ------------------------------------------------------------------------------------
-[ "${SKIP_COPY:-0}" -eq 1 ] || cp "$SRC" "$TARGET"
-[ "${SKIP_COPY:-0}" -eq 1 ] || { sed -i.bak 's#"/sdf/home/s/smarches/git/glint/lute/glint_launch.sh"#"'"$HERE"'/glint_launch.sh"#' "$TARGET" && rm -f "$TARGET.bak"; }
+[ "${SKIP_COPY:-0}" -eq 1 ] || cp "$EXPECTED" "$TARGET"
 grep -q "from .glint_index import" "$LUTE/lute/io/models/__init__.py" || \
   echo "from .glint_index import *" >> "$LUTE/lute/io/models/__init__.py"
 grep -q "IndexGLINT" "$LUTE/lute/managed_tasks.py" || \

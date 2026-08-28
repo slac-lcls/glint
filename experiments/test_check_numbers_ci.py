@@ -313,6 +313,8 @@ def test_hl_rendering_fires_on_marks_and_spares_comments_and_the_macro_def():
     """
     assert _fires("\\hl{draft}", "hl-rendering"), "line-start mark not caught"
     assert _fires("text \\hl{x}", "hl-rendering"), "mid-line mark not caught"
+    assert _fires("Accuracy: 95\\% \\hl{verify}", "hl-rendering"), \
+        "escaped percent was mistaken for a comment"
     assert not _fires("% \\hl{x}", "hl-rendering"), "fired on a commented mark"
     assert not _fires("text % \\hl{x}", "hl-rendering"), "fired past a trailing %"
     assert not _fires("\\newcommand{\\FIXME}[1]{\\hl{[FIXME: #1]}}", "hl-rendering"), \

@@ -82,13 +82,24 @@ def _diag_triples(index):
 
 def hnf_matrices(index):
     """Column-style Hermite normal forms: upper-triangular integer matrices with positive diagonal whose
-    product is `index`, off-diagonal entry (i,j<j) reduced modulo its column's diagonal -- one per
-    distinct index-`index` sublattice of Z^3 (1 for index 1, 7 for index 2, 13 for index 3)."""
+    product is `index`, off-diagonal entry (i, j>i) reduced modulo its own ROW's diagonal (i, i) --
+    one per distinct index-`index` sublattice of Z^3 (1 for index 1, 7 for index 2, 13 for index 3).
+
+    The reduction is modulo the ROW's diagonal, not the column's: column j may have any integer
+    multiple of column i subtracted from it, and column i's only nonzero entry at or above row i is
+    (i, i). Reducing modulo the COLUMN's diagonal instead -- which this function did until the fix
+    below -- produces the right CARDINALITY at every index and the wrong SET. The counts coincide
+    because sum(d*f^2) == sum(a^2*d) over a triple set closed under permutation, so a count check
+    passes forever while the distinct sublattices collapse: 3 instead of 7 at index 2, 3 instead of
+    13 at index 3, 9 instead of 35 at index 4. Every non-trivial off-diagonal form was missing, so
+    the family contained only axial doublings -- e.g. [[2,1,0],[0,1,0],[0,0,1]] was absent.
+    A cardinality check is not a check on a canonical form; see
+    test_hnf_matrices_are_distinct_sublattices, which tests the equivalence itself."""
     mats = []
     for a, d, f in _diag_triples(index):
-        for h12 in range(d):                     # column 2 diagonal = d
-            for h13 in range(f):                 # column 3 diagonal = f
-                for h23 in range(f):
+        for h12 in range(a):                     # (0,1) reduced mod row 0's diagonal = a
+            for h13 in range(a):                 # (0,2) likewise
+                for h23 in range(d):             # (1,2) reduced mod row 1's diagonal = d
                     mats.append(np.array([[a, h12, h13],
                                           [0.0, d, h23],
                                           [0.0, 0.0, f]], float))
@@ -113,23 +124,46 @@ def _fingerprint(M):
     return (tuple(np.round(l, 3)), tuple(np.round(c, 3)))
 
 
+def _same_embedded_lattice(A, B):
+    """A and B span the SAME lattice iff A^-1 B is integral with |det| == 1 (a change of basis)."""
+    try:
+        T = np.linalg.solve(np.asarray(A, float), np.asarray(B, float))
+    except np.linalg.LinAlgError:                            # pragma: no cover - _degenerate screens
+        return False
+    return (bool(np.all(np.isfinite(T))) and np.allclose(T, np.round(T), atol=1e-6)
+            and abs(abs(np.linalg.det(T)) - 1.0) < 1e-6)
+
+
 def derivative_lattices(M, max_index=2):
     """The leader M plus its index in [2, max_index] sub- and super-lattices (M@H and M@inv(H) for every
-    Hermite form H), deduplicated by reduced cell. M is always element 0. A degenerate leader yields just
-    [M] (nothing to derive from)."""
+    Hermite form H), deduplicated by the EMBEDDED LATTICE. M is always element 0. A degenerate leader
+    yields just [M] (nothing to derive from).
+
+    Deduplication is by _same_embedded_lattice, not by _fingerprint. _fingerprint's reduced-cell key
+    is ROTATION-INVARIANT, which is the wrong equivalence here: two derivatives that differ only in
+    their orientation relative to the observed peaks index DIFFERENT oriented peak sets, and
+    coverage/occupancy is scored against exactly those peaks. On a cubic or tetragonal leader the
+    three axial index-2 sublattices all reduce to the same parameters, so the reduced-cell key
+    collapsed them to one entry and the gate scored fewer than all seven derivatives -- undoing, one
+    layer up, the enumeration fix in hnf_matrices. Same class of defect as that one: an equivalence
+    coarser than the thing being enumerated. (Found by Copilot in review of #179.)"""
     M = np.asarray(M, float)
     out = [M]
     if _degenerate(M):
         return out
-    seen = {_fingerprint(M)}
     for idx in range(2, max_index + 1):
         for H in hnf_matrices(idx):
-            for cand in (M @ H, M @ np.linalg.inv(H)):
+            # Sub-lattices are M@H; SUPER-lattices are M@inv(H).T, not M@inv(H). H ranges over
+            # UPPER-triangular forms, and H^-1 is upper-triangular too, so M@inv(H) reaches only the
+            # axial superlattices: with a=index the reduction forces d=f=1, and all `index^2` such
+            # forms generate one and the same superlattice. Measured exactly (Fractions, no floats):
+            # inv(H) gives 3 of 7 at index 2 and 3 of 13 at index 3, while the dual form inv(H).T
+            # gives 7 of 7 and 13 of 13. Third instance of one defect family in this path -- an
+            # enumeration whose triangular convention silently restricts the set it spans.
+            for cand in (M @ H, M @ np.linalg.inv(H).T):
                 if _degenerate(cand):
                     continue
-                fp = _fingerprint(cand)
-                if fp not in seen:
-                    seen.add(fp)
+                if not any(_same_embedded_lattice(prev, cand) for prev in out):
                     out.append(cand)
     return out
 

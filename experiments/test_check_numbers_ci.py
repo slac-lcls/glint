@@ -365,6 +365,53 @@ def test_guard_advice_is_not_itself_retired():
         assert not tripped, f"{rule.name}'s advice {rule.instead!r} trips:\n" + "".join(tripped)
 
 
+def test_no_rule_text_anywhere_is_itself_retired():
+    """`instead` AND `exempt`, across every rule class -- not just RETIRED's `instead`.
+
+    The test above covers `RETIRED[*].instead`. That left the exemption markers unchecked, and they
+    were occupied: TWO of `live-merge.exempt`'s eight markers were "20x short" / "20× short", which
+    live-gap-20x retires. An author reaching for the guard's own sanctioned escape hatch therefore
+    committed a fresh violation. `khz-demonstrated.instead` carried the same stale figure.
+
+    ⚑ `why` is deliberately NOT checked. A why-string's job is often to NAME the retired value and
+    its predecessor -- "179 f/s is the reciprocal of the retired 5.58 ms" is correct prose that has
+    to keep quoting both. Only text the author is told to WRITE can walk them into a violation:
+    `instead` (what to write instead) and `exempt` (what to write to be excused). Checking `why`
+    here too was tried first and flagged six legitimate explanations, which is how this scope was
+    settled. `why` strings still must not go STALE -- live-merge's quoted a superseded rate and was
+    rewritten to interpolate FACTS -- but that is a correctness duty, not something this test can
+    enforce without failing on correct prose.
+
+    The general lesson: the guard's own prose is a deliverable. Anything it tells an author to
+    write must survive being written. Interpolate from FACTS rather than quoting a numeral and this
+    test stays quiet by construction.
+    """
+    classes = [("RETIRED", _cn.RETIRED), ("OVERCLAIM", _cn.OVERCLAIM), ("AMBIGUOUS", _cn.AMBIGUOUS)]
+    bad = []
+    for cls, rules in classes:
+        for rule in rules:
+            # ⚑ ALL THREE exemption channels, not just `exempt`: scan() also honours
+            # `exempt_before` and `exempt_after` (both live on nstar-stale-32), and a retired
+            # phrase added to either would recreate exactly this failure while the test stayed
+            # green. Enumerating the fields by name is deliberate -- a new escape hatch should
+            # break this test loudly rather than be silently uncovered.
+            # (Found by Copilot in review of #179.)
+            fields = [("instead", rule.instead)]
+            for chan in ("exempt", "exempt_before", "exempt_after"):
+                fields += [(f"{chan}[{i}]", e)
+                           for i, e in enumerate(getattr(rule, chan, ()) or ())]
+            for field, text in fields:
+                if not text:
+                    continue
+                # A rule matching its OWN advice stays allowed, for the reason the test above gives:
+                # retiring a value sometimes means naming it.
+                tripped = [f for f in _cn.scan(Path("advice.txt"), text)
+                           if "[RETIRED/" in f and f"/{rule.name}]" not in f]
+                if tripped:
+                    bad.append(f"{cls}/{rule.name}.{field} = {text!r}\n" + "".join(tripped))
+    assert not bad, "guard prose trips the guard:\n\n" + "\n".join(bad)
+
+
 def test_advice_check_covers_the_exempt_rules():
     """...and the skip is gone for good: the four rules that carry an `exempt` are now evaluated.
 
@@ -561,6 +608,32 @@ ARITHMETIC_PERTURBATIONS = [
     ({"n_cross90_r0058": 24},                             "moved without the measurement"),
     ({"recov_r0278_n16_pct": 88.0},                   "BELOW the 90% bar"),
     ({"recov_r0058_n16_pct": 88.0},                   "BELOW the 90% bar"),
+    # THE SI S17 GUARDS, one perturbation per branch. Same history as the S16 block above: I
+    # mutation-verified these by hand when adding them and did not encode it, so deleting any of
+    # them would have left the committed suite green (Copilot review of #179, round 2). The lesson
+    # keeps costing the same amount, so it is now written down twice.
+    #
+    # Both indexers, because the XGANDALF arms were stored and then never read -- a drift to
+    # roibin_nominal_xgd = 400 passed check_arithmetic() silently until this round.
+    ({"roibin_p_nominal": 0.55},                      "the p-value and the counts disagree"),
+    ({"roibin_p_xgd_nominal": 0.20},                  "the p-value and the counts disagree"),
+    ({"roibin_nominal_xgd": 400},                     "XGANDALF nominal"),
+    ({"roibin_disc_xgd_tight": 31},                   "opposite parity"),
+    ({"roibin_disc_tight": 54},                       "opposite parity"),
+    # the delta-exceeds-its-own-discordance branch: 245 gives delta -101 against discordance 61,
+    # which overshoots while keeping (disc + delta) EVEN, so the parity branch stays silent and
+    # this perturbation actually exercises the bound. (246 trips parity too and would pass this
+    # assertion without ever proving the bound works.) The negative-flip-count branch does also
+    # speak, which is correct -- an overshoot implies a negative count -- so this pins two
+    # consequences of one inconsistency, not two independent guards.
+    ({"roibin_aggr_glint": 245},                      "exceeds its own discordant count"),
+    # the flip split: sum, then the SIGNED identity the sum alone cannot pin (halves swapped)
+    ({"roibin_flip_down": 34},                        "no longer sums"),
+    ({"roibin_flip_up": 35, "roibin_flip_down": 22},  "implies a rate change"),
+    ({"roibin_nominal_glint": 333},                   "S17's sign is wrong"),
+    ({"roibin_lo_cmphi": 50},                         "denoising result has inverted"),
+    ({"roibin_sigma_q1": 0.99},                       "quartiles do not bracket"),
+    ({"roibin_sigma_q3": 0.70},                       "quartiles do not bracket"),
 ]
 
 
@@ -1034,6 +1107,7 @@ if __name__ == "__main__":
              test_hl_rendering_fires_on_marks_and_spares_comments_and_the_macro_def,
              test_consensus_117_accepts_the_form_its_own_advice_requests,
              test_guard_advice_is_not_itself_retired,
+             test_no_rule_text_anywhere_is_itself_retired,
              test_advice_check_covers_the_exempt_rules,
              test_every_merge_fact_is_read_by_a_required_rule,
              test_required_merge_rows_pass_on_the_measured_values,

@@ -43,6 +43,79 @@ def test_hnf_counts_and_dets():
             assert abs(round(np.linalg.det(h)) - idx) == 0, (idx, np.linalg.det(h))
 
 
+def _same_sublattice(A, B):
+    """A and B span the same sublattice iff A^-1 B is integral with |det| == 1 (a change of basis)."""
+    T = np.linalg.solve(A, B)
+    return np.allclose(T, np.round(T), atol=1e-9) and abs(abs(np.linalg.det(T)) - 1.0) < 1e-9
+
+
+def test_hnf_matrices_are_distinct_sublattices():
+    """The enumeration must be CANONICAL, not merely the right size.
+
+    test_hnf_counts_and_dets above passes for a broken enumeration, and did: reducing each
+    off-diagonal modulo its COLUMN's diagonal instead of its ROW's gives 7/13/35 matrices spanning
+    only 3/3/9 distinct sublattices. The counts agree because sum(d*f^2) == sum(a^2*d) over a triple
+    set closed under permutation, so the cardinality is invariant under exactly the error it is
+    supposed to catch. Test the equivalence the canonical form is defined by, not its cardinality.
+
+    Counts are the number of index-n sublattices of Z^3 (OEIS A001001): 1, 7, 13, 35, 31, 91.
+    """
+    for idx, n in [(1, 1), (2, 7), (3, 13), (4, 35), (5, 31), (6, 91)]:
+        H = hnf_matrices(idx)
+        assert len(H) == n, (idx, len(H))
+        for i, A in enumerate(H):
+            for B in H[i + 1:]:
+                assert not _same_sublattice(A, B), (
+                    f"index {idx}: two enumerated forms span the SAME sublattice:\n{A}\n{B}")
+
+
+def test_hnf_family_contains_off_diagonal_forms():
+    """Regression guard on the specific loss: the broken enumeration kept only axial doublings.
+
+    [[2,1,0],[0,1,0],[0,0,1]] is an ordinary index-2 sublattice with a live off-diagonal. It was
+    absent, so every 'the gate refused the alias' verdict was on an axial doubling only -- the
+    face-diagonal cells the module docstring names as the target were never in the family.
+    """
+    target = np.array([[2.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    assert any(_same_sublattice(H, target) for H in hnf_matrices(2))
+
+
+def test_derivative_family_is_complete_and_symmetry_independent():
+    """1 + 7 sub + 7 super at index 2, for EVERY leader symmetry.
+
+    Two defects met here, both found in review of #179 and both invisible to a count of the
+    enumeration alone:
+
+    * `derivative_lattices` deduplicated with `_fingerprint`, a ROTATION-INVARIANT reduced-cell key.
+      Derivatives differing only in orientation relative to the observed peaks index different
+      oriented peak sets -- which is what coverage/occupancy is scored against -- so on a cubic or
+      tetragonal leader the axial sublattices collapsed to one entry. The size of the family used to
+      depend on the leader's symmetry; it must not.
+    * Super-lattices were taken as M@inv(H). H is upper-triangular and so is its inverse, so that
+      reaches only the axial superlattices: 3 of 7 at index 2 and 3 of 13 at index 3, measured
+      exactly. The dual form M@inv(H).T reaches all of them.
+
+    The symmetry-independence is the load-bearing half of this test: it fails on the first defect
+    without needing to know the right total, which is what a count check could not do.
+    """
+    leaders = {"orthorhombic": np.diag([40.0, 55.0, 70.0]),
+               "cubic":        np.diag([50.0, 50.0, 50.0]),
+               "tetragonal":   np.diag([79.0, 79.0, 38.0])}
+    sizes = {}
+    for name, M in leaders.items():
+        fam = derivative_lattices(M, max_index=2)
+        sizes[name] = len(fam)
+        assert np.allclose(fam[0], M), "the leader must stay element 0"
+        for i, A in enumerate(fam):
+            for B in fam[i + 1:]:
+                assert not _same_sublattice(A, B), f"{name}: duplicate lattice in the family"
+        v0 = abs(np.linalg.det(M))
+        ratios = sorted({round(abs(np.linalg.det(c)) / v0, 6) for c in fam})
+        assert ratios == [0.5, 1.0, 2.0], (name, ratios)
+    assert len(set(sizes.values())) == 1, f"family size depends on leader symmetry: {sizes}"
+    assert set(sizes.values()) == {15}, sizes          # 1 leader + 7 sub + 7 super
+
+
 def test_derivatives_include_true():
     """The index-2 super-cell S = M@H must have the true cell M back among ITS derivatives (S@inv(H))."""
     H = hnf_matrices(2)[0]

@@ -13,7 +13,9 @@ It checks four things, in rough order of how much damage each does:
                             71%-attributed-to-GLINT swap: 71% is XGANDALF's blind rate, GLINT-(1) is
                             76%, and conflating them once cost two decks a wrong headline.
   2. OVERCLAIMS          -- language asserting end-to-end real-time / live merge, which the measured
-                            179 frames/s (vs ~3500 hits/s needed) does not support.
+                            streaming rate (FACTS['stream_fps'], against FACTS['hits_per_s'] needed)
+                            does not support. Named, not quoted: this line used to carry the literal
+                            179, which stream-179 retires.
   3. AMBIGUITY           -- `0.33 ms` means fp64 INDEXING at B=32 (fp32 is 0.31 since #165) *and*
                             fused INTEGRATION per frame; `0.17 ms` means fp64 indexing at B=120 *and*
                             the un-attributed residual of the 3.64 ms driver wall. A bare one is a
@@ -570,6 +572,63 @@ FACTS: dict[str, float | str] = {
     "ffbidx_latency_ms":   4.4,     # per single call -- a LATENCY
     "ffbidx_pipelined_ms": 3.1,     # persistent indexer -- the THROUGHPUT comparator
     "ffbidx_speedup":      18.0,    # = ffbidx_pipelined_ms / fused_b120_ms (throughput vs throughput)
+
+    # SI S17: indexing under ROIBIN-SZ-style compression -------------------------------------------
+    # Pinned 2026-08-28 (papers 14e78c9). The emulator (~/roibin_emu.py on S3DF) keeps a bit-exact
+    # ROI box around every peak in the SELECTION list and block-means the rest, quantised at 2*eb --
+    # SZ3's |x-x'| <= eb contract at its worst case. It reproduces the scheme's INFORMATION content,
+    # not its bitstream, and is deliberately conservative on the background.
+    #
+    # ⚑ The manuscript prints DELTAS, never the raw arm count, because compare3-346-at-480 fires on
+    # a 346 within 120 characters of a 480 -- and S17's whole subject is n=480. The raw counts live
+    # HERE so the deltas have a source; this file is not a scan target, so they are safe here and
+    # only here. If S17 ever needs an absolute count in print, it needs the compare3 rule revisited
+    # first, not a workaround.
+    "roibin_n":                 480,
+    "roibin_raw_glint":         346,   # strict gate, cxidb-17, pf8 peaks, FIXED_LAM=1.322216
+    "roibin_raw_xgd":           350,
+    "roibin_nominal_glint":     359,   # r=4 bin=2 eb=10   (the production operating point)
+    "roibin_tight_glint":       353,   # r=2 bin=2 eb=10
+    "roibin_aggr_glint":        333,   # r=4 bin=4 eb=100
+    "roibin_nominal_xgd":       352,
+    "roibin_tight_xgd":         356,
+    "roibin_aggr_xgd":          349,
+    # exact McNemar vs raw, same frames -- these are the p-values S17 prints
+    "roibin_p_nominal":         0.11,
+    "roibin_p_tight":           0.41,
+    "roibin_p_aggr":            0.12,
+    # ⚑ THE POINT OF S17, and the reason a rate-vs-rate comparison is the wrong instrument: at the
+    # nominal config the RATE moves by +13 while 57 individual frames change their verdict.
+    "roibin_flip_up":            22,
+    "roibin_flip_down":          35,
+    "roibin_discordant_nominal": 57,
+    # Each config's OWN discordant total. Bounding the tight and aggressive deltas by the NOMINAL
+    # discordance was meaningless -- they are different paired comparisons and can drift
+    # independently (Copilot, review of #179). GLINT is ~2x more compression-sensitive than
+    # xgandalf, which is the point these pairs carry.
+    "roibin_disc_tight":         53,
+    "roibin_disc_aggr":          61,
+    "roibin_disc_xgd_nominal":   40,
+    "roibin_disc_xgd_tight":     30,
+    "roibin_disc_xgd_aggr":      29,
+    "roibin_p_xgd_nominal":     0.87,
+    "roibin_p_xgd_tight":       0.36,
+    "roibin_p_xgd_aggr":         1.0,
+    # compression DENOISES a low-threshold analysis (--threshold=100 --min-snr=3 vs the 300/5
+    # production pair): the extra ~545 peaks/frame LO finds are single-pixel noise, and a 2x2 mean
+    # costs an isolated spike 4x amplitude while bit-exact ROIs protect real multi-pixel peaks.
+    "roibin_lo_raw":            109,
+    "roibin_lo_cmphi":          217,   # ROI selected at the HIGH threshold (0.54% of pixels)
+    "roibin_lo_cmplo":          114,   # ROI selected at the LOW threshold -- throws the gain away
+    "roibin_lo_disc_raw":         5,   # discordant split of raw+LO vs cmpHI+LO, p ~ 1e-27
+    "roibin_lo_disc_cmp":       113,
+    # sigma(I) suppression: block-mean preserves the MEAN and not the VARIANCE, and sigma(I) is the
+    # second consumer of the spread (the peakfinder's SNR test is the first). Below the ~0.5 floor
+    # because the 9x9 ROI box partly covers the 4->6 background ring.
+    "roibin_sigma_median":    0.817,
+    "roibin_sigma_q1":        0.666,
+    "roibin_sigma_q3":        0.974,
+    "roibin_sigma_nrefl":     15206,   # matched on (frame, hkl)
 }
 
 # Every arm-vs-default discordant split from the n=480 M3 sweep, both channels: (arm-only,
@@ -1225,13 +1284,21 @@ RETIRED = [
 
 # ---- 2. overclaims ---------------------------------------------------------------------------
 OVERCLAIM = [
+    # ⚑ The why-string and TWO of the exempt markers used to be written with the numbers this file
+    # itself retires: "179 f/s" (stream-179, superseded by stream_fps) and "~20x short"
+    # (live-gap-20x, superseded by ~13x once streaming reached 3.64 ms/frame). An author reaching
+    # for the sanctioned escape hatch therefore committed a fresh violation, and the guard's own
+    # advice walked them into it -- the exact failure test_guard_advice_is_not_itself_retired was
+    # written for, which only ever inspected RETIRED rules' `instead`. It now covers every rule
+    # class and every author-facing string. Keep these interpolated from FACTS, never literal.
     Rule("live-merge", r"(?:stops? when the data are complete|live merge|real[- ]time merg)",
-         "live completeness comes from the running merge accumulator: 179 f/s vs ~3500 needed, "
-         "~20x short, and unmerged (#19)",
+         "live completeness comes from the running merge accumulator: streaming runs at "
+         f"{FACTS['stream_fps']:.0f} f/s against {FACTS['hits_per_s']:.0f} hits/s needed "
+         f"({FACTS['hits_per_s'] / FACTS['stream_fps']:.0f}x short), and unmerged (#19)",
          "scope the claim to INDEXING, or mark the driver as in review",
          # a sentence that DENIES the live merge is the caveat we want, not an overclaim
          exempt=("not a live merge", "not (yet)", "not yet true", "how close",
-                 "20x short", "20× short", "still open", "in review")),
+                 "short of the hit rate", "still open", "in review")),
     Rule("steer-run", r"steer a run while the beam is on",
          "asserts a closed loop the measured pipeline does not close", "live hit rate / cell"),
     Rule("mhz-ready", r"ready for MHz[- ]rate",
@@ -1239,10 +1306,10 @@ OVERCLAIM = [
          "one A100 covers the INDEXING tier at 35 kHz x 10% hit"),
     Rule("khz-demonstrated", r"35\s*kHz\s+demonstrated",
          "the 35 kHz figure is a sizing projection for indexing, not an end-to-end run",
-         "sizing says ~1 A100 for indexing; end-to-end is ~20x short"),
+         "sizing says ~1 A100 for indexing; end-to-end is short of the hit rate"),
     Rule("detector-frame-rate", r"index at the detector frame rate",
-         "true of the batched 0.26 ms figure, not of the 34 ms it usually sits beside; "
-         "state the arithmetic instead",
+         f"true of the batched {FACTS['fused_b120_ms']} ms figure, not of the 34 ms it usually "
+         "sits beside; state the arithmetic instead",
          "absorbs the indexing load of a 35 kHz source at 10% hit"),
     # Not a number rule, but it lives here for the same reason the group exists: a RENDERING \hl{
     # mark in a shipped .tex asserts, in yellow, that the sentence beside it is unresolved --
@@ -2386,6 +2453,78 @@ def check_arithmetic() -> list[str]:
     # The tie framing is therefore RETIRED, not just renumbered -- deliverables saying peakfind and
     # predict are "tied", or quoting the 1.05x/1.18x margin, are now positively false. RETIRED rules
     # peakfind-predict-tie, tie-margin-1.05 and cold-margin-1.18 catch that wording in the files.
+    # SI S17 internal arithmetic. The manuscript prints DELTAS, so the deltas are the thing that can
+    # drift silently -- nothing else in the file re-derives them from the arm counts. These identities
+    # are what makes the S17 FACTS load-bearing rather than decorative (the failure mode found in
+    # review of #154 for the merge block, and the same one applies here).
+    # BOTH indexers. The XGANDALF arm counts and discordances were stored and then never read,
+    # which is precisely the "decorative FACTS" failure this file has been bitten by before -- a
+    # drift to roibin_nominal_xgd = 400 passed silently (Copilot, review of #179, round 2).
+    # All six configurations reproduce their printed p from (discordance, delta) alone:
+    #   GLINT    nominal (22,35) 0.1112 | tight (23,30) 0.4101 | aggr (37,24) 0.1237
+    #   XGANDALF nominal (19,21) 0.8746 | tight (12,18) 0.3616 | aggr (15,14) 1.0000
+    for label, raw_key, cmp_key, p_key, disc_key in (
+            ("GLINT nominal", "roibin_raw_glint", "roibin_nominal_glint",
+             "roibin_p_nominal", "roibin_discordant_nominal"),
+            ("GLINT tight",   "roibin_raw_glint", "roibin_tight_glint",
+             "roibin_p_tight",  "roibin_disc_tight"),
+            ("GLINT aggr",    "roibin_raw_glint", "roibin_aggr_glint",
+             "roibin_p_aggr",   "roibin_disc_aggr"),
+            ("XGANDALF nominal", "roibin_raw_xgd", "roibin_nominal_xgd",
+             "roibin_p_xgd_nominal", "roibin_disc_xgd_nominal"),
+            ("XGANDALF tight",   "roibin_raw_xgd", "roibin_tight_xgd",
+             "roibin_p_xgd_tight",  "roibin_disc_xgd_tight"),
+            ("XGANDALF aggr",    "roibin_raw_xgd", "roibin_aggr_xgd",
+             "roibin_p_xgd_aggr",   "roibin_disc_xgd_aggr")):
+        delta, disc = int(F[cmp_key]) - int(F[raw_key]), int(F[disc_key])
+        if abs(delta) > disc:
+            bad.append(f"  FACTS: S17 {label} delta {delta:+d} exceeds its own discordant count "
+                       f"{disc} -- an arm count or that discordance is wrong")
+        # up + down == disc and down - up == delta have integer solutions only when the two have
+        # the same parity -- and when they do, the split is FORCED. So the split need not be stored
+        # for the tight and aggressive arms: it is determined, and the exact McNemar p computed from
+        # it must reproduce the p S17 prints. That is a real cross-check of the whole block against
+        # itself, not the range check this used to be (Copilot, review of #179, asked for exactly
+        # this). Verified at the recorded values: (22,35) -> 0.1112, (23,30) -> 0.4101,
+        # (37,24) -> 0.1237, matching the printed 0.11 / 0.41 / 0.12.
+        if (disc + delta) % 2:
+            bad.append(f"  FACTS: S17 {label} delta {delta:+d} and discordance {disc} have "
+                       "opposite parity -- no integer flip split reproduces both")
+        elif not 0.0 <= float(F[p_key]) <= 1.0:
+            bad.append(f"  FACTS: S17 {label} McNemar p={F[p_key]} is not a probability")
+        else:
+            b_arm, c_arm = (disc - delta) // 2, (disc + delta) // 2
+            if b_arm < 0 or c_arm < 0:
+                bad.append(f"  FACTS: S17 {label} implies a negative flip count "
+                           f"({b_arm}, {c_arm}) -- delta and discordance are inconsistent")
+            else:
+                k = min(b_arm, c_arm)
+                p_exact = min(1.0, 2.0 * sum(math.comb(disc, i) for i in range(k + 1)) / 2 ** disc)
+                if abs(p_exact - float(F[p_key])) > 0.005:
+                    bad.append(f"  FACTS: S17 {label} prints p={F[p_key]} but the exact two-sided "
+                               f"McNemar p for its forced split ({b_arm}, {c_arm}) is "
+                               f"{p_exact:.4f} -- the p-value and the counts disagree")
+    up, down = int(F["roibin_flip_up"]), int(F["roibin_flip_down"])
+    if up + down != int(F["roibin_discordant_nominal"]):
+        bad.append("  FACTS: S17's 22/35 flip split no longer sums to the 57-frame discordance -- "
+                   "the 'the rate is stable but the frames are not' sentence rests on exactly this")
+    # ⚑ The sum alone does NOT pin the split: the halves could be swapped, or both changed, while
+    # 57 survives and every other check passes (Copilot, review of #179). The SIGNED identity is
+    # the constraint -- down - up must equal the nominal delta, or the split and the rate change
+    # contradict each other.
+    if down - up != int(F["roibin_nominal_glint"]) - int(F["roibin_raw_glint"]):
+        bad.append(f"  FACTS: S17's flip split ({up} up, {down} down) implies a rate change of "
+                   f"{down - up:+d}, but the nominal arm counts imply "
+                   f"{int(F['roibin_nominal_glint']) - int(F['roibin_raw_glint']):+d}")
+    if int(F["roibin_nominal_glint"]) - int(F["roibin_raw_glint"]) <= 0:
+        bad.append("  FACTS: compression no longer HELPS at the nominal config -- S17's sign is wrong")
+    if int(F["roibin_lo_cmphi"]) <= int(F["roibin_lo_raw"]):
+        bad.append("  FACTS: the S17 denoising result has inverted -- compression no longer roughly "
+                   "doubles the low-threshold analysis, and that paragraph must be rewritten")
+    if not (float(F["roibin_sigma_q1"]) <= float(F["roibin_sigma_median"])
+            <= float(F["roibin_sigma_q3"])):
+        bad.append("  FACTS: S17's sigma(I) quartiles do not bracket the median")
+
     m = float(F["peakfind_ms"]) / float(F["predict_ms"])
     if float(F["predict_ms"]) >= float(F["peakfind_ms"]):
         bad.append("  FACTS: predict is now >= peakfind -- 'peakfind is the largest single stage' is "

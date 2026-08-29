@@ -546,6 +546,32 @@ ARITHMETIC_PERTURBATIONS = [
     ({"n_cross90_r0058": 24},                             "moved without the measurement"),
     ({"recov_r0278_n16_pct": 88.0},                   "BELOW the 90% bar"),
     ({"recov_r0058_n16_pct": 88.0},                   "BELOW the 90% bar"),
+    # THE SI S17 GUARDS, one perturbation per branch. Same history as the S16 block above: I
+    # mutation-verified these by hand when adding them and did not encode it, so deleting any of
+    # them would have left the committed suite green (Copilot review of #179, round 2). The lesson
+    # keeps costing the same amount, so it is now written down twice.
+    #
+    # Both indexers, because the XGANDALF arms were stored and then never read -- a drift to
+    # roibin_nominal_xgd = 400 passed check_arithmetic() silently until this round.
+    ({"roibin_p_nominal": 0.55},                      "the p-value and the counts disagree"),
+    ({"roibin_p_xgd_nominal": 0.20},                  "the p-value and the counts disagree"),
+    ({"roibin_nominal_xgd": 400},                     "XGANDALF nominal"),
+    ({"roibin_disc_xgd_tight": 31},                   "opposite parity"),
+    ({"roibin_disc_tight": 54},                       "opposite parity"),
+    # the delta-exceeds-its-own-discordance branch: 245 gives delta -101 against discordance 61,
+    # which overshoots while keeping (disc + delta) EVEN, so the parity branch stays silent and
+    # this perturbation actually exercises the bound. (246 trips parity too and would pass this
+    # assertion without ever proving the bound works.) The negative-flip-count branch does also
+    # speak, which is correct -- an overshoot implies a negative count -- so this pins two
+    # consequences of one inconsistency, not two independent guards.
+    ({"roibin_aggr_glint": 245},                      "exceeds its own discordant count"),
+    # the flip split: sum, then the SIGNED identity the sum alone cannot pin (halves swapped)
+    ({"roibin_flip_down": 34},                        "no longer sums"),
+    ({"roibin_flip_up": 35, "roibin_flip_down": 22},  "implies a rate change"),
+    ({"roibin_nominal_glint": 333},                   "S17's sign is wrong"),
+    ({"roibin_lo_cmphi": 50},                         "denoising result has inverted"),
+    ({"roibin_sigma_q1": 0.99},                       "quartiles do not bracket"),
+    ({"roibin_sigma_q3": 0.70},                       "quartiles do not bracket"),
 ]
 
 

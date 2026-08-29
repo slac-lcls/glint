@@ -611,6 +611,9 @@ FACTS: dict[str, float | str] = {
     "roibin_disc_xgd_nominal":   40,
     "roibin_disc_xgd_tight":     30,
     "roibin_disc_xgd_aggr":      29,
+    "roibin_p_xgd_nominal":     0.87,
+    "roibin_p_xgd_tight":       0.36,
+    "roibin_p_xgd_aggr":         1.0,
     # compression DENOISES a low-threshold analysis (--threshold=100 --min-snr=3 vs the 300/5
     # production pair): the extra ~545 peaks/frame LO finds are single-pixel noise, and a 2x2 mean
     # costs an isolated spike 4x amplitude while bit-exact ROIs protect real multi-pixel peaks.
@@ -2420,11 +2423,26 @@ def check_arithmetic() -> list[str]:
     # drift silently -- nothing else in the file re-derives them from the arm counts. These identities
     # are what makes the S17 FACTS load-bearing rather than decorative (the failure mode found in
     # review of #154 for the merge block, and the same one applies here).
-    for label, cmp_key, p_key, disc_key in (
-            ("nominal", "roibin_nominal_glint", "roibin_p_nominal", "roibin_discordant_nominal"),
-            ("tight",   "roibin_tight_glint",   "roibin_p_tight",   "roibin_disc_tight"),
-            ("aggr",    "roibin_aggr_glint",    "roibin_p_aggr",    "roibin_disc_aggr")):
-        delta, disc = int(F[cmp_key]) - int(F["roibin_raw_glint"]), int(F[disc_key])
+    # BOTH indexers. The XGANDALF arm counts and discordances were stored and then never read,
+    # which is precisely the "decorative FACTS" failure this file has been bitten by before -- a
+    # drift to roibin_nominal_xgd = 400 passed silently (Copilot, review of #179, round 2).
+    # All six configurations reproduce their printed p from (discordance, delta) alone:
+    #   GLINT    nominal (22,35) 0.1112 | tight (23,30) 0.4101 | aggr (37,24) 0.1237
+    #   XGANDALF nominal (19,21) 0.8746 | tight (12,18) 0.3616 | aggr (15,14) 1.0000
+    for label, raw_key, cmp_key, p_key, disc_key in (
+            ("GLINT nominal", "roibin_raw_glint", "roibin_nominal_glint",
+             "roibin_p_nominal", "roibin_discordant_nominal"),
+            ("GLINT tight",   "roibin_raw_glint", "roibin_tight_glint",
+             "roibin_p_tight",  "roibin_disc_tight"),
+            ("GLINT aggr",    "roibin_raw_glint", "roibin_aggr_glint",
+             "roibin_p_aggr",   "roibin_disc_aggr"),
+            ("XGANDALF nominal", "roibin_raw_xgd", "roibin_nominal_xgd",
+             "roibin_p_xgd_nominal", "roibin_disc_xgd_nominal"),
+            ("XGANDALF tight",   "roibin_raw_xgd", "roibin_tight_xgd",
+             "roibin_p_xgd_tight",  "roibin_disc_xgd_tight"),
+            ("XGANDALF aggr",    "roibin_raw_xgd", "roibin_aggr_xgd",
+             "roibin_p_xgd_aggr",   "roibin_disc_xgd_aggr")):
+        delta, disc = int(F[cmp_key]) - int(F[raw_key]), int(F[disc_key])
         if abs(delta) > disc:
             bad.append(f"  FACTS: S17 {label} delta {delta:+d} exceeds its own discordant count "
                        f"{disc} -- an arm count or that discordance is wrong")

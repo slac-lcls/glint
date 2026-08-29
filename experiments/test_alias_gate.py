@@ -80,6 +80,42 @@ def test_hnf_family_contains_off_diagonal_forms():
     assert any(_same_sublattice(H, target) for H in hnf_matrices(2))
 
 
+def test_derivative_family_is_complete_and_symmetry_independent():
+    """1 + 7 sub + 7 super at index 2, for EVERY leader symmetry.
+
+    Two defects met here, both found in review of #179 and both invisible to a count of the
+    enumeration alone:
+
+    * `derivative_lattices` deduplicated with `_fingerprint`, a ROTATION-INVARIANT reduced-cell key.
+      Derivatives differing only in orientation relative to the observed peaks index different
+      oriented peak sets -- which is what coverage/occupancy is scored against -- so on a cubic or
+      tetragonal leader the axial sublattices collapsed to one entry. The size of the family used to
+      depend on the leader's symmetry; it must not.
+    * Super-lattices were taken as M@inv(H). H is upper-triangular and so is its inverse, so that
+      reaches only the axial superlattices: 3 of 7 at index 2 and 3 of 13 at index 3, measured
+      exactly. The dual form M@inv(H).T reaches all of them.
+
+    The symmetry-independence is the load-bearing half of this test: it fails on the first defect
+    without needing to know the right total, which is what a count check could not do.
+    """
+    leaders = {"orthorhombic": np.diag([40.0, 55.0, 70.0]),
+               "cubic":        np.diag([50.0, 50.0, 50.0]),
+               "tetragonal":   np.diag([79.0, 79.0, 38.0])}
+    sizes = {}
+    for name, M in leaders.items():
+        fam = derivative_lattices(M, max_index=2)
+        sizes[name] = len(fam)
+        assert np.allclose(fam[0], M), "the leader must stay element 0"
+        for i, A in enumerate(fam):
+            for B in fam[i + 1:]:
+                assert not _same_sublattice(A, B), f"{name}: duplicate lattice in the family"
+        v0 = abs(np.linalg.det(M))
+        ratios = sorted({round(abs(np.linalg.det(c)) / v0, 6) for c in fam})
+        assert ratios == [0.5, 1.0, 2.0], (name, ratios)
+    assert len(set(sizes.values())) == 1, f"family size depends on leader symmetry: {sizes}"
+    assert set(sizes.values()) == {15}, sizes          # 1 leader + 7 sub + 7 super
+
+
 def test_derivatives_include_true():
     """The index-2 super-cell S = M@H must have the true cell M back among ITS derivatives (S@inv(H))."""
     H = hnf_matrices(2)[0]

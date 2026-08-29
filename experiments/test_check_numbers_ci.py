@@ -328,8 +328,16 @@ def test_no_rule_text_anywhere_is_itself_retired():
     bad = []
     for cls, rules in classes:
         for rule in rules:
+            # ⚑ ALL THREE exemption channels, not just `exempt`: scan() also honours
+            # `exempt_before` and `exempt_after` (both live on nstar-stale-32), and a retired
+            # phrase added to either would recreate exactly this failure while the test stayed
+            # green. Enumerating the fields by name is deliberate -- a new escape hatch should
+            # break this test loudly rather than be silently uncovered.
+            # (Found by Copilot in review of #179.)
             fields = [("instead", rule.instead)]
-            fields += [(f"exempt[{i}]", e) for i, e in enumerate(rule.exempt)]
+            for chan in ("exempt", "exempt_before", "exempt_after"):
+                fields += [(f"{chan}[{i}]", e)
+                           for i, e in enumerate(getattr(rule, chan, ()) or ())]
             for field, text in fields:
                 if not text:
                     continue

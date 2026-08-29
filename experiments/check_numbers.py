@@ -602,6 +602,15 @@ FACTS: dict[str, float | str] = {
     "roibin_flip_up":            22,
     "roibin_flip_down":          35,
     "roibin_discordant_nominal": 57,
+    # Each config's OWN discordant total. Bounding the tight and aggressive deltas by the NOMINAL
+    # discordance was meaningless -- they are different paired comparisons and can drift
+    # independently (Copilot, review of #179). GLINT is ~2x more compression-sensitive than
+    # xgandalf, which is the point these pairs carry.
+    "roibin_disc_tight":         53,
+    "roibin_disc_aggr":          61,
+    "roibin_disc_xgd_nominal":   40,
+    "roibin_disc_xgd_tight":     30,
+    "roibin_disc_xgd_aggr":      29,
     # compression DENOISES a low-threshold analysis (--threshold=100 --min-snr=3 vs the 300/5
     # production pair): the extra ~545 peaks/frame LO finds are single-pixel noise, and a 2x2 mean
     # costs an isolated spike 4x amplitude while bit-exact ROIs protect real multi-pixel peaks.
@@ -2411,18 +2420,34 @@ def check_arithmetic() -> list[str]:
     # drift silently -- nothing else in the file re-derives them from the arm counts. These identities
     # are what makes the S17 FACTS load-bearing rather than decorative (the failure mode found in
     # review of #154 for the merge block, and the same one applies here).
-    for label, cmp_key, p_key in (("nominal", "roibin_nominal_glint", "roibin_p_nominal"),
-                                  ("tight",   "roibin_tight_glint",   "roibin_p_tight"),
-                                  ("aggr",    "roibin_aggr_glint",    "roibin_p_aggr")):
-        delta = int(F[cmp_key]) - int(F["roibin_raw_glint"])
-        if abs(delta) > int(F["roibin_discordant_nominal"]):
-            bad.append(f"  FACTS: S17 {label} delta {delta:+d} exceeds the discordant count -- "
-                       "one of the arm counts or the discordance is wrong")
+    for label, cmp_key, p_key, disc_key in (
+            ("nominal", "roibin_nominal_glint", "roibin_p_nominal", "roibin_discordant_nominal"),
+            ("tight",   "roibin_tight_glint",   "roibin_p_tight",   "roibin_disc_tight"),
+            ("aggr",    "roibin_aggr_glint",    "roibin_p_aggr",    "roibin_disc_aggr")):
+        delta, disc = int(F[cmp_key]) - int(F["roibin_raw_glint"]), int(F[disc_key])
+        if abs(delta) > disc:
+            bad.append(f"  FACTS: S17 {label} delta {delta:+d} exceeds its own discordant count "
+                       f"{disc} -- an arm count or that discordance is wrong")
+        # up + down == disc and down - up == delta have integer solutions only when the two have
+        # the same parity. This is what actually ties a config's delta to its discordant split
+        # without storing a split we never recorded for the tight and aggressive arms.
+        if (disc + delta) % 2:
+            bad.append(f"  FACTS: S17 {label} delta {delta:+d} and discordance {disc} have "
+                       "opposite parity -- no integer flip split reproduces both")
         if not 0.0 <= float(F[p_key]) <= 1.0:
             bad.append(f"  FACTS: S17 {label} McNemar p={F[p_key]} is not a probability")
-    if int(F["roibin_flip_up"]) + int(F["roibin_flip_down"]) != int(F["roibin_discordant_nominal"]):
+    up, down = int(F["roibin_flip_up"]), int(F["roibin_flip_down"])
+    if up + down != int(F["roibin_discordant_nominal"]):
         bad.append("  FACTS: S17's 22/35 flip split no longer sums to the 57-frame discordance -- "
                    "the 'the rate is stable but the frames are not' sentence rests on exactly this")
+    # ⚑ The sum alone does NOT pin the split: the halves could be swapped, or both changed, while
+    # 57 survives and every other check passes (Copilot, review of #179). The SIGNED identity is
+    # the constraint -- down - up must equal the nominal delta, or the split and the rate change
+    # contradict each other.
+    if down - up != int(F["roibin_nominal_glint"]) - int(F["roibin_raw_glint"]):
+        bad.append(f"  FACTS: S17's flip split ({up} up, {down} down) implies a rate change of "
+                   f"{down - up:+d}, but the nominal arm counts imply "
+                   f"{int(F['roibin_nominal_glint']) - int(F['roibin_raw_glint']):+d}")
     if int(F["roibin_nominal_glint"]) - int(F["roibin_raw_glint"]) <= 0:
         bad.append("  FACTS: compression no longer HELPS at the nominal config -- S17's sign is wrong")
     if int(F["roibin_lo_cmphi"]) <= int(F["roibin_lo_raw"]):

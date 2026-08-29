@@ -124,23 +124,46 @@ def _fingerprint(M):
     return (tuple(np.round(l, 3)), tuple(np.round(c, 3)))
 
 
+def _same_embedded_lattice(A, B):
+    """A and B span the SAME lattice iff A^-1 B is integral with |det| == 1 (a change of basis)."""
+    try:
+        T = np.linalg.solve(np.asarray(A, float), np.asarray(B, float))
+    except np.linalg.LinAlgError:                            # pragma: no cover - _degenerate screens
+        return False
+    return (bool(np.all(np.isfinite(T))) and np.allclose(T, np.round(T), atol=1e-6)
+            and abs(abs(np.linalg.det(T)) - 1.0) < 1e-6)
+
+
 def derivative_lattices(M, max_index=2):
     """The leader M plus its index in [2, max_index] sub- and super-lattices (M@H and M@inv(H) for every
-    Hermite form H), deduplicated by reduced cell. M is always element 0. A degenerate leader yields just
-    [M] (nothing to derive from)."""
+    Hermite form H), deduplicated by the EMBEDDED LATTICE. M is always element 0. A degenerate leader
+    yields just [M] (nothing to derive from).
+
+    Deduplication is by _same_embedded_lattice, not by _fingerprint. _fingerprint's reduced-cell key
+    is ROTATION-INVARIANT, which is the wrong equivalence here: two derivatives that differ only in
+    their orientation relative to the observed peaks index DIFFERENT oriented peak sets, and
+    coverage/occupancy is scored against exactly those peaks. On a cubic or tetragonal leader the
+    three axial index-2 sublattices all reduce to the same parameters, so the reduced-cell key
+    collapsed them to one entry and the gate scored fewer than all seven derivatives -- undoing, one
+    layer up, the enumeration fix in hnf_matrices. Same class of defect as that one: an equivalence
+    coarser than the thing being enumerated. (Found by Copilot in review of #179.)"""
     M = np.asarray(M, float)
     out = [M]
     if _degenerate(M):
         return out
-    seen = {_fingerprint(M)}
     for idx in range(2, max_index + 1):
         for H in hnf_matrices(idx):
-            for cand in (M @ H, M @ np.linalg.inv(H)):
+            # Sub-lattices are M@H; SUPER-lattices are M@inv(H).T, not M@inv(H). H ranges over
+            # UPPER-triangular forms, and H^-1 is upper-triangular too, so M@inv(H) reaches only the
+            # axial superlattices: with a=index the reduction forces d=f=1, and all `index^2` such
+            # forms generate one and the same superlattice. Measured exactly (Fractions, no floats):
+            # inv(H) gives 3 of 7 at index 2 and 3 of 13 at index 3, while the dual form inv(H).T
+            # gives 7 of 7 and 13 of 13. Third instance of one defect family in this path -- an
+            # enumeration whose triangular convention silently restricts the set it spans.
+            for cand in (M @ H, M @ np.linalg.inv(H).T):
                 if _degenerate(cand):
                     continue
-                fp = _fingerprint(cand)
-                if fp not in seen:
-                    seen.add(fp)
+                if not any(_same_embedded_lattice(prev, cand) for prev in out):
                     out.append(cand)
     return out
 

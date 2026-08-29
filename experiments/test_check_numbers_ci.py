@@ -303,6 +303,45 @@ def test_guard_advice_is_not_itself_retired():
         assert not tripped, f"{rule.name}'s advice {rule.instead!r} trips:\n" + "".join(tripped)
 
 
+def test_no_rule_text_anywhere_is_itself_retired():
+    """`instead` AND `exempt`, across every rule class -- not just RETIRED's `instead`.
+
+    The test above covers `RETIRED[*].instead`. That left the exemption markers unchecked, and they
+    were occupied: TWO of `live-merge.exempt`'s eight markers were "20x short" / "20× short", which
+    live-gap-20x retires. An author reaching for the guard's own sanctioned escape hatch therefore
+    committed a fresh violation. `khz-demonstrated.instead` carried the same stale figure.
+
+    ⚑ `why` is deliberately NOT checked. A why-string's job is often to NAME the retired value and
+    its predecessor -- "179 f/s is the reciprocal of the retired 5.58 ms" is correct prose that has
+    to keep quoting both. Only text the author is told to WRITE can walk them into a violation:
+    `instead` (what to write instead) and `exempt` (what to write to be excused). Checking `why`
+    here too was tried first and flagged six legitimate explanations, which is how this scope was
+    settled. `why` strings still must not go STALE -- live-merge's quoted a superseded rate and was
+    rewritten to interpolate FACTS -- but that is a correctness duty, not something this test can
+    enforce without failing on correct prose.
+
+    The general lesson: the guard's own prose is a deliverable. Anything it tells an author to
+    write must survive being written. Interpolate from FACTS rather than quoting a numeral and this
+    test stays quiet by construction.
+    """
+    classes = [("RETIRED", _cn.RETIRED), ("OVERCLAIM", _cn.OVERCLAIM), ("AMBIGUOUS", _cn.AMBIGUOUS)]
+    bad = []
+    for cls, rules in classes:
+        for rule in rules:
+            fields = [("instead", rule.instead)]
+            fields += [(f"exempt[{i}]", e) for i, e in enumerate(rule.exempt)]
+            for field, text in fields:
+                if not text:
+                    continue
+                # A rule matching its OWN advice stays allowed, for the reason the test above gives:
+                # retiring a value sometimes means naming it.
+                tripped = [f for f in _cn.scan(Path("advice.txt"), text)
+                           if "[RETIRED/" in f and f"/{rule.name}]" not in f]
+                if tripped:
+                    bad.append(f"{cls}/{rule.name}.{field} = {text!r}\n" + "".join(tripped))
+    assert not bad, "guard prose trips the guard:\n\n" + "\n".join(bad)
+
+
 def test_advice_check_covers_the_exempt_rules():
     """...and the skip is gone for good: the four rules that carry an `exempt` are now evaluated.
 
@@ -970,6 +1009,7 @@ if __name__ == "__main__":
              test_stream_band_rule_crosses_a_latex_hard_wrap,
              test_consensus_117_accepts_the_form_its_own_advice_requests,
              test_guard_advice_is_not_itself_retired,
+             test_no_rule_text_anywhere_is_itself_retired,
              test_advice_check_covers_the_exempt_rules,
              test_every_merge_fact_is_read_by_a_required_rule,
              test_required_merge_rows_pass_on_the_measured_values,

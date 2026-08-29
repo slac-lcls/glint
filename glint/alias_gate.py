@@ -82,13 +82,24 @@ def _diag_triples(index):
 
 def hnf_matrices(index):
     """Column-style Hermite normal forms: upper-triangular integer matrices with positive diagonal whose
-    product is `index`, off-diagonal entry (i,j<j) reduced modulo its column's diagonal -- one per
-    distinct index-`index` sublattice of Z^3 (1 for index 1, 7 for index 2, 13 for index 3)."""
+    product is `index`, off-diagonal entry (i, j>i) reduced modulo its own ROW's diagonal (i, i) --
+    one per distinct index-`index` sublattice of Z^3 (1 for index 1, 7 for index 2, 13 for index 3).
+
+    The reduction is modulo the ROW's diagonal, not the column's: column j may have any integer
+    multiple of column i subtracted from it, and column i's only nonzero entry at or above row i is
+    (i, i). Reducing modulo the COLUMN's diagonal instead -- which this function did until the fix
+    below -- produces the right CARDINALITY at every index and the wrong SET. The counts coincide
+    because sum(d*f^2) == sum(a^2*d) over a triple set closed under permutation, so a count check
+    passes forever while the distinct sublattices collapse: 3 instead of 7 at index 2, 3 instead of
+    13 at index 3, 9 instead of 35 at index 4. Every non-trivial off-diagonal form was missing, so
+    the family contained only axial doublings -- e.g. [[2,1,0],[0,1,0],[0,0,1]] was absent.
+    A cardinality check is not a check on a canonical form; see
+    test_hnf_matrices_are_distinct_sublattices, which tests the equivalence itself."""
     mats = []
     for a, d, f in _diag_triples(index):
-        for h12 in range(d):                     # column 2 diagonal = d
-            for h13 in range(f):                 # column 3 diagonal = f
-                for h23 in range(f):
+        for h12 in range(a):                     # (0,1) reduced mod row 0's diagonal = a
+            for h13 in range(a):                 # (0,2) likewise
+                for h23 in range(d):             # (1,2) reduced mod row 1's diagonal = d
                     mats.append(np.array([[a, h12, h13],
                                           [0.0, d, h23],
                                           [0.0, 0.0, f]], float))

@@ -43,6 +43,43 @@ def test_hnf_counts_and_dets():
             assert abs(round(np.linalg.det(h)) - idx) == 0, (idx, np.linalg.det(h))
 
 
+def _same_sublattice(A, B):
+    """A and B span the same sublattice iff A^-1 B is integral with |det| == 1 (a change of basis)."""
+    T = np.linalg.solve(A, B)
+    return np.allclose(T, np.round(T), atol=1e-9) and abs(abs(np.linalg.det(T)) - 1.0) < 1e-9
+
+
+def test_hnf_matrices_are_distinct_sublattices():
+    """The enumeration must be CANONICAL, not merely the right size.
+
+    test_hnf_counts_and_dets above passes for a broken enumeration, and did: reducing each
+    off-diagonal modulo its COLUMN's diagonal instead of its ROW's gives 7/13/35 matrices spanning
+    only 3/3/9 distinct sublattices. The counts agree because sum(d*f^2) == sum(a^2*d) over a triple
+    set closed under permutation, so the cardinality is invariant under exactly the error it is
+    supposed to catch. Test the equivalence the canonical form is defined by, not its cardinality.
+
+    Counts are the number of index-n sublattices of Z^3 (OEIS A001001): 1, 7, 13, 35, 31, 91.
+    """
+    for idx, n in [(1, 1), (2, 7), (3, 13), (4, 35), (5, 31), (6, 91)]:
+        H = hnf_matrices(idx)
+        assert len(H) == n, (idx, len(H))
+        for i, A in enumerate(H):
+            for B in H[i + 1:]:
+                assert not _same_sublattice(A, B), (
+                    f"index {idx}: two enumerated forms span the SAME sublattice:\n{A}\n{B}")
+
+
+def test_hnf_family_contains_off_diagonal_forms():
+    """Regression guard on the specific loss: the broken enumeration kept only axial doublings.
+
+    [[2,1,0],[0,1,0],[0,0,1]] is an ordinary index-2 sublattice with a live off-diagonal. It was
+    absent, so every 'the gate refused the alias' verdict was on an axial doubling only -- the
+    face-diagonal cells the module docstring names as the target were never in the family.
+    """
+    target = np.array([[2.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    assert any(_same_sublattice(H, target) for H in hnf_matrices(2))
+
+
 def test_derivatives_include_true():
     """The index-2 super-cell S = M@H must have the true cell M back among ITS derivatives (S@inv(H))."""
     H = hnf_matrices(2)[0]

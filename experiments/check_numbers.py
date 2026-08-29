@@ -2429,13 +2429,29 @@ def check_arithmetic() -> list[str]:
             bad.append(f"  FACTS: S17 {label} delta {delta:+d} exceeds its own discordant count "
                        f"{disc} -- an arm count or that discordance is wrong")
         # up + down == disc and down - up == delta have integer solutions only when the two have
-        # the same parity. This is what actually ties a config's delta to its discordant split
-        # without storing a split we never recorded for the tight and aggressive arms.
+        # the same parity -- and when they do, the split is FORCED. So the split need not be stored
+        # for the tight and aggressive arms: it is determined, and the exact McNemar p computed from
+        # it must reproduce the p S17 prints. That is a real cross-check of the whole block against
+        # itself, not the range check this used to be (Copilot, review of #179, asked for exactly
+        # this). Verified at the recorded values: (22,35) -> 0.1112, (23,30) -> 0.4101,
+        # (37,24) -> 0.1237, matching the printed 0.11 / 0.41 / 0.12.
         if (disc + delta) % 2:
             bad.append(f"  FACTS: S17 {label} delta {delta:+d} and discordance {disc} have "
                        "opposite parity -- no integer flip split reproduces both")
-        if not 0.0 <= float(F[p_key]) <= 1.0:
+        elif not 0.0 <= float(F[p_key]) <= 1.0:
             bad.append(f"  FACTS: S17 {label} McNemar p={F[p_key]} is not a probability")
+        else:
+            b_arm, c_arm = (disc - delta) // 2, (disc + delta) // 2
+            if b_arm < 0 or c_arm < 0:
+                bad.append(f"  FACTS: S17 {label} implies a negative flip count "
+                           f"({b_arm}, {c_arm}) -- delta and discordance are inconsistent")
+            else:
+                k = min(b_arm, c_arm)
+                p_exact = min(1.0, 2.0 * sum(math.comb(disc, i) for i in range(k + 1)) / 2 ** disc)
+                if abs(p_exact - float(F[p_key])) > 0.005:
+                    bad.append(f"  FACTS: S17 {label} prints p={F[p_key]} but the exact two-sided "
+                               f"McNemar p for its forced split ({b_arm}, {c_arm}) is "
+                               f"{p_exact:.4f} -- the p-value and the counts disagree")
     up, down = int(F["roibin_flip_up"]), int(F["roibin_flip_down"])
     if up + down != int(F["roibin_discordant_nominal"]):
         bad.append("  FACTS: S17's 22/35 flip split no longer sums to the 57-frame discordance -- "

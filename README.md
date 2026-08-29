@@ -110,7 +110,7 @@ research write-up is preserved in [`docs/lineage.md`](docs/lineage.md).
 
 ## Copyright
 
-COPYRIGHT (c) SLAC National Accelerator Laboratory. All rights reserved. This work is supported
+Copyright (c) 2026, The Board of Trustees of the Leland Stanford Junior University, through SLAC National Accelerator Laboratory (subject to receipt of any required approvals from the U.S. Dept. of Energy). All rights reserved. This work is supported
 [in part] by the U.S. Department of Energy, Office of Basic Energy Sciences under contract
 DE-AC02-76SF00515.
 

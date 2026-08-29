@@ -1203,6 +1203,24 @@ RETIRED = [
     # are superseded" -- a "29" followed inside 60 characters by the word "throughput". The fix is
     # both halves: refuse a hyphen-prefixed 29, and drop "throughput" from the unit list that
     # fps-47 carries, since for this numeral it is the word that makes dates collide.
+    #
+    # ...and the companion fps-29 CANNOT be widened into (2026-08-28 triage). fps-29 is same-line
+    # by construction -- its lookahead is [^\n]{0,60}, kept that way so the banner date above stays
+    # safe -- but the glint deck's statcard inverts the geometry: build_glint.py renders
+    # ("Throughput  (frames / s, one A100)", ...) on one SOURCE LINE and the bare numeral
+    # ("29", ...) on the NEXT, so the unit label precedes the value across a newline and fps-29
+    # ran green over a retired 29 in a shipped deck. This rule takes the label-then-value order
+    # with [\s\S] (wrapping is not a hiding place -- the blind-rate-swap note) and requires the 29
+    # to be QUOTED, which is what keeps the naked date-29 out WITHOUT re-opening the ISO trap:
+    # "2026-06-29" is never written '"29"', and a date after the label has a hyphen, not a quote,
+    # before its 29.
+    Rule("fps-29-statcard",
+         r"Throughput[^(\n]{0,40}\(\s*(?:frames?\s*/\s*s|f/s|shots?/s|fps)"
+         r"[\s\S]{0,140}?[\"']29[\"']",
+         f"a quoted statcard 29 under a Throughput (frames/s) label is 1000/34 -- the reciprocal "
+         f"of the blind figure retired by blind-34ms; the measured {FACTS['blind_ms']} ms gives "
+         f"{FACTS['blind_fps']:.0f} f/s",
+         f"{FACTS['blind_fps']:.0f}"),
 ]
 
 # ---- 2. overclaims ---------------------------------------------------------------------------
@@ -1226,6 +1244,22 @@ OVERCLAIM = [
          "true of the batched 0.26 ms figure, not of the 34 ms it usually sits beside; "
          "state the arithmetic instead",
          "absorbs the indexing load of a 35 kHz source at 10% hit"),
+    # Not a number rule, but it lives here for the same reason the group exists: a RENDERING \hl{
+    # mark in a shipped .tex asserts, in yellow, that the sentence beside it is unresolved --
+    # the submission tex defines \FIXME via \hl precisely so an author note "renders highlighted
+    # ... and must not ship" (its own comment at the \newcommand). This guard is what turns that
+    # "must not ship" from a comment into a check (2026-08-28 triage). The pattern anchors at
+    # line start and refuses any line with a % before the \hl{, so a COMMENTED mark -- the
+    # legitimate parking spot for feedback, e.g. the reviewer note at glint_rewrite_JAC_refined
+    # .tex:240 -- stays silent, and the \newcommand definition line itself is refused by the
+    # lookahead. The lookahead is the "tighter" form of exempt=("newcommand",): the window/clause
+    # exempts reach across newlines, so a real mark on the line AFTER the definition would have
+    # been exempted by its neighbour -- exactly the corridor the copilot-suppressed-comments
+    # review warned an exemption can open.
+    Rule("hl-rendering", r"(?m)^(?![^%\n]*\\newcommand)(?:\\.|[^%\\\n])*\\hl\{",
+         "a rendering \\hl{ editorial mark must never ship in a .tex deliverable; it prints a "
+         "highlighted author note in the journal PDF",
+         "resolve the note and delete the mark, or comment the line out with %"),
 ]
 
 # ---- 3. ambiguity ----------------------------------------------------------------------------

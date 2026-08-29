@@ -72,8 +72,8 @@ for k in range(K):
         S = np.round(np.linalg.inv(Mt) @ Mg)
         M = Mg @ np.linalg.inv(S) if abs(np.linalg.det(S)) > 0.5 else Mg
     pred = predict_spots(M, panels, clen, wave, dmin=dmin, tol=TOL)
-    I, sig, peak, bg = integrate_spots(img, pred, half=3, gap=2, ring=3)
-    keep = (I > 0) & np.isfinite(sig) & (sig > 0)
+    I, sig, peak, bg = integrate_spots(img, pred, half=3, gap=2, ring=3, bg_mode="median")  # pin: the estimator the published rows were measured under (default flipped to clipmean in glint#131)
+    keep = (I > 0) & np.isfinite(sig) & (sig > 0)   # pre-glint#130 selection the published rows used; the library paths no longer drop I<=0
     pred, I, sig, peak, bg = pred[keep], I[keep], sig[keep], peak[keep], bg[keep]
     results.append({"image": f"sim_{k}", "event": k, "M": M, "pred": pred,
                     "I": I, "sigma": sig, "peak": peak, "bg": bg})

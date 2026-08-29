@@ -165,7 +165,7 @@ def main():
                     return float(v)
                 except (TypeError, ValueError):
                     return d
-            write_stream_integrated(results, args.out,
+            write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
                                     photon_eV=_f(_g.get("photon_energy"), 9392.7), clen_m=_f(_g.get("clen"), 0.15),
                                     panel_names=_pnames)
         else:                                                    # per-file images (legacy detectors)

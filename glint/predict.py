@@ -831,13 +831,16 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
     tot_refl). Frame data are read once per file (h5 handles cached, closed on return).
 
     ``bg_mode`` is handed to ``integrate_spots``; the default changed from the annulus median to a
-    MAD-clipped mean in glint#131, so the merge numbers below -- and every intensity GLINT produced
-    before that -- were measured with ``bg_mode="median"``, which is still available for reproducing
-    them. They have NOT been re-measured under the new default.
+    MAD-clipped mean in glint#131, so the published merge numbers below were measured with
+    ``bg_mode="median"``, which is still available for reproducing them. The glint#129 A/B measured
+    both under the paper protocol: clipmean/partiality CC*=0.9122 / Rsplit=34.58% vs median/partiality
+    0.9146 / 31.60%.
 
-    On real lysozyme stills (Jungfrau-4M, 1476 frames) this self-merges to CC*=0.90 / Rsplit=39% at 2.1 A --
-    on par with a CrystFEL/xgandalf run on the same frames -- with peak search, indexing AND integration all
-    in GLINT. For the best (prediction-refined) merge, hand orientations to CrystFEL via ``write_fromfile``."""
+    On real lysozyme stills (Jungfrau-4M, 1482 frames) this self-merges to CC*=0.915 / Rsplit=31.6% at
+    2.1 A (partialator, default 10 cycles; the older 0.90/39% figure was a --iterations=1 under-converged
+    merge, glint#129) -- on par with a CrystFEL/xgandalf run on the same frames (CC*=0.930 / Rsplit=34.9%)
+    -- with peak search, indexing AND integration all in GLINT. For the best (prediction-refined) merge,
+    hand orientations to CrystFEL via ``write_fromfile``."""
     import h5py
     from glint.lute_bridge import parse_geom as _parse_geom, lambda_from_eV, _meta
     panels, glob = _parse_geom(geom_path)

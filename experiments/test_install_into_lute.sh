@@ -26,12 +26,22 @@ check() {    # $1 label, $2 expected exit, $3 grep pattern ("" = check exit code
 echo "1. fresh install (no deployed file)"
 mklute "$T/fresh"
 check "installs cleanly" 0 "installed IndexGLINT" bash "$REPO/lute/install_into_lute.sh" "$T/fresh"
+check "rewrites the installed launcher path" 0 "" \
+    grep -Fq "\"$REPO/lute/glint_launch.sh\"" "$T/fresh/lute/io/models/glint_index.py"
+check "removes the source launcher path" 1 "" \
+    grep -Fq '"/sdf/home/s/smarches/git/glint/lute/glint_launch.sh"' "$T/fresh/lute/io/models/glint_index.py"
 
-echo "2. deployed copy IDENTICAL to repo"
-mklute "$T/same" "$REPO/lute/glint_index.py"
+echo "2. deployed copy IDENTICAL to expected installed content"
+mklute "$T/same" "$T/fresh/lute/io/models/glint_index.py"
 check "reports nothing to install" 0 "already identical" bash "$REPO/lute/install_into_lute.sh" "$T/same"
 
-echo "3. deployed copy is an OLDER COMMITTED version (plain upgrade)"
+echo "3. deployed copy is raw repo content or an OLDER COMMITTED version (plain upgrade)"
+mklute "$T/raw" "$REPO/lute/glint_index.py"
+check "raw repo copy gets its launcher rewritten" 0 "plain upgrade" \
+    bash "$REPO/lute/install_into_lute.sh" "$T/raw"
+check "raw repo copy now has the installed launcher path" 0 "" \
+    grep -Fq "\"$REPO/lute/glint_launch.sh\"" "$T/raw/lute/io/models/glint_index.py"
+
 # Most recent committed version whose CONTENT differs from the working copy. Not "the 2nd commit":
 # squash-merges leave several commits carrying byte-identical files, so an index-based pick lands on
 # a duplicate of the current file and the fixture stops testing anything.
@@ -42,31 +52,38 @@ for c in $(git -C "$REPO" log --all --format=%H -- lute/glint_index.py); do
         PREV="$c"; break
     fi
 done
-[ -n "$PREV" ] || { echo "  [SKIP] no committed version differs from the working copy"; exit 0; }
-git -C "$REPO" show "$PREV:lute/glint_index.py" > "$T/old_committed.py"
-mklute "$T/old" "$T/old_committed.py"
-check "recognised as a repo version" 0 "plain upgrade" bash "$REPO/lute/install_into_lute.sh" "$T/old"
+if [ -n "$PREV" ]; then
+    git -C "$REPO" show "$PREV:lute/glint_index.py" > "$T/old_committed.py"
+    sed 's#"/sdf/home/s/smarches/git/glint/lute/glint_launch.sh"#"'"$REPO"'/lute/glint_launch.sh"#' \
+        "$T/old_committed.py" > "$T/old_installed.py"
+    mklute "$T/old" "$T/old_installed.py"
+    check "recognised as a repo version" 0 "plain upgrade" bash "$REPO/lute/install_into_lute.sh" "$T/old"
+else
+    echo "  [SKIP] no committed version differs from the working copy"
+fi
 
 echo "4. deployed copy has LOCAL EDITS (the real case -- must BLOCK)"
-cp "$REPO/lute/glint_index.py" "$T/edited.py"; echo "# local hand edit" >> "$T/edited.py"
+cp "$T/fresh/lute/io/models/glint_index.py" "$T/edited.py"; echo "# local hand edit" >> "$T/edited.py"
 mklute "$T/edited" "$T/edited.py"
 check "refuses without --force" 2 "MATCHES NO COMMITTED VERSION" bash "$REPO/lute/install_into_lute.sh" "$T/edited"
 check "local edits NOT overwritten" 0 "" grep -q "local hand edit" "$T/edited/lute/io/models/glint_index.py"
 check "--force overrides" 0 "force given" bash "$REPO/lute/install_into_lute.sh" "$T/edited" --force
 check "backup preserves the local edits" 0 "" bash -c "grep -q 'local hand edit' $T/edited/lute/io/models/glint_index.py.*.bak"
-check "target now matches the repo copy" 0 "" bash -c "diff -q $REPO/lute/glint_index.py $T/edited/lute/io/models/glint_index.py"
+check "target now matches expected installed content" 0 "" \
+    diff -q "$T/fresh/lute/io/models/glint_index.py" "$T/edited/lute/io/models/glint_index.py"
 
 echo "5. run from a NON-git directory (provenance unknowable -- must BLOCK)"
 rm -rf "$T/copied"; mkdir -p "$T/copied"
 cp "$REPO/lute/install_into_lute.sh" "$REPO/lute/glint_index.py" "$REPO/lute/glint_launch.sh" "$T/copied/"
-mklute "$T/nogit" "$T/old_committed.py"
+mklute "$T/nogit" "$REPO/lute/glint_index.py"
 check "refuses without --force" 2 "CANNOT VERIFY" bash "$T/copied/install_into_lute.sh" "$T/nogit"
 check "--force overrides" 0 "force given" bash "$T/copied/install_into_lute.sh" "$T/nogit" --force
 
 echo "6. idempotence: export + executor lines appended exactly once"
 mklute "$T/idem"
 bash "$REPO/lute/install_into_lute.sh" "$T/idem" >/dev/null 2>&1
-bash "$REPO/lute/install_into_lute.sh" "$T/idem" >/dev/null 2>&1
+check "second install is a no-op" 0 "already identical" \
+    bash "$REPO/lute/install_into_lute.sh" "$T/idem"
 n1=$(grep -c "from .glint_index import" "$T/idem/lute/io/models/__init__.py")
 n2=$(grep -c "IndexGLINT" "$T/idem/lute/managed_tasks.py")
 if [ "$n1" = "1" ] && [ "$n2" = "1" ]; then echo "  [PASS] no duplicate appends after 2 runs"; pass=$((pass+1));

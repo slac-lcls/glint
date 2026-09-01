@@ -205,6 +205,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_consensus_gate_constants.py
 
+      # Re-derives the sequential-stop FACTS (seqstop_median_lock, seqstop_false_locks,
+      # poolgate_clean_lock_max, poolgate_clean_maxpool) by replaying RunningConsensus over the cached
+      # cxidb-120 N-best (nbest_120.npz) in deposition order and 400 seeded random orders, ~2 s,
+      # numpy only. Until now those four were measured once by an out-of-tree script and only their
+      # QUOTES were guarded, so a stop-rule change left CI green. The two tail values are seed-pinned;
+      # the docstring says which checks are load-bearing and which are "the tail has not moved".
+      - name: experiments/test_seqstop_replay.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_seqstop_replay.py
+
 
       # The GPU comparison itself cannot run here, but its PASS/FAIL RULES can: without cupy this
       # runs compare_outputs' sabotage self-test (NaN/inf in each of the four outputs, tolerance

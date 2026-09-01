@@ -197,6 +197,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_gate_constants_dedup.py
 
+      # The pooled-vote acceptance gate (CONSENSUS_MIN_FRAC / _MIN_LEAD) now lives in the torch-free
+      # glint.multishot and is only RE-EXPORTED by hybrid_stream, so its shipped value is readable on
+      # this runner for the first time: the numpy half pins (0.02, 1.5) and that hybrid_stream.py no
+      # longer carries a second os.environ definition; the re-export half self-skips without torch.
+      - name: experiments/test_consensus_gate_constants.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_consensus_gate_constants.py
+
 
       # The GPU comparison itself cannot run here, but its PASS/FAIL RULES can: without cupy this
       # runs compare_outputs' sabotage self-test (NaN/inf in each of the four outputs, tolerance

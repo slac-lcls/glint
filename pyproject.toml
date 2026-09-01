@@ -12,7 +12,8 @@ readme = "README.md"
 # so naming plain BSD-3-Clause in metadata would misstate them. Point at the file instead.
 license = {file = "LICENSE.md"}
 requires-python = ">=3.9"
-authors = [{name = "Stefano Marchesini", email = "smarchesini@gmail.com"}]
+authors = [{name = "Stefano Marchesini", email = "smarches@slac.stanford.edu"}]
+maintainers = [{name = "SLAC National Accelerator Laboratory"}]
 keywords = ["crystallography", "indexing", "serial-crystallography", "SFX", "GPU", "diffraction", "LCLS"]
 classifiers = [
     "Programming Language :: Python :: 3",

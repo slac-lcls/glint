@@ -311,3 +311,14 @@ jobs:
       # crash, it silently changes WHICH candidates survive (glint_index.py::_first_index_per_group).
       - name: glint/test_first_index_per_group.py
         run: python -m glint.test_first_index_per_group
+
+      # The N-best PREFIX contract -- index_blind_nbest(q, 10)[:3] == index_blind_nbest(q, 3), the
+      # promise #145's cascade reuses one N-best call on -- checked on 3 real cxidb frames. It is
+      # device-independent (N only truncates), so it runs for REAL here on CPU torch (~0.5 s a frame;
+      # the CPU scores reproduce nbest_120.npz's GPU scores to 6 decimals) instead of waiting for a
+      # GPU node. Self-skips on torch < 1.12 (pyproject's floor -- the 1.11 leg exists for
+      # glint_index's scatter_reduce shim, not the indexer) and without torch, which is the path
+      # run_ci_locally.py exercises.
+      - name: experiments/test_nbest_prefix.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_nbest_prefix.py

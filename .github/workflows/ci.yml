@@ -77,6 +77,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_panel_stack_integrate.py
 
+      # The --images route (integrate_cxi) now puts the .cxi through the SAME layout decision as
+      # _load_image (predict._leading_axis_is_events): a stacked (event, ss, fs) file still integrates
+      # every event against its own frame, while an un-assembled (panel, ss, fs) stack under a
+      # multi-panel geometry is refused by name (glint#148) instead of data[ev] handing back one
+      # panel's pixels as event ev's frame. Builds its files with h5py (installed above).
+      - name: experiments/test_integrate_cxi_layout.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_integrate_cxi_layout.py
+
       # The .geom `data =` key must reach integration (glint#143). parse_geom used to drop it,
       # so the peaks+--integrate route could never read a non-default dataset path; #142's test
       # passed data_path explicitly, which is why CI stayed green through the defect.

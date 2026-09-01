@@ -94,15 +94,16 @@ def main():
     ap.add_argument("--int-dmin", type=float, default=2.0, help="--integrate resolution limit in A (default 2.0)")
     ap.add_argument("--int-tol", type=float, default=0.006,
                     help="--integrate Ewald excitation-error gate in 1/A (stills partiality window; default 0.006)")
-    # The escape hatch for glint#131. Without it "median" is reachable only from Python, which makes
-    # every intensity GLINT produced before that change irreproducible through the shipped routes.
-    # Only the --peaks route can face this: --images goes through integrate_cxi, whose .cxi layout
-    # is (event, ss, fs) by definition of that front end.
+    # Both --integrate routes face the layout question: --peaks through integrate_frames/_load_image,
+    # and --images through integrate_cxi, whose (event, ss, fs) reading is checked against the file
+    # by the same decision (an un-assembled panel stack is refused by name, glint#148).
     ap.add_argument("--event-axis", choices=("auto", "event", "panel"), default="auto",
-                    help="--integrate --peaks: what the leading axis of a 3-D image dataset means. "
+                    help="--integrate: what the leading axis of a 3-D image dataset means. "
                          "auto (default) asks the file's per-event metadata and refuses to guess "
                          "when a multi-panel geometry makes it ambiguous; event|panel say so "
-                         "outright (glint#136)")
+                         "outright (glint#136; applies to both the --peaks and the --images route)")
+    # The escape hatch for glint#131. Without it "median" is reachable only from Python, which makes
+    # every intensity GLINT produced before that change irreproducible through the shipped routes.
     ap.add_argument("--bg-mode", choices=("clipmean", "median", "mean"), default="clipmean",
                     help="--integrate annulus background estimator: clipmean (default, MAD-clipped "
                          "mean), median (what shipped before glint#131 -- use it to reproduce "
@@ -152,12 +153,13 @@ def main():
         if not args.geom:
             ap.error("--integrate requires --geom (and --image-dir for the frame images)")
         from glint.predict import write_stream_integrated
+        _ev_axis = {"auto": None, "event": True, "panel": False}[args.event_axis]
         if args.images:                                          # stacked .cxi: read data[event] directly (self-contained)
             from glint.predict import integrate_cxi
             from glint.lute_bridge import parse_geom as _pg
             nint, tot = integrate_cxi(results, args.geom, wavelength_A=args.wavelength,
                                       dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
-                                      data_key=args.data_path)
+                                      data_key=args.data_path, event_axis=_ev_axis)
             _panels, _g = _pg(args.geom)
             _pnames = [p["name"] for p in _panels]
             def _f(v, d):
@@ -175,8 +177,7 @@ def main():
             nint, tot = integrate_frames(results, geomd, image_dir=args.image_dir,
                                          data_path=args.data_path,          # None -> the .geom 'data =' key (glint#143)
                                          dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
-                                         event_axis={"auto": None, "event": True,
-                                                     "panel": False}[args.event_axis])
+                                         event_axis=_ev_axis)
             _pnames = list(geomd.get("panels", {}).keys())
             write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
                                     photon_eV=float(gg.get("photon_energy", 9392.7)), clen_m=float(gg.get("clen", 0.15)),

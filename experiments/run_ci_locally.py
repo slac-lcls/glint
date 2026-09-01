@@ -40,6 +40,7 @@ STEPS = [
     "experiments/test_integrate_event.py",
     "experiments/test_device_selection.py",
     "experiments/test_panel_stack_integrate.py",
+    "experiments/test_integrate_cxi_layout.py",
     "experiments/test_geom_data_key.py",
     "experiments/test_consensus_degenerate.py",
     "experiments/test_consensus_order.py",

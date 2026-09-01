@@ -606,8 +606,71 @@ def _event_count(f):
     return None
 
 
+def _leading_axis_is_events(f, d, path, data_path, n_panels=1, event_axis=None, panel_slabs=None):
+    """What the LEADING axis of a stacked (>= 3-D, ``shape[0] > 1``) image dataset means: True for
+    ``(event, ...)``, False for ``(panel, ss, fs)``.
+
+    THE one layout decision, shared by ``_load_image`` (the --peaks route) and ``integrate_cxi`` (the
+    --images route) so the two cannot read the same file differently. Rules, in order -- the history
+    behind each is in ``_load_image``'s docstring:
+
+      1. ``event_axis=True/False``  explicit, wins over everything.
+      2. 4-D and higher             EVENTS: the leading axis is the geometry's ``%`` dimension; the
+                                    slab-count inference below is reserved for 3-D data, where the
+                                    leading axis is the ambiguous one.
+      3. slab-mapped geometry       ``panel_slabs`` (integer dimN keys, glint#148) DECLARE the 3-D
+                                    layout as PANELS, full stop.
+      4. per-event metadata         the file's own event count: equal to the leading axis -> EVENTS,
+                                    different -> PANELS.
+      5. one-panel geometry, or leading axis != n_panels -> EVENTS: it cannot be a panel stack.
+      6. otherwise                  genuinely ambiguous -> ValueError naming both readings and the
+                                    override. Never silently pick (glint#136).
+    """
+    is_event = event_axis
+    n_slabs = (max(panel_slabs) + 1) if panel_slabs else None
+    if is_event is None and getattr(d, "ndim", 0) >= 4:
+        # 4-D and higher: the leading axis IS the event axis (the geometry's '%' dimension);
+        # slab-count inference below is reserved for 3-D data, where the leading axis is the
+        # ambiguous one. Without this, a 4-D file whose EVENT count happens to equal the slab
+        # count would be classified as a panel stack and returned whole to the 2-D integrator
+        # (Copilot review of #157).
+        is_event = True
+    if is_event is None and n_slabs is not None:
+        # The .geom's integer dimN keys DECLARE the 3-D layout: the leading axis is the panel
+        # axis, full stop. (A 3-D EVENT stack cannot coexist with a slab-mapped multi-panel
+        # geometry -- its per-slab windows overlap, so a single 2-D frame per event describes
+        # nothing; a real event series under this geometry is 4-D and is claimed above.) This
+        # must come before the metadata step and before rule 5: with asics sharing modules the
+        # slab count differs from the panel count, so "leading axis != n_panels -> events"
+        # read a 2-slab/4-panel stack as events and integrated slab 0's pixels for every panel
+        # (glint#148), and a per-event array that happens to match the leading axis is
+        # circumstance, while the dims are a statement. A leading axis that does not match the
+        # mapping is a geometry/data MISMATCH, and integrate_spots_stack raises it by name --
+        # guessing events there instead would integrate wrong pixels silently.
+        is_event = False
+    if is_event is None:
+        n_ev = _event_count(f)
+        if n_ev is not None:
+            is_event = (n_ev == d.shape[0])          # the file's own per-event metadata decides
+        elif n_panels <= 1 or d.shape[0] != n_panels:
+            is_event = True                          # cannot be a panel stack
+        else:
+            raise ValueError(
+                f"{path}:{data_path} has a leading axis of {d.shape[0]}, which equals the "
+                f"geometry's panel count, and the file carries no per-event metadata "
+                f"({', '.join(_EVENT_COUNT_PATHS)}) to settle it. It is either {d.shape[0]} "
+                f"EVENTS of an assembled frame or {n_panels} PANELS of one event, and picking "
+                f"wrong integrates the wrong pixels silently -- which is glint#136. Pass "
+                f"event_axis=True (events) or event_axis=False (panels), or --event-axis "
+                f"event|panel on the CLI, to say which it is.")
+    return bool(is_event)
+
+
 def _load_image(path, data_path, event=0, n_panels=1, event_axis=None, panel_slabs=None):
     """Read the frame for THIS event out of an image file at the geom ``data`` path.
+
+    The layout decision itself is ``_leading_axis_is_events`` (shared with ``integrate_cxi``); what
+    follows is the history that shaped its rules and how each reading is then honoured.
 
     EVENT-AWARE since glint#136. This used to end ``a = a[0] if a.shape[0] > 1 else a[0]`` -- both
     branches index 0 -- so on a stacked multi-event ``.cxi`` every result in the run was handed
@@ -664,43 +727,8 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None, panel_sla
                 f"default -- set whichever applies to where this file keeps its frames. "
                 f"Image-like datasets found here: {', '.join(cands) if cands else 'none'}.") from None
         stacked = getattr(d, "ndim", 0) >= 3 and d.shape[0] > 1
-        is_event = event_axis
-        n_slabs = (max(panel_slabs) + 1) if panel_slabs else None
-        if stacked and is_event is None and getattr(d, "ndim", 0) >= 4:
-            # 4-D and higher: the leading axis IS the event axis (the geometry's '%' dimension);
-            # slab-count inference below is reserved for 3-D data, where the leading axis is the
-            # ambiguous one. Without this, a 4-D file whose EVENT count happens to equal the slab
-            # count would be classified as a panel stack and returned whole to the 2-D integrator
-            # (Copilot review of #157).
-            is_event = True
-        if stacked and is_event is None and n_slabs is not None:
-            # The .geom's integer dimN keys DECLARE the 3-D layout: the leading axis is the panel
-            # axis, full stop. (A 3-D EVENT stack cannot coexist with a slab-mapped multi-panel
-            # geometry -- its per-slab windows overlap, so a single 2-D frame per event describes
-            # nothing; a real event series under this geometry is 4-D and is claimed above.) This
-            # must come before the metadata step and before rule 4: with asics sharing modules the
-            # slab count differs from the panel count, so "leading axis != n_panels -> events"
-            # read a 2-slab/4-panel stack as events and integrated slab 0's pixels for every panel
-            # (glint#148), and a per-event array that happens to match the leading axis is
-            # circumstance, while the dims are a statement. A leading axis that does not match the
-            # mapping is a geometry/data MISMATCH, and integrate_spots_stack raises it by name --
-            # guessing events there instead would integrate wrong pixels silently.
-            is_event = False
-        if stacked and is_event is None:
-            n_ev = _event_count(f)
-            if n_ev is not None:
-                is_event = (n_ev == d.shape[0])      # the file's own per-event metadata decides
-            elif n_panels <= 1 or d.shape[0] != n_panels:
-                is_event = True                      # cannot be a panel stack
-            else:
-                raise ValueError(
-                    f"{path}:{data_path} has a leading axis of {d.shape[0]}, which equals the "
-                    f"geometry's panel count, and the file carries no per-event metadata "
-                    f"({', '.join(_EVENT_COUNT_PATHS)}) to settle it. It is either {d.shape[0]} "
-                    f"EVENTS of an assembled frame or {n_panels} PANELS of one event, and picking "
-                    f"wrong integrates the wrong pixels silently -- which is glint#136. Pass "
-                    f"event_axis=True (events) or event_axis=False (panels), or --event-axis "
-                    f"event|panel on the CLI, to say which it is.")
+        is_event = (_leading_axis_is_events(f, d, path, data_path, n_panels, event_axis, panel_slabs)
+                    if stacked else None)             # the decision is only consumed when stacked
         if stacked and is_event:
             ev = _event_index(event)
             if not 0 <= ev < d.shape[0]:
@@ -810,8 +838,20 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
 
 
 def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, half=3, clen_scale=None,
-                  sym_refine=None, sym_refine_tol=0.02, bg_mode="clipmean", data_key=None):
+                  sym_refine=None, sym_refine_tol=0.02, bg_mode="clipmean", data_key=None,
+                  event_axis=None):
     """Self-contained native integrate for a STACKED .cxi -- the ``--images`` merge path, no CrystFEL.
+
+    LAYOUT. The frame for event ``ev`` is ``data[ev]`` of a 3-D ``(event, ss, fs)`` stack -- the
+    reading ``frames_from_cxi`` takes by definition of this front end -- but the file is put through
+    the SAME decision the --peaks route uses (``_leading_axis_is_events``) before that index is
+    trusted: a dataset whose leading axis is the geometry's PANEL count and is not the file's own
+    event count is an un-assembled ``(panel, ss, fs)`` stack, and ``data[ev]`` of it is one panel's
+    pixels, not one event's. That is refused by name (glint#148) rather than integrated silently, as
+    is any per-event frame that is not a single 2-D image (a 4-D ``(event, panel, ss, fs)`` file):
+    this integrator works on ONE assembled frame. ``event_axis`` is the explicit override
+    (``--event-axis`` on the CLI, both routes); the ambiguous case -- leading axis == panel count and
+    no per-event metadata -- raises and names it, exactly as ``_load_image`` does.
 
     sym_refine (default None -> OFF, nothing changes): if set to a Bravais system name (e.g.
     ``"tetragonal"``) AND a result carries its observed reciprocal peaks under key ``"q"`` (the (N,3)
@@ -879,7 +919,29 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
                 continue
             pred = predict_spots(M, panels, clen_m, wl, dmin=dmin, tol=tol)
             dset = f[data_key]
-            frame = np.asarray(dset[ev] if getattr(dset, "ndim", 0) >= 3 else dset, np.float32)
+            if getattr(dset, "ndim", 0) >= 3:
+                # (event, ss, fs) is the fast path; the decision below only refuses what is NOT that.
+                if dset.shape[0] > 1 and not _leading_axis_is_events(
+                        f, dset, str(r.get("image")), data_key, n_panels=len(panels),
+                        event_axis=event_axis):
+                    raise NotImplementedError(
+                        f"{r.get('image')}:{data_key} reads as a stack of {dset.shape[0]} PANELS "
+                        f"under a {len(panels)}-panel geometry, not as events, so data[{ev}] would "
+                        f"be one panel's pixels integrated as event {ev}'s assembled frame "
+                        f"(glint#148). integrate_cxi (the --images route) integrates ASSEMBLED "
+                        f"(event, ss, fs) stacks only: for an un-assembled panel stack use the "
+                        f"--peaks route with integer dimN keys in the .geom (slab-local "
+                        f"integration), or pass event_axis=True / --event-axis event if this file "
+                        f"really is one frame per event.")
+                frame = np.asarray(dset[ev], np.float32)
+            else:
+                frame = np.asarray(dset, np.float32)
+            if frame.ndim != 2:
+                raise NotImplementedError(
+                    f"{r.get('image')}:{data_key} event {ev} is a {frame.ndim}-D array of shape "
+                    f"{frame.shape} -- an un-assembled per-event panel stack -- and integrate_cxi "
+                    f"integrates one assembled 2-D frame per event (glint#148). Use the --peaks "
+                    f"route with integer dimN keys in the .geom for slab-local integration.")
             I, sig, peak, bg = integrate_spots(frame, pred, half=half, bg_mode=bg_mode)
             keep = np.isfinite(I) & np.isfinite(sig) & (sig > 0)   # non-positive I kept: glint#130
             r.update(M=M, pred=pred[keep], I=I[keep], sigma=sig[keep], peak=peak[keep], bg=bg[keep])  # store canonical M so the stream cell matches the hkl

@@ -560,7 +560,10 @@ class StreamDriver:
         self._n = 0
         self._frame_no = 0
 
-        self.ops = laue_ops_4mmm()                              # cell-independent (Laue group)
+        # Laue group 4/mmm (tetragonal holohedry); valid only after _conventional_tetragonal puts the
+        # 4-fold axis in c. NOT cell-independent: a non-tetragonal Mc, or a tetragonal one left in a
+        # different setting, makes stats()/completeness/CC*/Rsplit merge under the wrong point group.
+        self.ops = laue_ops_4mmm()
         self.snr_bins = snr_bins
         # GLINT_DEVICE_MERGE=1 relocates the running scatter-add onto the GPU (deferred,
         # order-faithful, bit-identical to the host merge). Host path stays the default for A/B.

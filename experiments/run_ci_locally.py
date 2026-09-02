@@ -65,6 +65,7 @@ STEPS = [
     "experiments/test_gate_constants_dedup.py",
     "experiments/test_consensus_gate_constants.py",
     "experiments/test_seqstop_replay.py",
+    "experiments/test_consensus_voter_set.py",
     "experiments/test_gate_project.py",
     "experiments/bench_integrate_fused.py",
     # torch-CPU job: runs for real there (CPU torch), SKIPs here with torch blocked.

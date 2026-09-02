@@ -897,6 +897,13 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
     import h5py
     from glint.lute_bridge import parse_geom as _parse_geom, lambda_from_eV, _meta
     panels, glob = _parse_geom(geom_path)
+    # The shared layout decision needs the geometry's SLAB MAPPING, not just its panel count:
+    # where asics share modules the slab count differs from the panel count, so a slab-mapped
+    # (panel, ss, fs) stack fell through rule 5's "leading axis != n_panels -> events" and
+    # data[ev] integrated slab ev as an assembled frame -- glint#148 on this route (Copilot
+    # review of #183). Same all-or-nothing construction as integrate_frames.
+    _slabs = [_panel_slab(p) for p in panels]
+    panel_slabs = _slabs if len(panels) > 1 and all(s is not None for s in _slabs) else None
     clen_spec, en_spec = glob.get("clen"), glob.get("photon_energy")
     coff = float(glob.get("coffset", 0.0))
     data_key = data_key or glob.get("data", "/entry_1/data_1/data")   # explicit arg > .geom `data` key > default
@@ -940,11 +947,15 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
                 # than quietly read as event 0 (Copilot review of #183).
                 if (dset.shape[0] > 1 or event_axis is not None) and not _leading_axis_is_events(
                         f, dset, str(r.get("image")), data_key, n_panels=len(panels),
-                        event_axis=event_axis):
+                        event_axis=event_axis, panel_slabs=panel_slabs):
+                    what = (f"PANEL SLABS (the geometry's integer dimN keys map its {len(panels)} "
+                            f"panels onto {max(panel_slabs) + 1} slabs)" if panel_slabs is not None
+                            else f"PANELS (a {len(panels)}-panel geometry)")
+                    unit = "slab" if panel_slabs is not None else "panel"
                     raise NotImplementedError(
-                        f"{r.get('image')}:{data_key} reads as a stack of {dset.shape[0]} PANELS "
-                        f"under a {len(panels)}-panel geometry, not as events, so data[{ev}] would "
-                        f"be one panel's pixels integrated as event {ev}'s assembled frame "
+                        f"{r.get('image')}:{data_key} reads as a stack of {dset.shape[0]} {what}, "
+                        f"not as events, so data[{ev}] would "
+                        f"be one {unit}'s pixels integrated as event {ev}'s assembled frame "
                         f"(glint#148). integrate_cxi (the --images route) integrates ASSEMBLED "
                         f"(event, ss, fs) stacks only: for an un-assembled panel stack use the "
                         f"--peaks route with integer dimN keys in the .geom (slab-local "

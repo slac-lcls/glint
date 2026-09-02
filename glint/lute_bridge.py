@@ -52,12 +52,25 @@ def parse_geom(path):
     for name, d in panels.items():
         if "fs" not in d or "corner_x" not in d:
             continue
-        out.append(dict(
+        p = dict(
             name=name, fs=_vec(d["fs"]), ss=_vec(d["ss"]), res=float(d.get("res", gres)),
             cx=float(d["corner_x"]), cy=float(d["corner_y"]),
             coffset=float(d.get("coffset", glob.get("coffset", 0.0))),
             min_fs=int(d["min_fs"]), max_fs=int(d["max_fs"]),
-            min_ss=int(d["min_ss"]), max_ss=int(d["max_ss"])))
+            min_ss=int(d["min_ss"]), max_ss=int(d["max_ss"]))
+        # Carry the dimN keys through in geom.parse_geom's convention -- integers as floats, axis
+        # names ('%', 'ss', 'fs') as strings -- so predict._panel_slab reads the slab mapping off
+        # THESE panels too. This schema dropped them, which left integrate_cxi's layout decision
+        # blind to a slab-mapped geometry: a 2-slab/4-panel stack then fell through the
+        # "leading axis != n_panels -> events" rule and data[ev] integrated slab ev as an
+        # assembled frame, which is glint#148 on the --images route (Copilot review of #183).
+        for k in ("dim0", "dim1", "dim2", "dim3"):
+            if k in d:
+                try:
+                    p[k] = float(d[k])
+                except ValueError:
+                    p[k] = d[k]
+        out.append(p)
     return out, glob
 
 

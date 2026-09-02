@@ -24,6 +24,9 @@ What is pinned:
   * ``event_axis=False`` forces the panel reading even when metadata says events -> refused;
   * a 4-D ``(event, panel, ss, fs)`` file is events by rule but each frame is a panel stack, and a
     3-D frame is refused (this integrator works on ONE assembled 2-D image);
+  * a SLAB-MAPPED geometry whose slab count differs from its panel count (asics sharing a module)
+    is refused rather than read as events -- the integer ``dimN`` keys declare the layout, and
+    ``lute_bridge.parse_geom`` now keeps them instead of dropping them (glint#148 on this route);
   * a plain 2-D dataset and a ``(1, ss, fs)`` singleton still integrate (legacy per-file layouts);
   * glint_cli forwards ``--event-axis`` to integrate_cxi as well as integrate_frames, so the
     refusal's named override is reachable from the shipped route.
@@ -49,7 +52,7 @@ except ImportError:                      # pragma: no cover - CI installs h5py; 
 
 from glint.lattice import cell_to_Ar
 from glint.lute_bridge import lambda_from_eV, parse_geom
-from glint.predict import integrate_cxi, predict_spots
+from glint.predict import _panel_slab, integrate_cxi, predict_spots
 
 FAILS = []
 
@@ -80,6 +83,15 @@ NP = 4                                    # a 4-panel geometry of 60x60 panels s
 GEOM4 = HEAD + "".join(
     f"p{p}/min_fs = 0\np{p}/max_fs = 59\np{p}/min_ss = {60*p}\np{p}/max_ss = {60*p+59}\n"
     f"p{p}/corner_x = -30\np{p}/corner_y = {-30+60*p}\np{p}/fs = +1.0x +0.0y\np{p}/ss = +0.0x +1.0y\n"
+    for p in range(NP))
+# The same 4 panels MAPPED onto 2 slabs (asics sharing a module), so the slab count differs from
+# the panel count -- the layout that fell through "leading axis != n_panels -> events". In a
+# slab-mapped .geom the min/max fs/ss windows address WITHIN the panel's slab, so each 60x60 panel
+# sits at ss 0..59 or 60..119 of a (120, 60) slab.
+GEOM4S = HEAD + "".join(
+    f"p{p}/min_fs = 0\np{p}/max_fs = 59\np{p}/min_ss = {60*(p % 2)}\np{p}/max_ss = {60*(p % 2)+59}\n"
+    f"p{p}/corner_x = -30\np{p}/corner_y = {-30+60*p}\np{p}/fs = +1.0x +0.0y\np{p}/ss = +0.0x +1.0y\n"
+    f"p{p}/dim0 = {p // 2}\np{p}/dim1 = ss\np{p}/dim2 = fs\n"
     for p in range(NP))
 FLUX = (1000.0, 4000.0, 16000.0)         # event 0, 1, 2 -- distinct, and distinct in RATIO
 
@@ -203,6 +215,30 @@ with tempfile.TemporaryDirectory() as d:
           np.array_equal(_load_image(single, DATA, event=0, n_panels=NP), panel_stack[0]))
     check("_load_image: event_axis=False on a singleton under a ONE-panel geometry still returns slab 0",
           np.array_equal(_load_image(single, DATA, event=0, n_panels=1, event_axis=False), panel_stack[0]))
+
+    # --- SLAB-MAPPED, and the slab count != the panel count (Copilot review of #183) ----------
+    # 2 slabs under a 4-panel geometry: "leading axis != n_panels" is TRUE, so before the geom's
+    # dimN mapping reached this route the file was classified as events and data[ev] integrated
+    # slab ev as an assembled frame -- glint#148, silently, on real-looking I/sigma. The integer
+    # dimN keys DECLARE the layout (rule 3) and must win over that inference.
+    g4spath = os.path.join(d, "four_two_slab.geom"); open(g4spath, "w").write(GEOM4S)
+    s_panels, _ = parse_geom(g4spath)
+    check("the slab-mapped geometry still parses as 4 panels", len(s_panels) == NP, len(s_panels))
+    check("lute_bridge.parse_geom KEEPS the integer dimN keys (it used to drop them)",
+          [_panel_slab(p) for p in s_panels] == [0, 0, 1, 1],
+          [{k: p.get(k) for k in ("dim0", "dim1", "dim2")} for p in s_panels])
+    slab_stack = np.stack([np.full((120, 60), 100.0 * (k + 1), np.float32) for k in range(2)])
+    sfile = write(os.path.join(d, "two_slab_no_meta.h5"), slab_stack)
+    exc_sl = raises(integrate_cxi, res(sfile, 1), g4spath, dmin=5.0, tol=0.004)
+    check("a 2-slab/4-panel stack with NO metadata is REFUSED, not read as data[ev] (glint#148)",
+          isinstance(exc_sl, NotImplementedError) and "glint#148" in str(exc_sl), repr(exc_sl))
+    check("...and the refusal says SLABS, naming the dimN mapping that settled it",
+          exc_sl is not None and "SLABS" in str(exc_sl) and "dimN" in str(exc_sl), str(exc_sl)[:200])
+    check("...and it does not misreport the slab count as the panel count",
+          exc_sl is not None and "2 PANEL SLABS" in str(exc_sl), str(exc_sl)[:120])
+    r_sl = res(sfile, 1)
+    n_sl, _ = integrate_cxi(r_sl, g4spath, dmin=5.0, tol=0.004, event_axis=True)
+    check("...but event_axis=True is still the escape hatch on a slab-mapped geometry", n_sl == 1, n_sl)
 
     # --- legacy layouts keep working ----------------------------------------------------------
     one = write(os.path.join(d, "plain2d.h5"), stack[2])

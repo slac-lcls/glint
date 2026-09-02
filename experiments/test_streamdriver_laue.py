@@ -368,6 +368,44 @@ def test_frames_are_canonicalized_in_the_reference_setting():
                 "vacuous probe: (long, long, short) must differ here for the test to mean anything")
 
 
+def test_identity_classes_relabel_the_frame_into_the_reference_order():
+    """The known-cell indexer anchors on the SHORTEST axis and hands its basis back shortest-first,
+    whatever order the reference was written in (replica_gpu._axes_from_cell). For the classes whose
+    standardizer is the identity -- triclinic, the monoclinic settings, rhombohedral, cubic -- that
+    left the frame in a different labelling from the grid and the operators, so a monoclinic
+    reference with its unique axis in b was predicted against a grid that expected it there while the
+    frame had it wherever its length put it (glint#186 review)."""
+    # a reference deliberately NOT in shortest-first order: lengths (50, 30, 32)
+    ref = cell_to_Ar(50.0, 30.0, 32.0, 90, 100.0, 90)
+    order = np.argsort(np.linalg.norm(ref, axis=0), kind="stable")     # what the indexer sorts by
+    shortest_first = ref[:, order]                                    # what it hands back
+    assert not _same_M(shortest_first, ref), "fixture must actually be out of order"
+
+    for laue in ("2/m_uab", "-1", "m-3m", "-3m_R"):
+        d = _driver(ref, laue=laue)
+        seen = {}
+        real = d.grid.predict
+
+        def spy(M, *a, _real=real, **kw):
+            seen["M"] = np.array(M, float)
+            return _real(M, *a, **kw)
+
+        d.grid.predict = spy
+        d._q[0] = np.zeros((0, 3)); d._ring[0] = np.zeros((N, N), np.uint16); d._pk[0] = None
+        d._integrate_one(0, shortest_first, d.grid, d.acc)
+        assert _same_M(seen["M"], ref), (laue, np.linalg.norm(seen["M"], axis=0))
+
+    # a reference ALREADY shortest-first is a fixed point -- the relabel is a round trip, not a sort
+    ref2 = cell_to_Ar(30.0, 32.0, 50.0, 90, 100.0, 90)
+    d = _driver(ref2, laue="2/m_uab")
+    assert _same_M(d._standardize(ref2, ref=ref2), ref2)
+    # ...and where a canonical setting IS imposed the reference went through the same function, so
+    # passing it changes nothing.
+    d4 = _driver(TET, laue="4/mmm")
+    M = cell_to_Ar(25.0, 40.0, 40.0, 90, 90, 90)
+    assert _same_M(d4._standardize(M), d4._standardize(M, ref=d4.Mc))
+
+
 if __name__ == "__main__":
     tests = (test_orthorhombic_set_merges_differently_under_mmm_and_the_default,
              test_default_path_is_bit_identical_to_a_direct_4mmm_accumulator,
@@ -379,7 +417,8 @@ if __name__ == "__main__":
              test_a_lower_class_on_the_same_lattice_is_not_a_contradiction,
              test_explicit_ops_skip_header_derivation_entirely,
              test_the_laue_label_does_not_permute_axes_when_ops_are_explicit,
-             test_frames_are_canonicalized_in_the_reference_setting)
+             test_frames_are_canonicalized_in_the_reference_setting,
+             test_identity_classes_relabel_the_frame_into_the_reference_order)
     ok = 0
     for t in tests:
         try:

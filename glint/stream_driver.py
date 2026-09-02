@@ -186,6 +186,7 @@ class HKLGrid:
 
     def __init__(self, Mc, dmin, margin=1.02, gpu=True,
                  panels=None, clen_m=None, wavelength_A=None):
+        self.Mc_ref = np.asarray(Mc, float).copy()   # the setting this grid's hkl box was sized in
         self.qmax = 1.0 / float(dmin)
         R = recip_from_M(np.asarray(Mc, float))
         self.g, _ = _hkl_grid(R, self.qmax * margin)
@@ -580,6 +581,28 @@ class MergeAccumulator:
 
 
 # ------------------------------------------------------------------------- the driver -----------
+def _relabel_like(M, ref):
+    """Relabel a frame's axes into the REFERENCE's column order.
+
+    The known-cell indexer anchors on the shortest axis and returns its columns shortest-first --
+    `replica_gpu._axes_from_cell` sorts the reference's columns by length and the returned basis is
+    (short, mid, long) in the frame's orientation, whatever order the reference itself was written in
+    (glint#186 review). For the classes whose standardizer is the identity (triclinic, the monoclinic
+    settings, rhombohedral, cubic) that leaves the frame in a different labelling from the grid and
+    the operators: a monoclinic reference with its unique axis in b, handed back shortest-first, has
+    that axis wherever its length puts it.
+
+    Undoing the sort is exact, because it IS the permutation the indexer applied: column k of the
+    returned basis is the reference's column `argsort(lengths)[k]`. Length ties are broken the same
+    way at both ends (`kind="stable"`), so the round trip is the identity when the reference is
+    already shortest-first."""
+    M = np.asarray(M, float)
+    order = np.argsort(np.linalg.norm(np.asarray(ref, float), axis=0), kind="stable")
+    out = np.empty_like(M)
+    out[:, order] = M
+    return out
+
+
 def _conventional_tetragonal(M):
     """Permute a tetragonal cell's columns so the unique (4-fold) axis is c, matching laue_ops_4mmm.
 
@@ -983,7 +1006,7 @@ class StreamDriver:
         else:
             self._lock(np.asarray(Mc, float))
 
-    def _standardize(self, M):
+    def _standardize(self, M, ref=None):
         """Cell setting for the merge operators (see _lock). The tetragonal classes need the 4-fold
         axis in c, where laue_ops puts it, and _conventional_tetragonal arranges that by length;
         every other class takes the cell exactly as handed in -- an orthorhombic cell has no unique
@@ -995,9 +1018,15 @@ class StreamDriver:
         ops=laue_ops("-1"), laue="4/mmm" would otherwise tetragonally permute a triclinic merge
         (glint#186 review)."""
         M = np.asarray(M, float)
-        if self._ops_explicit:
-            return M
-        return _conventional_tetragonal(M) if self.laue in TETRAGONAL_LAUE else M
+        out = M if self._ops_explicit else (
+            _conventional_tetragonal(M) if self.laue in TETRAGONAL_LAUE else M)
+        if ref is not None and out is M:
+            # No canonical setting was imposed, so the frame is still in the indexer's shortest-first
+            # order while the grid and the operators are in the reference's -- relabel it (glint#186
+            # review). Where a canonical setting WAS imposed the reference went through the same
+            # function, so the two already agree.
+            out = _relabel_like(out, ref)
+        return out
 
     def _lock(self, Mc, support=None, standardize=False):
         """Fix the cell: build the hkl grid + theoretical-unique count, and leave blind mode.
@@ -1223,7 +1252,7 @@ class StreamDriver:
         # makes grid, prediction and merge share a setting by construction; where the standardizer is
         # the identity the frame inherits its setting from registration against Mc, which is the same
         # rule the docstring states for Mc itself.
-        Mcan = self._standardize(M)
+        Mcan = self._standardize(M, ref=getattr(grid, "Mc_ref", None))
         if self.double_hit:                                 # deflate-and-reindex: a 2nd crystal in this shot?
             resid = deflate_peaks(self._q[i], Mcan)
             if len(resid) >= self.min_peaks:

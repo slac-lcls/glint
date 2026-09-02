@@ -326,18 +326,30 @@ def test_explicit_ops_skip_header_derivation_entirely():
 
 
 def test_the_laue_label_does_not_permute_axes_when_ops_are_explicit():
-    """With `ops` supplied, `laue` is documented as a reporting label -- so it must not reach the
-    axis standardizer. ops=laue_ops("-1") with laue="4/mmm" used to tetragonally permute a blind lock
-    the caller's triclinic operators never asked to be permuted (glint#186 review)."""
-    d = _driver(TET, ops=laue_ops("-1"), laue="4/mmm")
-    assert d.laue == "4/mmm" and _same_ops(d.ops, laue_ops("-1"))
+    """With `ops` supplied the operators are authoritative and the setting is the caller's, so the
+    class name must not reach the axis standardizer -- it used to tetragonally permute blind and
+    relocked cells the caller's operators never asked to be permuted (glint#186 review).
+
+    A label that does not DESCRIBE those operators is now refused outright, because stats() reports
+    it as the class the numbers were merged under."""
     M = cell_to_Ar(25.0, 40.0, 40.0, 90, 90, 90)          # 4-fold in a: a length rule would move it
-    assert _same_M(d._standardize(M), M), "explicit ops: the label must not standardize"
+    d = _driver(TET, ops=laue_ops("4/mmm"), laue="4/mmm")  # label agrees with the operators
+    assert d.laue == "4/mmm" and _same_ops(d.ops, laue_ops("4/mmm"))
+    assert _same_M(d._standardize(M), M), "explicit ops: the setting is the caller's"
     d._lock(M, standardize=True)
     assert _same_M(d.Mc, M), "a lock must not permute it either"
-    # the same driver WITHOUT explicit ops does standardize, so the test is not vacuous
+    # the same class WITHOUT explicit ops does standardize, so the test is not vacuous
     d2 = _driver(TET, laue="4/mmm")
     assert not _same_M(d2._standardize(M), M), "no ops: 4/mmm must still put the 4-fold axis in c"
+    # a label that misdescribes the operators is refused rather than silently misreported
+    try:
+        _driver(TET, ops=laue_ops("-1"), laue="4/mmm")
+    except ValueError as e:
+        assert "does not describe" in str(e), e
+    else:
+        raise AssertionError("a laue label that contradicts ops must not reach stats()")
+    d3 = _driver(TET, ops=laue_ops("-1"))                 # ops alone: the class is simply unlabelled
+    assert d3.laue is None and _same_ops(d3.ops, laue_ops("-1"))
 
 
 def test_frames_are_canonicalized_in_the_reference_setting():
@@ -392,8 +404,14 @@ def test_identity_classes_relabel_the_frame_into_the_reference_order():
 
         d.grid.predict = spy
         d._q[0] = np.zeros((0, 3)); d._ring[0] = np.zeros((N, N), np.uint16); d._pk[0] = None
-        d._integrate_one(0, shortest_first, d.grid, d.acc)
+        d._integrate_one(0, shortest_first, d.grid, d.acc, known_cell=True)
         assert _same_M(seen["M"], ref), (laue, np.linalg.norm(seen["M"], axis=0))
+
+    # a BLIND candidate is not relabelled: it comes through primitivize(buerger_reduce(...)) and can
+    # differ from the reference by a general integer change of basis, not a permutation, so undoing a
+    # length sort would be a guess (glint#186 review, glint#188).
+    d_blind = _driver(ref, laue="2/m_uab")
+    assert _same_M(d_blind._standardize(shortest_first), shortest_first), "no ref -> no relabel"
 
     # a reference ALREADY shortest-first is a fixed point -- the relabel is a round trip, not a sort
     ref2 = cell_to_Ar(30.0, 32.0, 50.0, 90, 100.0, 90)

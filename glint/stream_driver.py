@@ -723,6 +723,14 @@ class StreamDriver:
             self.ops = [np.asarray(o, int) for o in ops]
             self.laue = laue_name(laue) if laue is not None else None
             self._ops_explicit = True
+            # A label that does not describe the operators would make stats()["laue"] misreport the
+            # class the numbers were merged under (glint#186 review), so it has to agree with them.
+            if self.laue is not None and _op_set(self.ops) != _op_set(laue_ops(self.laue)):
+                raise ValueError(
+                    f"laue={laue!r} does not describe the operators given in ops "
+                    f"({len(self.ops)} of them against {len(laue_ops(self.laue))} for "
+                    f"{self.laue}): stats() reports this label as the class the merge used, so it "
+                    f"cannot name a different one. Pass ops alone to leave the class unlabelled.")
         else:
             derived = laue_from_symmetry(stream_symmetry)              # None without a lattice_type
             self.laue = laue_name(laue if laue is not None else (derived or "4/mmm"))
@@ -1232,7 +1240,7 @@ class StreamDriver:
             return False
         return not self.min_inlier_frac or n >= self.min_inlier_frac * len(q)
 
-    def _integrate_one(self, i, M, grid, acc, cell_id=0):
+    def _integrate_one(self, i, M, grid, acc, cell_id=0, known_cell=False):
         """Canonicalize + predict + integrate slot i under an ALREADY-ACCEPTED matrix M into acc.
         Split out of _index_integrate so _watchdog's individual rescue can integrate a validated
         blind candidate directly, without re-registering it through known-cell (which could just
@@ -1252,7 +1260,13 @@ class StreamDriver:
         # makes grid, prediction and merge share a setting by construction; where the standardizer is
         # the identity the frame inherits its setting from registration against Mc, which is the same
         # rule the docstring states for Mc itself.
-        Mcan = self._standardize(M, ref=getattr(grid, "Mc_ref", None))
+        # `known_cell` says the matrix came from the known-cell indexer, whose output order is a
+        # length-sort permutation of the reference's columns and can therefore be relabelled back
+        # exactly. A BLIND candidate cannot: it arrives through primitivize(buerger_reduce(...)) and
+        # may differ from the reference by a general integer change of basis, not a permutation, so
+        # undoing a sort would be a guess (glint#186 review). Those paths keep the canonical-setting
+        # behaviour only -- see glint#188.
+        Mcan = self._standardize(M, ref=getattr(grid, "Mc_ref", None) if known_cell else None)
         if self.double_hit:                                 # deflate-and-reindex: a 2nd crystal in this shot?
             resid = deflate_peaks(self._q[i], Mcan)
             if len(resid) >= self.min_peaks:
@@ -1382,7 +1396,7 @@ class StreamDriver:
                 else:
                     self.n_gate_rejected += 1           # nowhere left to send it -- dropped, but counted
                 continue
-            self._integrate_one(i, M, grid, acc, cell_id=cell_id)
+            self._integrate_one(i, M, grid, acc, cell_id=cell_id, known_cell=True)
         return missed
 
     def _all_cells(self):

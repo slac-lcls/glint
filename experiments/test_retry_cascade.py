@@ -82,9 +82,9 @@ def _instrument(drv):
     calls = []
     real = drv._integrate_one
 
-    def wrapped(i, M, grid, acc, cell_id=0):
+    def wrapped(i, M, grid, acc, cell_id=0, **kw):
         calls.append((i, cell_id))
-        return real(i, M, grid, acc, cell_id=cell_id)
+        return real(i, M, grid, acc, cell_id=cell_id, **kw)
     drv._integrate_one = wrapped
     return calls
 

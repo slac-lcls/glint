@@ -726,7 +726,8 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None, panel_sla
                 f"`data = <path>` key when it has one, --data-path on the CLI, or the /data/data "
                 f"default -- set whichever applies to where this file keeps its frames. "
                 f"Image-like datasets found here: {', '.join(cands) if cands else 'none'}.") from None
-        stacked = getattr(d, "ndim", 0) >= 3 and d.shape[0] > 1
+        stacked = (getattr(d, "ndim", 0) >= 3
+                   and (d.shape[0] > 1 or event_axis is not None))
         is_event = (_leading_axis_is_events(f, d, path, data_path, n_panels, event_axis, panel_slabs)
                     if stacked else None)             # the decision is only consumed when stacked
         if stacked and is_event:

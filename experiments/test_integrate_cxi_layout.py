@@ -215,6 +215,9 @@ with tempfile.TemporaryDirectory() as d:
           np.array_equal(_load_image(single, DATA, event=0, n_panels=NP), panel_stack[0]))
     check("_load_image: event_axis=False on a singleton under a ONE-panel geometry still returns slab 0",
           np.array_equal(_load_image(single, DATA, event=0, n_panels=1, event_axis=False), panel_stack[0]))
+    check("_load_image: event_axis=True on a mapped singleton returns event 0, not the panel stack",
+          np.array_equal(_load_image(single, DATA, event=0, n_panels=NP, event_axis=True,
+                                     panel_slabs=[0, 0, 1, 1]), panel_stack[0]))
 
     # --- SLAB-MAPPED, and the slab count != the panel count (Copilot review of #183) ----------
     # 2 slabs under a 4-panel geometry: "leading axis != n_panels" is TRUE, so before the geom's

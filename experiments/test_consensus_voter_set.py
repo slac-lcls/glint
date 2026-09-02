@@ -185,27 +185,27 @@ def main():
     check("witness chosen as representative (covers both halves): support 19", top[4] == 19, top[4])
     check("...and 19 == the pool's matches for it", top[4] == voters(top[0], [A] * 9 + [B] * 9 + [TRUE]))
 
+    @contextlib.contextmanager
+    def _no_torch_needed():
+        """Stand in for glint.glint_fast so the blind branch's lazy import resolves without torch
+        (the seam test_lock_gate_wiring.py uses; nothing here indexes a frame)."""
+        stub = types.ModuleType("glint.glint_fast")
+        stub.index_blind_nbest = lambda q, k: []
+        had, prev = "glint.glint_fast" in sys.modules, sys.modules.get("glint.glint_fast")
+        sys.modules["glint.glint_fast"] = stub
+        try:
+            yield
+        finally:
+            if had:
+                sys.modules["glint.glint_fast"] = prev
+            else:
+                sys.modules.pop("glint.glint_fast", None)
+
     print("\nPROBE 5 -- StreamDriver.stats() reports consensus_members beside consensus_support (blind)")
     try:
         from glint.stream_driver import StreamDriver
 
-        @contextlib.contextmanager
-        def _no_torch_needed():
-            """Stand in for glint.glint_fast so the blind branch's lazy import resolves without torch
-            (the seam test_lock_gate_wiring.py uses; nothing here indexes a frame)."""
-            stub = types.ModuleType("glint.glint_fast")
-            stub.index_blind_nbest = lambda q, k: []
-            had, prev = "glint.glint_fast" in sys.modules, sys.modules.get("glint.glint_fast")
-            sys.modules["glint.glint_fast"] = stub
-            try:
-                yield
-            finally:
-                if had:
-                    sys.modules["glint.glint_fast"] = prev
-                else:
-                    sys.modules.pop("glint.glint_fast", None)
-
-        N = 32
+        N = 64
         panels = [dict(name="p0", fs=np.array([1.0, 0, 0]), ss=np.array([0, 1.0, 0]), res=1e4,
                        cx=-(N / 2.0 - 0.5), cy=-(N / 2.0 - 0.5), coffset=0.0,
                        min_fs=0, max_fs=N - 1, min_ss=0, max_ss=N - 1)]
@@ -223,6 +223,102 @@ def main():
               getattr(d, "consensus_members", "<missing>"))
     except Exception as e:
         check("StreamDriver probe ran", False, f"{type(e).__name__}: {e}")
+
+
+    print("\nPROBE 6 -- a SUCCESSFUL lock persists the folded count, on both lock paths")
+    # Probe 5 only reads stats() while the driver is still blind, so removing either
+    # `self.consensus_members = ...` assignment would leave it green (Copilot review of #187). These
+    # two drive a lock to completion -- the sequential path through _push_blind's verdict and the
+    # batched path through warmup_batch -- and assert the count survives onto the locked driver.
+    try:
+        from glint.stream_driver import StreamDriver
+
+        N = 64
+        panels = [dict(name="p0", fs=np.array([1.0, 0, 0]), ss=np.array([0, 1.0, 0]), res=1e4,
+                       cx=-(N / 2.0 - 0.5), cy=-(N / 2.0 - 0.5), coffset=0.0,
+                       min_fs=0, max_fs=N - 1, min_ss=0, max_ss=N - 1)]
+        LADDER = (100, 97, 97, 97, 106, 103)          # the issue's pool: folds to 6, covers 5
+
+        def _blind_driver():
+            with _no_torch_needed():
+                return StreamDriver(None, panels, 0.1, 1.3, (N, N), dtype=np.uint16, B=8, dmin=3.0,
+                                    use_gpu=False, lock_support=3, lock_gap=2, adaptive_gap=False)
+
+        # --- sequential path: push frames through _push_blind so the DRIVER's own verdict fires the
+        # lock. Setting consensus_members by hand here would test nothing -- that is the flaw the
+        # review named -- so the blind indexer is stubbed to emit one ladder rung per frame and the
+        # driver is left to pool, vote, gate and lock on its own.
+        d = _blind_driver()
+        it_seq = iter(LADDER)
+
+        def _one_rung(q, k=3, fanout=None):
+            try:
+                return [(cell(next(it_seq)), 1.0)]
+            except StopIteration:
+                return []
+
+        d._blind_index = _one_rung
+        # _push_blind only reaches the vote when the frame yields >= min_peaks peaks, so give it a
+        # sparse grid of bright pixels: what is being tested is the lock bookkeeping, and the stubbed
+        # indexer supplies the cells regardless of where the peaks fall.
+        _rng = np.random.default_rng(0)
+        spotty = _rng.poisson(20, (N, N)).astype(np.uint16)      # a background the finder can measure
+        for r in range(8, N - 8, 10):
+            for c in range(8, N - 8, 10):
+                spotty[r - 1:r + 2, c - 1:c + 2] = 3000          # 3x3 blobs -> ~25 peaks, >= min_peaks
+        for _ in LADDER:
+            if not d._blind:
+                break
+            d._push_blind(spotty)
+        want_sup, want_mem = d.consensus_support, d.consensus_members
+        check("sequential: _push_blind drove the driver to a lock", d._blind is False and d.Mc is not None,
+              f"blind={d._blind}")
+        if d.Mc is not None:
+            check("sequential: the locked driver kept the folded count",
+                  d.consensus_members is not None and d.consensus_members >= 1,
+                  f"{d.consensus_members}")
+            check("sequential: support is the covered count, and members >= support",
+                  d.consensus_support is not None and d.consensus_members >= d.consensus_support,
+                  f"support {d.consensus_support}, members {d.consensus_members}")
+            st = d.stats()
+            check("sequential: stats() reports both after the lock",
+                  st.get("consensus_members") == want_mem and st.get("consensus_support") == want_sup,
+                  f"{st.get('consensus_support')}, {st.get('consensus_members')}")
+
+        # --- batched path: warmup_batch over a real (B,H,W) stack. The frames carry no Bragg peaks,
+        # so the driver's own peak-find yields nothing and the vote is driven by stubbing the blind
+        # indexer to emit the ladder -- the point is the LOCK BOOKKEEPING, not the indexing.
+        d2 = _blind_driver()
+        frames = np.zeros((len(LADDER), N, N), np.uint16)
+        it = iter(LADDER)
+
+        def _stub_batch(qs, blind, rc, nbest, fanout, sink=None):
+            for a in it:
+                rc.add(cell(a))
+            return rc.verdict()[0], rc.verdict()[1]
+
+        locked = False
+        import glint.warmup_batch as wb_mod          # warmup_batch imports it lazily, by module
+        real_wc = wb_mod.warmup_consensus
+        wb_mod.warmup_consensus = _stub_batch
+        try:
+            locked = bool(d2.warmup_batch(frames))
+        except Exception as e:                       # a stub mismatch must not read as a pass
+            check("batched: warmup_batch ran", False, f"{type(e).__name__}: {e}")
+        finally:
+            wb_mod.warmup_consensus = real_wc
+        if locked:
+            check("batched: the locked driver kept the folded count",
+                  d2.consensus_members is not None and d2.consensus_members >= d2.consensus_support,
+                  f"members {d2.consensus_members}, support {d2.consensus_support}")
+            check("batched: stats() reports the folded count after the lock",
+                  d2.stats().get("consensus_members") == d2.consensus_members,
+                  d2.stats().get("consensus_members"))
+        else:
+            check("batched: warmup_batch reached a lock", False,
+                  "no lock -- the stub did not drive warmup_consensus to a verdict")
+    except Exception as e:
+        check("locked-driver probe ran", False, f"{type(e).__name__}: {e}")
 
     return 0 if not fails else 1
 

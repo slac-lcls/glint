@@ -44,7 +44,7 @@ except Exception:                                            # pragma: no cover 
     cp = None
     _HAVE_CP = False
 
-from glint.lattice import standardize_axes
+from glint.lattice import LENGTH_ORDER_LAUE, UNIQUE_C_LAUE, standardize_axes
 from glint.lute_bridge import peaks_to_q
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
                            _hkl_grid, project_q)
@@ -1015,24 +1015,35 @@ class StreamDriver:
             self._lock(np.asarray(Mc, float))
 
     def _standardize(self, M, ref=None):
-        """Cell setting for the merge operators (see _lock). The tetragonal classes need the 4-fold
-        axis in c, where laue_ops puts it, and _conventional_tetragonal arranges that by length;
-        every other class takes the cell exactly as handed in -- an orthorhombic cell has no unique
-        axis to find, and no length rule locates the unique axis of a monoclinic or hexagonal one, so
-        the setting is the caller's (known-cell) or the reducer's (blind lock) responsibility.
+        """Cell setting for the merge operators (see _lock), decided by the Laue CLASS rather than by
+        lengths alone: `standardize_axes(M, laue=self.laue)` puts the unique axis in c for the
+        tetragonal/trigonal/hexagonal classes (where laue_ops rotates about c), orders an
+        orthorhombic cell a <= b <= c, and leaves triclinic, monoclinic, rhombohedral and cubic cells
+        exactly as handed in -- no length rule can locate a monoclinic unique axis or a rhombohedral
+        3-fold, and for cubic every permutation is already standard.
+
+        The class is the input a length rule cannot supply: a cell whose three axes all sit inside the
+        equal-length tolerance has no pair a tolerance can identify, and guessing one made the setting
+        flip between frames on a refine-sized change (glint#185 review). The same function and the
+        same class canonicalize every frame in _integrate_one, so the grid, the prediction and the
+        merge cannot land in different settings.
+
+        For the classes it leaves alone there IS no canonical setting to land in, so a reference is
+        used instead when one is given: the known-cell indexer returns its axes shortest-first
+        whatever order the reference was written in, and `_relabel_like` undoes exactly that
+        permutation (glint#186 review). The two halves compose -- the class fixes the setting where
+        one exists, the reference supplies it where none does.
 
         With explicit `ops` this is the identity: `laue` is then a reporting label only, and using it
-        to permute axes would impose a setting the supplied operators never asked for -- e.g.
-        ops=laue_ops("-1"), laue="4/mmm" would otherwise tetragonally permute a triclinic merge
-        (glint#186 review)."""
+        to permute axes would impose a setting the supplied operators never asked for."""
         M = np.asarray(M, float)
-        out = M if self._ops_explicit else (
-            _conventional_tetragonal(M) if self.laue in TETRAGONAL_LAUE else M)
-        if ref is not None and out is M:
-            # No canonical setting was imposed, so the frame is still in the indexer's shortest-first
-            # order while the grid and the operators are in the reference's -- relabel it (glint#186
-            # review). Where a canonical setting WAS imposed the reference went through the same
-            # function, so the two already agree.
+        # Whether a canonical setting was imposed is a property of the CLASS, not of object identity:
+        # standardize_axes returns a copy for the classes it leaves alone, so an `out is M` test would
+        # silently stop relabelling the moment that copy was introduced.
+        imposed = (not self._ops_explicit) and (
+            self.laue in UNIQUE_C_LAUE or self.laue in LENGTH_ORDER_LAUE)
+        out = M if self._ops_explicit else standardize_axes(M, laue=self.laue)
+        if ref is not None and not imposed:
             out = _relabel_like(out, ref)
         return out
 

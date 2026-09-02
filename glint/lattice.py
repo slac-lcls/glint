@@ -69,53 +69,92 @@ def cell_params(Ar):
 AXIS_EQUAL_RTOL = 0.05
 
 
-def standardize_axes(M, rtol=AXIS_EQUAL_RTOL):
+# Which axis rule a Laue class implies. The class is what a length rule cannot know, and guessing it
+# from lengths alone is where the setting used to go unstable (glint#185 review): a cell whose three
+# axes are all within the tolerance has no "equal pair" a tolerance can identify.
+UNIQUE_C_LAUE = ("4/m", "4/mmm", "-3", "-3m1", "-31m", "6/m", "6/mmm")   # one unique axis, goes to c
+LENGTH_ORDER_LAUE = ("mmm",)                                            # a <= b <= c IS the setting
+# Everything else -- triclinic, the monoclinic settings, the rhombohedral settings and the cubic
+# classes -- is left exactly as handed in: no length rule locates a monoclinic unique axis or a
+# rhombohedral 3-fold, and for cubic every axis is equivalent so any permutation is already standard.
+
+
+def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL):
     """Bravais-aware standard setting of a real-space basis (columns of ``M`` = a, b, c).
 
-    The ONE axis-setting rule behind ``predict._canonical_axes`` (the per-frame setting the merge
-    and the CrystFEL ``--indexing=file`` handoff use) and ``stream_driver._conventional_tetragonal``
-    (the reference cell the ``HKLGrid`` and the 4/mmm operators are built on). Those used to be two
-    rules -- sort-by-length (long, long, short) versus most-equal-pair -- which agree for c < a
-    (lysozyme 79/79/38) and disagree for c > a: (long, long, short) puts the 4-fold axis of 58/58/130
-    in b, so a frame in that setting was predicted against a grid built for (58, 58, 130) and lost
-    ~19% of its reflections, and the merge folded (h,0,0) with (0,k,0) while keeping (h,0,0) apart
-    from its true equivalent (0,0,l) (glint#181).
+    The ONE axis-setting rule behind ``predict._canonical_axes`` (the per-frame setting the merge and
+    the CrystFEL ``--indexing=file`` handoff use) and ``stream_driver._conventional_tetragonal`` (the
+    reference cell the ``HKLGrid`` and the merge operators are built on). Those used to be two rules
+    -- sort-by-length (long, long, short) versus most-equal-pair -- which agree for c < a (lysozyme
+    79/79/38) and disagree for c > a: (long, long, short) puts the 4-fold axis of 58/58/130 in b, so
+    a frame in that setting was predicted against a grid built for (58, 58, 130) and lost ~19% of its
+    reflections, and the merge folded (h,0,0) with (0,k,0) while keeping (h,0,0) apart from its true
+    equivalent (0,0,l) (glint#181).
 
-      * Two lengths equal within ``rtol`` (tetragonal, hexagonal): the closest pair becomes a, b --
-        a the SHORTER of the two, b the longer -- and the outlier becomes c, the unique axis
-        ``laue_ops_4mmm`` rotates about, whether c is shorter or longer than a.
-      * No two lengths equal (orthorhombic and lower): (long, long, short), the order
-        ``_canonical_axes`` has always produced, so nothing changes for those cells.
+    ``laue`` names the Laue class the caller is merging under (``stream_driver.laue_name`` keys, e.g.
+    "4/mmm", "mmm", "2/m_uab", "-3m1"), and it decides the rule:
 
-    In both branches the setting is a function of the three LENGTHS alone, never of the order the
-    indexer happened to hand the columns back in (a <= b always). That matters for a cell the
-    tolerance admits without being tetragonal -- a pseudo-tetragonal orthorhombic 100/103/150 --
-    where a and b are NOT interchangeable under mmm: keeping the incoming pair order would have
-    standardized it to (100, 103, 150) on one frame and (103, 100, 150) on the next and put the
-    grid, the merge and a non-tetragonal ``write_fromfile`` handoff back in disagreement (Copilot
-    review of #185). For a true tetragonal cell a <-> b is a 4/mmm operator, so which of two
-    equal-to-the-jitter axes is called a cannot affect the merge or the grid.
+      * ``UNIQUE_C_LAUE`` (tetragonal, trigonal, hexagonal) -- the class guarantees exactly one
+        unique axis, so the closest-length pair becomes a, b (a the SHORTER of the two) and the
+        outlier becomes c, the axis the operators rotate about, whether c is short or long.
+      * ``LENGTH_ORDER_LAUE`` (orthorhombic) -- a <= b <= c, with NO tolerance anywhere in the
+        decision. The three axes are inequivalent, so the setting has to be a total order.
+      * anything else, and ``laue=None`` on a caller that knows no class -- see below.
 
-    The result is a column permutation of ``M``; when that permutation is odd, column a is negated
-    so det > 0 (a proper, right-handed basis). The a -> -a flip sends (h,k,l) to (-h,k,l), which the
-    mmm / 4/mmm merge absorbs (the mirror perpendicular to a is one of its operators). Idempotent:
-    ``standardize_axes(standardize_axes(M))`` equals ``standardize_axes(M)`` exactly.
+    Passing the class is what makes the setting stable. Deciding it from lengths alone cannot work
+    when all three are similar: 100/103/106 has TWO pairs inside a 5% tolerance, so a closest-pair
+    rule picked (103, 106) while a refine-sized change to 100/102.8/106 picked (100, 102.8) -- the
+    same clearly ordered orthorhombic axes standardizing to different unique axes on consecutive
+    frames, which ``mmm`` cannot absorb and which puts the grid and the merge back in disagreement
+    (Copilot review of glint#185).
+
+    So without a class this refuses to guess: the equal-pair rule is applied only when EXACTLY ONE
+    pair lies within ``rtol`` -- the unambiguous case, 79/79/38 or 58/58/130 or a pseudo-tetragonal
+    100/103/150 -- and otherwise the cell falls back to (long, long, short), the order
+    ``_canonical_axes`` has always produced. Both cells of the example above take that fallback and
+    land in the same setting, which is the property the caller needs.
+
+    In every branch the setting is a function of the three LENGTHS alone, never of the order the
+    indexer happened to hand the columns back in (a <= b always inside a chosen pair). For a true
+    tetragonal cell a <-> b is a 4/mmm operator, so which of two equal-to-the-jitter axes is called a
+    cannot affect the merge or the grid.
+
+    The result is a column permutation of ``M``; when that permutation is odd, column a is negated so
+    det > 0 (a proper, right-handed basis). The a -> -a flip sends (h,k,l) to (-h,k,l), which the mmm
+    / 4/mmm merge absorbs (the mirror perpendicular to a is one of its operators). Idempotent:
+    ``standardize_axes(standardize_axes(M, laue), laue)`` equals ``standardize_axes(M, laue)``.
     """
     M = np.asarray(M, float)
     L = np.linalg.norm(M, axis=0)
+    pairs = [(0, 1, 2), (0, 2, 1), (1, 2, 0)]
 
     def _reldiff(i, j):
         den = max(L[i], L[j])
         return abs(L[i] - L[j]) / den if den > 0 else 0.0
 
-    i, j, k = min([(0, 1, 2), (0, 2, 1), (1, 2, 0)], key=lambda p: _reldiff(p[0], p[1]))
-    if _reldiff(i, j) <= rtol:
+    def _sorted_order():
+        o = np.argsort(L, kind="stable")
+        return [int(o[0]), int(o[1]), int(o[2])]
+
+    def _unique_c_order():
+        i, j, k = min(pairs, key=lambda p: _reldiff(p[0], p[1]))
         if L[j] < L[i]:
-            i, j = j, i                            # a the shorter of the pair: lengths decide, not
-        order = [i, j, k]                          # incoming order; equal pair -> a, b; outlier -> c
+            i, j = j, i                            # a the shorter of the pair: lengths decide the
+        return [i, j, k]                           # order inside it, never the incoming columns
+
+    if laue is not None and laue in UNIQUE_C_LAUE:
+        order = _unique_c_order()
+    elif laue is not None and laue in LENGTH_ORDER_LAUE:
+        order = _sorted_order()                    # a <= b <= c, no tolerance in the decision
+    elif laue is not None:
+        return M.copy()                            # triclinic / monoclinic / rhombohedral / cubic
     else:
-        o = np.argsort(L)                          # shortest axis first
-        order = [o[1], o[2], o[0]]                 # -> (long, long, short)
+        near = [p for p in pairs if _reldiff(p[0], p[1]) <= rtol]
+        if len(near) == 1:                         # exactly one candidate: unambiguous, use it
+            order = _unique_c_order()
+        else:                                      # none, or an ambiguous near-cubic cell
+            o = np.argsort(L, kind="stable")       # -> (long, long, short), the historical order
+            order = [int(o[1]), int(o[2]), int(o[0])]
     P = M[:, order].copy()
     if np.linalg.det(P) < 0:
         P[:, 0] = -P[:, 0]                         # keep a proper (right-handed) basis

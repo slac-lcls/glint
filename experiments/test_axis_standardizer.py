@@ -219,6 +219,52 @@ def hkl_set(pred):
     return set(zip(pred["h"].tolist(), pred["k"].tolist(), pred["l"].tolist()))
 
 
+print("\nthe CLASS decides the rule, and a near-cubic cell is not guessed at (Copilot review of #185)")
+# A closest-pair rule reads 100/103/106 as the pair (103, 106) and a refine-sized 100/102.8/106 as
+# (100, 102.8): the same clearly ordered ORTHORHOMBIC axes standardizing to two different unique axes
+# on consecutive frames. mmm cannot absorb that permutation, so grid, prediction and merge fall back
+# out of agreement -- the defect #181 is about. The Laue class is the input a length rule cannot
+# supply, so with the class the rule is fixed, and without it the standardizer refuses to guess.
+NEAR = [(100.0, 103.0, 106.0), (100.0, 102.8, 106.0)]
+
+
+def _lens(M):
+    return np.linalg.norm(M, axis=0)
+
+
+def _order_of(M, ref):
+    """Which incoming axis (by length) ended up in a, b, c."""
+    return tuple(int(np.argmin(np.abs(np.asarray(ref) - L))) for L in _lens(M))
+
+
+ok_mmm = True
+for cell in NEAR:
+    for perm in ((0, 1, 2), (2, 0, 1), (1, 2, 0), (2, 1, 0)):
+        P_in = cell_to_Ar(*cell, 90, 90, 90)[:, list(perm)]
+        out = standardize_axes(P_in, laue="mmm")
+        ok_mmm &= bool(np.allclose(_lens(out), sorted(cell))) and np.linalg.det(out) > 0
+check("mmm: a <= b <= c, and the incoming column order cannot change it", ok_mmm)
+
+orders = {_order_of(standardize_axes(cell_to_Ar(*c, 90, 90, 90)), c) for c in NEAR}
+print(f" no class, 100/103/106 vs 100/102.8/106 -> axis orders {sorted(orders)}")
+check("no class: two pairs inside the tolerance -> both take the same (long, long, short) fallback",
+      orders == {(1, 2, 0)}, f"{orders}")
+
+unamb = all(np.allclose(_lens(standardize_axes(cell_to_Ar(*c, 90, 90, 90))), c)
+            for c in ((58.0, 58.0, 130.0), (79.02, 79.02, 37.98), (100.0, 103.0, 150.0)))
+check("no class: exactly one pair inside the tolerance still gets the unique-axis rule", unamb)
+
+M_OBL = cell_to_Ar(50.0, 30.0, 32.0, 90, 100.0, 90)
+idem = all(np.array_equal(standardize_axes(standardize_axes(M_OBL, laue=q), laue=q),
+                          standardize_axes(M_OBL, laue=q)) for q in ("mmm", "4/mmm", "6/mmm"))
+idem &= np.array_equal(standardize_axes(standardize_axes(M_OBL)), standardize_axes(M_OBL))
+check("every branch is idempotent", idem)
+
+free = all(np.array_equal(standardize_axes(M_OBL, laue=q), M_OBL)
+           for q in ("-1", "2/m_uab", "2/m_uac", "m-3", "m-3m", "-3_R", "-3m_R"))
+check("triclinic / monoclinic / rhombohedral / cubic are left exactly as handed in", free)
+
+
 print("\nHKLGrid built from the reference cell covers every predict_spots reflection of a canonicalised frame")
 rng = np.random.default_rng(1810)
 for name, (a, b, c) in TETRAGONAL.items():

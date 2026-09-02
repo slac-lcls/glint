@@ -207,7 +207,7 @@ def test_explicit_ops_are_used_verbatim():
 
 
 # --------------------------------------------------------- WHEN the tetragonal setting is applied
-def test_lock_standardizes_the_setting_for_tetragonal_classes_only():
+def test_lock_standardizes_the_setting_under_the_driver_class():
     # a tetragonal cell handed over with the 4-fold axis in column a (what Buerger reduction can do)
     tet_perm = cell_to_Ar(25.0, 40.0, 40.0, 90, 90, 90)
     for laue in ("4/mmm", "4/m"):
@@ -217,9 +217,19 @@ def test_lock_standardizes_the_setting_for_tetragonal_classes_only():
         assert d.n_theoretical == theoretical_unique(d.Mc, DMIN, laue_ops(laue))
         d._lock(tet_perm, standardize=False)                     # a known cell is taken as given
         assert np.array_equal(d.Mc, tet_perm)
-    # an orthorhombic cell whose length-outlier is NOT last: mmm must leave it exactly alone
+    # orthorhombic: mmm orders it a <= b <= c -- the three axes are inequivalent, so the setting has
+    # to be a total order, and a length order is the only one available without a reference (#181).
     ortho_perm = cell_to_Ar(50.0, 30.0, 32.0, 90, 90, 90)
-    for laue in ("mmm", "2/m", "-1", "6/mmm", "m-3m"):
+    d = _driver(ORTHO, laue="mmm")
+    d._lock(ortho_perm, standardize=True)
+    assert np.allclose(np.linalg.norm(d.Mc, axis=0), (30.0, 32.0, 50.0)), np.linalg.norm(d.Mc, axis=0)
+    assert np.linalg.det(d.Mc) > 0, "the permutation must keep a right-handed basis"
+    # 6/mmm takes the unique-axis rule (its outlier is c); the classes with no length rule at all --
+    # triclinic, monoclinic, rhombohedral, cubic -- are left exactly as handed in.
+    d = _driver(ORTHO, laue="6/mmm")
+    d._lock(ortho_perm, standardize=True)
+    assert np.allclose(np.linalg.norm(d.Mc, axis=0), (30.0, 32.0, 50.0)), np.linalg.norm(d.Mc, axis=0)
+    for laue in ("2/m", "-1", "m-3m", "-3m_R"):
         d = _driver(ORTHO, laue=laue)
         d._lock(ortho_perm, standardize=True)
         assert np.array_equal(d.Mc, ortho_perm), (laue, np.linalg.norm(d.Mc, axis=0))
@@ -251,11 +261,12 @@ def _fill_lattice_frames(drv, Mc_new, rng, k=5, n=30):
     return list(range(k))
 
 
-def test_relock_extras_inherit_the_ops_and_skip_tetragonal_standardization_for_mmm():
+def test_relock_extras_inherit_the_ops_and_standardize_under_the_driver_class():
     new_cell = cell_to_Ar(50.0, 30.0, 32.0, 90, 90, 90)          # orthorhombic, length-outlier FIRST
     calls = []
-    real = sd._conventional_tetragonal
-    sd._conventional_tetragonal = lambda M: (calls.append(np.asarray(M, float)), real(M))[1]
+    real = sd.standardize_axes
+    sd.standardize_axes = lambda M, **kw: (calls.append((np.asarray(M, float), kw.get("laue"))),
+                                           real(M, **kw))[1]
     try:
         drv = _relock_driver(TET, new_cell, laue="mmm")
         drv._watchdog(_fill_lattice_frames(drv, new_cell, np.random.default_rng(5)))
@@ -265,17 +276,18 @@ def test_relock_extras_inherit_the_ops_and_skip_tetragonal_standardization_for_m
         assert _same_ops(e["acc"].ops, laue_ops("mmm")), "relock extra accumulator not on the driver's ops"
         assert e["nth"] == theoretical_unique(e["Mc"], DMIN, laue_ops("mmm"))
         assert e["nth"] != theoretical_unique(e["Mc"], DMIN, laue_ops_4mmm()), "test cell not discriminating"
-        assert not calls, "mmm driver ran _conventional_tetragonal on the relocked cell"
+        assert calls and all(c[1] == "mmm" for c in calls), (
+            "the relocked cell must be standardized under the driver's own class, not 4/mmm")
         st = drv.stats()
         assert st["n_cells"] == 2 and st["extra_cells"][0]["unique"] == 0 and st["laue"] == "mmm"
         # and the default driver on the same relock DOES standardize (unchanged 4/mmm behaviour)
         drv4 = _relock_driver(TET, new_cell)
         drv4._watchdog(_fill_lattice_frames(drv4, new_cell, np.random.default_rng(6)))
-        assert drv4.n_relock == 1 and len(calls) >= 1, (drv4.n_relock, len(calls))
+        assert drv4.n_relock == 1 and any(c[1] == "4/mmm" for c in calls), (drv4.n_relock, calls)
         assert _same_ops(drv4.extra[0]["acc"].ops, laue_ops_4mmm())
         assert drv4.extra[0]["nth"] == theoretical_unique(drv4.extra[0]["Mc"], DMIN, laue_ops_4mmm())
     finally:
-        sd._conventional_tetragonal = real
+        sd.standardize_axes = real
 
 
 # ---------------------------------------------------------------- glint#186 review follow-ups
@@ -430,8 +442,8 @@ if __name__ == "__main__":
              test_stream_symmetry_derives_the_class_when_laue_is_unset,
              test_explicit_laue_wins_over_stream_symmetry_with_a_warning,
              test_explicit_ops_are_used_verbatim,
-             test_lock_standardizes_the_setting_for_tetragonal_classes_only,
-             test_relock_extras_inherit_the_ops_and_skip_tetragonal_standardization_for_mmm,
+             test_lock_standardizes_the_setting_under_the_driver_class,
+             test_relock_extras_inherit_the_ops_and_standardize_under_the_driver_class,
              test_a_lower_class_on_the_same_lattice_is_not_a_contradiction,
              test_explicit_ops_skip_header_derivation_entirely,
              test_the_laue_label_does_not_permute_axes_when_ops_are_explicit,

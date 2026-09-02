@@ -663,6 +663,17 @@ ARITHMETIC_PERTURBATIONS = [
     ({"floor_mean_sigmas": 5.0},                      "right-skewed"),
     # the threshold ORDERING, percentage moved together for the same reason as the partition case
     ({"floor_above_of80": 50, "floor_above_pct": 62}, "lower bar cannot pass fewer"),
+    # INTEGRALITY of the frame counts. Without these the int() coercions in the partition and the
+    # two percentage loops truncated a fractional edit into a pass -- sf_strict_of120 = 79.9 left
+    # every guard green (#184 review, suppressed comment), the same fail-open the
+    # subset_draws_per_n = 400.9 case pins one block up. One per denominator family.
+    ({"sf_strict_of120": 79.9},                       "must be integral"),
+    ({"floor_above_of80": 78.5},                      "must be integral"),
+    # ...and the oracle ceiling's real bounds. sel_miss <= ceiling <= solved + sel_miss: the upper
+    # bound is NOT an equality (HEAD prints 86 against 79+8=87) so both ends are exercised from
+    # outside, not by nudging toward the measured value.
+    ({"sf_ceiling_of120": 95},                        "solved + selection-miss"),
+    ({"sf_ceiling_of120": 5},                         "solved + selection-miss"),
 ]
 
 
@@ -748,6 +759,45 @@ BLIND_PAIR_CASES = [
     ("lone 76%, offline", "the offline hybrid reaches 76% (91/120) at the strict bar", False),
     ("lone 71%, ceiling", "Blind indexing saturates at ~71% gated on sparse cxidb", False),
 ]
+
+
+def test_superseded_files_are_exempt_from_required_rules_only():
+    """A self-declared SUPERSEDED deliverable owes no ADDED text, but still may not QUOTE a stale one.
+
+    `glint_SI.tex` and `glint.tex` both carry a banner saying their numbers are not maintained and
+    not to be quoted, and glint#159 deliberately keeps them on the target list so a stale value
+    cannot sit there unnoticed. A REQUIRED rule inverts that: the only ways to satisfy one are to
+    edit a file the banner freezes, or to leave the guard permanently red (#184 review, where
+    `negatives-69-is-the-lattice-bar` fired on glint_SI.tex's `69% (best)` cell). So REQUIRED is
+    scoped off by the banner -- and this test pins that the exemption is that narrow, because an
+    exemption that also silenced RETIRED/OVERCLAIM would defeat glint#159.
+    """
+    banner = "% SUPERSEDED (2026-08-27): kept as a historical reference only.\n"
+    trigger = r"scorer: coverage-gated defect & \textbf{69\% (best)} & --- \\" + "\n"
+    stale = (r"When the real crystal frames are evaluated against the reference cell, 97\% lie "
+             r"above the $+3\sigma$ null level, with a median separation of 7.5 null standard "
+             r"deviations." + "\n")
+
+    # 1. the trigger alone, in a LIVE file -> REQUIRED fires
+    live = _cn.check_required(Path("live.tex"), trigger)
+    assert any("negatives-69-is-the-lattice-bar" in f for f in live), (
+        "the REQUIRED rule no longer fires on an unqualified '69% (best)' in a live file; "
+        f"got: {live}")
+
+    # 2. the same trigger behind the banner -> REQUIRED is silent
+    frozen = _cn.check_required(Path("frozen.tex"), banner + trigger)
+    assert not frozen, f"a SUPERSEDED file is still being asked to ADD text: {frozen}"
+
+    # 3. ...but a stale QUOTE in that same frozen file still fails the scan
+    still = _cn.scan(Path("frozen.tex"), banner + stale)
+    assert any("floor-97-3sigma" in f for f in still), (
+        "the SUPERSEDED exemption leaked past REQUIRED and silenced the OVERCLAIM scan, which is "
+        f"exactly what glint#159 put these files on the target list to catch; got: {still}")
+
+    # 4. the banner must be a banner: the word deep in running text exempts nothing
+    deep = _cn.check_required(Path("live.tex"), ("x" * 900) + "\nSUPERSEDED\n" + trigger)
+    assert any("negatives-69-is-the-lattice-bar" in f for f in deep), (
+        "'SUPERSEDED' outside the file's opening banner is exempting REQUIRED rules")
 
 
 def test_oracle_ceiling_is_not_asserted_as_a_sum():
@@ -1291,6 +1341,7 @@ if __name__ == "__main__":
              test_required_merge_rows_fire_on_an_edited_cell,
              test_required_whole_file_form_catches_a_value_leaving_the_file,
              test_required_stays_silent_without_its_trigger,
+             test_superseded_files_are_exempt_from_required_rules_only,
              test_oracle_ceiling_is_not_asserted_as_a_sum,
              test_blind_pair_rules_fire_and_stay_silent,
              test_s16_required_passes_on_the_measured_values,

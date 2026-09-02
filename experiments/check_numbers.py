@@ -1782,9 +1782,25 @@ REQUIRED = [
 ]
 
 
+# A banner in the first few lines of a deliverable declaring it SUPERSEDED. Matched at a line
+# start, optionally behind a comment marker, and only near the top of the file so a mention of the
+# word in running text cannot exempt anything.
+_SUPERSEDED_BANNER = re.compile(r"^[ \t]*(?:%+|#+|//|<!--)?[ \t]*SUPERSEDED\b", re.M | re.I)
+
+
 def check_required(path: Path, text: str) -> list[str]:
     out = []
     norm = _normalize(text)
+    # A file that declares itself SUPERSEDED is exempt from REQUIRED rules -- and ONLY from those.
+    # RETIRED / OVERCLAIM / AMBIGUITY still apply to it, which is the whole point of keeping a
+    # frozen deliverable under the guard (glint#159 put glint_SI.tex back on the target list so a
+    # stale value could not be quoted unnoticed). But a REQUIRED rule demands text be ADDED, and
+    # the only ways to satisfy one on a frozen file are to edit a file whose own banner says
+    # "numbers here are not maintained ... do not quote from it", or to leave the run permanently
+    # red. Neither is the guard doing its job (#184 review). Scoped by the banner rather than by a
+    # path list so the exemption follows the declaration instead of duplicating it.
+    if _SUPERSEDED_BANNER.search(text[:600]):
+        return out
     for req in REQUIRED:
         for m in req._trx.finditer(norm):
             seg = (norm if not req.window
@@ -2427,19 +2443,44 @@ def check_arithmetic() -> list[str]:
         if int(F[_lat]) < int(F[_strict]):
             bad.append(f"  FACTS: {_who} correct-lattice {F[_lat]}/120 is BELOW its strict "
                        f"{F[_strict]}/120 -- the looser bar cannot pass fewer frames")
+    # These keys are COUNTS OF FRAMES, so a non-integral value is malformed whichever relation
+    # reads it. Rejecting it once, here, is what keeps every identity below honest: the partition
+    # and both percentage loops coerce with int(), so `sf_strict_of120 = 79.9` truncated to 79 and
+    # EVERY guard stayed green -- fail-open on exactly the malformed value they exist to reject
+    # (#184 review, suppressed comment). Same lesson the subset_draws_per_n = 400.9 note above
+    # records; banked as a type check rather than patched into each reader, so a relation added
+    # later cannot reintroduce it.
+    for _k in ("sf_lattice_of120", "sf_strict_of120", "sf_selmiss_of120", "sf_genmiss_of120",
+               "sf_ceiling_of120", "sf_negatives_lattice_of120", "floor_real_frames",
+               "floor_null_pool", "floor_above_of80", "floor_above_3sd_of80"):
+        if float(F[_k]) != int(F[_k]):
+            bad.append(f"  FACTS: {_k} = {F[_k]} is a frame COUNT and must be integral -- a "
+                       f"fractional value is silently truncated by the int() coercions in the "
+                       f"partition and percentage checks, leaving every guard green")
     # The oracle split PARTITIONS the 120: oracle_blind.py's loop is an if/elif/else over solved,
-    # selection-miss, generation-miss, so the three must total the set exactly. EXACT, not close():
-    # a 3% relative band would accept any total from 116 to 124 against a set of 120.
-    if (int(F["sf_strict_of120"]) + int(F["sf_selmiss_of120"])
-            + int(F["sf_genmiss_of120"]) != 120):
+    # selection-miss, generation-miss, so the three must total the set exactly. EXACT, and on RAW
+    # values -- close()'s 3% band would accept any total from 116 to 124, and int() would truncate
+    # a fractional count into a pass (the integrality guard above is the other half of this).
+    if (F["sf_strict_of120"] + F["sf_selmiss_of120"] + F["sf_genmiss_of120"]) != 120:
         bad.append(f"  FACTS: the oracle split must partition the 120 frames, but "
                    f'{F["sf_strict_of120"]} solved + {F["sf_selmiss_of120"]} selection-miss + '
                    f'{F["sf_genmiss_of120"]} generation-miss = '
-                   f'{int(F["sf_strict_of120"]) + int(F["sf_selmiss_of120"]) + int(F["sf_genmiss_of120"])}')
-    # No lower bound on sf_ceiling_of120 is asserted here. oracle_blind.py computes reachability
-    # from all_annealed() and solved-ness from index_blind_fast() independently, so the measured
-    # reachable set can legitimately sit below the solved set. The number is pinned by REQUIRED
-    # rules against the deliverables instead.
+                   f'{F["sf_strict_of120"] + F["sf_selmiss_of120"] + F["sf_genmiss_of120"]}')
+    # sf_ceiling_of120 is NOT solved + selection-miss (oracle_blind.py counts reachability from
+    # all_annealed() and solved-ness from index_blind_fast() independently, so HEAD prints 86
+    # against 79+8=87 while the June-29 archive agrees at 77+9=86). But it is not unconstrained
+    # either, and asserting NOTHING gave up a real invariant: reading the if/elif/else, a frame is
+    # a selection-miss only when it IS reachable, so the reachable set is (solved AND reachable)
+    # plus every selection-miss. Hence sel_miss <= ceiling <= solved + sel_miss, with equality on
+    # the right iff every solved frame is also reachable. Both bounds hold on both measured code
+    # states and would still reject an impossible ceiling (95, or one below sel_miss).
+    if not (F["sf_selmiss_of120"] <= F["sf_ceiling_of120"]
+            <= F["sf_strict_of120"] + F["sf_selmiss_of120"]):
+        bad.append(f'  FACTS: oracle ceiling {F["sf_ceiling_of120"]}/120 is outside '
+                   f'{F["sf_selmiss_of120"]} <= ceiling <= '
+                   f'{F["sf_strict_of120"] + F["sf_selmiss_of120"]} (solved + selection-miss): '
+                   f"every selection-miss is reachable by construction, and the reachable set "
+                   f"cannot exceed the solved-and-reachable frames plus the selection-misses")
     # --- the extreme-value floor. DENOMINATOR IS floor_real_frames (80), NOT 120. -----------------
     for _pct_key, _cnt_key in (("floor_above_pct", "floor_above_of80"),
                                ("floor_above_3sd_pct", "floor_above_3sd_of80")):

@@ -268,13 +268,27 @@ class RunningConsensus:
                           & np.all(np.abs(l - lv) <= self.rtol * lv, axis=1)
                           & np.all(np.abs(c - cv) <= self.ctol, axis=1))[0]
 
+    @staticmethod
+    def _member_arrays(members):
+        """Stack a member list ((M, lens, cos, det) tuples) into the three fingerprint arrays
+        ``_covered`` tests against. Materialized ONCE per merge and reused for every candidate
+        representative: an h-way merge scores h+1 candidates against the same pool, and rebuilding
+        these inside the loop repeated O(m) allocations on the streaming path for no gain (glint#187
+        review)."""
+        return (np.array([m[1] for m in members]),
+                np.array([m[2] for m in members]),
+                np.array([m[3] for m in members]))
+
     def _covered(self, l, c, d, members):
-        """How many of ``members`` ((M, lens, cos, det) tuples) a representative with fingerprint
-        (l, c, d) covers: ``_match`` with the representative as the reference, vectorised over the
-        members. This is the count ``verdict()`` reports as support after a merge, so it must agree
-        with ``_match`` member for member (pinned by test_consensus_voter_set.py)."""
-        lm = np.array([m[1] for m in members]); cm = np.array([m[2] for m in members])
-        dm = np.array([m[3] for m in members])
+        """How many of ``members`` a representative with fingerprint (l, c, d) covers: ``_match``
+        with the representative as the reference, vectorised over the members. This is the count
+        ``verdict()`` reports as support after a merge, so it must agree with ``_match`` member for
+        member (pinned by test_consensus_voter_set.py).
+
+        ``members`` may be the member list itself or an already-materialized (lm, cm, dm) triple from
+        ``_member_arrays``; the two are exactly equivalent, and the merge loop passes the triple."""
+        lm, cm, dm = (members if isinstance(members, tuple) and len(members) == 3
+                      else self._member_arrays(members))
         return int(np.count_nonzero((np.abs(dm - d) <= self.vtol * d)
                                     & np.all(np.abs(lm - l) <= self.rtol * l, axis=1)
                                     & np.all(np.abs(cm - c) <= self.ctol, axis=1)))
@@ -331,8 +345,9 @@ class RunningConsensus:
         drop = {id(g) for g in others}                    # by IDENTITY: `==` is ambiguous on arrays
         self.groups = [g for g in self.groups if id(g) not in drop]
         best, best_n = None, -1
+        pool = self._member_arrays(keep[5])               # built once, scored against h+1 candidates
         for cand in [keep[:4], [M, l, c, d]] + [g[:4] for g in others]:
-            n = self._covered(cand[1], cand[2], cand[3], keep[5])
+            n = self._covered(cand[1], cand[2], cand[3], pool)
             if n > best_n:
                 best, best_n = cand, n
         keep[0], keep[1], keep[2], keep[3] = best

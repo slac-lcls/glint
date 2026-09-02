@@ -29,7 +29,11 @@ PROBES
      members throughout;
   4. the split-vote repair the merge exists for (test_running_consensus.py's A/B halves + witness) still
      recombines both halves under the witness: support 19, unchanged;
-  5. StreamDriver.stats() reports `consensus_members` beside `consensus_support` while blind.
+  5. StreamDriver.stats() reports `consensus_members` beside `consensus_support` while blind;
+  6. a SUCCESSFUL lock persists the folded count on BOTH lock paths -- the sequential one driven
+     through `_push_blind` (frames with real peaks, blind indexer stubbed to emit the ladder) and the
+     batched one through `warmup_batch` -- so removing either capture fails the suite. Probes 1-5
+     read state the driver had already been handed; this one makes the driver do the bookkeeping.
 
 INSTRUMENT CHECK. Against the pre-fix running_consensus.py this file prints probe 1 as support 6,
 voters 3 and exits 1 (recorded in the PR that added it).

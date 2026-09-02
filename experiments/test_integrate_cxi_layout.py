@@ -181,6 +181,29 @@ with tempfile.TemporaryDirectory() as d:
           isinstance(exc4, NotImplementedError) and "glint#148" in str(exc4) and "2-D" in str(exc4),
           repr(exc4))
 
+    # --- the override wins on SINGLETONS too (Copilot review of #183) --------------------------
+    # A (1, ss, fs) file auto-reads as one assembled frame (legacy per-file layout). An EXPLICIT
+    # event_axis=False under a multi-panel geometry declares a 1-slab panel stack, which neither
+    # integrator can serve without a slab mapping -- it used to be silently read as event 0 on the
+    # --images route (and slab 0 on the --peaks loader).
+    single = write(os.path.join(d, "singleton_4panel.h5"), panel_stack[:1])
+    n_s, _ = integrate_cxi(res(single, 0), g4path, dmin=5.0, tol=0.004)
+    check("a (1, ss, fs) singleton under a 4-panel geometry auto-reads as one assembled frame (legacy)",
+          n_s == 1, n_s)
+    exc_s = raises(integrate_cxi, res(single, 0), g4path, dmin=5.0, tol=0.004, event_axis=False)
+    check("...but event_axis=False on it is honoured: refused as a 1-slab panel stack",
+          isinstance(exc_s, NotImplementedError) and "glint#148" in str(exc_s), repr(exc_s))
+    n_s2, _ = integrate_cxi(res(single, 0), g4path, dmin=5.0, tol=0.004, event_axis=True)
+    check("...and event_axis=True integrates it as event 0", n_s2 == 1, n_s2)
+    from glint.predict import _load_image
+    exc_l = raises(_load_image, single, DATA, event=0, n_panels=NP, event_axis=False)
+    check("_load_image: event_axis=False on a singleton under a multi-panel geometry is refused too",
+          isinstance(exc_l, NotImplementedError) and "glint#148" in str(exc_l), repr(exc_l))
+    check("_load_image: auto on that singleton still returns the frame (legacy per-file layout)",
+          np.array_equal(_load_image(single, DATA, event=0, n_panels=NP), panel_stack[0]))
+    check("_load_image: event_axis=False on a singleton under a ONE-panel geometry still returns slab 0",
+          np.array_equal(_load_image(single, DATA, event=0, n_panels=1, event_axis=False), panel_stack[0]))
+
     # --- legacy layouts keep working ----------------------------------------------------------
     one = write(os.path.join(d, "plain2d.h5"), stack[2])
     r1 = res(one, 0)

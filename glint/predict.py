@@ -786,6 +786,19 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None, panel_sla
                     f"a {n_panels}-panel geometry with no slab mapping: reflections outside "
                     f"panel 0 would integrate to exactly 0 (glint#148). Declare integer dimN keys "
                     f"in the .geom (e.g. `p1/dim1 = 1`).")
+        elif event_axis is False and n_panels > 1:
+            # An EXPLICIT panel reading of a (1, ss, fs) singleton under a multi-panel geometry with
+            # no slab mapping. Auto (event_axis=None) keeps the legacy per-file behaviour below --
+            # the singleton IS the frame -- but the caller has just said it is a panel stack, and
+            # taking a[0] would integrate one slab against every panel's predictions, which is the
+            # glint#148 defect. The override wins on singletons exactly as it does on stacks
+            # (Copilot review of #183 found the --images route skipping it; this is the same hole).
+            raise NotImplementedError(
+                f"{path}:{data_path} is a (1, ss, fs) singleton read as a 1-slab PANEL stack "
+                f"(event_axis=False / --event-axis panel) under a {n_panels}-panel geometry with "
+                f"no slab mapping: every reflection outside that slab would integrate to exactly 0 "
+                f"(glint#148). Declare integer dimN keys in the .geom, or drop the override to read "
+                f"it as the single assembled frame it is treated as by default.")
         a = a[0]                                     # (1, ss, fs) -> single assembled 2D frame
     return a
 
@@ -921,7 +934,11 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
             dset = f[data_key]
             if getattr(dset, "ndim", 0) >= 3:
                 # (event, ss, fs) is the fast path; the decision below only refuses what is NOT that.
-                if dset.shape[0] > 1 and not _leading_axis_is_events(
+                # A (1, ss, fs) singleton is auto-read as one assembled frame (the legacy per-file
+                # layout), but an EXPLICIT override still wins there too: event_axis=False declares
+                # a 1-slab panel stack, which this integrator cannot serve, so it is refused rather
+                # than quietly read as event 0 (Copilot review of #183).
+                if (dset.shape[0] > 1 or event_axis is not None) and not _leading_axis_is_events(
                         f, dset, str(r.get("image")), data_key, n_panels=len(panels),
                         event_axis=event_axis):
                     raise NotImplementedError(

@@ -401,8 +401,11 @@ def laue_from_symmetry(sym):
     if lt not in _HOLOHEDRY:
         raise ValueError(f"unknown lattice_type {lt!r}; known: {', '.join(_HOLOHEDRY)}")
     ua = str(sym.get("unique_axis") or "*").strip().lower()
-    if lt == "monoclinic" and ua in ("a", "b", "c"):
-        return f"2/m_ua{ua}"
+    if lt == "monoclinic":
+        if ua in ("a", "b", "c"):
+            return f"2/m_ua{ua}"
+        if ua != "*":
+            raise ValueError(f"unknown monoclinic unique_axis {ua!r}; known: *, a, b, c")
     if lt in ("tetragonal", "trigonal", "hexagonal") and ua not in ("*", "c"):
         warnings.warn(f"lattice_type {lt} with unique_axis {ua!r}: the {_HOLOHEDRY[lt]} operator set "
                       "assumes the unique axis in c; the live merge will use c (glint#180)")

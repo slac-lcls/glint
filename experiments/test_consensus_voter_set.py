@@ -243,10 +243,16 @@ def main():
                        min_fs=0, max_fs=N - 1, min_ss=0, max_ss=N - 1)]
         LADDER = (100, 97, 97, 97, 106, 103)          # the issue's pool: folds to 6, covers 5
 
-        def _blind_driver():
+        def _blind_driver(lock_support=5):
+            # lock_support=5 so the driver CANNOT lock before the merge: the 100/97/97/97 group
+            # reaches only 4, and 5 is first reached by the merged group AFTER the witness arrives.
+            # At the old value of 3 the lock fired on the third rung, the witness was never consumed,
+            # and support == members == 3 -- so storing leader_counts()[0] instead of [1] would have
+            # passed every assertion below (Copilot review of #187).
             with _no_torch_needed():
                 return StreamDriver(None, panels, 0.1, 1.3, (N, N), dtype=np.uint16, B=8, dmin=3.0,
-                                    use_gpu=False, lock_support=3, lock_gap=2, adaptive_gap=False)
+                                    use_gpu=False, lock_support=lock_support, lock_gap=2,
+                                    adaptive_gap=False)
 
         # --- sequential path: push frames through _push_blind so the DRIVER's own verdict fires the
         # lock. Setting consensus_members by hand here would test nothing -- that is the flaw the
@@ -274,19 +280,17 @@ def main():
             if not d._blind:
                 break
             d._push_blind(spotty)
-        want_sup, want_mem = d.consensus_support, d.consensus_members
         check("sequential: _push_blind drove the driver to a lock", d._blind is False and d.Mc is not None,
               f"blind={d._blind}")
         if d.Mc is not None:
-            check("sequential: the locked driver kept the folded count",
-                  d.consensus_members is not None and d.consensus_members >= 1,
-                  f"{d.consensus_members}")
-            check("sequential: support is the covered count, and members >= support",
-                  d.consensus_support is not None and d.consensus_members >= d.consensus_support,
+            # EXACT values, not an inequality: the whole point is that the two differ after a merge,
+            # so `members >= support` would pass if the driver stored support by mistake.
+            check("sequential: the lock happened AFTER the merge (support 5, folded 6)",
+                  (d.consensus_support, d.consensus_members) == (5, 6),
                   f"support {d.consensus_support}, members {d.consensus_members}")
             st = d.stats()
-            check("sequential: stats() reports both after the lock",
-                  st.get("consensus_members") == want_mem and st.get("consensus_support") == want_sup,
+            check("sequential: stats() reports both exactly after the lock",
+                  (st.get("consensus_support"), st.get("consensus_members")) == (5, 6),
                   f"{st.get('consensus_support')}, {st.get('consensus_members')}")
 
         # --- batched path: warmup_batch over a real (B,H,W) stack. The frames carry no Bragg peaks,
@@ -312,12 +316,13 @@ def main():
         finally:
             wb_mod.warmup_consensus = real_wc
         if locked:
-            check("batched: the locked driver kept the folded count",
-                  d2.consensus_members is not None and d2.consensus_members >= d2.consensus_support,
-                  f"members {d2.consensus_members}, support {d2.consensus_support}")
-            check("batched: stats() reports the folded count after the lock",
-                  d2.stats().get("consensus_members") == d2.consensus_members,
-                  d2.stats().get("consensus_members"))
+            check("batched: the locked driver kept the folded count exactly (support 5, folded 6)",
+                  (d2.consensus_support, d2.consensus_members) == (5, 6),
+                  f"support {d2.consensus_support}, members {d2.consensus_members}")
+            st2 = d2.stats()
+            check("batched: stats() reports both exactly after the lock",
+                  (st2.get("consensus_support"), st2.get("consensus_members")) == (5, 6),
+                  f"{st2.get('consensus_support')}, {st2.get('consensus_members')}")
         else:
             check("batched: warmup_batch reached a lock", False,
                   "no lock -- the stub did not drive warmup_consensus to a verdict")

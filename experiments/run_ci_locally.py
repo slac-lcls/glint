@@ -48,6 +48,8 @@ STEPS = [
     "experiments/test_lock_probe.py",
     "experiments/test_running_consensus.py",
     "experiments/test_lock_gate_wiring.py",
+    "experiments/test_laue_ops.py",
+    "experiments/test_streamdriver_laue.py",
     "experiments/test_multilattice.py",
     "experiments/test_warmup_batch.py",
     "experiments/test_missbuf_rescue.py",

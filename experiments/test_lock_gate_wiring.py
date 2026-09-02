@@ -92,7 +92,7 @@ def test_new_options_stay_at_the_end_of_the_signature():
     onward had shifted a slot). A future tidy-up grouping them by topic would reintroduce it.
 
     The expected tail GROWS as options are appended (retry_cascade/retry_nbest from glint#75,
-    bg_mode from glint#131) -- that is the rule being obeyed, not broken. What must never happen is
+    bg_mode from glint#131, laue/ops from glint#180) -- that is the rule being obeyed, not broken. What must never happen is
     one of these moving inward, or a new option landing anywhere but after them, and pinning the
     whole tail in order still catches both. If you add an option and this fails, the fix is to add
     its name to the END here; if the name you added is not last in `params`, that is the bug this
@@ -107,7 +107,7 @@ def test_new_options_stay_at_the_end_of_the_signature():
               "lock_probe", "probe_null", "lock_min_z", "warmup_rescue", "qc_frac_threshold",
               "stream_out", "stream_geom_text", "stream_image", "stream_symmetry", "stream_peaks",
               "lock_frac", "lock_lead", "lock_pool_switch", "retry_cascade", "retry_nbest",
-              "bg_mode"]
+              "bg_mode", "laue", "ops"]
     assert params == expect, (params, expect)
 
 

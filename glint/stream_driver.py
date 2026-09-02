@@ -298,13 +298,62 @@ class HKLGrid:
         return out
 
 
-# --------------------------------------------------------------- asymmetric unit (4/mmm) --------
-def laue_ops_4mmm():
-    """16 Laue 4/mmm operators (4-fold c, 2-fold a, inversion). Same generators as merge_stats.py."""
-    gens = [np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]]),
-            np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]]),
-            -np.eye(3, dtype=int)]
-    G = [np.eye(3, dtype=int)]
+# ------------------------------------------------------------ asymmetric unit (Laue classes) -----
+# Operators act on Miller indices as integer 3x3 matrices, hkl' = op @ hkl (canon() applies them as
+# `hkl @ op.T`). A point-group operation with rotation part W (on fractional coordinates) acts on
+# hkl as W^-T; since the set {W^-T} over a group is the set of transposes of that group, generating
+# from the TRANSPOSED rotation parts gives the right hkl group. Settings are the conventional ones
+# -- unique axis c for the tetragonal/trigonal/hexagonal classes, b for monoclinic (2/m_ua* name
+# the other two), hexagonal axes for the trigonal classes unless the name ends in _R.
+_I3 = np.eye(3, dtype=int)
+_INV = -_I3
+_R4_C = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]])           # 4-fold about c
+_R2_A = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])          # 2-fold about a
+_R2_B = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, -1]])          # 2-fold about b
+_R2_C = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]])          # 2-fold about c
+_R3_C_HEX = np.array([[0, 1, 0], [-1, -1, 0], [0, 0, 1]])      # 3-fold about c, hexagonal axes
+_R6_C_HEX = np.array([[1, 1, 0], [-1, 0, 0], [0, 0, 1]])       # 6-fold about c, hexagonal axes
+_R2_A_HEX = np.array([[1, 0, 0], [-1, -1, 0], [0, 0, -1]])     # 2-fold about a, hexagonal axes (-3m1)
+_R2_AB_HEX = np.array([[0, -1, 0], [-1, 0, 0], [0, 0, -1]])    # 2-fold about [1-10], hexagonal (-31m)
+_R3_111 = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])          # 3-fold about [111] (cubic / rhombohedral)
+_R2_AB_R = _R2_AB_HEX                                          # [1-10] 2-fold reads the same in rhombohedral axes
+
+# Rotation generators per Laue class; the inversion is appended to every entry by laue_ops(). The
+# 4/mmm entry is (4-fold c, 2-fold a) in that order so laue_ops_4mmm() returns the list it always
+# has, element for element (pinned by experiments/test_laue_ops.py against a frozen copy).
+_LAUE_GENERATORS = {
+    "-1": (),
+    "2/m_uaa": (_R2_A,), "2/m_uab": (_R2_B,), "2/m_uac": (_R2_C,),
+    "mmm": (_R2_A, _R2_B),
+    "4/m": (_R4_C,), "4/mmm": (_R4_C, _R2_A),
+    "-3": (_R3_C_HEX,), "-3m1": (_R3_C_HEX, _R2_A_HEX), "-31m": (_R3_C_HEX, _R2_AB_HEX),
+    "-3_R": (_R3_111,), "-3m_R": (_R3_111, _R2_AB_R),
+    "6/m": (_R6_C_HEX,), "6/mmm": (_R6_C_HEX, _R2_A_HEX),
+    "m-3": (_R3_111, _R2_C), "m-3m": (_R3_111, _R4_C),
+}
+# Short names -> the setting they mean. "-3m" is the -3m1 setting (2-folds along a, b, a+b: R-3m,
+# P-3m1, P321), which is the common one; a P312-type crystal must ask for "-31m" explicitly.
+_LAUE_ALIASES = {
+    "2/m": "2/m_uab", "-3m": "-3m1",
+    "-3_H": "-3", "-3m1_H": "-3m1", "-31m_H": "-31m", "-3m_H": "-3m1",
+    "m3": "m-3", "m3m": "m-3m",
+}
+# The eleven Laue classes by their usual names -- what a CLI `choices=` should offer.
+LAUE_CLASSES = ("-1", "2/m", "mmm", "4/m", "4/mmm", "-3", "-3m", "6/m", "6/mmm", "m-3", "m-3m")
+# Classes whose operators need the 4-fold axis in c, i.e. the ones _conventional_tetragonal serves.
+TETRAGONAL_LAUE = ("4/m", "4/mmm")
+# Lattice type (CrystFEL stream vocabulary, plus "trigonal") -> holohedry, the Laue class ASSUMED when
+# only the lattice is known. A crystal of lower symmetry on the same lattice (4/m on tetragonal, -3 or
+# -3m on hexagonal P, 6/m, m-3) has to name its class through `laue=` -- the lattice cannot tell.
+_HOLOHEDRY = {
+    "triclinic": "-1", "monoclinic": "2/m", "orthorhombic": "mmm", "tetragonal": "4/mmm",
+    "trigonal": "-3m", "rhombohedral": "-3m_R", "hexagonal": "6/mmm", "cubic": "m-3m",
+}
+
+
+def _close_group(gens):
+    """Close a generator list under multiplication (breadth-first, first-seen order)."""
+    G = [_I3.copy()]
     ch = True
     while ch:
         ch = False
@@ -314,6 +363,50 @@ def laue_ops_4mmm():
                 if not any(np.array_equal(h, x) for x in G):
                     G.append(h); ch = True
     return G
+
+
+def laue_name(name):
+    """Canonical registry key for a Laue-class name (aliases resolved); ValueError if unknown."""
+    key = _LAUE_ALIASES.get(str(name).strip(), str(name).strip())
+    if key not in _LAUE_GENERATORS:
+        raise ValueError(f"unknown Laue class {name!r}; known: {', '.join(LAUE_CLASSES)} "
+                         f"(settings: {', '.join(sorted(set(_LAUE_GENERATORS) - set(LAUE_CLASSES)))})")
+    return key
+
+
+def laue_ops(name):
+    """Operator list (integer 3x3, inversion included) for a Laue class, for MergeAccumulator /
+    theoretical_unique / _asu_key. Orders: -1 2, 2/m 4, mmm 8, 4/m 8, 4/mmm 16, -3 6, -3m 12,
+    6/m 12, 6/mmm 24, m-3 24, m-3m 48."""
+    return _close_group(list(_LAUE_GENERATORS[laue_name(name)]) + [_INV])
+
+
+def laue_ops_4mmm():
+    """16 Laue 4/mmm operators (4-fold c, 2-fold a, inversion). Same generators as merge_stats.py."""
+    return laue_ops("4/mmm")
+
+
+def laue_from_symmetry(sym):
+    """Laue class implied by a CrystFEL-style symmetry record {lattice_type, centering, unique_axis}
+    -- the one StreamDriver(stream_symmetry=...) stamps on every chunk -- or None when it names no
+    lattice_type. Assumes the HOLOHEDRY (see _HOLOHEDRY): the header carries the lattice, not the
+    point group, so this is the most the record can support; a lower class is `laue=`'s job.
+    Monoclinic honours unique_axis (a/b/c; '*' or absent means b). The c-unique classes warn when the
+    record says the unique axis is elsewhere, because the operator set assumes c and cannot follow."""
+    sym = dict(sym or {})
+    lt = sym.get("lattice_type")
+    if lt is None:
+        return None
+    lt = str(lt).strip().lower()
+    if lt not in _HOLOHEDRY:
+        raise ValueError(f"unknown lattice_type {lt!r}; known: {', '.join(_HOLOHEDRY)}")
+    ua = str(sym.get("unique_axis") or "*").strip().lower()
+    if lt == "monoclinic" and ua in ("a", "b", "c"):
+        return f"2/m_ua{ua}"
+    if lt in ("tetragonal", "trigonal", "hexagonal") and ua not in ("*", "c"):
+        warnings.warn(f"lattice_type {lt} with unique_axis {ua!r}: the {_HOLOHEDRY[lt]} operator set "
+                      "assumes the unique axis in c; the live merge will use c (glint#180)")
+    return _HOLOHEDRY[lt]
 
 
 def canon(hkl, ops):
@@ -492,6 +585,14 @@ class StreamDriver:
     peak-finds it ON DEVICE, and queues the reciprocal vectors. When B frames are queued it indexes
     them as one batch and integrates each against its still-resident pixels, then folds the
     intensities into the running merge. Call flush() at the end of a run, then stats().
+
+    Merge symmetry: `laue` names the Laue class the running merge (completeness, CC*, Rsplit and
+    the theoretical-unique denominator) is accumulated under -- one of LAUE_CLASSES or a setting such
+    as "2/m_uac" / "-31m" (see laue_ops) -- or `ops` supplies the operator list outright. Left unset
+    it follows `stream_symmetry`'s lattice_type (its holohedry; laue_from_symmetry), and without
+    that it is "4/mmm", the historical default. Blind locks are put in the tetragonal conventional
+    setting (4-fold axis in c) only for the tetragonal classes; other classes are merged in the
+    setting the cell arrives in, so a known cell must be given in the setting its class assumes.
     """
 
     def __init__(self, Mc, panels, clen_m, wavelength_A, shape, dtype=np.uint16, mask=None,
@@ -509,7 +610,8 @@ class StreamDriver:
                  # by topic: this constructor is not keyword-only, so adding a parameter anywhere
                  # but the end silently rebinds every positional argument after it.
                  lock_frac=0.02, lock_lead=1.5, lock_pool_switch=72,
-                 retry_cascade=False, retry_nbest=None, bg_mode="clipmean"):
+                 retry_cascade=False, retry_nbest=None, bg_mode="clipmean",
+                 laue=None, ops=None):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -560,10 +662,29 @@ class StreamDriver:
         self._n = 0
         self._frame_no = 0
 
-        # Laue group 4/mmm (tetragonal holohedry); valid only after _conventional_tetragonal puts the
-        # 4-fold axis in c. NOT cell-independent: a non-tetragonal Mc, or a tetragonal one left in a
-        # different setting, makes stats()/completeness/CC*/Rsplit merge under the wrong point group.
-        self.ops = laue_ops_4mmm()
+        # Merge symmetry (glint#180). This used to be `laue_ops_4mmm()` unconditionally, so any
+        # non-tetragonal cell had its completeness/CC*/Rsplit merged under 4/mmm while the stream
+        # header (stream_symmetry) could say otherwise. Resolution, first match wins:
+        #   ops              an explicit operator list, used verbatim (laue is then only a label;
+        #                    None unless given, so no tetragonal standardization is applied);
+        #   laue             a Laue-class name (laue_ops); aliases/settings resolve to laue_name();
+        #   stream_symmetry  the holohedry of its lattice_type (laue_from_symmetry), so the header an
+        #                    offline merger reads and the live merge cannot disagree;
+        #   "4/mmm"          the historical default -- bit-identical to before for every caller that
+        #                    passes neither.
+        # An explicit laue that contradicts stream_symmetry WARNS rather than fails: the operator is
+        # the one who knows which of the two is wrong for this sample.
+        derived = laue_from_symmetry(stream_symmetry)                  # None without a lattice_type
+        if ops is not None:
+            self.ops = [np.asarray(o, int) for o in ops]
+            self.laue = laue_name(laue) if laue is not None else None
+        else:
+            self.laue = laue_name(laue if laue is not None else (derived or "4/mmm"))
+            self.ops = laue_ops(self.laue)
+        if laue is not None and derived is not None and laue_name(laue) != laue_name(derived):
+            warnings.warn(f"laue={laue!r} but stream_symmetry says lattice_type="
+                          f"{stream_symmetry.get('lattice_type')!r} ({laue_name(derived)}): the "
+                          f"live merge uses {laue_name(laue)}, the stream header the other (glint#180)")
         self.snr_bins = snr_bins
         # GLINT_DEVICE_MERGE=1 relocates the running scatter-add onto the GPU (deferred,
         # order-faithful, bit-identical to the host merge). Host path stays the default for A/B.
@@ -829,16 +950,26 @@ class StreamDriver:
         else:
             self._lock(np.asarray(Mc, float))
 
+    def _standardize(self, M):
+        """Cell setting for the merge operators (see _lock). The tetragonal classes need the 4-fold
+        axis in c, where laue_ops puts it, and _conventional_tetragonal arranges that by length;
+        every other class takes the cell exactly as handed in -- an orthorhombic cell has no unique
+        axis to find, and no length rule locates the unique axis of a monoclinic or hexagonal one, so
+        the setting is the caller's (known-cell) or the reducer's (blind lock) responsibility."""
+        M = np.asarray(M, float)
+        return _conventional_tetragonal(M) if self.laue in TETRAGONAL_LAUE else M
+
     def _lock(self, Mc, support=None, standardize=False):
         """Fix the cell: build the hkl grid + theoretical-unique count, and leave blind mode.
 
-        standardize: put the unique (4-fold) axis in c so laue_ops_4mmm / theoretical_unique are
-        counted in the conventional setting. Needed for a consensus-locked cell (Buerger reduction
-        orders axes by length, so the short 4-fold axis can land in a/b); a user-supplied known cell
-        is taken as authoritative and left as-is."""
+        standardize: put the cell in the setting self.ops assume (_standardize: for the tetragonal
+        classes the 4-fold axis in c, so laue_ops / theoretical_unique count in the conventional
+        setting; other classes are left as received). Needed for a consensus-locked cell (Buerger
+        reduction orders axes by length, so the short 4-fold axis can land in a/b); a user-supplied
+        known cell is taken as authoritative and left as-is."""
         Mc = np.asarray(Mc, float)
         if standardize:
-            Mc = _conventional_tetragonal(Mc)
+            Mc = self._standardize(Mc)
         if self._blind:
             self.locked_after = self.n_pushed; self.consensus_support = support
         self.Mc = Mc
@@ -1438,7 +1569,7 @@ class StreamDriver:
         Mn = self._watch.verdict()[0]
         if Mn is None:
             return
-        Mn = _conventional_tetragonal(np.asarray(Mn, float))
+        Mn = self._standardize(Mn)
         if self._alias_gate is not None:
             # Deterministic relock confirmation, scored PER FRAME and voted -- the missed frames are at
             # different orientations, and coverage/occupancy are only meaningful within one orientation.
@@ -1467,7 +1598,7 @@ class StreamDriver:
             if Mg is None:
                 self.n_gate_refused += 1
                 return
-            Mn = _conventional_tetragonal(np.asarray(Mg, float))
+            Mn = self._standardize(Mg)
         if any(same_lattice(Mn, Mc) for Mc in self._all_cells()):
             return
         lock_z = None
@@ -1567,6 +1698,9 @@ class StreamDriver:
         s.update(locked=True, locked_after=self.locked_after, consensus_support=self.consensus_support,
                  pushed=self.n_pushed, indexed=self.n_indexed, integrated=self.n_integrated,
                  theoretical_unique=self.n_theoretical,
+                 # the Laue class the numbers above were merged under (None = explicit `ops`), so a
+                 # disagreement with the stream header is visible where the numbers are (glint#180)
+                 laue=self.laue,
                  # frames the ingest gate refused outright. Reported unconditionally: dropping data
                  # must never be silent, and a rising count is the signal that the cell has drifted
                  # away from the sample (or that min_inlier_frac is set too high for this run).

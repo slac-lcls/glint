@@ -124,6 +124,21 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_lock_gate_wiring.py
 
+      # The Laue-class operator registry (glint#180): group order/closure/inversion per class,
+      # metric preservation on a cell of each system, and laue_ops("4/mmm") pinned element-for-
+      # element against a frozen copy of the pre-#180 laue_ops_4mmm.
+      - name: experiments/test_laue_ops.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_laue_ops.py
+
+      # ...and that StreamDriver USES it: an orthorhombic set merged under laue="mmm" vs the default
+      # gives different ASU-key counts and the right theoretical_unique; the default path is
+      # bit-identical to a direct laue_ops_4mmm() accumulator; stream_symmetry derives the class;
+      # tetragonal standardization is applied for 4/m and 4/mmm only (lock and watchdog paths).
+      - name: experiments/test_streamdriver_laue.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_streamdriver_laue.py
+
       # Script-contract fixes: each of these swallowed its own assertion failures and exited 0,
       # so none could have failed a CI step before now. Exit codes verified by deliberately
       # breaking an assertion in each. All five run on numpy+scipy alone -- numba, torch and

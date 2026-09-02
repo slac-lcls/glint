@@ -634,6 +634,34 @@ ARITHMETIC_PERTURBATIONS = [
     ({"roibin_lo_cmphi": 50},                         "denoising result has inverted"),
     ({"roibin_sigma_q1": 0.99},                       "quartiles do not bracket"),
     ({"roibin_sigma_q3": 0.70},                       "quartiles do not bracket"),
+    # THE SINGLE-FRAME FRONT END and the EXTREME-VALUE FLOOR, added 2026-09-01 with the two FACTS
+    # blocks themselves, one perturbation per branch. Both blocks exist because their numbers
+    # reached the submission unguarded: tab:negatives' "69% (best)" reconciled with no other rate
+    # in the paper (triage 153/268), and "97% lie above the +3sigma null level" reported the
+    # above-FLOOR count against the above-3sigma threshold (triage 216).
+    ({"sf_strict_rate_pct": 67},                      "sf_strict_rate_pct"),
+    ({"sf_lattice_rate_pct": 70},                     "sf_lattice_rate_pct"),
+    ({"sf_selmiss_rate_pct": 9},                      "sf_selmiss_rate_pct"),
+    ({"sf_genmiss_rate_pct": 25},                     "sf_genmiss_rate_pct"),
+    ({"sf_negatives_lattice_pct": 72},                "sf_negatives_lattice_pct"),
+    ({"sf_lattice_of120": 70, "sf_lattice_rate_pct": 58},  "looser bar cannot pass fewer"),
+    # the partition, with its percentage moved TOGETHER so the pct tie above cannot claim the
+    # catch -- otherwise this case proves the wrong guard (which is how the two were conflated
+    # when they were mutation-checked by hand).
+    ({"sf_genmiss_of120": 30, "sf_genmiss_rate_pct": 25},  "partition the 120 frames"),
+    ({"sf_ceiling_of120": 70},                        "reachable by"),
+    # ...and NOT an identity: 79 + 8 = 87 against a printed ceiling of 86 at HEAD, so a
+    # solved+selmiss check here would fail on the shipped measurement. Pinned as a NEGATIVE below
+    # in test_oracle_ceiling_is_not_asserted_as_a_sum.
+    ({"floor_above_pct": 97},                         "floor_above_pct"),
+    ({"floor_above_3sd_pct": 80},                     "floor_above_3sd_pct"),
+    ({"floor_at_K": 60.0},                            "floor_at_K = floor_fit_a"),
+    ({"floor_fit_b": 6.0},                            "floor_at_K = floor_fit_a"),
+    ({"floor_K": 500},                                "floor_at_K = floor_fit_a"),
+    ({"floor_measured_at_K": 70.0},                   "come apart"),
+    ({"floor_mean_sigmas": 5.0},                      "right-skewed"),
+    # the threshold ORDERING, percentage moved together for the same reason as the partition case
+    ({"floor_above_of80": 50, "floor_above_pct": 62}, "lower bar cannot pass fewer"),
 ]
 
 
@@ -719,6 +747,27 @@ BLIND_PAIR_CASES = [
     ("lone 76%, offline", "the offline hybrid reaches 76% (91/120) at the strict bar", False),
     ("lone 71%, ceiling", "Blind indexing saturates at ~71% gated on sparse cxidb", False),
 ]
+
+
+def test_oracle_ceiling_is_not_asserted_as_a_sum():
+    """sf_ceiling_of120 must NOT be checked as sf_strict + sf_selmiss -- it is not one.
+
+    oracle_blind.py PRINTS the ceiling as "(solved+selection-miss)" but counts reachability
+    independently, off all_annealed's candidate list. At HEAD one frame is selected-and-passing
+    while never counted reachable, so the shipped numbers are 79 + 8 = 87 against a printed 86;
+    on the 2026-06-29 archive they agree (77 + 9 = 86). A well-meaning later edit that "restores
+    the identity" would therefore make the guard fail on the real measurement, or push someone to
+    edit 86 to 87 and invent one. Pinned as a negative so the omission reads as deliberate.
+    """
+    F = _cn.FACTS
+    assert int(F["sf_strict_of120"]) + int(F["sf_selmiss_of120"]) != int(F["sf_ceiling_of120"]), (
+        "the shipped counts now satisfy solved+selmiss == ceiling; if oracle_blind.py was fixed "
+        "to count reachability consistently, re-measure and then this test should be retired")
+    bad, _ = _arith()
+    assert not any("ceiling" in b and "selection-miss" in b for b in bad), (
+        "check_arithmetic asserts the ceiling as solved+selection-miss, which the shipped "
+        f'measurement contradicts: {F["sf_strict_of120"]} + {F["sf_selmiss_of120"]} != '
+        f'{F["sf_ceiling_of120"]}')
 
 
 def test_blind_pair_rules_fire_and_stay_silent():
@@ -1114,6 +1163,7 @@ if __name__ == "__main__":
              test_required_merge_rows_fire_on_an_edited_cell,
              test_required_whole_file_form_catches_a_value_leaving_the_file,
              test_required_stays_silent_without_its_trigger,
+             test_oracle_ceiling_is_not_asserted_as_a_sum,
              test_blind_pair_rules_fire_and_stay_silent,
              test_s16_required_passes_on_the_measured_values,
              test_s16_required_fires_on_every_edited_claim,

@@ -146,6 +146,46 @@ FACTS: dict[str, float | str] = {
     "glint1_lattice_rate_pct":     96,  # = round(100 * glint1_lattice_of120 / 120)
     "xgandalf_lattice_of120":      94,  # xgandalf blind, same bar, same peak list
     "xgandalf_lattice_rate_pct":   78,  # = round(100 * xgandalf_lattice_of120 / 120)
+    # THE SINGLE-FRAME BLIND FRONT END -- which is NOT the GLINT-(1) pair above: no cross-frame
+    # consensus, no known-cell rescue. These are the rates Sec. 4.2 (sec:ceiling) and the SI's
+    # tab:negatives are about, and nothing guarded them until 2026-09-01. That is how tab:negatives'
+    # "69% (best)" shipped in the submission reconciling with neither rate the section beside it
+    # states (triage 153/268). CPU at HEAD, experiments/oracle_blind.py and the 3-bar gate over
+    # experiments/frames_cxidb_clean.txt, n=120.
+    #
+    # ⚑ TWO BARS, AND THE TABLE USES THE LOOSER ONE. sf_lattice_of120 is same_lattice alone; on this
+    # set it coincides EXACTLY with the >=10-matched-reflection bar, and it runs 4-6 frames above the
+    # >=25%-of-spots gate the main text reports (85 vs 79 at HEAD, 81 vs 77 on the 2026-06-29
+    # archive e15636e). tab:negatives' rows are the LATTICE bar: 83/120 = 69% on the June-29 A100
+    # sweep, whose >=25% figure was 65%, not 69%. Triage 153 and NOTE 268 both mis-derived that 69%
+    # as oracle_blind's strict bar and recommended a caption saying so -- oracle_blind never produces
+    # 83 there (79 shipped, 79 at HEAD, 77 on the archive). Do NOT "fix" the caption to the strict
+    # bar; see papers/glint NOTES_FOR_YUAN.md, 1 Sep.
+    "sf_lattice_of120":            85,  # single-frame blind, correct reduced cell, no coverage bar
+    "sf_lattice_rate_pct":         71,  # = round(100 * sf_lattice_of120 / 120)
+    "sf_strict_of120":             79,  # the same frames at the >=25%-of-spots gate
+    "sf_strict_rate_pct":          66,  # = round(100 * sf_strict_of120 / 120)
+    # The oracle split of the strict-bar misses. GENERATION-miss outweighs SELECTION-miss 4:1, which
+    # is the measured basis for Sec. 4.2's "incomplete candidate generation" reading; the three
+    # partition the 120 exactly.
+    "sf_selmiss_of120":             8,  # reachable among the retained candidates, but not selected
+    "sf_selmiss_rate_pct":          7,  # = round(100 * sf_selmiss_of120 / 120)
+    "sf_genmiss_of120":            33,  # no matching hypothesis among the retained candidates
+    "sf_genmiss_rate_pct":         28,  # = round(100 * sf_genmiss_of120 / 120)
+    "sf_ceiling_of120":            86,  # oracle-reachable, as oracle_blind PRINTS it
+    # ⚑ sf_ceiling_of120 IS NOT sf_strict_of120 + sf_selmiss_of120, and must not be checked as if it
+    # were. oracle_blind.py labels it "(solved+selection-miss)" but counts it INDEPENDENTLY, off
+    # all_annealed's candidate list: at HEAD one frame is selected-and-passing while never counted
+    # reachable, so the printed 86 sits one BELOW 79+8=87. On the June-29 archive the two do agree
+    # (77+9=86). The LABEL is the defect, not the number -- an identity check here would fail on the
+    # shipped code, and "correcting" 86 to 87 would invent a measurement. No _rate_pct key for it
+    # either: 86/120 rounds to 72%, which is NOT the 71% the paper quotes beside it (that is
+    # sf_lattice_rate_pct, 85/120), and the two get conflated exactly because they are one apart.
+    # Percentages here are ROUNDED per the convention above; oracle_blind prints FLOORED
+    # (100*solved//n), which is why its stdout reads 65% where FACTS and the paper read 66%.
+    "sf_negatives_lattice_of120":  83,  # tab:negatives baseline row: June-29 A100 sweep, lattice bar
+    "sf_negatives_lattice_pct":    69,  # = round(100 * sf_negatives_lattice_of120 / 120) -- "69% (best)"
+    "sf_negatives_strict_pct":     65,  # the SAME run's >=25% figure, from the A100 run record
     # The SAME two blind arms extended to 480 frames of the same run (2026-08-17). Identical peak
     # finder (pf8 out of the CrystFEL stream), identical gate, and the published 120 embedded as a
     # subset that reproduces 92 and 86 EXACTLY -- that reproduction is the control that makes these
@@ -326,6 +366,37 @@ FACTS: dict[str, float | str] = {
     "jungfrau_blind_rate_pct":  96,  # = round(100 * jungfrau_blind_of1563 / jungfrau_frames_total)
     "jungfrau_final_of1563":  1482,  # the GATED SUBSET of that 1506        (job 35507050)
     "jungfrau_final_rate_pct":  95,  # = round(100 * jungfrau_final_of1563 / jungfrau_frames_total)
+    # the extreme-value floor: Sec. 4.2 and Fig. 5 (fig:stat_floor) ---------------------------------
+    # Unguarded until 2026-09-01, which is how "97\% lie above the $+3\sigma$ null level" shipped in
+    # the submission: 97% is the fraction above the FLOOR, and the fraction above +3sigma is 75%
+    # (triage 216). Recomputed from exp1_null_data.npz, the fixture Fig. 5 is drawn from.
+    # ⚑ THE DENOMINATOR IS 80 REAL FRAMES, not the 120 of every count above it. A percentage from
+    # this block compared against a /120 count is a category error, and the two blocks sit close
+    # enough together to invite it.
+    "floor_real_frames":         80,     # real crystal frames scored against the reference cell
+    "floor_null_pool":          160,     # the null: 80 scramble-q + 80 rand-|q| frames, pooled
+    "floor_null_mu":          51.42,     # mean of the null WINNING-inlier (max-of-K) distribution
+    "floor_null_sd":           3.61,     # ...and its sd. Both are already max-of-K statistics.
+    "floor_above_of80":          78,     # real frames scoring above the fitted floor
+    "floor_above_pct":           98,     # = round(100 * floor_above_of80 / floor_real_frames)
+    "floor_above_3sd_of80":      60,     # ...and above floor_null_mu + 3*floor_null_sd
+    "floor_above_3sd_pct":       75,     # = round(100 * floor_above_3sd_of80 / floor_real_frames)
+    "floor_median_sigmas":     7.51,     # median (real - mu)/sd -- the paper's "7.5"
+    "floor_mean_sigmas":      11.41,     # ...and the mean, quoted as 11.4 (glint.tex's "11.4 null-sigma")
+    "floor_K":                70400,     # candidate seeds in the single-frame blind search
+    "floor_fit_a":            29.24,     # Fig. 5(b) sweep fit: floor(K) = a + b*sqrt(2 ln K)
+    "floor_fit_b":             4.53,     # b is the PER-SEED sigma_0 the extreme-value law wants
+    "floor_fit_r":            0.985,     # Pearson r of that fit, quoted in the caption
+    "floor_at_K":             50.65,     # = floor_fit_a + floor_fit_b * sqrt(2 ln floor_K)
+    "floor_measured_at_K":    50.38,     # the directly measured null maximum at floor_K...
+    "floor_measured_sd_at_K":  4.16,     # ...and its scatter. Agrees with floor_at_K, which is the
+                                         # cross-check that makes the fit quotable rather than fitted.
+    # ⚑ DO NOT compute the floor as floor_null_mu + floor_null_sd*sqrt(2 ln K). floor_null_mu and
+    # floor_null_sd are ALREADY the mean and sd of the maximum over K seeds, so that form
+    # double-counts the look-elsewhere effect: it puts the bar at 68.46 inliers and leaves only
+    # 46/80 = 58% of real frames above it. The law wants the PER-SEED mu_0/sigma_0, which is what
+    # the K-sweep fit recovers -- hence floor_at_K = 50.65, just BELOW floor_null_mu, with 78/80
+    # above it. That mistake is the one the +3sigma slip in the manuscript was a symptom of.
     # merge quality --------------------------------------------------------------------------------
     # THE PROTOCOL IS PART OF THE NUMBER, and these keys carry it because an unlabelled CC* is
     # exactly the ambiguity this file exists to prevent. Every value below is a `partialator` merge
@@ -2211,7 +2282,16 @@ def check_arithmetic() -> list[str]:
                                ("xgandalf_blind_rate_pct", "xgandalf_blind_strict_of120"),
                                # the correct-lattice pair, same denominator, same rule
                                ("glint1_lattice_rate_pct", "glint1_lattice_of120"),
-                               ("xgandalf_lattice_rate_pct", "xgandalf_lattice_of120")):
+                               ("xgandalf_lattice_rate_pct", "xgandalf_lattice_of120"),
+                               # the SINGLE-FRAME front end, both bars and the oracle split: same
+                               # denominator, same rule (added 2026-09-01 with the block itself --
+                               # tab:negatives' 69% had been quotable for months with nothing
+                               # deriving it from a count).
+                               ("sf_lattice_rate_pct", "sf_lattice_of120"),
+                               ("sf_strict_rate_pct", "sf_strict_of120"),
+                               ("sf_selmiss_rate_pct", "sf_selmiss_of120"),
+                               ("sf_genmiss_rate_pct", "sf_genmiss_of120"),
+                               ("sf_negatives_lattice_pct", "sf_negatives_lattice_of120")):
         _want = round(100.0 * int(F[_cnt_key]) / 120.0)
         if int(F[_pct_key]) != _want:
             bad.append(f"  FACTS: {_pct_key} = {F[_pct_key]}% but {_cnt_key} = {F[_cnt_key]}/120 rounds to "
@@ -2257,10 +2337,65 @@ def check_arithmetic() -> list[str]:
     # The correct-lattice bar is strictly LOOSER than the strict bar (it drops the coverage
     # requirement), so a count below its own strict count is an edit that crossed two rows.
     for _lat, _strict, _who in (("glint1_lattice_of120", "glint1_strict_of120", "GLINT-(1)"),
-                                ("xgandalf_lattice_of120", "xgandalf_blind_strict_of120", "xgandalf")):
+                                ("xgandalf_lattice_of120", "xgandalf_blind_strict_of120", "xgandalf"),
+                                ("sf_lattice_of120", "sf_strict_of120", "single-frame blind")):
         if int(F[_lat]) < int(F[_strict]):
             bad.append(f"  FACTS: {_who} correct-lattice {F[_lat]}/120 is BELOW its strict "
                        f"{F[_strict]}/120 -- the looser bar cannot pass fewer frames")
+    # The oracle split PARTITIONS the 120: oracle_blind.py's loop is an if/elif/else over solved,
+    # selection-miss, generation-miss, so the three must total the set exactly. EXACT, not close():
+    # a 3% relative band would accept any total from 116 to 124 against a set of 120.
+    if (int(F["sf_strict_of120"]) + int(F["sf_selmiss_of120"])
+            + int(F["sf_genmiss_of120"]) != 120):
+        bad.append(f"  FACTS: the oracle split must partition the 120 frames, but "
+                   f'{F["sf_strict_of120"]} solved + {F["sf_selmiss_of120"]} selection-miss + '
+                   f'{F["sf_genmiss_of120"]} generation-miss = '
+                   f'{int(F["sf_strict_of120"]) + int(F["sf_selmiss_of120"]) + int(F["sf_genmiss_of120"])}')
+    # The oracle ceiling cannot sit below what the selector actually solved. This is the ONLY
+    # bound asserted on it: it is deliberately NOT checked as solved + selection-miss, because
+    # oracle_blind.py counts reachability independently and the two differ by one at HEAD (79+8=87
+    # against a printed 86) while agreeing on the June-29 archive. See the FACTS note; making this
+    # an identity would fail on the shipped code, and editing 86 to 87 would invent a measurement.
+    if int(F["sf_ceiling_of120"]) < int(F["sf_strict_of120"]):
+        bad.append(f'  FACTS: oracle ceiling {F["sf_ceiling_of120"]}/120 is BELOW the solved count '
+                   f'{F["sf_strict_of120"]}/120 -- a frame the selector solved is reachable by '
+                   f"definition")
+    # --- the extreme-value floor. DENOMINATOR IS floor_real_frames (80), NOT 120. -----------------
+    for _pct_key, _cnt_key in (("floor_above_pct", "floor_above_of80"),
+                               ("floor_above_3sd_pct", "floor_above_3sd_of80")):
+        _want = round(100.0 * int(F[_cnt_key]) / int(F["floor_real_frames"]))
+        if int(F[_pct_key]) != _want:
+            bad.append(f"  FACTS: {_pct_key} = {F[_pct_key]}% but {_cnt_key} = {F[_cnt_key]}/"
+                       f'{F["floor_real_frames"]} rounds to {_want}% -- a count and its percentage '
+                       f"were edited apart (note the /80 denominator, not /120)")
+    # The floor must BE its own fitted law, or Fig. 5(b)'s sqrt(2 ln K) caption is decorative.
+    _g2lnK = math.sqrt(2.0 * math.log(float(F["floor_K"])))
+    close("floor_at_K = floor_fit_a + floor_fit_b*sqrt(2 ln floor_K)", float(F["floor_at_K"]),
+          float(F["floor_fit_a"]) + float(F["floor_fit_b"]) * _g2lnK, tol=0.01)
+    # ...and the fit must agree with the DIRECT measurement at the same K, inside that
+    # measurement's own scatter. This is what makes Fig. 5(b) evidence rather than a curve drawn
+    # through points, and it is the cross-check the corrected Sec. 4.2 sentence now quotes.
+    if (abs(float(F["floor_at_K"]) - float(F["floor_measured_at_K"]))
+            > float(F["floor_measured_sd_at_K"])):
+        bad.append(f'  FACTS: fitted floor_at_K = {F["floor_at_K"]} disagrees with the measured '
+                   f'{F["floor_measured_at_K"]} +- {F["floor_measured_sd_at_K"]} at K={F["floor_K"]} '
+                   f"-- the fit and the direct measurement have come apart")
+    # A LOWER threshold cannot pass FEWER frames. floor_at_K sits below mu+3sd (50.65 vs 62.25), so
+    # the above-floor count must exceed the above-3sigma count. The collapse of exactly this
+    # ordering is what the manuscript's "97% lie above the +3sigma null level" amounted to: the
+    # LOW-bar count (78/80) reported against the HIGH-bar threshold. Guarded so it cannot recur.
+    if (float(F["floor_at_K"]) < float(F["floor_null_mu"]) + 3.0 * float(F["floor_null_sd"])
+            and int(F["floor_above_of80"]) < int(F["floor_above_3sd_of80"])):
+        bad.append(f'  FACTS: floor_at_K ({F["floor_at_K"]}) is the LOWER threshold but '
+                   f'floor_above_of80 = {F["floor_above_of80"]} is below floor_above_3sd_of80 = '
+                   f'{F["floor_above_3sd_of80"]} -- a lower bar cannot pass fewer frames')
+    # The margin distribution is right-skewed (a handful of frames clear the floor enormously), so
+    # the mean sits ABOVE the median. An inversion here means one of the two was mistranscribed --
+    # and they are quoted one clause apart in Sec. 4.2, which is where that is easiest to do.
+    if float(F["floor_mean_sigmas"]) < float(F["floor_median_sigmas"]):
+        bad.append(f'  FACTS: floor_mean_sigmas ({F["floor_mean_sigmas"]}) is below '
+                   f'floor_median_sigmas ({F["floor_median_sigmas"]}) -- the real-frame margin '
+                   f"distribution is right-skewed, so the mean cannot be the smaller of the two")
     # Same derivation for the n=480 rows. Note the denominator differs, so this cannot be folded into
     # the loop above -- and folding it would be the exact mistake that makes a percentage stop tracking
     # its count.

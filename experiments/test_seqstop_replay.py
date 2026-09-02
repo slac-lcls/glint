@@ -22,8 +22,15 @@ WHAT IS PINNED, and how honestly:
   * deposition order (the order the file was written in) locks CORRECTLY, no later than the worst
     random order and no bigger a pool -- a weak consistency check, printed for the record;
   * 400 random orders at ONE fixed seed: every order locks; the MEDIAN lock frame and the FALSE-lock
-    count equal FACTS seqstop_median_lock / seqstop_false_locks. These two are seed-STABLE: over
-    seeds 0, 1, 2, 3, 7, 11, 42, 2024 the median was 6 and the false-lock count 0 every time;
+    count equal FACTS seqstop_median_lock / seqstop_false_locks. SCOPE (Copilot review of #183): those
+    two keys are recorded as the n=480 measurement, and this file holds 120 frames -- the only
+    cached N-best in the tree (frames_cxidb_clean.txt is 120 frames; no 480-frame cache is
+    committed). What is re-derived here is therefore the FACTS comment's own subsidiary statement,
+    "The 120 reproduces (median 6, 0/400)", NOT the n=480 headline: a regression that shows only
+    among the other 360 frames cannot be caught by this test, and re-deriving the headline needs
+    the 480-frame hypotheses cached (gen_nbest.py on the 480 set, GPU). The values are seed-STABLE
+    at n=120: over seeds 0, 1, 2, 3, 7, 11, 42, 2024 the median was 6 and the false-lock count 0
+    every time;
   * the same 400 orders' WORST lock frame and LARGEST pool at lock equal FACTS
     poolgate_clean_lock_max / poolgate_clean_maxpool. These are the max of 400 draws and are NOT
     seed-stable: across those eight seeds they ranged 15-19 frames and 45-57 hypotheses. FACTS
@@ -130,11 +137,15 @@ def main():
           f"median {med:.0f} p90 {np.percentile(fr, 90):.0f} max {fr.max()}, pool at lock max "
           f"{pools.max()}, false locks {false} (vs batch cell {false_vs_batch})")
     check(f"all {TRIALS} orders lock", n_lock == TRIALS, f"{n_lock}/{TRIALS}")
-    check(f"median lock frame == FACTS seqstop_median_lock ({FACTS['seqstop_median_lock']})",
+    # seqstop_* are the n=480 headline; what n=120 pins is the FACTS comment's "The 120 reproduces
+    # (median 6, 0/400)" -- see SCOPE in the docstring.
+    check(f"median lock frame == FACTS seqstop_median_lock ({FACTS['seqstop_median_lock']}) "
+          f"[n=120 reproduction of the n=480 headline]",
           med == FACTS["seqstop_median_lock"], f"measured {med:.1f}")
-    check(f"false locks vs lyso == FACTS seqstop_false_locks ({FACTS['seqstop_false_locks']})",
+    check(f"false locks vs lyso == FACTS seqstop_false_locks ({FACTS['seqstop_false_locks']}) "
+          f"[n=120 reproduction]",
           false == FACTS["seqstop_false_locks"], f"measured {false}")
-    check("false locks vs the batch consensus cell also == FACTS seqstop_false_locks",
+    check("false locks vs the batch consensus cell also == FACTS seqstop_false_locks [n=120]",
           false_vs_batch == FACTS["seqstop_false_locks"], f"measured {false_vs_batch}")
     check(f"worst lock frame == FACTS poolgate_clean_lock_max ({FACTS['poolgate_clean_lock_max']})"
           f" [tail, seed-pinned]",

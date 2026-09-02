@@ -656,6 +656,8 @@ ARITHMETIC_PERTURBATIONS = [
     ({"floor_above_pct": 97},                         "floor_above_pct"),
     ({"floor_above_3sd_pct": 80},                     "floor_above_3sd_pct"),
     ({"floor_at_K": 60.0},                            "floor_at_K = floor_fit_a"),
+    # Copilot (#184): close() is relative, so 50.2 against 50.645 (0.9%) passed a tol=0.01 check.
+    ({"floor_at_K": 50.2},                            "floor_at_K = floor_fit_a"),
     ({"floor_fit_b": 6.0},                            "floor_at_K = floor_fit_a"),
     ({"floor_K": 500},                                "floor_at_K = floor_fit_a"),
     ({"floor_measured_at_K": 70.0},                   "come apart"),
@@ -1143,6 +1145,108 @@ def test_deprecated_saturating_batch_alias_is_preserved():
     assert _cn.FACTS["saturating_batch"] == _cn.FACTS["driver_default_batch"] == 64
 
 
+
+
+# ---------------------------------------------------------------------------------------------
+# Triage 153/216 follow-up (Copilot review of #184): the sf_*/floor_* FACTS must be READ by a rule
+# that looks at the deliverable, and the superseded "97% above +3 sigma" pairing must fire.
+# Probes are rendered from FACTS with the manuscript's own wording, so a value edited in FACTS
+# without the paper following (or vice versa) shows up here as a failing needle.
+
+def _floor_prose(**edit) -> str:
+    F = _cn.FACTS
+    v = dict(pct=f"{F['floor_above_pct']:d}", n=f"{F['floor_above_of80']:d}",
+             den=f"{F['floor_real_frames']:d}", fl=f"{F['floor_at_K']:.1f}",
+             meas=f"{F['floor_measured_at_K']:.1f}", msd=f"{F['floor_measured_sd_at_K']:.1f}",
+             med=f"{F['floor_median_sigmas']:.1f}", mean=f"{F['floor_mean_sigmas']:.1f}",
+             p3=f"{F['floor_above_3sd_pct']:d}", n3=f"{F['floor_above_3sd_of80']:d}",
+             r=f"{F['floor_fit_r']:.3f}")
+    v.update(edit)
+    return (f"When the real crystal frames are evaluated against the reference cell, "
+            f"${v['pct']}\\%$ (${v['n']}/{v['den']}$) score above the extreme-value floor: the "
+            f"$\\sqrt{{2\\ln K}}$ fit of Fig.~\\ref{{fig:stat_floor}}(\\emph{{b}}) places that floor at "
+            f"${v['fl']}$ inliers at $K=70{{,}}400$, consistent with the directly measured null maximum "
+            f"of ${v['meas']}\\pm{v['msd']}$. The median separation is {v['med']} standard deviations of "
+            f"the null-maximum distribution (mean {v['mean']}), and ${v['p3']}\\%$ (${v['n3']}/{v['den']}$) "
+            f"lie more than $3\\sigma$ above that distribution's mean. The observed growth is consistent "
+            f"with the $\\sqrt{{2\\ln K}}$ look-elsewhere scaling over the tested range ($r={v['r']}$).")
+
+
+def _split_prose(**edit) -> str:
+    F = _cn.FACTS
+    v = dict(un=f"{120 - F['sf_strict_of120']:d}", g=f"{F['sf_genmiss_of120']:d}",
+             s=f"{F['sf_selmiss_of120']:d}", gp=f"{F['sf_genmiss_rate_pct']:d}",
+             sp=f"{F['sf_selmiss_rate_pct']:d}")
+    v.update(edit)
+    return (f"At the stricter criterion the {v['un']} unaccepted frames divide into {v['g']} generation "
+            f"misses, in which no retained candidate matches the reference lattice, and {v['s']} "
+            f"selection misses, in which such a candidate is present but is not chosen (${v['gp']}\\%$ "
+            f"and ${v['sp']}\\%$ of the 120 frames).")
+
+
+def _negatives_caption(**edit) -> str:
+    F = _cn.FACTS
+    v = dict(base=f"{F['sf_negatives_lattice_of120']:d}", bstrict=f"{F['sf_negatives_strict_pct']:d}",
+             lat=f"{F['sf_lattice_of120']:d}", latp=f"{F['sf_lattice_rate_pct']:d}",
+             st=f"{F['sf_strict_of120']:d}", stp=f"{F['sf_strict_rate_pct']:d}",
+             best=f"{F['sf_negatives_lattice_pct']:d}")
+    v.update(edit)
+    return (f"\\caption{{\\label{{tab:negatives}}Single-frame levers explored. Both are a looser bar than "
+            f"the $\\geq$25\\%-of-spots gate used in Sec.~\\ref{{sec:ceiling}}. These percentages come "
+            f"from one scorer-development sweep on a single A100 and are therefore comparable with one "
+            f"another rather than with the shipped rates: the baseline row is ${v['base']}/120$ at this "
+            f"bar and ${v['bstrict']}\\%$ at the $\\geq$25\\% gate, where the shipped code now gives "
+            f"${v['lat']}/120$ (${v['latp']}\\%$) and ${v['st']}/120$ (${v['stp']}\\%$).}}\n"
+            f"\\begin{{tabular}}{{lll}}\nscorer: coverage-gated defect & \\textbf{{{v['best']}\\% (best)}} "
+            f"& --- \\\\\n\\end{{tabular}}")
+
+
+def test_floor_required_passes_on_the_measured_values():
+    for name in ("floor-facts", "floor-fit-r"):
+        assert not _required_fires(_floor_prose(), name), name
+    assert not _fires(_floor_prose(), "floor-97-3sigma")
+
+
+def test_floor_required_fires_on_every_edited_value():
+    for edit in (dict(pct="97"), dict(n="77"), dict(fl="50.7"), dict(meas="50.9"), dict(msd="3.9"),
+                 dict(med="7.9"), dict(mean="10.4"), dict(p3="80"), dict(n3="64")):
+        assert _required_fires(_floor_prose(**edit), "floor-facts"), f"floor-facts silent on {edit}"
+    assert _required_fires(_floor_prose(r="0.990"), "floor-fit-r")
+
+
+def test_superseded_97_above_3sigma_sentence_fires():
+    old = ("When the real crystal frames are evaluated against the reference cell, 97\\% lie above the "
+           "$+3\\sigma$ null level, with a median separation of 7.5 null standard deviations.")
+    assert _fires(old, "floor-97-3sigma")
+    assert _fires(old.replace("97", "98"), "floor-97-3sigma")   # same misattribution, new number
+    # ...and the corrected sentence, which carries both a 98% and a 3 sigma, must stay clean.
+    assert not _fires(_floor_prose(), "floor-97-3sigma")
+
+
+def test_split_required_passes_and_fires():
+    assert not _required_fires(_split_prose(), "sf-oracle-split")
+    for edit in (dict(un="40"), dict(g="30"), dict(s="9"), dict(gp="25"), dict(sp="8")):
+        assert _required_fires(_split_prose(**edit), "sf-oracle-split"), f"silent on {edit}"
+
+
+def test_negatives_required_passes_and_fires():
+    for name in ("negatives-caption-facts", "negatives-69-is-the-lattice-bar"):
+        assert not _required_fires(_negatives_caption(), name), name
+    for edit in (dict(base="79"), dict(bstrict="69"), dict(lat="83"), dict(latp="69"),
+                 dict(st="85"), dict(stp="71")):
+        assert _required_fires(_negatives_caption(**edit), "negatives-caption-facts"), f"silent on {edit}"
+    # The finding itself: a "69% (best)" cell whose caption no longer anchors it to the lattice bar.
+    bare = "\\caption{Single-frame levers explored; all fail.}\n\\begin{tabular}{lll}\nscorer & \\textbf{69\\% (best)} & --- \\\\\n\\end{tabular}"
+    assert _required_fires(bare, "negatives-69-is-the-lattice-bar")
+
+
+def test_new_required_rules_stay_silent_without_their_trigger():
+    quiet = "A paragraph about something else entirely, with 79/120 and 98\\% in it but no trigger."
+    for name in ("floor-facts", "floor-fit-r", "sf-oracle-split", "negatives-caption-facts",
+                 "negatives-69-is-the-lattice-bar"):
+        assert not _required_fires(quiet, name), name
+
+
 if __name__ == "__main__":
     tests = (test_closed_form_mle_matches_brute_force,
              test_bounds_ordered_and_bracket_the_estimate,
@@ -1183,7 +1287,14 @@ if __name__ == "__main__":
              test_perturbations_are_restored,
              test_main_fails_on_missing_requested_targets,
              test_main_fails_on_missing_or_unreadable_in_repo_defaults,
-             test_deprecated_saturating_batch_alias_is_preserved)
+             test_deprecated_saturating_batch_alias_is_preserved,
+             test_floor_required_passes_on_the_measured_values,
+             test_floor_required_fires_on_every_edited_value,
+             test_superseded_97_above_3sigma_sentence_fires,
+             test_split_required_passes_and_fires,
+             test_negatives_required_passes_and_fires,
+             test_new_required_rules_stay_silent_without_their_trigger,
+)
     ok = 0
     for t in tests:
         try:

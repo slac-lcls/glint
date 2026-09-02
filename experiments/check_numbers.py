@@ -387,7 +387,10 @@ FACTS: dict[str, float | str] = {
     "floor_fit_a":            29.24,     # Fig. 5(b) sweep fit: floor(K) = a + b*sqrt(2 ln K)
     "floor_fit_b":             4.53,     # b is the PER-SEED sigma_0 the extreme-value law wants
     "floor_fit_r":            0.985,     # Pearson r of that fit, quoted in the caption
-    "floor_at_K":             50.65,     # = floor_fit_a + floor_fit_b * sqrt(2 ln floor_K)
+    "floor_at_K":            50.645,     # = floor_fit_a + floor_fit_b * sqrt(2 ln floor_K), from the
+                                         #   UNROUNDED a_int/b_slope in exp1_null_data.npz; the paper
+                                         #   prints it at 1 dp = 50.6 (a 50.7 shipped once: 2-dp 50.65
+                                         #   re-rounded by hand -- round the source, not the rounding)
     "floor_measured_at_K":    50.38,     # the directly measured null maximum at floor_K...
     "floor_measured_sd_at_K":  4.16,     # ...and its scatter. Agrees with floor_at_K, which is the
                                          # cross-check that makes the fit quotable rather than fitted.
@@ -1394,6 +1397,16 @@ OVERCLAIM = [
     # exempts reach across newlines, so a real mark on the line AFTER the definition would have
     # been exempted by its neighbour -- exactly the corridor the copilot-suppressed-comments
     # review warned an exemption can open.
+    # Triage 216: "97% lie above the +3 sigma null level" named the WRONG threshold. Recomputed from
+    # exp1_null_data.npz, 60/80 = 75% of the real frames sit above the null mean + 3 sd; the 97-98% is
+    # the fraction above the FITTED extreme-value floor (78/80). check_required() accepted the old
+    # sentence because nothing bound the two thresholds to their own percentages (Copilot, #184).
+    Rule("floor-97-3sigma",
+         r"(?<![\d.])9[678]\s*\\?%(?=[\s\S]{0,140}(?:\+\s*3\s*\\?sigma|3\s*\\?sigma\s+(?:null\s+)?(?:level|floor)))",
+         "97% named the wrong threshold: 60/80 = 75% of the real crystal frames lie above the null "
+         "mean + 3 sigma; 78/80 = 98% lie above the FITTED extreme-value floor (recomputed from "
+         "exp1_null_data.npz, triage 216)",
+         "98\\% (78/80) above the fitted floor; 75\\% (60/80) above the null mean + 3 sigma"),
     Rule("hl-rendering", r"(?m)^(?![^%\n]*\\newcommand)(?:\\.|[^%\\\n])*\\hl\{",
          "a rendering \\hl{ editorial mark must never ship in a .tex deliverable; it prints a "
          "highlighted author note in the journal PDF",
@@ -1515,6 +1528,69 @@ class Required:
 
 
 REQUIRED = [
+    # ⚑ Triage 153/216 (#184 review): the sf_*/floor_* keys were banked, arithmetic-checked, and read
+    # by NOTHING that looks at a deliverable -- so the superseded "97% above +3 sigma" sentence and a
+    # "69% (best)" row with no bar named both passed. Same defect as the jungfrau block below.
+    # Sec. 4.2's floor sentence: every printed value is a FACTS rendering.
+    Required("floor-facts", r"score above the extreme-value floor",
+             (_lit(f"{FACTS['floor_above_pct']:d}") + r"\s*\\?%\s*\(\s*"
+              + _lit(f"{FACTS['floor_above_of80']:d}") + "/" + _lit(f"{FACTS['floor_real_frames']:d}") + r"\s*\)",
+              r"floor at\s+" + _lit(f"{FACTS['floor_at_K']:.1f}") + r"\s+inliers",
+              _lit(f"{FACTS['floor_measured_at_K']:.1f}") + r"\s*\\pm\s*" + _lit(f"{FACTS['floor_measured_sd_at_K']:.1f}"),
+              _lit(f"{FACTS['floor_median_sigmas']:.1f}") + r"\s+standard deviations",
+              r"mean\s+" + _lit(f"{FACTS['floor_mean_sigmas']:.1f}"),
+              _lit(f"{FACTS['floor_above_3sd_pct']:d}") + r"\s*\\?%\s*\(\s*"
+              + _lit(f"{FACTS['floor_above_3sd_of80']:d}") + "/" + _lit(f"{FACTS['floor_real_frames']:d}")
+              + r"\s*\)[^.]{0,40}3\s*\\?sigma"),
+             f"Sec. 4.2's floor sentence must print the exp1_null_data.npz numbers: "
+             f"{FACTS['floor_above_of80']}/{FACTS['floor_real_frames']} = {FACTS['floor_above_pct']}% above "
+             f"the fitted floor ({FACTS['floor_at_K']:.1f} inliers at K={FACTS['floor_K']}, measured "
+             f"{FACTS['floor_measured_at_K']:.1f}+-{FACTS['floor_measured_sd_at_K']:.1f}), median "
+             f"{FACTS['floor_median_sigmas']:.1f} sd (mean {FACTS['floor_mean_sigmas']:.1f}), and "
+             f"{FACTS['floor_above_3sd_of80']}/{FACTS['floor_real_frames']} = {FACTS['floor_above_3sd_pct']}% "
+             f"above the null mean + 3 sigma. The two thresholds are different quantities -- a 97% once "
+             f"sat on the wrong one for weeks",
+             window=700),
+    Required("floor-fit-r", r"look-elsewhere",
+             (r"r\s*=\s*" + _lit(f"{FACTS['floor_fit_r']:.3f}"),),
+             f"the sqrt(2 ln K) look-elsewhere fit is quoted with its Pearson r = {FACTS['floor_fit_r']:.3f} "
+             f"(exp1_null_data.npz r_pear); a caption that names the scaling without the r is decorative"),
+    # Sec. 4.2's oracle split: the three counts partition the 120 (check_arithmetic) AND must be the
+    # ones printed. 41 = the strict-bar misses = 120 - sf_strict_of120.
+    Required("sf-oracle-split", r"divide into\s+\d+\s+generation misses",
+             (_lit(f"{FACTS['sf_genmiss_of120']:d}") + r"\s+generation misses",
+              _lit(f"{FACTS['sf_selmiss_of120']:d}") + r"\s+selection misses",
+              _lit(f"{120 - FACTS['sf_strict_of120']:d}") + r"\s+unaccepted frames",
+              _lit(f"{FACTS['sf_genmiss_rate_pct']:d}") + r"\s*\\?%\s+and\s+"
+              + _lit(f"{FACTS['sf_selmiss_rate_pct']:d}") + r"\s*\\?%"),
+             f"the oracle split of Sec. 4.2 must read {120 - FACTS['sf_strict_of120']} unaccepted = "
+             f"{FACTS['sf_genmiss_of120']} generation + {FACTS['sf_selmiss_of120']} selection misses "
+             f"({FACTS['sf_genmiss_rate_pct']}% and {FACTS['sf_selmiss_rate_pct']}% of 120) -- "
+             f"oracle_blind.py at HEAD on frames_cxidb_clean.txt",
+             window=600),
+    # tab:negatives' caption: the row values are the LATTICE bar of one June-29 A100 sweep, and the
+    # caption must say what the shipped code gives at both bars so the 69% cannot be read as the
+    # strict rate again.
+    Required("negatives-caption-facts", r"scorer-development sweep",
+             (_lit(f"{FACTS['sf_negatives_lattice_of120']:d}") + "/120",
+              _lit(f"{FACTS['sf_negatives_strict_pct']:d}") + r"\s*\\?%",
+              _lit(f"{FACTS['sf_lattice_of120']:d}") + r"/120\s*\(\s*" + _lit(f"{FACTS['sf_lattice_rate_pct']:d}") + r"\s*\\?%\s*\)",
+              _lit(f"{FACTS['sf_strict_of120']:d}") + r"/120\s*\(\s*" + _lit(f"{FACTS['sf_strict_rate_pct']:d}") + r"\s*\\?%\s*\)"),
+             f"tab:negatives' caption must anchor its rows: baseline {FACTS['sf_negatives_lattice_of120']}/120 "
+             f"at the lattice bar and {FACTS['sf_negatives_strict_pct']}% at the >=25% gate on the June-29 "
+             f"sweep, against the shipped {FACTS['sf_lattice_of120']}/120 ({FACTS['sf_lattice_rate_pct']}%) "
+             f"and {FACTS['sf_strict_of120']}/120 ({FACTS['sf_strict_rate_pct']}%). Without these the "
+             f"69% reads as the strict rate -- which is how triage 153 mis-derived it",
+             window=600),
+    # ...and the "69% (best)" cell itself must sit within reach of the bar it is measured at.
+    Required("negatives-69-is-the-lattice-bar",
+             _lit(f"{FACTS['sf_negatives_lattice_pct']:d}") + r"\s*\\?%\s*\(best\)",
+             (r"looser bar than the\s*\\?geq\s*25",
+              _lit(f"{FACTS['sf_negatives_lattice_of120']:d}") + "/120"),
+             f"a '{FACTS['sf_negatives_lattice_pct']}% (best)' cell is {FACTS['sf_negatives_lattice_of120']}/120 "
+             f"at the correct-lattice bar, NOT oracle_blind's strict SOLVED (79 shipped, 79 at HEAD, 77 on "
+             f"the June-29 archive); the caption that says so must be within reach of the cell",
+             window=1400),
     Required("rtx-disclaimer", r"RTX",
              ("no number here was measured on an RTX Blackwell",),
              "this file argues an RTX Blackwell case from datasheet fp32/$, but every GLINT timing "
@@ -2370,8 +2446,13 @@ def check_arithmetic() -> list[str]:
                        f"were edited apart (note the /80 denominator, not /120)")
     # The floor must BE its own fitted law, or Fig. 5(b)'s sqrt(2 ln K) caption is decorative.
     _g2lnK = math.sqrt(2.0 * math.log(float(F["floor_K"])))
-    close("floor_at_K = floor_fit_a + floor_fit_b*sqrt(2 ln floor_K)", float(F["floor_at_K"]),
-          float(F["floor_fit_a"]) + float(F["floor_fit_b"]) * _g2lnK, tol=0.01)
+    # ABSOLUTE 0.01, not close(): close() takes tol as RELATIVE, so tol=0.01 meant ~0.5 inliers of
+    # slack on a 50-inlier floor and a half-applied floor_at_K = 50.2 stayed green (Copilot review of
+    # #184). The identity is stated to two decimals; hold it there.
+    _floor_fit = float(F["floor_fit_a"]) + float(F["floor_fit_b"]) * _g2lnK
+    if abs(float(F["floor_at_K"]) - _floor_fit) > 0.01:
+        bad.append(f'  FACTS: floor_at_K = floor_fit_a + floor_fit_b*sqrt(2 ln floor_K): table says '
+                   f'{float(F["floor_at_K"]):g}, arithmetic gives {_floor_fit:.3f} (absolute 0.01 band)')
     # ...and the fit must agree with the DIRECT measurement at the same K, inside that
     # measurement's own scatter. This is what makes Fig. 5(b) evidence rather than a curve drawn
     # through points, and it is the cross-check the corrected Sec. 4.2 sentence now quotes.

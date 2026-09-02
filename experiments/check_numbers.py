@@ -1402,7 +1402,7 @@ OVERCLAIM = [
     # the fraction above the FITTED extreme-value floor (78/80). check_required() accepted the old
     # sentence because nothing bound the two thresholds to their own percentages (Copilot, #184).
     Rule("floor-97-3sigma",
-         r"(?<![\d.])9[678]\s*\\?%(?=[^%]{0,140}(?:\+\s*3\s*\\?sigma|3\s*\\?sigma\s+(?:null\s+)?(?:level|floor)))",
+         r"(?<![\d.])9[678]\s*\\?%(?=[^%]{0,140}(?:\+\s*3\s*(?:\\?sigma|σ)|3\s*(?:\\?sigma|σ)\s+(?:null\s+)?(?:level|floor)))",
          "97% named the wrong threshold: 60/80 = 75% of the real crystal frames lie above the null "
          "mean + 3 sigma; 78/80 = 98% lie above the FITTED extreme-value floor (recomputed from "
          "exp1_null_data.npz, triage 216)",
@@ -1555,7 +1555,7 @@ REQUIRED = [
               r"mean\s+" + _lit(f"{FACTS['floor_mean_sigmas']:.1f}"),
               _lit(f"{FACTS['floor_above_3sd_pct']:d}") + r"\s*\\?%\s*\(\s*"
               + _lit(f"{FACTS['floor_above_3sd_of80']:d}") + "/" + _lit(f"{FACTS['floor_real_frames']:d}")
-              + r"\s*\)[^.]{0,40}3\s*\\?sigma"),
+              + r"\s*\)[^.]{0,40}3\s*(?:\\?sigma|σ)"),
              f"Sec. 4.2's floor sentence must print the exp1_null_data.npz numbers: "
              f"{FACTS['floor_above_of80']}/{FACTS['floor_real_frames']} = {FACTS['floor_above_pct']}% above "
              f"the fitted floor ({FACTS['floor_at_K']:.1f} inliers at K={FACTS['floor_K']}, measured "
@@ -1808,9 +1808,9 @@ REQUIRED = [
 ]
 
 
-# A banner in the first few lines of a deliverable declaring it SUPERSEDED. Matched at a line
-# start, optionally behind a comment marker, and only near the top of the file so a mention of the
-# word in running text cannot exempt anything.
+# A banner on the FIRST line of a deliverable declaring it SUPERSEDED. Matched at a line start,
+# optionally behind a comment marker; line-1 scoping keeps a line-start mention in running text
+# from exempting REQUIRED rules.
 _SUPERSEDED_BANNER = re.compile(r"^[ \t]*(?:%+|#+|//|<!--)?[ \t]*SUPERSEDED\b", re.M | re.I)
 
 
@@ -1825,7 +1825,7 @@ def check_required(path: Path, text: str) -> list[str]:
     # "numbers here are not maintained ... do not quote from it", or to leave the run permanently
     # red. Neither is the guard doing its job (#184 review). Scoped by the banner rather than by a
     # path list so the exemption follows the declaration instead of duplicating it.
-    if _SUPERSEDED_BANNER.search(text[:600]):
+    if _SUPERSEDED_BANNER.search("\n".join(text.splitlines()[:1])):
         return out
     for req in REQUIRED:
         for m in req._trx.finditer(norm):

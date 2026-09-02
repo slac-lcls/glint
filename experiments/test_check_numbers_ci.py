@@ -797,7 +797,12 @@ def test_superseded_files_are_exempt_from_required_rules_only():
         "the SUPERSEDED exemption leaked past REQUIRED and silenced the OVERCLAIM scan, which is "
         f"exactly what glint#159 put these files on the target list to catch; got: {still}")
 
-    # 4. the banner must be a banner: the word deep in running text exempts nothing
+    # 4. the banner must be a banner: a line-start SUPERSEDED in running text exempts nothing
+    near = _cn.check_required(Path("live.tex"), "title\nbody\nmore\nSUPERSEDED old note\n" + trigger)
+    assert any("negatives-69-is-the-lattice-bar" in f for f in near), (
+        "line-start 'SUPERSEDED' outside the opening banner is exempting REQUIRED rules")
+
+    # 5. ...including when the word appears deep in running text
     deep = _cn.check_required(Path("live.tex"), ("x" * 900) + "\nSUPERSEDED\n" + trigger)
     assert any("negatives-69-is-the-lattice-bar" in f for f in deep), (
         "'SUPERSEDED' outside the file's opening banner is exempting REQUIRED rules")
@@ -1275,6 +1280,8 @@ def _negatives_caption(**edit) -> str:
 def test_floor_required_passes_on_the_measured_values():
     for name in ("floor-facts", "floor-fit-r"):
         assert not _required_fires(_floor_prose(), name), name
+    unicode_sigma = _floor_prose().replace(r"3\sigma", "3σ")
+    assert not _required_fires(unicode_sigma, "floor-facts")
     assert not _fires(_floor_prose(), "floor-97-3sigma")
 
 
@@ -1304,6 +1311,7 @@ def test_superseded_97_above_3sigma_sentence_fires():
     old = ("When the real crystal frames are evaluated against the reference cell, 97\\% lie above the "
            "$+3\\sigma$ null level, with a median separation of 7.5 null standard deviations.")
     assert _fires(old, "floor-97-3sigma")
+    assert _fires(old.replace(r"\sigma", "σ"), "floor-97-3sigma")
     assert _fires(old.replace("97", "98"), "floor-97-3sigma")   # same misattribution, new number
     # ...and the corrected sentence, which carries both a 98% and a 3 sigma, must stay clean.
     assert not _fires(_floor_prose(), "floor-97-3sigma")
@@ -1312,6 +1320,7 @@ def test_superseded_97_above_3sigma_sentence_fires():
 def test_floor_97_rule_stops_at_the_next_percentage():
     ok = "98\\% exceed the fitted floor, while 75\\% exceed the null mean +3\\sigma."
     assert not _fires(ok, "floor-97-3sigma")
+    assert not _fires(ok.replace(r"\sigma", "σ"), "floor-97-3sigma")
 
 
 def test_split_required_passes_and_fires():

@@ -61,9 +61,11 @@ def cell_params(Ar):
 # relative tolerance: the rtol same_lattice / consensus_cell (glint.multishot) already use to call two
 # edge lengths the same edge, reused here rather than inventing a second notion of equality. A
 # per-frame unconstrained refine scatters a and b of a tetragonal crystal by well under 1%, so every
-# frame lands on the same branch of standardize_axes as the reference cell; a genuinely orthorhombic
-# cell whose a and b happen to fall inside it is standardized the same way on every frame too, which
-# is all the hkl grid and the merge need from a setting.
+# frame lands on the same branch of standardize_axes as the reference cell. The tolerance is NOT
+# taken as proof that the pair is symmetry-equivalent: a genuinely orthorhombic cell whose a and b
+# happen to fall inside it (100/103/150) is still standardized by lengths alone, a the shorter of
+# the pair, so every frame of it lands in ONE setting too -- which is all the hkl grid, the merge
+# and the CrystFEL handoff need from a setting.
 AXIS_EQUAL_RTOL = 0.05
 
 
@@ -79,11 +81,20 @@ def standardize_axes(M, rtol=AXIS_EQUAL_RTOL):
     ~19% of its reflections, and the merge folded (h,0,0) with (0,k,0) while keeping (h,0,0) apart
     from its true equivalent (0,0,l) (glint#181).
 
-      * Two lengths equal within ``rtol`` (tetragonal, hexagonal): the closest pair becomes a, b (in
-        their incoming order) and the outlier becomes c -- the unique axis ``laue_ops_4mmm`` rotates
-        about -- whether c is shorter or longer than a.
+      * Two lengths equal within ``rtol`` (tetragonal, hexagonal): the closest pair becomes a, b --
+        a the SHORTER of the two, b the longer -- and the outlier becomes c, the unique axis
+        ``laue_ops_4mmm`` rotates about, whether c is shorter or longer than a.
       * No two lengths equal (orthorhombic and lower): (long, long, short), the order
         ``_canonical_axes`` has always produced, so nothing changes for those cells.
+
+    In both branches the setting is a function of the three LENGTHS alone, never of the order the
+    indexer happened to hand the columns back in (a <= b always). That matters for a cell the
+    tolerance admits without being tetragonal -- a pseudo-tetragonal orthorhombic 100/103/150 --
+    where a and b are NOT interchangeable under mmm: keeping the incoming pair order would have
+    standardized it to (100, 103, 150) on one frame and (103, 100, 150) on the next and put the
+    grid, the merge and a non-tetragonal ``write_fromfile`` handoff back in disagreement (Copilot
+    review of #185). For a true tetragonal cell a <-> b is a 4/mmm operator, so which of two
+    equal-to-the-jitter axes is called a cannot affect the merge or the grid.
 
     The result is a column permutation of ``M``; when that permutation is odd, column a is negated
     so det > 0 (a proper, right-handed basis). The a -> -a flip sends (h,k,l) to (-h,k,l), which the
@@ -99,7 +110,9 @@ def standardize_axes(M, rtol=AXIS_EQUAL_RTOL):
 
     i, j, k = min([(0, 1, 2), (0, 2, 1), (1, 2, 0)], key=lambda p: _reldiff(p[0], p[1]))
     if _reldiff(i, j) <= rtol:
-        order = [i, j, k]                          # equal pair -> a, b; the outlier -> c (unique axis)
+        if L[j] < L[i]:
+            i, j = j, i                            # a the shorter of the pair: lengths decide, not
+        order = [i, j, k]                          # incoming order; equal pair -> a, b; outlier -> c
     else:
         o = np.argsort(L)                          # shortest axis first
         order = [o[1], o[2], o[0]]                 # -> (long, long, short)

@@ -25,7 +25,13 @@ Both helpers are now thin wrappers over `glint.lattice.standardize_axes`. What i
   4. the prediction regression from the issue: an `HKLGrid(_conventional_tetragonal(cell), dmin=2.0,
      gpu=False)` predicts EXACTLY the reflections `predict_spots` finds for frames canonicalised with
      `_canonical_axes` (tol 0.002, one 2000-px panel, 0.15 m, 1.322 A) -- 0 missing for all three
-     tetragonal cells. On the pre-fix code this step reports the 19% shortfall for 58/58/130.
+     tetragonal cells. On the pre-fix code this step reports the 19% shortfall for 58/58/130;
+  5. a cell the equal-pair tolerance admits WITHOUT being tetragonal (pseudo-tetragonal orthorhombic
+     100/103/150) still lands in ONE setting -- (shorter, longer, outlier) -- whatever column order
+     the indexer handed back. Lengths decide, never incoming order: the tolerance is not taken as
+     proof that a and b are interchangeable, which under mmm they are not (Copilot review of #185;
+     the first cut of this PR kept the pair's incoming order and standardized that cell to either
+     (100, 103, 150) or (103, 100, 150)).
 
 Run: `PYTHONPATH=. python experiments/test_axis_standardizer.py` (exit 1 on any failure).
 """
@@ -65,6 +71,8 @@ TETRAGONAL = {
     "lysozyme 79.02/79.02/37.98": (79.02, 79.02, 37.98),
 }
 ORTHORHOMBIC = {"ClCRY4 54.15/87.29/141.33": (54.15, 87.29, 141.33)}
+# Inside AXIS_EQUAL_RTOL (3% apart) without being tetragonal: a and b are NOT interchangeable here.
+PSEUDO_TETRAGONAL = {"pseudo-tetragonal oP 100/103/150": (100.0, 103.0, 150.0)}
 
 PERMS = list(itertools.permutations(range(3)))
 SIGNS = [np.array(s, float) for s in itertools.product((1.0, -1.0), repeat=3)]
@@ -172,6 +180,31 @@ for name, (a, b, c) in ORTHORHOMBIC.items():
     P1 = _canonical_axes(M)
     check("equals the old sort-by-length result up to the handedness sign of column a",
           np.allclose(np.abs(P1), np.abs(old)) and np.allclose(P1[:, 1:], old[:, 1:]))
+
+# ------------------------------------------ 5: inside the tolerance without being tetragonal
+print("\ninside the equal-pair tolerance without being tetragonal: lengths decide, never incoming order")
+for name, (a, b, c) in PSEUDO_TETRAGONAL.items():
+    ref = np.array([a, b, c])
+    seen, disagree, lefthanded, not_idem, a_gt_b = set(), [], [], [], []
+    for exact in (True, False):
+        for _ in range(N_ORI):
+            base = cell_to_Ar(a, b, c, 90, 90, 90) if exact else jittered(rng, a, b, c)
+            M = random_setting(rng, base)
+            P1 = _canonical_axes(M)
+            L = np.linalg.norm(P1, axis=0)
+            # which true axis landed in each column (3% apart vs 0.4% jitter: unambiguous)
+            seen.add(tuple("abc"[int(np.argmin(np.abs(ref - x)))] for x in L))
+            a_gt_b.append(L[0] > L[1])
+            disagree.append(np.max(np.abs(P1 - _conventional_tetragonal(M))))
+            lefthanded.append(np.linalg.det(P1) <= 0)
+            not_idem.append(not np.array_equal(_canonical_axes(P1), P1))
+    print(f" {name}: settings seen over {2 * N_ORI} incoming orders = {sorted(''.join(s) for s in seen)}")
+    check("ONE setting for every incoming column order: (shorter, longer, outlier) = (a, b, c)",
+          seen == {("a", "b", "c")}, sorted("".join(s) for s in seen))
+    check("a <= b in every result", not any(a_gt_b), f"{sum(a_gt_b)} results with a > b")
+    check("_canonical_axes == _conventional_tetragonal here too", worst(disagree) == 0.0, f"max |diff| = {worst(disagree):.3g}")
+    check("right-handed (det > 0)", not any(lefthanded), f"{sum(lefthanded)} left-handed")
+    check("idempotent", not any(not_idem), f"{sum(not_idem)} changed")
 
 # ------------------------------------------------------------------- 4: the prediction regression
 # The issue's setup: tol 0.002, one 2000-px panel (100 um pixels), 0.15 m, 1.322 A, dmin 2.0 A.

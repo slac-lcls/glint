@@ -649,7 +649,6 @@ ARITHMETIC_PERTURBATIONS = [
     # catch -- otherwise this case proves the wrong guard (which is how the two were conflated
     # when they were mutation-checked by hand).
     ({"sf_genmiss_of120": 30, "sf_genmiss_rate_pct": 25},  "partition the 120 frames"),
-    ({"sf_ceiling_of120": 70},                        "reachable by"),
     # ...and NOT an identity: 79 + 8 = 87 against a printed ceiling of 86 at HEAD, so a
     # solved+selmiss check here would fail on the shipped measurement. Pinned as a NEGATIVE below
     # in test_oracle_ceiling_is_not_asserted_as_a_sum.
@@ -752,7 +751,7 @@ BLIND_PAIR_CASES = [
 
 
 def test_oracle_ceiling_is_not_asserted_as_a_sum():
-    """sf_ceiling_of120 must NOT be checked as sf_strict + sf_selmiss -- it is not one.
+    """sf_ceiling_of120 must NOT be checked as sf_strict + sf_selmiss, or as >= solved.
 
     oracle_blind.py PRINTS the ceiling as "(solved+selection-miss)" but counts reachability
     independently, off all_annealed's candidate list. At HEAD one frame is selected-and-passing
@@ -770,6 +769,10 @@ def test_oracle_ceiling_is_not_asserted_as_a_sum():
         "check_arithmetic asserts the ceiling as solved+selection-miss, which the shipped "
         f'measurement contradicts: {F["sf_strict_of120"]} + {F["sf_selmiss_of120"]} != '
         f'{F["sf_ceiling_of120"]}')
+    low_bad, _ = _arith(sf_ceiling_of120=70)
+    assert not any("BELOW the solved count" in b or "reachable by definition" in b for b in low_bad), (
+        "check_arithmetic asserts an oracle ceiling lower bound that oracle_blind.py's independent "
+        "reachability/solved sets do not justify")
 
 
 def test_blind_pair_rules_fire_and_stay_silent():
@@ -1184,6 +1187,16 @@ def _split_prose(**edit) -> str:
             f"and ${v['sp']}\\%$ of the 120 frames).")
 
 
+def _ceiling_prose(**edit) -> str:
+    F = _cn.FACTS
+    v = dict(c=f"{F['sf_ceiling_of120']:d}",
+             p=f"{round(100.0 * F['sf_ceiling_of120'] / 120):d}")
+    v.update(edit)
+    return (f"Blind indexing on sparse cxidb saturates at $71\\%$ gated "
+            f"(oracle-reachable ceiling ${v['c']}/120 ~ {v['p']}\\%$; "
+            f"oracle_blind.py floors that printout to $71\\%$).")
+
+
 def _negatives_caption(**edit) -> str:
     F = _cn.FACTS
     v = dict(base=f"{F['sf_negatives_lattice_of120']:d}", bstrict=f"{F['sf_negatives_strict_pct']:d}",
@@ -1223,10 +1236,21 @@ def test_superseded_97_above_3sigma_sentence_fires():
     assert not _fires(_floor_prose(), "floor-97-3sigma")
 
 
+def test_floor_97_rule_stops_at_the_next_percentage():
+    ok = "98\\% exceed the fitted floor, while 75\\% exceed the null mean +3\\sigma."
+    assert not _fires(ok, "floor-97-3sigma")
+
+
 def test_split_required_passes_and_fires():
     assert not _required_fires(_split_prose(), "sf-oracle-split")
     for edit in (dict(un="40"), dict(g="30"), dict(s="9"), dict(gp="25"), dict(sp="8")):
         assert _required_fires(_split_prose(**edit), "sf-oracle-split"), f"silent on {edit}"
+
+
+def test_ceiling_required_passes_and_fires():
+    assert not _required_fires(_ceiling_prose(), "sf-ceiling-facts")
+    for edit in (dict(c="85"), dict(p="76")):
+        assert _required_fires(_ceiling_prose(**edit), "sf-ceiling-facts"), f"silent on {edit}"
 
 
 def test_negatives_required_passes_and_fires():
@@ -1242,7 +1266,7 @@ def test_negatives_required_passes_and_fires():
 
 def test_new_required_rules_stay_silent_without_their_trigger():
     quiet = "A paragraph about something else entirely, with 79/120 and 98\\% in it but no trigger."
-    for name in ("floor-facts", "floor-fit-r", "sf-oracle-split", "negatives-caption-facts",
+    for name in ("floor-facts", "floor-fit-r", "sf-oracle-split", "sf-ceiling-facts", "negatives-caption-facts",
                  "negatives-69-is-the-lattice-bar"):
         assert not _required_fires(quiet, name), name
 
@@ -1291,7 +1315,9 @@ if __name__ == "__main__":
              test_floor_required_passes_on_the_measured_values,
              test_floor_required_fires_on_every_edited_value,
              test_superseded_97_above_3sigma_sentence_fires,
+             test_floor_97_rule_stops_at_the_next_percentage,
              test_split_required_passes_and_fires,
+             test_ceiling_required_passes_and_fires,
              test_negatives_required_passes_and_fires,
              test_new_required_rules_stay_silent_without_their_trigger,
 )

@@ -82,7 +82,8 @@ showed it over-iterated 10×.
 
 ## 4. Accuracy: the ceiling, and why every single-frame lever fails
 
-Blind indexing on sparse cxidb saturates at **~71% gated** (reachable ceiling ~76%).
+Blind indexing on sparse cxidb saturates at **~71% gated** (oracle-reachable ceiling
+**86/120 ≈ 72%**; `oracle_blind.py` floors that printout to 71%).
 An oracle diagnostic shows the gap is **28% generation-miss** (true axes absent from the
 candidate set) vs only **6–8% selection-miss**. Every attempt to push past this failed,
 all for the same reason — **the data is spurious-limited**: on a sparse single shot the
@@ -101,6 +102,10 @@ spurious signal faster than true signal.
 | algorithm unrolling (learned M3 schedule) | 35% | self-sup loss rewards basin collapse |
 | reverse/Chamfer cost (predict→observed) | 48/30/23% | every metric gameable; Ewald fit (λ=1.322 Å) works but doesn't help |
 | recover below-threshold peaks | 50→26% | sub-threshold set is mostly noise |
+
+This scorer-development sweep is at a looser bar than the ≥25%-of-spots gate above: the
+best row is 83/120 = 69% at the correct-lattice bar, versus 65% at the ≥25% gate; the
+shipped code now gives 85/120 (71%) and 79/120 (66%) at those same two bars.
 
 **Conclusion:** the ~71% single-frame ceiling is neither a scoring nor a missing-data
 deficiency. The ~100 strongest peaks is near-optimal; the peakfinder threshold discards

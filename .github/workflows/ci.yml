@@ -77,6 +77,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_panel_stack_integrate.py
 
+      # The --images route (integrate_cxi) now puts the .cxi through the SAME layout decision as
+      # _load_image (predict._leading_axis_is_events): a stacked (event, ss, fs) file still integrates
+      # every event against its own frame, while an un-assembled (panel, ss, fs) stack under a
+      # multi-panel geometry is refused by name (glint#148) instead of data[ev] handing back one
+      # panel's pixels as event ev's frame. Builds its files with h5py (installed above).
+      - name: experiments/test_integrate_cxi_layout.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_integrate_cxi_layout.py
+
       # The .geom `data =` key must reach integration (glint#143). parse_geom used to drop it,
       # so the peaks+--integrate route could never read a non-default dataset path; #142's test
       # passed data_path explicitly, which is why CI stayed green through the defect.
@@ -197,6 +206,27 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_gate_constants_dedup.py
 
+      # The pooled-vote acceptance gate (CONSENSUS_MIN_FRAC / _MIN_LEAD) now lives in the torch-free
+      # glint.multishot and is only RE-EXPORTED by hybrid_stream, so its shipped value is readable on
+      # this runner for the first time: the numpy half pins (0.02, 1.5) and that hybrid_stream.py no
+      # longer carries a second os.environ definition; the re-export half self-skips without torch.
+      - name: experiments/test_consensus_gate_constants.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_consensus_gate_constants.py
+
+      # Re-derives the sequential-stop FACTS (seqstop_median_lock, seqstop_false_locks,
+      # poolgate_clean_lock_max, poolgate_clean_maxpool) by replaying RunningConsensus over the cached
+      # cxidb-120 N-best (nbest_120.npz) in deposition order and 400 seeded random orders, ~2 s,
+      # numpy only. Until now those four were measured once by an out-of-tree script and only their
+      # QUOTES were guarded, so a stop-rule change left CI green. SCOPE: the seqstop_* pair is the
+      # n=480 headline and no 480-frame N-best cache is in the tree, so what this re-derives for them
+      # is the FACTS comment's own "The 120 reproduces (median 6, 0/400)"; the poolgate_clean_* pair IS
+      # an n=120 measurement. The two tail values are seed-pinned; the docstring says which checks are
+      # load-bearing and which are "the tail has not moved".
+      - name: experiments/test_seqstop_replay.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_seqstop_replay.py
+
 
       # The GPU comparison itself cannot run here, but its PASS/FAIL RULES can: without cupy this
       # runs compare_outputs' sabotage self-test (NaN/inf in each of the four outputs, tolerance
@@ -293,3 +323,14 @@ jobs:
       # crash, it silently changes WHICH candidates survive (glint_index.py::_first_index_per_group).
       - name: glint/test_first_index_per_group.py
         run: python -m glint.test_first_index_per_group
+
+      # The N-best PREFIX contract -- index_blind_nbest(q, 10)[:3] == index_blind_nbest(q, 3), the
+      # promise #145's cascade reuses one N-best call on -- checked on 3 real cxidb frames. It is
+      # device-independent (N only truncates), so it runs for REAL here on CPU torch (~0.5 s a frame;
+      # the CPU scores reproduce nbest_120.npz's GPU scores to 6 decimals) instead of waiting for a
+      # GPU node. Self-skips on torch < 1.12 (pyproject's floor -- the 1.11 leg exists for
+      # glint_index's scatter_reduce shim, not the indexer) and without torch, which is the path
+      # run_ci_locally.py exercises.
+      - name: experiments/test_nbest_prefix.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_nbest_prefix.py

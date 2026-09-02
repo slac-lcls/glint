@@ -268,12 +268,14 @@ class IndexGLINTParameters(ThirdPartyParameters):
     )
     event_axis: Optional[Literal["auto", "event", "panel"]] = Field(
         None,
-        description="What the leading axis of a 3-D image dataset means on the `peaks` + "
-                    "`integrate` route. Unset/`auto` asks the file's per-event metadata "
-                    "(nPeaks, LCLS/eventNumber, ...) and REFUSES to guess when a multi-panel "
-                    "geometry leaves it ambiguous; `event` and `panel` say so outright. Has no "
-                    "meaning on the `images` route (a stacked .cxi is (event, ss, fs) by "
-                    "definition) or on raw xtc (frames come from psana). glint#136.",
+        description="What the leading axis of a 3-D image dataset means on BOTH `integrate` "
+                    "routes -- `peaks` (integrate_frames) and `images` (integrate_cxi, which since "
+                    "glint#183 checks its (event, ss, fs) reading against the file and refuses an "
+                    "un-assembled panel stack by name, glint#148). Unset/`auto` asks the file's "
+                    "per-event metadata (nPeaks, LCLS/eventNumber, ...) and REFUSES to guess when a "
+                    "multi-panel geometry leaves it ambiguous; `event` and `panel` say so outright, "
+                    "and are the named way out of that refusal. Has no meaning on raw xtc (frames "
+                    "come from psana). glint#136.",
         flag_type="--", rename_param="event-axis",
     )
     bg_mode: Optional[Literal["clipmean", "median", "mean"]] = Field(

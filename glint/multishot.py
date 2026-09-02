@@ -25,6 +25,22 @@ from .peakfind import find_peaks_classical
 from .transform import fft_volume
 
 
+# Consensus acceptance for the POOLED N-best vote (hybrid_stream), on top of consensus_cell's
+# absolute min_support=3. ONE home, here, next to consensus_cell: hybrid_stream re-exports the pair
+# (`from glint.hybrid_stream import CONSENSUS_MIN_FRAC` keeps working) but imports torch at module
+# level, so a torch-free caller or test could not read the shipped gate from there. Env-overridable
+# so a run can be re-scored without an edit; set MIN_FRAC=0 / MIN_LEAD=1 to reproduce pre-gate
+# behaviour.
+#   MIN_FRAC -- the winning cluster must be >= this share of the POOLED hypotheses (n_frames*nbest).
+#               2% is ~7 of the 360 hypotheses in the 120-frame benchmark (a no-op there, where the
+#               true cluster runs to the hundreds) but ~126 of 6300 on a multi-thousand-frame run,
+#               which is what a chance 23-cluster needs to clear and cannot.
+#   MIN_LEAD -- the winner must beat the RUNNER-UP cluster by this factor; a near-tie is an
+#               ambiguous lock no matter how big it is.
+CONSENSUS_MIN_FRAC = float(os.environ.get("GLINT_CONSENSUS_MIN_FRAC", "0.02"))
+CONSENSUS_MIN_LEAD = float(os.environ.get("GLINT_CONSENSUS_MIN_LEAD", "1.5"))
+
+
 def reference_lattice(M_ref, qmax):
     """All reciprocal-lattice vectors of cell M_ref within |g| <= qmax (one orientation)."""
     B = np.linalg.inv(np.asarray(M_ref, float)).T

@@ -19,19 +19,12 @@ import numpy as np
 from glint.glint_fast import index_blind_fast, index_blind_nbest, load
 from glint.replica_gpu import index_known_gpu_cell
 from glint.multishot import consensus_cell, group_medoid, same_lattice
+# The pooled-vote acceptance gate (min_frac / min_lead, env-overridable) LIVES in glint.multishot
+# next to consensus_cell, so torch-free code can read it; re-exported here because callers and
+# experiments/test_consensus_gate.py import it from this module (and rebind it here for A/Bs --
+# hybrid_index reads THIS module's globals at call time, so that still works).
+from glint.multishot import CONSENSUS_MIN_FRAC, CONSENSUS_MIN_LEAD   # noqa: F401  (re-export)
 from glint.stream import write_stream
-
-
-# Consensus acceptance, on top of consensus_cell's absolute min_support=3. Env-overridable so a run
-# can be re-scored without an edit; set MIN_FRAC=0 / MIN_LEAD=1 to reproduce pre-gate behaviour.
-#   MIN_FRAC -- the winning cluster must be >= this share of the POOLED hypotheses (n_frames*nbest).
-#               2% is ~7 of the 360 hypotheses in the 120-frame benchmark (a no-op there, where the
-#               true cluster runs to the hundreds) but ~126 of 6300 on a multi-thousand-frame run,
-#               which is what a chance 23-cluster needs to clear and cannot.
-#   MIN_LEAD -- the winner must beat the RUNNER-UP cluster by this factor; a near-tie is an
-#               ambiguous lock no matter how big it is.
-CONSENSUS_MIN_FRAC = float(os.environ.get("GLINT_CONSENSUS_MIN_FRAC", "0.02"))
-CONSENSUS_MIN_LEAD = float(os.environ.get("GLINT_CONSENSUS_MIN_LEAD", "1.5"))
 
 
 def _hkl(q, M):

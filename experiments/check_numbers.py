@@ -1527,6 +1527,19 @@ class Required:
         self._needles = tuple(re.compile(n, self.flags) for n in self.needed)
 
 
+# ⚑ THE K IS PART OF THE CLAIM. floor_at_K is 50.6 only AT K=70,400 -- the entire point of the
+# Fig. 5(b) fit is that the floor GROWS as sqrt(2 ln K) -- so a floor quoted against a different K
+# is a different measurement. Without this needle "places that floor at 50.6 inliers at K=700"
+# satisfied every other needle in floor-facts and passed (#184 review, suppressed comment). The last
+# three digits are split off so the manuscript's LaTeX separator ($K=70{,}400$), a plain comma, and
+# no separator at all all match; derived from FACTS so it cannot drift from the banked K.
+# The trailing (?![\d.]) is load-bearing: without a right boundary the needle matched the "70400"
+# PREFIX of "704000" and a K an order of magnitude out still passed. `_lit`'s own lookbehind cannot
+# be used on the second group -- with no separator the preceding char is a digit, which would reject
+# the legitimate bare "70400" -- so the left boundary comes from the anchoring `K\s*=\s*` instead.
+_FLOOR_K_NEEDLE = (r"K\s*=\s*" + f"{int(FACTS['floor_K']):d}"[:-3]
+                   + r"\s*(?:\{,\}|,)?\s*" + f"{int(FACTS['floor_K']):d}"[-3:] + r"(?![\d.])")
+
 REQUIRED = [
     # ⚑ Triage 153/216 (#184 review): the sf_*/floor_* keys were banked, arithmetic-checked, and read
     # by NOTHING that looks at a deliverable -- so the superseded "97% above +3 sigma" sentence and a
@@ -1536,6 +1549,7 @@ REQUIRED = [
              (_lit(f"{FACTS['floor_above_pct']:d}") + r"\s*\\?%\s*\(\s*"
               + _lit(f"{FACTS['floor_above_of80']:d}") + "/" + _lit(f"{FACTS['floor_real_frames']:d}") + r"\s*\)",
               r"floor at\s+" + _lit(f"{FACTS['floor_at_K']:.1f}") + r"\s+inliers",
+              _FLOOR_K_NEEDLE,
               _lit(f"{FACTS['floor_measured_at_K']:.1f}") + r"\s*\\pm\s*" + _lit(f"{FACTS['floor_measured_sd_at_K']:.1f}"),
               _lit(f"{FACTS['floor_median_sigmas']:.1f}") + r"\s+standard deviations",
               r"mean\s+" + _lit(f"{FACTS['floor_mean_sigmas']:.1f}"),
@@ -1571,7 +1585,14 @@ REQUIRED = [
     Required("sf-ceiling-facts", r"~?\s*" + _lit(f"{FACTS['sf_lattice_rate_pct']:d}") + r"\s*\\?%\s+gated",
              (r"(?:oracle[- ]?)?reachable ceiling",
               _lit(f"{FACTS['sf_ceiling_of120']:d}") + "/120",
-              r"~?\s*" + _lit(f"{round(100.0 * FACTS['sf_ceiling_of120'] / 120):d}") + r"\s*\\?%"),
+              r"~?\s*" + _lit(f"{round(100.0 * FACTS['sf_ceiling_of120'] / 120):d}") + r"\s*\\?%",
+              # ...and the FLOORED value, where the text claims one. The rule pinned only the
+              # rounded 72%, so "86/120 ~ 72%; oracle_blind.py floors that printout to 76%" passed
+              # with a stale floored figure sitting beside a correct rounded one (#184 review,
+              # suppressed comment). Both renderings of one measurement are published together in
+              # GLINT_REPORT.md, so both have to be tied to it.
+              r"floors[^.]{0,40}"
+              + _lit(f"{100 * int(FACTS['sf_ceiling_of120']) // 120:d}") + r"\s*\\?%"),
              f"any published reachable ceiling must be tied to the measured oracle reach "
              f"{FACTS['sf_ceiling_of120']}/120 = {round(100.0 * FACTS['sf_ceiling_of120'] / 120)}% "
              f"rounded; oracle_blind.py floors its stdout to {100 * FACTS['sf_ceiling_of120'] // 120}%, "

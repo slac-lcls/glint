@@ -1213,12 +1213,13 @@ def _floor_prose(**edit) -> str:
              meas=f"{F['floor_measured_at_K']:.1f}", msd=f"{F['floor_measured_sd_at_K']:.1f}",
              med=f"{F['floor_median_sigmas']:.1f}", mean=f"{F['floor_mean_sigmas']:.1f}",
              p3=f"{F['floor_above_3sd_pct']:d}", n3=f"{F['floor_above_3sd_of80']:d}",
-             r=f"{F['floor_fit_r']:.3f}")
+             r=f"{F['floor_fit_r']:.3f}",
+             K="70{,}400")          # the manuscript's LaTeX rendering of FACTS['floor_K']
     v.update(edit)
     return (f"When the real crystal frames are evaluated against the reference cell, "
             f"${v['pct']}\\%$ (${v['n']}/{v['den']}$) score above the extreme-value floor: the "
             f"$\\sqrt{{2\\ln K}}$ fit of Fig.~\\ref{{fig:stat_floor}}(\\emph{{b}}) places that floor at "
-            f"${v['fl']}$ inliers at $K=70{{,}}400$, consistent with the directly measured null maximum "
+            f"${v['fl']}$ inliers at $K={v['K']}$, consistent with the directly measured null maximum "
             f"of ${v['meas']}\\pm{v['msd']}$. The median separation is {v['med']} standard deviations of "
             f"the null-maximum distribution (mean {v['mean']}), and ${v['p3']}\\%$ (${v['n3']}/{v['den']}$) "
             f"lie more than $3\\sigma$ above that distribution's mean. The observed growth is consistent "
@@ -1240,11 +1241,12 @@ def _split_prose(**edit) -> str:
 def _ceiling_prose(**edit) -> str:
     F = _cn.FACTS
     v = dict(c=f"{F['sf_ceiling_of120']:d}",
-             p=f"{round(100.0 * F['sf_ceiling_of120'] / 120):d}")
+             p=f"{round(100.0 * F['sf_ceiling_of120'] / 120):d}",
+             fp=f"{100 * int(F['sf_ceiling_of120']) // 120:d}")   # the FLOORED stdout rendering
     v.update(edit)
     return (f"Blind indexing on sparse cxidb saturates at $71\\%$ gated "
             f"(oracle-reachable ceiling ${v['c']}/120 ~ {v['p']}\\%$; "
-            f"oracle_blind.py floors that printout to $71\\%$).")
+            f"oracle_blind.py floors that printout to ${v['fp']}\\%$).")
 
 
 def _negatives_caption(**edit) -> str:
@@ -1268,6 +1270,21 @@ def test_floor_required_passes_on_the_measured_values():
     for name in ("floor-facts", "floor-fit-r"):
         assert not _required_fires(_floor_prose(), name), name
     assert not _fires(_floor_prose(), "floor-97-3sigma")
+
+
+def test_floor_required_fires_on_the_wrong_K():
+    """floor_at_K is 50.6 only AT K=70,400 -- the fit's whole content is that the floor grows with K.
+
+    The rule checked the floor value and never the K it was quoted against, so a manuscript saying
+    "50.6 inliers at K=700" satisfied every needle (#184 review, suppressed comment). Both the
+    separator-free and plain-comma renderings must still pass, since the needle exists to pin the
+    NUMBER, not the manuscript's typography.
+    """
+    assert not _required_fires(_floor_prose(), "floor-facts")
+    for good in ("70{,}400", "70,400", "70400"):
+        assert not _required_fires(_floor_prose(K=good), "floor-facts"), f"rejects valid {good!r}"
+    for bad in ("700", "7040", "704000", "70{,}401"):
+        assert _required_fires(_floor_prose(K=bad), "floor-facts"), f"silent on K={bad!r}"
 
 
 def test_floor_required_fires_on_every_edited_value():
@@ -1299,7 +1316,9 @@ def test_split_required_passes_and_fires():
 
 def test_ceiling_required_passes_and_fires():
     assert not _required_fires(_ceiling_prose(), "sf-ceiling-facts")
-    for edit in (dict(c="85"), dict(p="76")):
+    # fp="76" is the #184 finding: a stale FLOORED printout beside a correct rounded 72%. The rule
+    # pinned only the rounded value, so that text passed.
+    for edit in (dict(c="85"), dict(p="76"), dict(fp="76"), dict(fp="72")):
         assert _required_fires(_ceiling_prose(**edit), "sf-ceiling-facts"), f"silent on {edit}"
 
 
@@ -1364,6 +1383,7 @@ if __name__ == "__main__":
              test_main_fails_on_missing_or_unreadable_in_repo_defaults,
              test_deprecated_saturating_batch_alias_is_preserved,
              test_floor_required_passes_on_the_measured_values,
+             test_floor_required_fires_on_the_wrong_K,
              test_floor_required_fires_on_every_edited_value,
              test_superseded_97_above_3sigma_sentence_fires,
              test_floor_97_rule_stops_at_the_next_percentage,

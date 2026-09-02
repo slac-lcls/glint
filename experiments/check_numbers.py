@@ -2473,11 +2473,11 @@ def check_arithmetic() -> list[str]:
     # later cannot reintroduce it.
     for _k in ("sf_lattice_of120", "sf_strict_of120", "sf_selmiss_of120", "sf_genmiss_of120",
                "sf_ceiling_of120", "sf_negatives_lattice_of120", "floor_real_frames",
-               "floor_null_pool", "floor_above_of80", "floor_above_3sd_of80"):
+               "floor_null_pool", "floor_above_of80", "floor_above_3sd_of80", "floor_K"):
         if float(F[_k]) != int(F[_k]):
-            bad.append(f"  FACTS: {_k} = {F[_k]} is a frame COUNT and must be integral -- a "
-                       f"fractional value is silently truncated by the int() coercions in the "
-                       f"partition and percentage checks, leaving every guard green")
+            bad.append(f"  FACTS: {_k} = {F[_k]} is a COUNT and must be integral -- a "
+                       f"fractional value is silently truncated by int() coercions used by "
+                       f"arithmetic checks or REQUIRED renderings")
     # The oracle split PARTITIONS the 120: oracle_blind.py's loop is an if/elif/else over solved,
     # selection-miss, generation-miss, so the three must total the set exactly. EXACT, and on RAW
     # values -- close()'s 3% band would accept any total from 116 to 124, and int() would truncate

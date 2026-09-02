@@ -10,9 +10,14 @@ plausible cells, just not the same ones the vote was taken over.
 
 WHAT IT CHECKS, on 3 real frames from experiments/frames_cxidb_clean.txt (the first three with >= 6
 peaks): `index_blind_nbest(q, 10)[:3]` equals `index_blind_nbest(q, 3)` element-wise -- same order,
-cells np.allclose, scores allclose -- and the check is not vacuous: each frame must yield at least
-one hypothesis, and at least one frame must yield MORE than 3 at N=10, so the truncation is actually
-exercised. The contract is device-independent, so this runs on whatever device glint_fast picked
+cells and scores EXACTLY equal, not merely allclose. Exactness is the point: N only truncates an
+already-computed sequence, so ANY difference is a computation keyed on N, which is what this test
+exists to catch (Copilot review of #183 -- a tolerant compare would let a small N-dependent change
+through). #145 measured the slice bit-for-bit on an A100 and this file measures it bit-for-bit on
+CPU torch; if a device ever shows a nonzero difference here, that is a nondeterministic kernel and
+a finding in itself, not a reason to loosen the compare. The check is not vacuous: each frame must
+yield at least one hypothesis, and at least one frame must yield MORE than 3 at N=10, so the
+truncation is actually exercised. The contract is device-independent, so this runs on whatever device glint_fast picked
 (CPU torch indexes one of these frames in ~0.5 s; a GPU run is the owner's to do).
 
 SKIPS, exit 0, when torch is not importable (glint_fast imports it unconditionally; the CPU CI job
@@ -77,9 +82,11 @@ def main():
               len(small) == min(N_SMALL, len(big)), f"{len(small)} vs {len(big)}")
         any_truncated |= len(big) > N_SMALL
         for i, ((cs, ss), (cb, sb)) in enumerate(zip(small, big)):
-            check(f"frame {k} rank {i}: cell of N={N_SMALL} == cell of N={N_BIG} (same order)",
-                  np.allclose(cs, cb), f"max |diff| {np.abs(np.asarray(cs) - np.asarray(cb)).max():.3g}")
-            check(f"frame {k} rank {i}: score equal", np.allclose(ss, sb), f"{ss:.6f} vs {sb:.6f}")
+            cs, cb = np.asarray(cs, float), np.asarray(cb, float)
+            check(f"frame {k} rank {i}: cell of N={N_SMALL} == cell of N={N_BIG} EXACTLY (same order)",
+                  cs.shape == cb.shape and np.array_equal(cs, cb),
+                  f"max |diff| {np.abs(cs - cb).max() if cs.shape == cb.shape else 'shape'}")
+            check(f"frame {k} rank {i}: score identical", ss == sb, f"{ss!r} vs {sb!r}")
     check(f"at least one frame yields > {N_SMALL} hypotheses at N={N_BIG} (truncation exercised)",
           any_truncated)
     return 0 if not fails else 1

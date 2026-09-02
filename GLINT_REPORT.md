@@ -82,8 +82,9 @@ showed it over-iterated 10×.
 
 ## 4. Accuracy: the ceiling, and why every single-frame lever fails
 
-Blind indexing on sparse cxidb saturates at **~71% gated** (oracle-reachable ceiling
-**86/120 ≈ 72%**; `oracle_blind.py` floors that printout to 71%).
+Blind indexing on sparse cxidb reaches **85/120 ≈ 71% at the correct-lattice bar**
+and **79/120 ≈ 66% at the ≥25%-of-spots gate** (strict-bar oracle-reachable
+ceiling **86/120 ≈ 72%**; `oracle_blind.py` floors that printout to 71%).
 An oracle diagnostic shows the gap is **28% generation-miss** (true axes absent from the
 candidate set) vs only **6–8% selection-miss**. Every attempt to push past this failed,
 all for the same reason — **the data is spurious-limited**: on a sparse single shot the

@@ -386,6 +386,21 @@ def laue_ops_4mmm():
     return laue_ops("4/mmm")
 
 
+def _op_set(ops):
+    """Operator list -> a hashable set, so two Laue classes can be compared as groups."""
+    return {tuple(np.asarray(o, int).ravel()) for o in ops}
+
+
+def _is_subgroup(sub, sup):
+    """Is every operator of `sub` present in `sup`? This is the test for whether a Laue class is a
+    LEGITIMATE lower-symmetry choice on a lattice whose holohedry is `sup` -- 4/m under 4/mmm, -3 or
+    -3m under 6/mmm, m-3 under m-3m, 2/m_uab under mmm -- as opposed to a genuine contradiction (a
+    monoclinic unique axis the header does not name, or a class from another crystal system). An
+    equality test would flag every one of the lower classes `laue=` exists to express (glint#186
+    review), since the header carries the lattice and never the point group."""
+    return _op_set(sub) <= _op_set(sup)
+
+
 def laue_from_symmetry(sym):
     """Laue class implied by a CrystFEL-style symmetry record {lattice_type, centering, unique_axis}
     -- the one StreamDriver(stream_symmetry=...) stamps on every chunk -- or None when it names no
@@ -677,17 +692,32 @@ class StreamDriver:
         #                    passes neither.
         # An explicit laue that contradicts stream_symmetry WARNS rather than fails: the operator is
         # the one who knows which of the two is wrong for this sample.
-        derived = laue_from_symmetry(stream_symmetry)                  # None without a lattice_type
         if ops is not None:
+            # Explicit operators win OUTRIGHT, so the header is never consulted: deriving from it
+            # first meant an unknown lattice_type or a malformed monoclinic unique_axis could still
+            # raise on a path whose operators make the header's symmetry irrelevant (glint#186
+            # review). `laue` is then only a reporting label -- see _standardize.
             self.ops = [np.asarray(o, int) for o in ops]
             self.laue = laue_name(laue) if laue is not None else None
+            self._ops_explicit = True
         else:
+            derived = laue_from_symmetry(stream_symmetry)              # None without a lattice_type
             self.laue = laue_name(laue if laue is not None else (derived or "4/mmm"))
             self.ops = laue_ops(self.laue)
-        if laue is not None and derived is not None and laue_name(laue) != laue_name(derived):
-            warnings.warn(f"laue={laue!r} but stream_symmetry says lattice_type="
-                          f"{stream_symmetry.get('lattice_type')!r} ({laue_name(derived)}): the "
-                          f"live merge uses {laue_name(laue)}, the stream header the other (glint#180)")
+            self._ops_explicit = False
+            # A LOWER class on the same lattice is legitimate and is the reason `laue=` exists: the
+            # header names the lattice, not the point group, so 4/m on tetragonal, -3/-3m on
+            # hexagonal P and m-3 on cubic are all valid and must not be reported as contradictions
+            # (glint#186 review). The test is therefore subgroup, not equality -- what remains a
+            # real conflict is a class the header's holohedry does not contain, such as a monoclinic
+            # unique axis the record puts elsewhere, or a class from another crystal system.
+            if (laue is not None and derived is not None
+                    and not _is_subgroup(self.ops, laue_ops(derived))):
+                warnings.warn(f"laue={laue!r} is not a subgroup of the holohedry implied by "
+                              f"stream_symmetry lattice_type="
+                              f"{stream_symmetry.get('lattice_type')!r} ({laue_name(derived)}): the "
+                              f"live merge uses {laue_name(laue)}, the stream header the other "
+                              f"(glint#180)")
         self.snr_bins = snr_bins
         # GLINT_DEVICE_MERGE=1 relocates the running scatter-add onto the GPU (deferred,
         # order-faithful, bit-identical to the host merge). Host path stays the default for A/B.
@@ -958,8 +988,15 @@ class StreamDriver:
         axis in c, where laue_ops puts it, and _conventional_tetragonal arranges that by length;
         every other class takes the cell exactly as handed in -- an orthorhombic cell has no unique
         axis to find, and no length rule locates the unique axis of a monoclinic or hexagonal one, so
-        the setting is the caller's (known-cell) or the reducer's (blind lock) responsibility."""
+        the setting is the caller's (known-cell) or the reducer's (blind lock) responsibility.
+
+        With explicit `ops` this is the identity: `laue` is then a reporting label only, and using it
+        to permute axes would impose a setting the supplied operators never asked for -- e.g.
+        ops=laue_ops("-1"), laue="4/mmm" would otherwise tetragonally permute a triclinic merge
+        (glint#186 review)."""
         M = np.asarray(M, float)
+        if self._ops_explicit:
+            return M
         return _conventional_tetragonal(M) if self.laue in TETRAGONAL_LAUE else M
 
     def _lock(self, Mc, support=None, standardize=False):
@@ -1176,7 +1213,17 @@ class StreamDriver:
         adaptive-relock extras) -- recorded per chunk so an offline merger can separate the sub-runs
         instead of silently co-merging two different crystals."""
         self.n_indexed += 1
-        Mcan = _canonical_axes(M)                            # cross-frame consistent hkl setting
+        # ONE setting for the reference and every frame (glint#186 review). This used to be
+        # _canonical_axes(M) -- an unconditional (long, long, short) sort -- while HKLGrid was built
+        # from the reference cell as _standardize left it. The two disagree for any class whose
+        # standardizer is not that sort: on a 30/40/50 orthorhombic cell the grid's h bound is sized
+        # for 30 A while prediction would read h along 40 A, clipping valid reflections, and for the
+        # monoclinic and trigonal settings the reorder can move the unique axis off the one the
+        # selected operators assume. Standardizing frames the same way the reference was standardized
+        # makes grid, prediction and merge share a setting by construction; where the standardizer is
+        # the identity the frame inherits its setting from registration against Mc, which is the same
+        # rule the docstring states for Mc itself.
+        Mcan = self._standardize(M)
         if self.double_hit:                                 # deflate-and-reindex: a 2nd crystal in this shot?
             resid = deflate_peaks(self._q[i], Mcan)
             if len(resid) >= self.min_peaks:

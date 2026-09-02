@@ -29,8 +29,8 @@ import numpy as np
 import glint.stream_driver as sd
 from glint.lattice import cell_to_Ar
 from glint.multishot import same_lattice
-from glint.predict import _hkl_grid, recip_from_M
-from glint.stream_driver import (MergeAccumulator, StreamDriver, laue_ops, laue_ops_4mmm,
+from glint.predict import _canonical_axes, _hkl_grid, recip_from_M
+from glint.stream_driver import (MergeAccumulator, StreamDriver, laue_name, laue_ops, laue_ops_4mmm,
                                  theoretical_unique)
 
 N = 64
@@ -88,6 +88,12 @@ def _feed(acc, frames):
 
 def _same_ops(G1, G2):
     return len(G1) == len(G2) and all(np.array_equal(a, b) for a, b in zip(G1, G2))
+
+
+def _same_M(a, b):
+    """Exact equality of two 3x3 cell matrices (the settings under test are permutations and sign
+    flips of one another, so exactness is the right bar -- no tolerance to hide a swap in)."""
+    return np.array_equal(np.asarray(a, float), np.asarray(b, float))
 
 
 def _eq(a, b):
@@ -272,6 +278,96 @@ def test_relock_extras_inherit_the_ops_and_skip_tetragonal_standardization_for_m
         sd._conventional_tetragonal = real
 
 
+# ---------------------------------------------------------------- glint#186 review follow-ups
+
+
+def test_a_lower_class_on_the_same_lattice_is_not_a_contradiction():
+    """A Laue class BELOW the header's holohedry is legitimate and is the reason `laue=` exists: the
+    stream record names the lattice, never the point group. The compatibility test is therefore
+    subgroup, not equality -- an equality test flagged 4/m on tetragonal, 6/m on hexagonal and m-3 on
+    cubic, i.e. exactly the cases the API tells the caller to spell out (glint#186 review)."""
+    for laue, lt in (("4/m", "tetragonal"), ("6/m", "hexagonal"), ("-3m1", "hexagonal"),
+                     ("-3", "hexagonal"), ("m-3", "cubic"), ("2/m_uab", "monoclinic")):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            d = _driver(ORTHO, laue=laue, stream_symmetry=dict(lattice_type=lt))
+        assert d.laue == laue_name(laue), (laue, d.laue)
+        assert not [x for x in w if "subgroup" in str(x.message) or "glint#180" in str(x.message)], (
+            f"{laue} on {lt} is a subgroup of its holohedry and must not be reported as a conflict: "
+            f"{[str(x.message) for x in w]}")
+    # ...and a class the holohedry does NOT contain still warns, in both directions.
+    for laue, lt in (("4/mmm", "orthorhombic"),     # higher: 16 operators the lattice cannot carry
+                     ("2/m_uac", "monoclinic"),     # same class, unique axis the record puts in b
+                     ("mmm", "trigonal")):          # another crystal system
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            _driver(ORTHO, laue=laue, stream_symmetry=dict(lattice_type=lt))
+        assert any("glint#180" in str(x.message) for x in w), (laue, lt,
+                                                               [str(x.message) for x in w])
+
+
+def test_explicit_ops_skip_header_derivation_entirely():
+    """Explicit operators win outright, so a header the operators make irrelevant must not be parsed
+    at all -- deriving first meant an unknown lattice_type or a malformed monoclinic unique_axis
+    raised on a path that never uses the result (glint#186 review)."""
+    for sym in (dict(lattice_type="not-a-lattice"),
+                dict(lattice_type="monoclinic", unique_axis="c1")):
+        d = _driver(ORTHO, ops=laue_ops("-1"), stream_symmetry=sym)   # must not raise
+        assert _same_ops(d.ops, laue_ops("-1"))
+    # without ops the same records are still rejected -- the validation is not weakened, only skipped
+    for sym in (dict(lattice_type="not-a-lattice"),
+                dict(lattice_type="monoclinic", unique_axis="c1")):
+        try:
+            _driver(ORTHO, stream_symmetry=sym)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"a malformed record must still be rejected when it is used: {sym}")
+
+
+def test_the_laue_label_does_not_permute_axes_when_ops_are_explicit():
+    """With `ops` supplied, `laue` is documented as a reporting label -- so it must not reach the
+    axis standardizer. ops=laue_ops("-1") with laue="4/mmm" used to tetragonally permute a blind lock
+    the caller's triclinic operators never asked to be permuted (glint#186 review)."""
+    d = _driver(TET, ops=laue_ops("-1"), laue="4/mmm")
+    assert d.laue == "4/mmm" and _same_ops(d.ops, laue_ops("-1"))
+    M = cell_to_Ar(25.0, 40.0, 40.0, 90, 90, 90)          # 4-fold in a: a length rule would move it
+    assert _same_M(d._standardize(M), M), "explicit ops: the label must not standardize"
+    d._lock(M, standardize=True)
+    assert _same_M(d.Mc, M), "a lock must not permute it either"
+    # the same driver WITHOUT explicit ops does standardize, so the test is not vacuous
+    d2 = _driver(TET, laue="4/mmm")
+    assert not _same_M(d2._standardize(M), M), "no ops: 4/mmm must still put the 4-fold axis in c"
+
+
+def test_frames_are_canonicalized_in_the_reference_setting():
+    """The grid is built from the reference cell as _standardize left it, so every frame must be put
+    in THAT setting -- not through an unconditional (long, long, short) sort. On 30/40/50 under mmm
+    the sort moved h from the 30 A axis to the 40 A one while the grid's h bound was still sized for
+    30 A, clipping valid reflections (glint#186 review). Pins the call site, which the accumulator
+    tests do not reach."""
+    seen = {}
+    for laue, Mc in (("mmm", ORTHO), ("4/mmm", TET), (None, TET)):
+        d = _driver(Mc, **({} if laue is None else dict(laue=laue)))
+        real = d.grid.predict
+
+        def spy(M, *a, _real=real, **kw):
+            seen[id(d)] = np.array(M, float)
+            return _real(M, *a, **kw)
+
+        d.grid.predict = spy
+        d._q[0] = np.zeros((0, 3))
+        d._ring[0] = np.zeros((N, N), np.uint16)
+        d._pk[0] = None
+        d._integrate_one(0, np.array(d.Mc, float), d.grid, d.acc)
+        got = seen[id(d)]
+        assert _same_M(got, d._standardize(d.Mc)), (laue, got, d.Mc)
+        if laue == "mmm":
+            assert _same_M(got, d.Mc), "mmm: a frame already in the reference setting must not move"
+            assert not _same_M(got, _canonical_axes(d.Mc)), (
+                "vacuous probe: (long, long, short) must differ here for the test to mean anything")
+
+
 if __name__ == "__main__":
     tests = (test_orthorhombic_set_merges_differently_under_mmm_and_the_default,
              test_default_path_is_bit_identical_to_a_direct_4mmm_accumulator,
@@ -279,7 +375,11 @@ if __name__ == "__main__":
              test_explicit_laue_wins_over_stream_symmetry_with_a_warning,
              test_explicit_ops_are_used_verbatim,
              test_lock_standardizes_the_setting_for_tetragonal_classes_only,
-             test_relock_extras_inherit_the_ops_and_skip_tetragonal_standardization_for_mmm)
+             test_relock_extras_inherit_the_ops_and_skip_tetragonal_standardization_for_mmm,
+             test_a_lower_class_on_the_same_lattice_is_not_a_contradiction,
+             test_explicit_ops_skip_header_derivation_entirely,
+             test_the_laue_label_does_not_permute_axes_when_ops_are_explicit,
+             test_frames_are_canonicalized_in_the_reference_setting)
     ok = 0
     for t in tests:
         try:

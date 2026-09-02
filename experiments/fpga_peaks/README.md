@@ -27,9 +27,16 @@ error, not a bug.
 
 Reference is the projection-round-trip baseline; each arm is a delta from it.
 
+**The bar.** `indexed` counts frames whose picked cell is `same_lattice` with the reference — the
+offline hybrid at the correct-lattice bar, with no reflection-count gate. That is the LOOSE bar; on
+this set it coincides with the >=10-reflection bar and sits 4-6 frames above the >=25%-of-spots gate
+the paper's Table 2 reports (FACTS `sf_lattice_of120` 85 against `sf_strict_of120` 79). These rows
+are therefore comparable **with each other** — the point is the delta each emission constraint
+costs — and not with a published indexing rate.
+
 | arm | indexed | kept pk/frame |
 |---|---|---|
-| baseline (projection round-trip) | **117 / 120** | 137.9 |
+| baseline (projection round-trip; offline, loose bar) | **117 / 120** | 137.9 |
 | integer positions | 116 / 120 | 137.9 |
 | seam mask w=8, panel grain (576×336) | 116 / 120 | 129.6 |
 | seam mask w=8, ASIC grain (192×168) | 116 / 120 | 120.5 |

@@ -57,6 +57,58 @@ def cell_params(Ar):
     return (la, lb, lc, ang(b, c), ang(a, c), ang(a, b))
 
 
+# Two axis lengths count as "equal" -- a tetragonal/hexagonal a = b pair -- when they agree to this
+# relative tolerance: the rtol same_lattice / consensus_cell (glint.multishot) already use to call two
+# edge lengths the same edge, reused here rather than inventing a second notion of equality. A
+# per-frame unconstrained refine scatters a and b of a tetragonal crystal by well under 1%, so every
+# frame lands on the same branch of standardize_axes as the reference cell; a genuinely orthorhombic
+# cell whose a and b happen to fall inside it is standardized the same way on every frame too, which
+# is all the hkl grid and the merge need from a setting.
+AXIS_EQUAL_RTOL = 0.05
+
+
+def standardize_axes(M, rtol=AXIS_EQUAL_RTOL):
+    """Bravais-aware standard setting of a real-space basis (columns of ``M`` = a, b, c).
+
+    The ONE axis-setting rule behind ``predict._canonical_axes`` (the per-frame setting the merge
+    and the CrystFEL ``--indexing=file`` handoff use) and ``stream_driver._conventional_tetragonal``
+    (the reference cell the ``HKLGrid`` and the 4/mmm operators are built on). Those used to be two
+    rules -- sort-by-length (long, long, short) versus most-equal-pair -- which agree for c < a
+    (lysozyme 79/79/38) and disagree for c > a: (long, long, short) puts the 4-fold axis of 58/58/130
+    in b, so a frame in that setting was predicted against a grid built for (58, 58, 130) and lost
+    ~19% of its reflections, and the merge folded (h,0,0) with (0,k,0) while keeping (h,0,0) apart
+    from its true equivalent (0,0,l) (glint#181).
+
+      * Two lengths equal within ``rtol`` (tetragonal, hexagonal): the closest pair becomes a, b (in
+        their incoming order) and the outlier becomes c -- the unique axis ``laue_ops_4mmm`` rotates
+        about -- whether c is shorter or longer than a.
+      * No two lengths equal (orthorhombic and lower): (long, long, short), the order
+        ``_canonical_axes`` has always produced, so nothing changes for those cells.
+
+    The result is a column permutation of ``M``; when that permutation is odd, column a is negated
+    so det > 0 (a proper, right-handed basis). The a -> -a flip sends (h,k,l) to (-h,k,l), which the
+    mmm / 4/mmm merge absorbs (the mirror perpendicular to a is one of its operators). Idempotent:
+    ``standardize_axes(standardize_axes(M))`` equals ``standardize_axes(M)`` exactly.
+    """
+    M = np.asarray(M, float)
+    L = np.linalg.norm(M, axis=0)
+
+    def _reldiff(i, j):
+        den = max(L[i], L[j])
+        return abs(L[i] - L[j]) / den if den > 0 else 0.0
+
+    i, j, k = min([(0, 1, 2), (0, 2, 1), (1, 2, 0)], key=lambda p: _reldiff(p[0], p[1]))
+    if _reldiff(i, j) <= rtol:
+        order = [i, j, k]                          # equal pair -> a, b; the outlier -> c (unique axis)
+    else:
+        o = np.argsort(L)                          # shortest axis first
+        order = [o[1], o[2], o[0]]                 # -> (long, long, short)
+    P = M[:, order].copy()
+    if np.linalg.det(P) < 0:
+        P[:, 0] = -P[:, 0]                         # keep a proper (right-handed) basis
+    return P
+
+
 _BR = np.arange(-3, 4)
 _BN = np.array(np.meshgrid(_BR, _BR, _BR, indexing="ij")).reshape(3, -1).T
 _BN = _BN[np.any(_BN != 0, axis=1)]

@@ -264,6 +264,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_gate_project.py
 
+      # ONE axis-setting rule for the frame and for the reference cell (glint#181). _canonical_axes
+      # sorted by length to (long, long, short) while _conventional_tetragonal took the equal pair as
+      # a,b, so for c > a cells (58/58/130) an accepted frame was predicted in a different setting
+      # from the HKLGrid / 4mmm reference and the grid missed 19% of its reflections. Pins both
+      # wrappers to glint.lattice.standardize_axes at random orientations and incoming settings,
+      # right-handed and idempotent, the (long, long, short) fallback for cells with no equal pair,
+      # and 0 missing predictions grid-vs-predict_spots on three tetragonal cells. numpy-only.
+      - name: experiments/test_axis_standardizer.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_axis_standardizer.py
+
       # Not a test: it checks that run_ci_locally.py's STEPS still matches the steps above, so the
       # local "run it as poor as CI" harness cannot quietly fall behind this file and start
       # reporting ALL PASS over a step it no longer runs.

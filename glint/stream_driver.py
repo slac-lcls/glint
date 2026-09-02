@@ -44,6 +44,7 @@ except Exception:                                            # pragma: no cover 
     cp = None
     _HAVE_CP = False
 
+from glint.lattice import standardize_axes
 from glint.lute_bridge import peaks_to_q
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
                            _hkl_grid, project_q)
@@ -607,16 +608,15 @@ def _conventional_tetragonal(M):
     """Permute a tetragonal cell's columns so the unique (4-fold) axis is c, matching laue_ops_4mmm.
 
     Buerger reduction orders axes by length, so the short 4-fold axis of a cell like 79/79/38 can land
-    in column a. The two most-equal-length columns are taken as a,b; the length outlier becomes c.
-    Handedness is preserved (negate one column if the permutation flipped the determinant sign)."""
-    M = np.asarray(M, float)
-    L = np.linalg.norm(M, axis=0)
-    i, j, k = min([(0, 1, 2), (0, 2, 1), (1, 2, 0)],
-                  key=lambda p: abs(L[p[0]] - L[p[1]]) / max(L[p[0]], L[p[1]]))
-    P = M[:, [i, j, k]].copy()
-    if np.linalg.det(P) < 0:
-        P[:, 0] = -P[:, 0]
-    return P
+    in column a. The two equal-length columns are taken as a,b; the length outlier becomes c.
+    Handedness is preserved (negate one column if the permutation flipped the determinant sign).
+
+    A thin wrapper over ``glint.lattice.standardize_axes`` -- the SAME function ``_canonical_axes``
+    applies to every accepted frame in ``_integrate_one``, so the reference cell the ``HKLGrid`` and
+    the 4/mmm operators are built on and the frames predicted against it can no longer land in
+    different settings (glint#181: for c > a cells the frame's 4-fold ended up in b and the grid
+    missed ~19% of its predictions). Cells with no equal pair fall back to (long, long, short)."""
+    return standardize_axes(M)
 
 
 class StreamDriver:

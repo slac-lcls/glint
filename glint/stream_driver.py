@@ -1012,7 +1012,7 @@ class StreamDriver:
             from glint.glint_fast import index_blind_nbest      # torch; imported only in blind mode
             self._blind_index = index_blind_nbest
         else:
-            self._lock(np.asarray(Mc, float))
+            self._lock(np.asarray(Mc, float), standardize=True)
 
     def _standardize(self, M, ref=None):
         """Cell setting for the merge operators (see _lock), decided by the Laue CLASS rather than by
@@ -1052,9 +1052,8 @@ class StreamDriver:
 
         standardize: put the cell in the setting self.ops assume (_standardize: for the tetragonal
         classes the 4-fold axis in c, so laue_ops / theoretical_unique count in the conventional
-        setting; other classes are left as received). Needed for a consensus-locked cell (Buerger
-        reduction orders axes by length, so the short 4-fold axis can land in a/b); a user-supplied
-        known cell is taken as authoritative and left as-is."""
+        setting; other classes are left as received). Needed for both consensus-locked and supplied
+        known cells so the grid, prediction and merge share one setting."""
         Mc = np.asarray(Mc, float)
         if standardize:
             Mc = self._standardize(Mc)

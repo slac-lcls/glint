@@ -157,7 +157,8 @@ def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL):
             order = [int(o[1]), int(o[2]), int(o[0])]
     P = M[:, order].copy()
     if np.linalg.det(P) < 0:
-        P[:, 0] = -P[:, 0]                         # keep a proper (right-handed) basis
+        k = 2 if (laue is not None and laue in UNIQUE_C_LAUE) else 0
+        P[:, k] = -P[:, k]                         # keep a proper (right-handed) basis
     return P
 
 

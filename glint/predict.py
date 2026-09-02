@@ -492,7 +492,31 @@ class StreamWriter:
         return False
 
 
-def _canonical_axes(M):
+def _laue_hint_from_lattice_code(lattice_code):
+    c = str(lattice_code or "").strip().lower()
+    if c.startswith("t"):
+        return "4/mmm"
+    if c.startswith("o"):
+        return "mmm"
+    if c.startswith("h"):
+        return "6/mmm"
+    return None
+
+
+def _laue_hint_from_lattice_type(lattice_type):
+    c = str(lattice_type or "").strip().lower()
+    if c == "tetragonal":
+        return "4/mmm"
+    if c == "orthorhombic":
+        return "mmm"
+    if c == "hexagonal":
+        return "6/mmm"
+    if c == "trigonal":
+        return "-3m1"
+    return None
+
+
+def _canonical_axes(M, laue=None):
     """Per-frame-consistent cell setting (columns of ``M`` = real-space a, b, c) so tetragonal /
     orthorhombic reflections co-merge under the point group: the choice of unique axis c is what a
     422/mmm merge does NOT absorb (a<->b and the Friedel/handedness ambiguity it does).
@@ -505,7 +529,7 @@ def _canonical_axes(M):
     4-fold axis in b while the reference cell's ``HKLGrid`` and 4/mmm operators had it in c
     (glint#181). ``write_fromfile`` (the CrystFEL handoff), ``integrate_cxi`` (native merge) and the
     streaming driver's ``_integrate_one`` all use it, so every merge path shares one setting."""
-    return standardize_axes(M)
+    return standardize_axes(M, laue=laue)
 
 
 def write_fromfile(results, path, lattice_code="aP"):
@@ -523,11 +547,12 @@ def write_fromfile(results, path, lattice_code="aP"):
     sorted to (long, long, short), which for c > a cells labelled the 4-fold axis "b", not "c".
     """
     rows = []
+    laue = _laue_hint_from_lattice_code(lattice_code)
     for r in results:
         M = r.get("M")
         if M is None:
             continue
-        Are = _canonical_axes(M)                                   # standard setting: unique axis c
+        Are = _canonical_axes(M, laue=laue)                        # standard setting: unique axis c
         Br = np.linalg.inv(Are).T * 10.0                           # reciprocal a*,b*,c* in nm^-1 (1/A -> 1/nm)
         v = Br[:, 0].tolist() + Br[:, 1].tolist() + Br[:, 2].tolist()
         ev = r.get("event", "")
@@ -936,7 +961,8 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
                 qobs = qobs[np.isfinite(qobs).all(1)]
                 if len(qobs) >= 6:
                     M_raw, _, _, _ = refine_bravais(qobs, M_raw, sym_refine, sym_refine_tol)
-            M = _canonical_axes(M_raw)                             # standard setting (unique axis c): cross-frame-consistent hkl for the merge
+            M = _canonical_axes(M_raw, laue=_laue_hint_from_lattice_type(sym_refine or r.get("lattice_type")))
+            # standard setting (unique axis c): cross-frame-consistent hkl for the merge
             f = _h5(str(r.get("image")))
             ev = int(r.get("event", 0))
             clen = _meta(clen_spec, f, ev, 0.1)

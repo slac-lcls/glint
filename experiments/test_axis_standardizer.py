@@ -45,7 +45,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from glint.lattice import cell_to_Ar, random_rotation
+from glint.lattice import cell_to_Ar, cell_params, random_rotation
 from glint.predict import _canonical_axes, predict_spots
 from glint.stream_driver import HKLGrid, _conventional_tetragonal
 
@@ -263,6 +263,17 @@ check("every branch is idempotent", idem)
 free = all(np.array_equal(standardize_axes(M_OBL, laue=q), M_OBL)
            for q in ("-1", "2/m_uab", "2/m_uac", "m-3", "m-3m", "-3_R", "-3m_R"))
 check("triclinic / monoclinic / rhombohedral / cubic are left exactly as handed in", free)
+
+# Known class hints are passed through wrappers that have one: they disambiguate near-cubic tetragonal
+# cells, and the handedness fix keeps the hexagonal 120-degree setting.
+near_tp = _canonical_axes(cell_to_Ar(100.0, 100.0, 103.0, 90, 90, 90), laue="4/mmm")
+Ln = _lens(near_tp)
+check("with laue=4/mmm, near-cubic tetragonal keeps the unique axis in c",
+      abs(Ln[0] - Ln[1]) <= 1e-9 and abs(Ln[2] - Ln[0]) > 1.0)
+
+hex_in = cell_to_Ar(40.0, 40.0, 65.0, 90, 90, 120)[:, [1, 0, 2]]   # odd permutation -> handedness fix path
+hex_out = standardize_axes(hex_in, laue="6/mmm")
+check("hexagonal handedness fix preserves gamma=120 setting", abs(cell_params(hex_out)[5] - 120.0) < 1e-9)
 
 
 print("\nHKLGrid built from the reference cell covers every predict_spots reflection of a canonicalised frame")

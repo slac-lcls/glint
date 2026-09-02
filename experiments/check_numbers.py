@@ -1582,8 +1582,11 @@ REQUIRED = [
              f"({FACTS['sf_genmiss_rate_pct']}% and {FACTS['sf_selmiss_rate_pct']}% of 120) -- "
              f"oracle_blind.py at HEAD on frames_cxidb_clean.txt",
              window=600),
-    Required("sf-ceiling-facts", r"~?\s*" + _lit(f"{FACTS['sf_lattice_rate_pct']:d}") + r"\s*\\?%\s+gated",
-             (r"(?:oracle[- ]?)?reachable ceiling",
+    Required("sf-ceiling-facts", r"(?:oracle[- ]?)?reachable ceiling",
+             (_lit(f"{FACTS['sf_lattice_of120']:d}") + r"/120[^.]{0,60}"
+              + _lit(f"{FACTS['sf_lattice_rate_pct']:d}") + r"\s*\\?%[^.]{0,80}"
+              + r"(?:correct[- ]?lattice|lattice bar)",
+              r"(?:oracle[- ]?)?reachable ceiling",
               _lit(f"{FACTS['sf_ceiling_of120']:d}") + "/120",
               r"~?\s*" + _lit(f"{round(100.0 * FACTS['sf_ceiling_of120'] / 120):d}") + r"\s*\\?%",
               # ...and the FLOORED value, where the text claims one. The rule pinned only the
@@ -1594,6 +1597,8 @@ REQUIRED = [
               r"floors[^.]{0,40}"
               + _lit(f"{100 * int(FACTS['sf_ceiling_of120']) // 120:d}") + r"\s*\\?%"),
              f"any published reachable ceiling must be tied to the measured oracle reach "
+             f"and the shipped lattice-bar rate {FACTS['sf_lattice_of120']}/120 = "
+             f"{FACTS['sf_lattice_rate_pct']}%; the oracle reach is "
              f"{FACTS['sf_ceiling_of120']}/120 = {round(100.0 * FACTS['sf_ceiling_of120'] / 120)}% "
              f"rounded; oracle_blind.py floors its stdout to {100 * FACTS['sf_ceiling_of120'] // 120}%, "
              f"so a stale '~76%' cannot pass as this measurement",
@@ -2478,6 +2483,21 @@ def check_arithmetic() -> list[str]:
             bad.append(f"  FACTS: {_k} = {F[_k]} is a COUNT and must be integral -- a "
                        f"fractional value is silently truncated by int() coercions used by "
                        f"arithmetic checks or REQUIRED renderings")
+    # Integrality alone is not enough: a count can still exceed its denominator (121/120, 81/80)
+    # and satisfy the percentage ties. Keep the denominator families explicit so an edit cannot
+    # move one count outside range while preserving arithmetic identities.
+    for _k in ("sf_lattice_of120", "sf_strict_of120", "sf_selmiss_of120",
+               "sf_genmiss_of120", "sf_ceiling_of120", "sf_negatives_lattice_of120"):
+        if not (0 <= int(F[_k]) <= 120):
+            bad.append(f"  FACTS: {_k} = {F[_k]} is a /120 count and must satisfy 0 <= count <= 120")
+    for _k in ("floor_real_frames", "floor_null_pool"):
+        if int(F[_k]) <= 0:
+            bad.append(f"  FACTS: {_k} = {F[_k]} is a denominator and must be positive")
+    if int(F["floor_real_frames"]) > 0:
+        for _k in ("floor_above_of80", "floor_above_3sd_of80"):
+            if not (0 <= int(F[_k]) <= int(F["floor_real_frames"])):
+                bad.append(f"  FACTS: {_k} = {F[_k]} must satisfy 0 <= count <= floor_real_frames "
+                           f"({F['floor_real_frames']})")
     # The oracle split PARTITIONS the 120: oracle_blind.py's loop is an if/elif/else over solved,
     # selection-miss, generation-miss, so the three must total the set exactly. EXACT, and on RAW
     # values -- close()'s 3% band would accept any total from 116 to 124, and int() would truncate
@@ -2503,13 +2523,14 @@ def check_arithmetic() -> list[str]:
                    f"every selection-miss is reachable by construction, and the reachable set "
                    f"cannot exceed the solved-and-reachable frames plus the selection-misses")
     # --- the extreme-value floor. DENOMINATOR IS floor_real_frames (80), NOT 120. -----------------
-    for _pct_key, _cnt_key in (("floor_above_pct", "floor_above_of80"),
-                               ("floor_above_3sd_pct", "floor_above_3sd_of80")):
-        _want = round(100.0 * int(F[_cnt_key]) / int(F["floor_real_frames"]))
-        if int(F[_pct_key]) != _want:
-            bad.append(f"  FACTS: {_pct_key} = {F[_pct_key]}% but {_cnt_key} = {F[_cnt_key]}/"
-                       f'{F["floor_real_frames"]} rounds to {_want}% -- a count and its percentage '
-                       f"were edited apart (note the /80 denominator, not /120)")
+    if int(F["floor_real_frames"]) > 0:
+        for _pct_key, _cnt_key in (("floor_above_pct", "floor_above_of80"),
+                                   ("floor_above_3sd_pct", "floor_above_3sd_of80")):
+            _want = round(100.0 * int(F[_cnt_key]) / int(F["floor_real_frames"]))
+            if int(F[_pct_key]) != _want:
+                bad.append(f"  FACTS: {_pct_key} = {F[_pct_key]}% but {_cnt_key} = {F[_cnt_key]}/"
+                           f'{F["floor_real_frames"]} rounds to {_want}% -- a count and its percentage '
+                           f"were edited apart (note the /80 denominator, not /120)")
     # The floor must BE its own fitted law, or Fig. 5(b)'s sqrt(2 ln K) caption is decorative.
     _g2lnK = math.sqrt(2.0 * math.log(float(F["floor_K"])))
     # ABSOLUTE 0.01, not close(): close() takes tol as RELATIVE, so tol=0.01 meant ~0.5 inliers of

@@ -669,6 +669,10 @@ ARITHMETIC_PERTURBATIONS = [
     # subset_draws_per_n = 400.9 case pins one block up. One per denominator family.
     ({"sf_strict_of120": 79.9},                       "must be integral"),
     ({"floor_above_of80": 78.5},                      "must be integral"),
+    ({"sf_lattice_of120": 121, "sf_lattice_rate_pct": 101}, "must satisfy 0 <= count <= 120"),
+    ({"floor_above_of80": 81, "floor_above_pct": 101}, "must satisfy 0 <= count <= floor_real_frames"),
+    ({"floor_real_frames": 0},                        "must be positive"),
+    ({"floor_null_pool": 0},                          "must be positive"),
     # ...and the oracle ceiling's real bounds. sel_miss <= ceiling <= solved + sel_miss: the upper
     # bound is NOT an equality (HEAD prints 86 against 79+8=87) so both ends are exercised from
     # outside, not by nudging toward the measured value.
@@ -764,13 +768,12 @@ BLIND_PAIR_CASES = [
 def test_superseded_files_are_exempt_from_required_rules_only():
     """A self-declared SUPERSEDED deliverable owes no ADDED text, but still may not QUOTE a stale one.
 
-    `glint_SI.tex` and `glint.tex` both carry a banner saying their numbers are not maintained and
-    not to be quoted, and glint#159 deliberately keeps them on the target list so a stale value
-    cannot sit there unnoticed. A REQUIRED rule inverts that: the only ways to satisfy one are to
-    edit a file the banner freezes, or to leave the guard permanently red (#184 review, where
-    `negatives-69-is-the-lattice-bar` fired on glint_SI.tex's `69% (best)` cell). So REQUIRED is
-    scoped off by the banner -- and this test pins that the exemption is that narrow, because an
-    exemption that also silenced RETIRED/OVERCLAIM would defeat glint#159.
+    `glint_SI.tex` carries the superseded banner and remains on DEFAULT_TARGETS so stale values in
+    that deliverable still get caught by QUOTE rules. A REQUIRED rule inverts that: the only ways
+    to satisfy one are to edit a file the banner freezes, or to leave the guard permanently red
+    (#184 review, where `negatives-69-is-the-lattice-bar` fired on glint_SI.tex's `69% (best)`
+    cell). So REQUIRED is scoped off by the banner -- and this test pins that the exemption is
+    that narrow, because an exemption that also silenced RETIRED/OVERCLAIM would defeat glint#159.
     """
     banner = "% SUPERSEDED (2026-08-27): kept as a historical reference only.\n"
     trigger = r"scorer: coverage-gated defect & \textbf{69\% (best)} & --- \\" + "\n"
@@ -1240,11 +1243,14 @@ def _split_prose(**edit) -> str:
 
 def _ceiling_prose(**edit) -> str:
     F = _cn.FACTS
-    v = dict(c=f"{F['sf_ceiling_of120']:d}",
+    v = dict(lat=f"{F['sf_lattice_of120']:d}",
+             lp=f"{F['sf_lattice_rate_pct']:d}",
+             c=f"{F['sf_ceiling_of120']:d}",
              p=f"{round(100.0 * F['sf_ceiling_of120'] / 120):d}",
              fp=f"{100 * int(F['sf_ceiling_of120']) // 120:d}")   # the FLOORED stdout rendering
     v.update(edit)
-    return (f"Blind indexing on sparse cxidb saturates at $71\\%$ gated "
+    return (f"Blind indexing on sparse cxidb reaches ${v['lat']}/120 ~ {v['lp']}\\%$ "
+            f"at the correct-lattice bar "
             f"(oracle-reachable ceiling ${v['c']}/120 ~ {v['p']}\\%$; "
             f"oracle_blind.py floors that printout to ${v['fp']}\\%$).")
 
@@ -1318,7 +1324,7 @@ def test_ceiling_required_passes_and_fires():
     assert not _required_fires(_ceiling_prose(), "sf-ceiling-facts")
     # fp="76" is the #184 finding: a stale FLOORED printout beside a correct rounded 72%. The rule
     # pinned only the rounded value, so that text passed.
-    for edit in (dict(c="85"), dict(p="76"), dict(fp="76"), dict(fp="72")):
+    for edit in (dict(lp="70"), dict(c="85"), dict(p="76"), dict(fp="76"), dict(fp="72")):
         assert _required_fires(_ceiling_prose(**edit), "sf-ceiling-facts"), f"silent on {edit}"
 
 

@@ -16,6 +16,12 @@ import os, sys, argparse
 import numpy as np
 
 
+def _lattice_type_from_lattice_code(lattice_code):
+    c = str(lattice_code or "").strip().lower()
+    return {"a": "triclinic", "m": "monoclinic", "o": "orthorhombic",
+            "t": "tetragonal", "h": "hexagonal", "c": "cubic"}.get(c[:1])
+
+
 def _load_frames(args):
     """Return (frames [list of (N,3) q in 1/A], images [list of {image,event}])."""
     from glint.geom import parse_geom, read_crystfel_peaks, peaks_to_q
@@ -157,6 +163,10 @@ def main():
         if args.images:                                          # stacked .cxi: read data[event] directly (self-contained)
             from glint.predict import integrate_cxi
             from glint.lute_bridge import parse_geom as _pg
+            lt = _lattice_type_from_lattice_code(args.lattice)
+            if lt is not None:
+                for r in results:
+                    r.setdefault("lattice_type", lt)
             nint, tot = integrate_cxi(results, args.geom, wavelength_A=args.wavelength,
                                       dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
                                       data_key=args.data_path, event_axis=_ev_axis)

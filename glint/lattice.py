@@ -156,9 +156,12 @@ def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL):
             o = np.argsort(L, kind="stable")       # -> (long, long, short), the historical order
             order = [int(o[1]), int(o[2]), int(o[0])]
     P = M[:, order].copy()
+    if (laue in ("-3", "-3m1", "-31m", "6/m", "6/mmm")
+            and np.dot(P[:, 0], P[:, 1]) > 0):
+        P[:, 1] = -P[:, 1]                     # conventional hexagonal gamma is obtuse (120 degrees)
     if np.linalg.det(P) < 0:
         k = 2 if (laue is not None and laue in UNIQUE_C_LAUE) else 0
-        P[:, k] = -P[:, k]                         # keep a proper (right-handed) basis
+        P[:, k] = -P[:, k]                     # keep a proper (right-handed) basis
     return P
 
 

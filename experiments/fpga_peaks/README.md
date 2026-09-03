@@ -4,8 +4,8 @@
 (ePixUHR / SparkPix-class) instead of GPU peakfinder8 — integer positions, a small per-tile
 buffer, seams where a local finder cannot compute its background — does GLINT still index?
 
-**Answer (measured):** yes, to within run noise of the undegraded rate. The cross-frame
-consensus absorbs the per-frame losses an edge emitter introduces.
+**Answer (measured):** integer emission and seam masking stay within 1–2 frames of the 117/120
+baseline, while a 48-peak frame cap reaches 110/120 or 104/120 depending on selection bias.
 
 ## What runs
 

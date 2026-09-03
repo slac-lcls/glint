@@ -498,6 +498,8 @@ def _laue_hint_from_lattice_code(lattice_code):
         return "4/mmm"
     if c.startswith("o"):
         return "mmm"
+    if c.startswith("hr"):
+        return "-3m_R"
     if c.startswith("h"):
         return "6/mmm"
     return None

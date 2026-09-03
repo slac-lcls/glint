@@ -170,8 +170,9 @@ def main():
     exc = float(np.mean(np.abs(q1 - q0[on]).sum(1)))
     print(f"geometry self-check OK (inverse exact to {err:.1e}); mean excitation shift {exc:.2e} 1/A")
 
-    # Baseline: undegraded projection round-trip. Establishes the reference cell and the ceiling.
-    base, ref_cell, bstats = score(frames, None)
+    # Baseline: projection round-trip. Establishes the reference cell and the ceiling.
+    baseline_frames, _ = degrade(frames, arm_identity)
+    base, ref_cell, bstats = score(baseline_frames, None)
     if ref_cell is None:
         sys.exit("baseline formed no consensus cell -- cannot proceed")
     edges = np.round(np.sort(np.linalg.norm(ref_cell, axis=0)), 1)

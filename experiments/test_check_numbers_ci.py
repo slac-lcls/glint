@@ -60,6 +60,24 @@ def _brute_p10(n01, n10, n, d, steps=200000):
     return best[1]
 
 
+
+def test_bare_86_of_120_needs_to_say_whose_it_is():
+    """86/120 is xgandalf's blind rate AND GLINT's oracle-reachable ceiling. The rule must fire on an
+    unlabelled one, stay silent on either labelling, and -- the trap that caught its own first draft
+    -- not skip a value that ends a sentence: (?![\\d.]) rejects ANY following period, so
+    "below XGANDALF's 86/120." went unseen on the one line that disambiguates it correctly."""
+    fires = lambda t: _fires(t, "bare-86-of-120")
+    assert fires("the counts (92/120 and 86/120) are reproduced")
+    assert fires("GLINT reaches 86 of 120 frames")
+    for ok in ("below XGANDALF's 86/120.",                 # sentence-final, labelled
+               "the oracle-reachable ceiling is 86/120",
+               "xgandalf & blind & 72\\% (86/120) \\\\",
+               next(r.instead for r in _cn.AMBIGUOUS if r.name == "bare-86-of-120")):   # never flag its own advice
+        assert not fires(ok), ok
+    for no in ("a value of 86.120 in the fit", "frames 186/120 nonsense"):
+        assert not fires(no), no
+
+
 def test_closed_form_mle_matches_brute_force():
     for (n01, n10), d in ((( 10, 29), -0.04), ((29, 54), -0.05), ((32, 21), 0.02), ((29, 27), 0.0)):
         got, want = p10_mle(n01, n10, N, d), _brute_p10(n01, n10, N, d)
@@ -634,6 +652,50 @@ ARITHMETIC_PERTURBATIONS = [
     ({"roibin_lo_cmphi": 50},                         "denoising result has inverted"),
     ({"roibin_sigma_q1": 0.99},                       "quartiles do not bracket"),
     ({"roibin_sigma_q3": 0.70},                       "quartiles do not bracket"),
+    # THE SINGLE-FRAME FRONT END and the EXTREME-VALUE FLOOR, added 2026-09-01 with the two FACTS
+    # blocks themselves, one perturbation per branch. Both blocks exist because their numbers
+    # reached the submission unguarded: tab:negatives' "69% (best)" reconciled with no other rate
+    # in the paper (triage 153/268), and "97% lie above the +3sigma null level" reported the
+    # above-FLOOR count against the above-3sigma threshold (triage 216).
+    ({"sf_strict_rate_pct": 67},                      "sf_strict_rate_pct"),
+    ({"sf_lattice_rate_pct": 70},                     "sf_lattice_rate_pct"),
+    ({"sf_selmiss_rate_pct": 9},                      "sf_selmiss_rate_pct"),
+    ({"sf_genmiss_rate_pct": 25},                     "sf_genmiss_rate_pct"),
+    ({"sf_negatives_lattice_pct": 72},                "sf_negatives_lattice_pct"),
+    ({"sf_lattice_of120": 70, "sf_lattice_rate_pct": 58},  "looser bar cannot pass fewer"),
+    # the partition, with its percentage moved TOGETHER so the pct tie above cannot claim the
+    # catch -- otherwise this case proves the wrong guard (which is how the two were conflated
+    # when they were mutation-checked by hand).
+    ({"sf_genmiss_of120": 30, "sf_genmiss_rate_pct": 25},  "partition the 120 frames"),
+    # ...and NOT an identity: 79 + 8 = 87 against a printed ceiling of 86 at HEAD, so a
+    # solved+selmiss check here would fail on the shipped measurement. Pinned as a NEGATIVE below
+    # in test_oracle_ceiling_is_not_asserted_as_a_sum.
+    ({"floor_above_pct": 97},                         "floor_above_pct"),
+    ({"floor_above_3sd_pct": 80},                     "floor_above_3sd_pct"),
+    ({"floor_at_K": 60.0},                            "floor_at_K = floor_fit_a"),
+    # Copilot (#184): close() is relative, so 50.2 against 50.645 (0.9%) passed a tol=0.01 check.
+    ({"floor_at_K": 50.2},                            "floor_at_K = floor_fit_a"),
+    ({"floor_fit_b": 6.0},                            "floor_at_K = floor_fit_a"),
+    ({"floor_K": 500},                                "floor_at_K = floor_fit_a"),
+    ({"floor_measured_at_K": 70.0},                   "come apart"),
+    ({"floor_mean_sigmas": 5.0},                      "right-skewed"),
+    # the threshold ORDERING, percentage moved together for the same reason as the partition case
+    ({"floor_above_of80": 50, "floor_above_pct": 62}, "lower bar cannot pass fewer"),
+    # INTEGRALITY of the frame counts. Without these the int() coercions in the partition and the
+    # two percentage loops truncated a fractional edit into a pass -- sf_strict_of120 = 79.9 left
+    # every guard green (#184 review, suppressed comment), the same fail-open the
+    # subset_draws_per_n = 400.9 case pins one block up. One per denominator family.
+    ({"sf_strict_of120": 79.9},                       "must be integral"),
+    ({"floor_above_of80": 78.5},                      "must be integral"),
+    ({"sf_lattice_of120": 121, "sf_lattice_rate_pct": 101}, "must satisfy 0 <= count <= 120"),
+    ({"floor_above_of80": 81, "floor_above_pct": 101}, "must satisfy 0 <= count <= floor_real_frames"),
+    ({"floor_real_frames": 0},                        "must be positive"),
+    ({"floor_null_pool": 0},                          "must be positive"),
+    # ...and the oracle ceiling's real bounds. sel_miss <= ceiling <= solved + sel_miss: the upper
+    # bound is NOT an equality (HEAD prints 86 against 79+8=87) so both ends are exercised from
+    # outside, not by nudging toward the measured value.
+    ({"sf_ceiling_of120": 95},                        "solved + selection-miss"),
+    ({"sf_ceiling_of120": 5},                         "solved + selection-miss"),
 ]
 
 
@@ -719,6 +781,74 @@ BLIND_PAIR_CASES = [
     ("lone 76%, offline", "the offline hybrid reaches 76% (91/120) at the strict bar", False),
     ("lone 71%, ceiling", "Blind indexing saturates at ~71% gated on sparse cxidb", False),
 ]
+
+
+def test_superseded_files_are_exempt_from_required_rules_only():
+    """A self-declared SUPERSEDED deliverable owes no ADDED text, but still may not QUOTE a stale one.
+
+    `glint_SI.tex` carries the superseded banner and remains on DEFAULT_TARGETS so stale values in
+    that deliverable still get caught by QUOTE rules. A REQUIRED rule inverts that: the only ways
+    to satisfy one are to edit a file the banner freezes, or to leave the guard permanently red
+    (#184 review, where `negatives-69-is-the-lattice-bar` fired on glint_SI.tex's `69% (best)`
+    cell). So REQUIRED is scoped off by the banner -- and this test pins that the exemption is
+    that narrow, because an exemption that also silenced RETIRED/OVERCLAIM would defeat glint#159.
+    """
+    banner = "% SUPERSEDED (2026-08-27): kept as a historical reference only.\n"
+    trigger = r"scorer: coverage-gated defect & \textbf{69\% (best)} & --- \\" + "\n"
+    stale = (r"When the real crystal frames are evaluated against the reference cell, 97\% lie "
+             r"above the $+3\sigma$ null level, with a median separation of 7.5 null standard "
+             r"deviations." + "\n")
+
+    # 1. the trigger alone, in a LIVE file -> REQUIRED fires
+    live = _cn.check_required(Path("live.tex"), trigger)
+    assert any("negatives-69-is-the-lattice-bar" in f for f in live), (
+        "the REQUIRED rule no longer fires on an unqualified '69% (best)' in a live file; "
+        f"got: {live}")
+
+    # 2. the same trigger behind the banner -> REQUIRED is silent
+    frozen = _cn.check_required(Path("frozen.tex"), banner + trigger)
+    assert not frozen, f"a SUPERSEDED file is still being asked to ADD text: {frozen}"
+
+    # 3. ...but a stale QUOTE in that same frozen file still fails the scan
+    still = _cn.scan(Path("frozen.tex"), banner + stale)
+    assert any("floor-97-3sigma" in f for f in still), (
+        "the SUPERSEDED exemption leaked past REQUIRED and silenced the OVERCLAIM scan, which is "
+        f"exactly what glint#159 put these files on the target list to catch; got: {still}")
+
+    # 4. the banner must be a banner: a line-start SUPERSEDED in running text exempts nothing
+    near = _cn.check_required(Path("live.tex"), "title\nbody\nmore\nSUPERSEDED old note\n" + trigger)
+    assert any("negatives-69-is-the-lattice-bar" in f for f in near), (
+        "line-start 'SUPERSEDED' outside the opening banner is exempting REQUIRED rules")
+
+    # 5. ...including when the word appears deep in running text
+    deep = _cn.check_required(Path("live.tex"), ("x" * 900) + "\nSUPERSEDED\n" + trigger)
+    assert any("negatives-69-is-the-lattice-bar" in f for f in deep), (
+        "'SUPERSEDED' outside the file's opening banner is exempting REQUIRED rules")
+
+
+def test_oracle_ceiling_is_not_asserted_as_a_sum():
+    """sf_ceiling_of120 must NOT be checked as sf_strict + sf_selmiss, or as >= solved.
+
+    oracle_blind.py PRINTS the ceiling as "(solved+selection-miss)" but counts reachability
+    independently, off all_annealed's candidate list. At HEAD one frame is selected-and-passing
+    while never counted reachable, so the shipped numbers are 79 + 8 = 87 against a printed 86;
+    on the 2026-06-29 archive they agree (77 + 9 = 86). A well-meaning later edit that "restores
+    the identity" would therefore make the guard fail on the real measurement, or push someone to
+    edit 86 to 87 and invent one. Pinned as a negative so the omission reads as deliberate.
+    """
+    F = _cn.FACTS
+    assert int(F["sf_strict_of120"]) + int(F["sf_selmiss_of120"]) != int(F["sf_ceiling_of120"]), (
+        "the shipped counts now satisfy solved+selmiss == ceiling; if oracle_blind.py was fixed "
+        "to count reachability consistently, re-measure and then this test should be retired")
+    bad, _ = _arith()
+    assert not any("ceiling" in b and "selection-miss" in b for b in bad), (
+        "check_arithmetic asserts the ceiling as solved+selection-miss, which the shipped "
+        f'measurement contradicts: {F["sf_strict_of120"]} + {F["sf_selmiss_of120"]} != '
+        f'{F["sf_ceiling_of120"]}')
+    low_bad, _ = _arith(sf_ceiling_of120=70)
+    assert not any("BELOW the solved count" in b or "reachable by definition" in b for b in low_bad), (
+        "check_arithmetic asserts an oracle ceiling lower bound that oracle_blind.py's independent "
+        "reachability/solved sets do not justify")
 
 
 def test_blind_pair_rules_fire_and_stay_silent():
@@ -1094,6 +1224,155 @@ def test_deprecated_saturating_batch_alias_is_preserved():
     assert _cn.FACTS["saturating_batch"] == _cn.FACTS["driver_default_batch"] == 64
 
 
+
+
+# ---------------------------------------------------------------------------------------------
+# Triage 153/216 follow-up (Copilot review of #184): the sf_*/floor_* FACTS must be READ by a rule
+# that looks at the deliverable, and the superseded "97% above +3 sigma" pairing must fire.
+# Probes are rendered from FACTS with the manuscript's own wording, so a value edited in FACTS
+# without the paper following (or vice versa) shows up here as a failing needle.
+
+def _floor_prose(**edit) -> str:
+    F = _cn.FACTS
+    v = dict(pct=f"{F['floor_above_pct']:d}", n=f"{F['floor_above_of80']:d}",
+             den=f"{F['floor_real_frames']:d}", fl=f"{F['floor_at_K']:.1f}",
+             meas=f"{F['floor_measured_at_K']:.1f}", msd=f"{F['floor_measured_sd_at_K']:.1f}",
+             med=f"{F['floor_median_sigmas']:.1f}", mean=f"{F['floor_mean_sigmas']:.1f}",
+             p3=f"{F['floor_above_3sd_pct']:d}", n3=f"{F['floor_above_3sd_of80']:d}",
+             r=f"{F['floor_fit_r']:.3f}",
+             K="70{,}400")          # the manuscript's LaTeX rendering of FACTS['floor_K']
+    v.update(edit)
+    return (f"When the real crystal frames are evaluated against the reference cell, "
+            f"${v['pct']}\\%$ (${v['n']}/{v['den']}$) score above the extreme-value floor: the "
+            f"$\\sqrt{{2\\ln K}}$ fit of Fig.~\\ref{{fig:stat_floor}}(\\emph{{b}}) places that floor at "
+            f"${v['fl']}$ inliers at $K={v['K']}$, consistent with the directly measured null maximum "
+            f"of ${v['meas']}\\pm{v['msd']}$. The median separation is {v['med']} standard deviations of "
+            f"the null-maximum distribution (mean {v['mean']}), and ${v['p3']}\\%$ (${v['n3']}/{v['den']}$) "
+            f"lie more than $3\\sigma$ above that distribution's mean. The observed growth is consistent "
+            f"with the $\\sqrt{{2\\ln K}}$ look-elsewhere scaling over the tested range ($r={v['r']}$).")
+
+
+def _split_prose(**edit) -> str:
+    F = _cn.FACTS
+    v = dict(un=f"{120 - F['sf_strict_of120']:d}", g=f"{F['sf_genmiss_of120']:d}",
+             s=f"{F['sf_selmiss_of120']:d}", gp=f"{F['sf_genmiss_rate_pct']:d}",
+             sp=f"{F['sf_selmiss_rate_pct']:d}")
+    v.update(edit)
+    return (f"At the stricter criterion the {v['un']} unaccepted frames divide into {v['g']} generation "
+            f"misses, in which no retained candidate matches the reference lattice, and {v['s']} "
+            f"selection misses, in which such a candidate is present but is not chosen (${v['gp']}\\%$ "
+            f"and ${v['sp']}\\%$ of the 120 frames).")
+
+
+def _ceiling_prose(**edit) -> str:
+    F = _cn.FACTS
+    v = dict(lat=f"{F['sf_lattice_of120']:d}",
+             lp=f"{F['sf_lattice_rate_pct']:d}",
+             c=f"{F['sf_ceiling_of120']:d}",
+             p=f"{round(100.0 * F['sf_ceiling_of120'] / 120):d}",
+             fp=f"{100 * int(F['sf_ceiling_of120']) // 120:d}")   # the FLOORED stdout rendering
+    v.update(edit)
+    return (f"Blind indexing on sparse cxidb reaches ${v['lat']}/120 ~ {v['lp']}\\%$ "
+            f"at the correct-lattice bar "
+            f"(oracle-reachable ceiling ${v['c']}/120 ~ {v['p']}\\%$; "
+            f"oracle_blind.py floors that printout to ${v['fp']}\\%$).")
+
+
+def _negatives_caption(**edit) -> str:
+    F = _cn.FACTS
+    v = dict(base=f"{F['sf_negatives_lattice_of120']:d}", bstrict=f"{F['sf_negatives_strict_pct']:d}",
+             lat=f"{F['sf_lattice_of120']:d}", latp=f"{F['sf_lattice_rate_pct']:d}",
+             st=f"{F['sf_strict_of120']:d}", stp=f"{F['sf_strict_rate_pct']:d}",
+             best=f"{F['sf_negatives_lattice_pct']:d}")
+    v.update(edit)
+    return (f"\\caption{{\\label{{tab:negatives}}Single-frame levers explored. Both are a looser bar than "
+            f"the $\\geq$25\\%-of-spots gate used in Sec.~\\ref{{sec:ceiling}}. These percentages come "
+            f"from one scorer-development sweep on a single A100 and are therefore comparable with one "
+            f"another rather than with the shipped rates: the baseline row is ${v['base']}/120$ at this "
+            f"bar and ${v['bstrict']}\\%$ at the $\\geq$25\\% gate, where the shipped code now gives "
+            f"${v['lat']}/120$ (${v['latp']}\\%$) and ${v['st']}/120$ (${v['stp']}\\%$).}}\n"
+            f"\\begin{{tabular}}{{lll}}\nscorer: coverage-gated defect & \\textbf{{{v['best']}\\% (best)}} "
+            f"& --- \\\\\n\\end{{tabular}}")
+
+
+def test_floor_required_passes_on_the_measured_values():
+    for name in ("floor-facts", "floor-fit-r"):
+        assert not _required_fires(_floor_prose(), name), name
+    unicode_sigma = _floor_prose().replace(r"3\sigma", "3σ")
+    assert not _required_fires(unicode_sigma, "floor-facts")
+    assert not _fires(_floor_prose(), "floor-97-3sigma")
+
+
+def test_floor_required_fires_on_the_wrong_K():
+    """floor_at_K is 50.6 only AT K=70,400 -- the fit's whole content is that the floor grows with K.
+
+    The rule checked the floor value and never the K it was quoted against, so a manuscript saying
+    "50.6 inliers at K=700" satisfied every needle (#184 review, suppressed comment). Both the
+    separator-free and plain-comma renderings must still pass, since the needle exists to pin the
+    NUMBER, not the manuscript's typography.
+    """
+    assert not _required_fires(_floor_prose(), "floor-facts")
+    for good in ("70{,}400", "70,400", "70400"):
+        assert not _required_fires(_floor_prose(K=good), "floor-facts"), f"rejects valid {good!r}"
+    for bad in ("700", "7040", "704000", "70{,}401"):
+        assert _required_fires(_floor_prose(K=bad), "floor-facts"), f"silent on K={bad!r}"
+
+
+def test_floor_required_fires_on_every_edited_value():
+    for edit in (dict(pct="97"), dict(n="77"), dict(fl="50.7"), dict(meas="50.9"), dict(msd="3.9"),
+                 dict(med="7.9"), dict(mean="10.4"), dict(p3="80"), dict(n3="64")):
+        assert _required_fires(_floor_prose(**edit), "floor-facts"), f"floor-facts silent on {edit}"
+    assert _required_fires(_floor_prose(r="0.990"), "floor-fit-r")
+
+
+def test_superseded_97_above_3sigma_sentence_fires():
+    old = ("When the real crystal frames are evaluated against the reference cell, 97\\% lie above the "
+           "$+3\\sigma$ null level, with a median separation of 7.5 null standard deviations.")
+    assert _fires(old, "floor-97-3sigma")
+    assert _fires(old.replace(r"\sigma", "σ"), "floor-97-3sigma")
+    assert _fires(old.replace("97", "98"), "floor-97-3sigma")   # same misattribution, new number
+    # ...and the corrected sentence, which carries both a 98% and a 3 sigma, must stay clean.
+    assert not _fires(_floor_prose(), "floor-97-3sigma")
+
+
+def test_floor_97_rule_stops_at_the_next_percentage():
+    ok = "98\\% exceed the fitted floor, while 75\\% exceed the null mean +3\\sigma."
+    assert not _fires(ok, "floor-97-3sigma")
+    assert not _fires(ok.replace(r"\sigma", "σ"), "floor-97-3sigma")
+
+
+def test_split_required_passes_and_fires():
+    assert not _required_fires(_split_prose(), "sf-oracle-split")
+    for edit in (dict(un="40"), dict(g="30"), dict(s="9"), dict(gp="25"), dict(sp="8")):
+        assert _required_fires(_split_prose(**edit), "sf-oracle-split"), f"silent on {edit}"
+
+
+def test_ceiling_required_passes_and_fires():
+    assert not _required_fires(_ceiling_prose(), "sf-ceiling-facts")
+    # fp="76" is the #184 finding: a stale FLOORED printout beside a correct rounded 72%. The rule
+    # pinned only the rounded value, so that text passed.
+    for edit in (dict(lp="70"), dict(c="85"), dict(p="76"), dict(fp="76"), dict(fp="72")):
+        assert _required_fires(_ceiling_prose(**edit), "sf-ceiling-facts"), f"silent on {edit}"
+
+
+def test_negatives_required_passes_and_fires():
+    for name in ("negatives-caption-facts", "negatives-69-is-the-lattice-bar"):
+        assert not _required_fires(_negatives_caption(), name), name
+    for edit in (dict(base="79"), dict(bstrict="69"), dict(lat="83"), dict(latp="69"),
+                 dict(st="85"), dict(stp="71")):
+        assert _required_fires(_negatives_caption(**edit), "negatives-caption-facts"), f"silent on {edit}"
+    # The finding itself: a "69% (best)" cell whose caption no longer anchors it to the lattice bar.
+    bare = "\\caption{Single-frame levers explored; all fail.}\n\\begin{tabular}{lll}\nscorer & \\textbf{69\\% (best)} & --- \\\\\n\\end{tabular}"
+    assert _required_fires(bare, "negatives-69-is-the-lattice-bar")
+
+
+def test_new_required_rules_stay_silent_without_their_trigger():
+    quiet = "A paragraph about something else entirely, with 79/120 and 98\\% in it but no trigger."
+    for name in ("floor-facts", "floor-fit-r", "sf-oracle-split", "sf-ceiling-facts", "negatives-caption-facts",
+                 "negatives-69-is-the-lattice-bar"):
+        assert not _required_fires(quiet, name), name
+
+
 if __name__ == "__main__":
     tests = (test_closed_form_mle_matches_brute_force,
              test_bounds_ordered_and_bracket_the_estimate,
@@ -1114,6 +1393,8 @@ if __name__ == "__main__":
              test_required_merge_rows_fire_on_an_edited_cell,
              test_required_whole_file_form_catches_a_value_leaving_the_file,
              test_required_stays_silent_without_its_trigger,
+             test_superseded_files_are_exempt_from_required_rules_only,
+             test_oracle_ceiling_is_not_asserted_as_a_sum,
              test_blind_pair_rules_fire_and_stay_silent,
              test_s16_required_passes_on_the_measured_values,
              test_s16_required_fires_on_every_edited_claim,
@@ -1133,7 +1414,18 @@ if __name__ == "__main__":
              test_perturbations_are_restored,
              test_main_fails_on_missing_requested_targets,
              test_main_fails_on_missing_or_unreadable_in_repo_defaults,
-             test_deprecated_saturating_batch_alias_is_preserved)
+             test_deprecated_saturating_batch_alias_is_preserved,
+             test_floor_required_passes_on_the_measured_values,
+             test_floor_required_fires_on_the_wrong_K,
+             test_floor_required_fires_on_every_edited_value,
+             test_superseded_97_above_3sigma_sentence_fires,
+             test_floor_97_rule_stops_at_the_next_percentage,
+             test_split_required_passes_and_fires,
+             test_ceiling_required_passes_and_fires,
+             test_negatives_required_passes_and_fires,
+             test_new_required_rules_stay_silent_without_their_trigger,
+             test_bare_86_of_120_needs_to_say_whose_it_is,
+)
     ok = 0
     for t in tests:
         try:

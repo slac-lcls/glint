@@ -58,8 +58,8 @@ costs — and not with a published indexing rate.
 ## What this does NOT cover (needs raw pixels — do not fake)
 
 - **Intensity-weighted top-K per tile.** The committed lists carry positions only. The count-cap
-  arms here are unbiased vs a low-\|q\| worst-case proxy; a real intensity cap keeps strong peaks
-  at all resolutions and should land at or above the unbiased result.
+  arms compare unbiased sampling with a low-\|q\| worst-case proxy; raw intensity data are required
+  to place a real intensity-ranked cap relative to either result.
 - **The detection model** (pf8 radial background vs a tile-local finder = *which* peaks are
   found) needs frames. A 2026-07 study on realistic simulated frames found a local-window finder
   matched pf8 and was robust to a rising water-ring background, but the experimental pixels

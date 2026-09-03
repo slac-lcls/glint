@@ -507,15 +507,16 @@ def _laue_hint_from_lattice_code(lattice_code):
 
 def _laue_hint_from_lattice_type(lattice_type):
     c = str(lattice_type or "").strip().lower()
-    if c == "tetragonal":
-        return "4/mmm"
-    if c == "orthorhombic":
-        return "mmm"
-    if c == "hexagonal":
-        return "6/mmm"
-    if c == "trigonal":
-        return "-3m1"
-    return None
+    return {
+        "triclinic": "-1",
+        "monoclinic": "2/m_uab",
+        "orthorhombic": "mmm",
+        "tetragonal": "4/mmm",
+        "hexagonal": "6/mmm",
+        "trigonal": "-3m1",
+        "rhombohedral": "-3m_R",
+        "cubic": "m-3m",
+    }.get(c)
 
 
 def _canonical_axes(M, laue=None):

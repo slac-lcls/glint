@@ -4,11 +4,11 @@ For people who did not write GLINT: beamline staff putting it into production, a
 testing it on their own data. It assumes an S3DF account with an LCLS data allocation and
 nothing else.
 
-> **Verification status.** Every command, flag and field name below was checked against the
-> code at the commit this file was added on. The **numbers** in "Did it work?" are quoted from
-> a real recorded run (S3DF job `34240308`), not from a run of this document. This walkthrough
-> has **not itself been executed end to end** — see [Verifying this document](#verifying-this-document)
-> for the exact commands that would do it. Treat it as carefully checked, not as certified.
+> **Verification status: executed.** The Track A / A1 walkthrough below was run end to end on
+> an S3DF A100 (job `36862739`, `sdfampere024`, GLINT `af147ad`) exactly as printed, and
+> reproduced the reference result: **54 frames with ≥ 6 peaks, 50 indexed (92%)**. Every flag and
+> field name is additionally checked against the code by script. Tracks A2/A3 and Track B are
+> checked against the code but have **not** been executed here.
 
 > **Access.** `slac-lcls/glint` is private pending SLAC's institutional software-release review.
 > If you cannot clone it, ask Stefano Marchesini for repository access; there is no public
@@ -34,14 +34,24 @@ it skips the one setup step known to fail silently. Move to Track B once it work
 ## Before you start
 
 ```bash
-ssh s3df           # then: kinit
+ssh sdfiana027     # then: kinit
 ```
+
+> **Use an LCLS analysis node (`sdfiana*`), not the general login pool.** `ssh s3df` lands on a
+> node that carries neither the LCLS data mounts nor Slurm — measured on `sdflogin002`, where
+> `/sdf/data/lcls/ds/mfx/` does not exist and there is no `sinfo`/`sbatch` on `PATH`. The data
+> "not found" there is a missing mount, not missing data: the same path resolves normally on
+> `sdfiana027`. If your experiment directory appears to be gone, check the host before you
+> conclude the run was purged.
 
 Get an interactive GPU node. Everything below assumes you are **on** it, not on a login node:
 
 ```bash
 srun -p ampere -A lcls:prjdat21 --gres=gpu:a100:1 -c 8 --mem=96G -t 2:00:00 --pty bash
 ```
+
+The `ampere` partition is busy and several nodes sit in `maint`/`drain` at any time; if `srun`
+does not return promptly, submit with `sbatch` instead of waiting interactively.
 
 Set up the environment. These two lines are the whole environment story:
 
@@ -174,25 +184,68 @@ grep -c 'Begin chunk'    glint.stream      # frames offered
 **3 · Is the cell right?** Read the cells GLINT found:
 
 ```bash
-grep 'Cell parameters' glint.stream | sort | uniq -c | sort -rn | head
+grep 'Cell parameters' glint.stream | head
 ```
 
 They should cluster tightly on one cell. A blind run whose cells scatter has not converged.
 
-**Reference — what a healthy small run looks like** (job `34240308`, `mfxx49820` r0016,
-the A1 command above with `--max-events 200`):
+> **These print in nanometres**, as CrystFEL writes them — `Cell parameters 3.82629 7.92156
+> 7.98653 nm, ...`. Multiply by 10 before comparing with the ångström values quoted below and in
+> the literature. GLINT's own summary line reports the consensus cell in Å, so the two differ by
+> a factor of ten by design, not by error.
 
-| | |
-|---|---|
-| events read | 200 |
-| frames with ≥ 6 peaks | 54 |
-| **indexed** | **50 (92%)** |
-| cell found (Å) | 38.3 / 79.2 / 79.9, angles 89.2 / 89.7 / 90.0 |
-| truth | 38.4 / 79.3 / 79.5 |
+**Reference — what a healthy small run looks like** (`mfxx49820` r0016, the A1 command above
+with `--max-events 200`), and the independent reproduction of it:
+
+| | recorded (job `34240308`) | reproduced (job `36862739`) |
+|---|---|---|
+| events read | 200 | 200 |
+| frames with ≥ 6 peaks | 54 | **54** |
+| **indexed** | **50 (92%)** | **50 (92%)** |
+| consensus cell (Å) | 38.3 / 79.2 / 79.9 | 38.5 / 79.1 / 79.6 |
+| truth | 38.4 / 79.3 / 79.5 | — |
+| wall time | — | 60 s on one A100 |
+
+The counts reproduce exactly. The cell differs in the third significant figure and both runs sit
+within ~0.4 Å of truth — blind consensus re-derives the cell from the data each time, so expect
+that last digit to move; expect the *counts* to be stable.
 
 Your yield will differ — 92% is a bright lysozyme run. What should *not* differ is the shape:
 peaks found on most hits, a cell that clusters, and a cell that matches whatever you know about
 your sample.
+
+### The big geometry block is a diagnostic, not an error
+
+Before indexing, the xtc route prints a geometry provenance report ending in a verdict —
+`CORROBORATED`, `DISAGREE`, or `UNVERIFIED` — plus a `VERDICT: WARN ... geometry is NOT verified`
+manifest. **It does not stop the run**, and on the reference dataset above it prints `DISAGREE`
+while indexing 92%. Read it like this:
+
+| verdict | meaning | what to do |
+|---|---|---|
+| `CORROBORATED` | your `.geom` agrees with psana's deployed geometry | nothing |
+| `DISAGREE` | your `.geom` differs from psana's | **usually correct** — see below |
+| `UNVERIFIED` | you passed no `.geom`; nothing to compare against | **this is the risky one** |
+
+**`DISAGREE` is normally the outcome you want.** psana's deployed geometry is often the *unrefined*
+starting calibration, while the refinement everyone actually trusts lives only in a `.geom` and is
+never written back. If you supplied a refined `.geom`, it is *supposed* to differ — that is why you
+supplied it. This is not hypothetical on the reference run: against psana's own geometry, blind
+indexing on `mfxx49820` r0016 locks a **wrong doubled-*c* cell** at support 23/6294 and reports
+success; the refined `.geom` takes support to 832 and the cell to the truth.
+
+What the report adds is *which kind* of difference it found:
+
+* a **global scale / distance** term is benign — `--zdist` exists to set exactly that, and it moves
+  every panel together;
+* a **per-panel shape** term (tilts, offsets) is what `--zdist` cannot absorb and what stops blind
+  indexing converging. The discriminator is inter-panel dispersion relative to the size of the
+  error, not "could one scale factor explain it" — a real per-quadrant error is still ~54%
+  absorbable by a single scale and would be waved through.
+
+**`UNVERIFIED` deserves more caution than `DISAGREE`.** A wrong geometry does not crash and does not
+look wrong: it quietly moves every *q*, and blind indexing converges on something else and reports
+it confidently. If you see `UNVERIFIED`, supply a refined `.geom` before believing a cell.
 
 > **The stream always says `lattice_type = triclinic, centering = P`.** GLINT imposes no
 > symmetry. This is not a failure to detect your space group — symmetry is supplied downstream
@@ -378,23 +431,24 @@ Things an external user will reasonably expect and not find:
 
 ## Verifying this document
 
-This walkthrough has not been executed end to end. To certify it, run on an ampere node:
+Track A/A1 was executed on 2026-09-03: S3DF job `36862739`, node `sdfampere024`
+(A100-SXM4-40GB), GLINT `af147ad`, env `ana-4.0.58-py3-minipytorch` (torch 2.1.0, CUDA available).
+The A1 command was run verbatim as printed above — **no `--calib-dir`**, confirming it is not
+needed on this dataset — and took 60 s wall.
+
+To re-verify after a change:
 
 ```bash
-# 1. environment
+ssh sdfiana027 ; kinit
 source /sdf/group/lcls/ds/ana/sw/conda1/manage/bin/psconda.sh
 conda activate ana-4.0.58-py3-minipytorch
 python -c "import torch; assert torch.cuda.is_available()"
-
-# 2. the A1 command verbatim, then the three checks in "Did it work?"
-#    expected: 200 events -> 54 frames with >=6 peaks -> 50 indexed,
-#    cell 38.3 / 79.2 / 79.9
+# then the A1 command, then the three checks in "Did it work?"
+# expect: 54 frames with >=6 peaks, 50 indexed
 ```
 
-If the reproduction differs from the table, the table is what to trust — it is a recorded
-measurement — and this document needs correcting.
-
----
+Expect the counts to reproduce exactly and the cell's third significant figure to move. If the
+counts differ, that is a real change and this document needs correcting.
 
 ## Where to look next
 

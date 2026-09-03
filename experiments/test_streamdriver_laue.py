@@ -109,8 +109,16 @@ def test_orthorhombic_set_merges_differently_under_mmm_and_the_default():
     d_mmm, d_def = _driver(ORTHO, laue="mmm"), _driver(ORTHO)
     _feed(d_mmm.acc, frames); _feed(d_def.acc, frames)
     s_mmm, s_def = d_mmm.stats(), d_def.stats()
-    n_mmm = theoretical_unique(ORTHO, DMIN, laue_ops("mmm"))
-    n_wrong = theoretical_unique(ORTHO, DMIN, laue_ops_4mmm())
+    # The denominators follow the cell IN THE SETTING ITS CLASS PUTS IT IN, because _lock now
+    # standardizes the reference too (glint#185: leaving the known cell in the caller's setting while
+    # every frame was standardized lost 33% of predictions). mmm orders 30/40/50 a<=b<=c, which it
+    # already is; the deliberately-wrong 4/mmm treats the closest pair (40, 50) as a,b and sends 30
+    # to c, so its denominator is that of the permuted cell -- computing it on the raw cell would be
+    # asserting a setting the driver no longer uses.
+    n_mmm = theoretical_unique(d_mmm.Mc, DMIN, laue_ops("mmm"))
+    n_wrong = theoretical_unique(d_def.Mc, DMIN, laue_ops_4mmm())
+    assert _same_M(d_mmm.Mc, ORTHO), "mmm: 30/40/50 is already a<=b<=c"
+    assert not _same_M(d_def.Mc, ORTHO), "4/mmm on an orthorhombic cell must move the odd axis to c"
     # The point of the issue: the two groups partition the same measurements into a different
     # number of ASU keys. If `laue` were ignored these would be equal.
     assert s_mmm["unique"] != s_def["unique"], (
@@ -124,13 +132,14 @@ def test_orthorhombic_set_merges_differently_under_mmm_and_the_default():
     assert d_def.n_theoretical == n_wrong == s_def["theoretical_unique"], (d_def.n_theoretical, n_wrong)
     assert n_mmm > n_wrong, (n_mmm, n_wrong)
     # Whole sphere in one frame -> every ASU key observed: the mmm key count IS theoretical_unique
-    hkl = _sphere(ORTHO)
+    hkl = _sphere(d_mmm.Mc)
     full = _driver(ORTHO, laue="mmm")
     full.acc.add_frame(hkl, np.full(len(hkl), 100.0), np.full(len(hkl), 5.0), 0)
     s = full.stats()
     assert s["unique"] == n_mmm and abs(s["completeness"] - 100.0) < 1e-9, (s["unique"], n_mmm, s["completeness"])
     full_def = _driver(ORTHO)
-    full_def.acc.add_frame(hkl, np.full(len(hkl), 100.0), np.full(len(hkl), 5.0), 0)
+    hkl_def = _sphere(full_def.Mc)
+    full_def.acc.add_frame(hkl_def, np.full(len(hkl_def), 100.0), np.full(len(hkl_def), 5.0), 0)
     assert full_def.stats()["unique"] == n_wrong != n_mmm, (full_def.stats()["unique"], n_wrong, n_mmm)
 
 

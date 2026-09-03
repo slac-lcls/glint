@@ -1519,7 +1519,7 @@ class StreamDriver:
                 continue
             k = hit.get("k", 0)
             grid, acc = self._cell_sink(k)
-            self._integrate_one(i, M, grid, acc, cell_id=k)
+            self._integrate_one(i, M, grid, acc, cell_id=k, known_cell=(arm == "known_perframe"))
             self.n_cascade_rescued += 1
             self.n_cascade_by_arm[arm] = self.n_cascade_by_arm.get(arm, 0) + 1
         # Only the UNRESCUED slots can reach the watchdog, so only their candidates are worth

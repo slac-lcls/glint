@@ -174,6 +174,32 @@ def test_arms_are_complementary():
     assert s["gate_rejected"] == 1, "the frame no arm saves still takes the ordinary miss path"
 
 
+def test_known_perframe_retry_relabels_back_to_the_reference_order():
+    """A known-perframe rescue must be integrated as known-cell so identity-setting classes relabel
+    the shortest-first indexer output back into the reference order before prediction."""
+    rng = np.random.default_rng(SEED + 3)
+    ref = cell_to_Ar(50.0, 30.0, 32.0, 90, 100.0, 90)
+    order = np.argsort(np.linalg.norm(ref, axis=0), kind="stable")
+    shortest_first = ref[:, order]
+    q = frame_on(ref, rng)
+    drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                       use_gpu=False, retry_cascade=True, laue="2/m_uab")
+    drv._blind_index = lambda q, k: []
+    drv._known_perframe = lambda q, Mc: shortest_first.copy()
+    seen = {}
+    real = drv.grid.predict
+
+    def spy(M, *a, _real=real, **kw):
+        seen["M"] = np.array(M, float)
+        return _real(M, *a, **kw)
+
+    drv.grid.predict = spy
+    _load(drv, [q])
+    drv.flush()
+    assert np.allclose(seen["M"], ref), np.linalg.norm(seen["M"], axis=0)
+    assert drv.stats()["n_cascade_by_arm"] == {"known_perframe": 1}
+
+
 def test_wrong_lattice_candidate_is_refused():
     """A blind candidate can FIT a frame and still be the wrong lattice. Accepting it would add a
     different crystal's reflections to this cell's merge -- corruption, not a recovered frame."""

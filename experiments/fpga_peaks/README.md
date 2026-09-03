@@ -25,7 +25,15 @@ error, not a bug.
 
 ## Result (A100, S3DF; glint @1226833)
 
-Reference is the projection-round-trip baseline; each arm is a delta from it.
+Reference is the projection-round-trip baseline; each arm is a delta from it. The finding is the
+**delta** each emission constraint costs, not the absolute count.
+
+> **On the baseline count vs the paper.** This harness's baseline is 117/120, measured
+> independently here: frames whose picked cell is `same_lattice` to the run's own consensus cell at
+> the default tolerance. The paper's stable metric (`tab:summary`, correct-lattice bar) is
+> **115/120** — the correct *reduced* cell, a stricter criterion, ~2 frames lower. Cite 115/120 as
+> the benchmark's correct-lattice rate; read this table only for the *relative* cost of the FPGA
+> emission constraints, which is tolerance-independent because every arm is scored identically.
 
 | arm | indexed | kept pk/frame |
 |---|---|---|

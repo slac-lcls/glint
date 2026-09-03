@@ -160,18 +160,16 @@ for name, (a, b, c) in TETRAGONAL.items():
 print("\nno two lengths equal: the historical (long, long, short) order is kept")
 for name, (a, b, c) in ORTHORHOMBIC.items():
     Ar = cell_to_Ar(a, b, c, 90, 90, 90)
-    bad_order, disagree, lefthanded, not_idem = [], [], [], []
+    bad_order, lefthanded, not_idem = [], [], []
     for _ in range(N_ORI):
         M = random_setting(rng, jittered(rng, a, b, c))
         P1 = _canonical_axes(M)
         L = np.linalg.norm(P1, axis=0)
         bad_order.append(not (L[2] < L[0] <= L[1]))                 # (long, long, short), b the longest
-        disagree.append(np.max(np.abs(P1 - _conventional_tetragonal(M))))
         lefthanded.append(np.linalg.det(P1) <= 0)
         not_idem.append(not np.array_equal(_canonical_axes(P1), P1))
     print(f" {name}")
     check("(long, long, short): c the shortest, b the longest", not any(bad_order), f"{sum(bad_order)} misordered")
-    check("_canonical_axes == _conventional_tetragonal here too", worst(disagree) == 0.0, f"max |diff| = {worst(disagree):.3g}")
     check("right-handed (det > 0)", not any(lefthanded), f"{sum(lefthanded)} left-handed")
     check("idempotent", not any(not_idem), f"{sum(not_idem)} changed")
     # and it is exactly the old formula, up to the sign of column a that keeps det > 0

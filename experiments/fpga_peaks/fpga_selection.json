@@ -1,9 +1,9 @@
 {
- "baseline": 114,
+ "baseline": 117,
  "cell_edges": [
-  37.9,
-  78.7,
-  78.8
+  37.8,
+  78.6,
+  78.9
  ],
  "rows": [
   {
@@ -25,35 +25,35 @@
    "indexed": 116,
    "total": 120,
    "kept_per_frame": 129.6,
-   "support": 89
+   "support": 90
   },
   {
    "arm": "seam mask w=8, ASIC grain",
-   "indexed": 116,
+   "indexed": 115,
    "total": 120,
    "kept_per_frame": 120.5,
    "support": 82
   },
   {
    "arm": "seam mask w=12, ASIC grain",
-   "indexed": 115,
+   "indexed": 111,
    "total": 120,
    "kept_per_frame": 107.9,
-   "support": 81
+   "support": 83
   },
   {
    "arm": "count cap 48/frame, unbiased",
-   "indexed": 110,
+   "indexed": 115,
    "total": 120,
    "kept_per_frame": 47.6,
    "support": 44
   },
   {
    "arm": "count cap 48/frame, low-|q| biased",
-   "indexed": 104,
+   "indexed": 106,
    "total": 120,
    "kept_per_frame": 47.6,
-   "support": 56
+   "support": 58
   }
  ]
 }

@@ -32,27 +32,27 @@ Reference is the projection-round-trip baseline; each arm is a delta from it.
 | baseline (projection round-trip) | **117 / 120** | 137.9 |
 | integer positions | 116 / 120 | 137.9 |
 | seam mask w=8, panel grain (576×336) | 116 / 120 | 129.6 |
-| seam mask w=8, ASIC grain (192×168) | 116 / 120 | 120.5 |
-| seam mask w=12, ASIC grain | 115 / 120 | 107.9 |
-| count cap 48/frame, unbiased | 110 / 120 | 47.6 |
-| count cap 48/frame, low-\|q\| biased | 104 / 120 | 47.6 |
+| seam mask w=8, ASIC grain (192×168) | 115 / 120 | 120.5 |
+| seam mask w=12, ASIC grain | 111 / 120 | 107.9 |
+| count cap 48/frame, unbiased | 115 / 120 | 47.6 |
+| count cap 48/frame, low-\|q\| biased | 106 / 120 | 47.6 |
 
 **Reading.**
 - **Integer positions are free.** Sub-pixel precision is unnecessary for indexing (−1 frame,
   within run noise).
 - **Consensus absorbs the seam loss.** Aggressive per-tile masking removes ~13% of peaks near
-  tile edges (blind, per-frame), yet the consensus rate holds at 116/120 even at the fine ASIC
+  tile edges (blind, per-frame), yet the consensus rate holds at 115/120 even at the fine ASIC
   grain; panel-grain tiling costs less. Tile coarsely and let consensus recover the rest.
-- **Keep the strongest peaks across all resolutions.** A count cap costs little when unbiased
-  (110) but measurably more when biased toward low resolution (104): indexing needs the
-  high-angle peaks for angular leverage. This is the one selection policy that hurts — an
-  occupancy/FIFO cap that drops by position or time (≈resolution-unbiased) is fine.
+- **Preserve peaks across resolutions.** A count cap costs little when unbiased (115) but
+  measurably more when biased toward low resolution (106): indexing needs the high-angle peaks
+  for angular leverage. These arms measure resolution diversity only; they do not validate
+  intensity-ranked or FIFO/position-based dropping.
 
 ## What this does NOT cover (needs raw pixels — do not fake)
 
 - **Intensity-weighted top-K per tile.** The committed lists carry positions only. The count-cap
-  arms here are unbiased vs a low-\|q\| worst-case proxy; a real intensity cap keeps strong peaks
-  at all resolutions and should land at or above the unbiased result.
+  arms here are unbiased vs a low-\|q\| worst-case proxy; where a real intensity cap lands is
+  unmeasured here.
 - **The detection model** (pf8 radial background vs a tile-local finder = *which* peaks are
   found) needs frames. A 2026-07 study on realistic simulated frames found a local-window finder
   matched pf8 and was robust to a rising water-ring background, but the experimental pixels
@@ -67,5 +67,5 @@ GLINT_ROOT=$PWD python3 experiments/fpga_peaks/fpga_selection.py --json out.json
 # S3DF A100 (torch env): experiments/fpga_peaks/run_fpga.sh under srun -p ampere.
 ```
 
-Design brief for an edge peak-emitter, in one line: **emit integer positions; keep the strongest
-peaks across all resolutions; tile coarsely; let the cross-frame consensus absorb the rest.**
+Design brief for an edge peak-emitter, in one line: **emit integer positions; preserve peaks
+across resolutions; tile coarsely; let the cross-frame consensus absorb the rest.**

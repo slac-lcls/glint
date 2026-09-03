@@ -16,7 +16,7 @@ Ewald sphere), asserted at startup: if it fails, nothing below is a controlled c
 WHAT THIS DOES NOT COVER (needs raw pixels, which are purged -- do not fake):
   * intensity-weighted top-K per tile: the committed lists carry positions only, no intensity. We
     test count caps that are UNBIASED (random) and RESOLUTION-BIASED (low-|q|, a worst-case proxy);
-    a real intensity cap keeps strong peaks at all resolutions and should land at the unbiased result.
+    where a real intensity cap lands is unmeasured here.
   * the DETECTION model (pf8-radial vs a tile-local finder = WHICH peaks are found): needs frames.
 
 Usage:  python experiments/fpga_peaks/fpga_selection.py [--device cpu|cuda] [--json out.json]
@@ -26,8 +26,6 @@ import numpy as np
 
 ROOT = os.environ.get("GLINT_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
-from glint.hybrid_stream import hybrid_index          # noqa: E402
-from glint.multishot import same_lattice              # noqa: E402
 
 # Synthetic panel geometry -- the same constants q_to_peaks.py uses to invert q-frames to a detector.
 RES, CLEN, NPX, CORNER = 10000.0, 0.15, 3000, -1500.0     # px/m, m, panel px, corner (px)
@@ -130,7 +128,7 @@ def degrade(frames, arm, integer=False, tfs=PANEL_FS, tss=PANEL_SS, seed=0):
     return out, float(np.mean(kept))
 
 
-def score(frames, ref_cell):
+def score(frames, ref_cell, hybrid_index, same_lattice):
     """Index with the shipped consensus path; count frames whose picked cell is same_lattice(ref).
     Returns (n_indexed_at_ref, consensus_cell Mc, stats). If ref_cell is None (baseline), the run's
     own Mc is the reference."""
@@ -149,9 +147,18 @@ def score(frames, ref_cell):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--frames", default=os.path.join(ROOT, "experiments", "frames_cxidb_clean.txt"))
-    ap.add_argument("--device", default="cpu")
+    ap.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     ap.add_argument("--json", default=None)
     a = ap.parse_args()
+    if a.device == "cpu":
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    else:
+        import torch
+        if not torch.cuda.is_available():
+            sys.exit("--device cuda requested, but CUDA is not available")
+
+    from glint.hybrid_stream import hybrid_index
+    from glint.multishot import same_lattice
 
     frames = load_frames(a.frames)
     print(f"loaded {len(frames)} frames, mean {np.mean([len(f) for f in frames]):.0f} peaks/frame")
@@ -171,7 +178,8 @@ def main():
     print(f"geometry self-check OK (inverse exact to {err:.1e}); mean excitation shift {exc:.2e} 1/A")
 
     # Baseline: undegraded projection round-trip. Establishes the reference cell and the ceiling.
-    base, ref_cell, bstats = score(frames, None)
+    base_frames, _ = degrade(frames, arm_identity)
+    base, ref_cell, bstats = score(base_frames, None, hybrid_index, same_lattice)
     if ref_cell is None:
         sys.exit("baseline formed no consensus cell -- cannot proceed")
     edges = np.round(np.sort(np.linalg.norm(ref_cell, axis=0)), 1)
@@ -189,7 +197,7 @@ def main():
     rows = []
     for name, arm, integer, tfs, tss in arms:
         fr, kpf = degrade(frames, arm, integer=integer, tfs=tfs, tss=tss)
-        n_ok, _, st = score(fr, ref_cell)
+        n_ok, _, st = score(fr, ref_cell, hybrid_index, same_lattice)
         rows.append(dict(arm=name, indexed=n_ok, total=len(frames), kept_per_frame=round(kpf, 1),
                          support=st.get("support")))
         print(f"  {name:38s}  {n_ok:3d}/{len(frames)}   {kpf:5.1f} pk/frame")

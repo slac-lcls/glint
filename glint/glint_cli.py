@@ -18,6 +18,8 @@ import numpy as np
 
 def _lattice_type_from_lattice_code(lattice_code):
     c = str(lattice_code or "").strip().lower()
+    if c.startswith("hr"):
+        return "rhombohedral"
     return {"a": "triclinic", "m": "monoclinic", "o": "orthorhombic",
             "t": "tetragonal", "h": "hexagonal", "c": "cubic"}.get(c[:1])
 

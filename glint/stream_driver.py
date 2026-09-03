@@ -994,6 +994,9 @@ class StreamDriver:
         # frames, negligible for completeness. See glint.running_consensus.
         self._blind = Mc is None
         self.n_warmup = 0; self.locked_after = None; self.consensus_support = None
+        # Hypotheses FOLDED into the locked group, >= consensus_support: the two differ only when a
+        # multi-match merge absorbed cells the locked representative does not cover (glint#182).
+        self.consensus_members = None
         if self._blind:
             self.Mc = None; self.grid = None; self.n_theoretical = None
             # The pool-keyed acceptance gate (glint.running_consensus.consensus_accept). ON by
@@ -1122,6 +1125,7 @@ class StreamDriver:
         if Mc is not None:
             Mc = self._gate_lock(Mc, sup)                       # may tighten the cell, or refuse the lock
         if Mc is not None:
+            self.consensus_members = self._rc.leader_counts()[1]   # folded >= sup (glint#182)
             self._lock(Mc, sup, standardize=True)               # -> known-cell batched path from here
 
     def warmup_batch(self, frames, fanout=None):
@@ -1181,6 +1185,7 @@ class StreamDriver:
             Mc = self._gate_lock(Mc, sup)                        # may tighten the cell, or refuse the lock
         if Mc is not None:
             self.locked_after = self.n_pushed
+            self.consensus_members = self._rc.leader_counts()[1]   # folded >= sup (glint#182)
             self._lock(Mc, sup, standardize=True)
             return True
         return False
@@ -1786,9 +1791,11 @@ class StreamDriver:
             # "there is support but no cell -- why?" (Copilot review of glint#164).
             return dict(locked=False, pushed=self.n_pushed, warmup_indexed=self.n_warmup,
                         consensus_support=sup, consensus_lead=lead,
+                        consensus_members=self._rc.leader_counts()[1],   # folded >= support (glint#182)
                         gate_refused=self.n_gate_refused)
         s = self.acc.stats(thr=thr, n_theoretical=self.n_theoretical)
         s.update(locked=True, locked_after=self.locked_after, consensus_support=self.consensus_support,
+                 consensus_members=self.consensus_members,      # folded >= support (glint#182)
                  pushed=self.n_pushed, indexed=self.n_indexed, integrated=self.n_integrated,
                  theoretical_unique=self.n_theoretical,
                  # the Laue class the numbers above were merged under (None = explicit `ops`), so a

@@ -35,7 +35,13 @@ Newton specifically (`REFINER=newton`) basin-jumps from imperfect seeds — wedg
 
 Casting M3 as phase retrieval (P_data = round inlier projections to integer hkl; P_support =
 least-squares refit onto range(Q)) and applying **RAAR** feedback lifts the **sparse** blind rate
-**84 → 88/120** (β = 0.7, ~16 iters; reproduced) — right at the oracle-reachable ceiling (73–76%). It
+**84 → 88/120** (β = 0.7, ~16 iters; reproduced). The oracle-reachable ceiling it was said to sit at
+is 86/120 (~72%; `oracle_blind.py` floors that printout to 71%), against a shipped single-frame
+85/120 = 71% at the correct-lattice bar — so as banked, **this sweep's 88 EXCEEDS the oracle reach**,
+which cannot both be true at one bar. The RAAR sweep predates the #184 oracle measurement and its own
+acceptance bar was never recorded, so the two are not comparable as they stand; the earlier
+"(73–76%)" here was a prose estimate, not a measured value, and this file's own rule is to quote
+FACTS rather than prose. Re-measure both at one bar before either number is used. It
 is the *first* single-frame lever to beat momentum-GD, it recovers exactly the selection-miss frames GD
 loses to spurious basins, and it **grows on hard data** (mosaic blind 11 → 17 at σ = .0015, +55% rel).
 

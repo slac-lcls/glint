@@ -38,10 +38,11 @@ the recorded item-7 failure, which reproduces today only with ``GLINT_CONSENSUS_
 number quoted throughout this repo is exact, but it is a PRE-#102 measurement; the batch path has
 since outgrown that failure and this one has not.
 
-Adopting #102 here is possible but not free: this class keeps only group representatives and
-weights, so densest seeding would mean retaining the full hypothesis pool and re-grouping it
-periodically -- O(n) work repeated on a path whose whole purpose is to decide after every frame.
-It defends with the acceptance gate instead, and the defence is worth what it costs. Replaying that
+Adopting #102 here is possible but not free: this class groups once, on arrival, and never
+re-groups (it does keep each group's members since glint#182, for the post-merge recount below, but
+densest seeding would mean re-partitioning that pool periodically -- O(n) work repeated on a path
+whose whole purpose is to decide after every frame). It defends with the acceptance gate instead,
+and the defence is worth what it costs. Replaying that
 run over 400 random arrival orders:
 
     gap-only (shipped)          locks 342/400, of which 194 are the WRONG lattice
@@ -61,8 +62,9 @@ match cannot short-circuit the way first-match-wins did, so ``_candidates`` scan
 set. The scan is one vectorised numpy expression over parallel fingerprint arrays rather than a
 Python loop, which is what keeps the cost bounded -- 147 us/hypothesis against 121 for the
 short-circuit path at ~700 groups, most of the remaining gap being the ``reduced_params`` call both
-paths already pay (it was 328 us before the arrays). What it does NOT cost is memory: the witness is
-the arriving cell, so nothing is retained. It fixes the failure this path was losing to. Measured on a real
+paths already pay (it was 328 us before the arrays). Memory is a 3x3 matrix plus a fingerprint per
+hypothesis (each group keeps its members -- see REPRESENTATIVE AFTER A MERGE), well under a megabyte
+for the few thousand hypotheses a run pools. It fixes the failure this path was losing to. Measured on a real
 refined-geometry run (small-molecule cell, 665 frames, 3325 hypotheses): the true lattice's votes
 FRAGMENTED across two groups, each within 5% of truth but 5.5-5.9% from EACH OTHER, so neither
 absorbed the other and a spurious group outranked both halves. Shipped grouping locked at frame 31
@@ -76,6 +78,28 @@ frames, merge and shipped are INDISTINGUISHABLE: at n=120 both lock 2000/2000 wi
 (median 8 frames); at n=480 both lock 2000/2000 with 1 false-lock (0.05%, median 9 frames) -- and on
 the SAME alias, a doubled c axis, so n=480 exposes a pre-existing supercell false-lock in BOTH rather
 than a new one from the merge. ``merge=False`` restores first-match-wins exactly.
+
+REPRESENTATIVE AFTER A MERGE (glint#182). The merged group's representative used to be the witness,
+on the argument that it matches every group it merged. But tolerance matching is not transitive: a
+member that matched a group's FOUNDER need not match the witness, so the coalesced group could carry
+a support its representative did not command -- diag(a,120,140) with a = 100, 97, 97, 97 (one
+group), 106 (another), then the witness 103 gave support 6 with only 3 of the 6 cells within
+tolerance of the locked a=103 (the 97s are 6% from it). StreamDriver locks the representative and
+its alias gate collects voters against it, so the gate was handed a count it could not see. Now
+every group keeps its members; after a merge the representative is chosen among {the heaviest
+group's representative, the witness, the other merged groups' representatives} by how many members
+it covers (ties -> the heaviest group's, so the lock churns least), and the support is RECOUNTED as
+that coverage. The invariant ``support == members within tolerance of the representative`` then
+holds after every add, and it is what ``verdict()`` reports and the driver gates on. Members the
+chosen representative does not cover stay in the group -- so a later recount is exact -- but do not
+count; ``leader_counts()`` reports both numbers. The recount never costs the leader a vote it had:
+the heaviest group's own representative still covers everything it covered plus the witness, so the
+merged support is at least that group's support + 1. The clean cxidb-120 replay
+(experiments/test_seqstop_replay.py) never takes the merge path at all -- 0 multi-match hits in
+deposition order over all 120 frames, 0 across its 400 random orders -- so its FACTS are untouched
+by construction; the recount matters where merges happen, i.e. the fragmented-lattice runs above.
+Pinned by experiments/test_consensus_voter_set.py, which fails on the pre-fix module with exactly
+the 6-vs-3 above.
 
 
 Stop rule: lock when the leading group's support >= ``min_support`` AND it leads the runner-up by >=
@@ -188,7 +212,10 @@ class RunningConsensus:
         # per-hypothesis query is one numpy expression instead of a Python loop over every group.
         self._n = 0
         self._dets = np.empty(64); self._lens = np.empty((64, 3)); self._cos = np.empty((64, 3))
-        self.groups = []                                  # each: [rep_M, lens, cos, det, weight]
+        # each: [rep_M, lens, cos, det, weight, members]; members = [(M, lens, cos, det), ...] --
+        # every hypothesis folded into the group, kept so a merge can re-choose the representative
+        # and recount the weight it commands (REPRESENTATIVE AFTER A MERGE, glint#182).
+        self.groups = []
         self.nframes = 0
         self.npool = 0                                    # hypotheses added, not frames
 
@@ -214,7 +241,7 @@ class RunningConsensus:
         self._n = i + 1
 
     def _push(self, M, l, c, d):
-        self.groups.append([M, l, c, d, 1]); self._push_fp(l, c, d)
+        self.groups.append([M, l, c, d, 1, [(M, l, c, d)]]); self._push_fp(l, c, d)
 
     def _rebuild_fp(self):
         """Re-derive the fingerprint arrays from self.groups (after a merge changed the set)."""
@@ -241,20 +268,46 @@ class RunningConsensus:
                           & np.all(np.abs(l - lv) <= self.rtol * lv, axis=1)
                           & np.all(np.abs(c - cv) <= self.ctol, axis=1))[0]
 
+    @staticmethod
+    def _member_arrays(members):
+        """Stack a member list ((M, lens, cos, det) tuples) into the three fingerprint arrays
+        ``_covered`` tests against. Materialized ONCE per merge and reused for every candidate
+        representative: an h-way merge scores h+1 candidates against the same pool, and rebuilding
+        these inside the loop repeated O(m) allocations on the streaming path for no gain (glint#187
+        review)."""
+        return (np.array([m[1] for m in members]),
+                np.array([m[2] for m in members]),
+                np.array([m[3] for m in members]))
+
+    def _covered(self, l, c, d, members):
+        """How many of ``members`` a representative with fingerprint (l, c, d) covers: ``_match``
+        with the representative as the reference, vectorised over the members. This is the count
+        ``verdict()`` reports as support after a merge, so it must agree with ``_match`` member for
+        member (pinned by test_consensus_voter_set.py).
+
+        ``members`` may be the member list itself or an already-materialized (lm, cm, dm) triple from
+        ``_member_arrays``; the two are exactly equivalent, and the merge loop passes the triple."""
+        lm, cm, dm = (members if isinstance(members, tuple) and len(members) == 3
+                      else self._member_arrays(members))
+        return int(np.count_nonzero((np.abs(dm - d) <= self.vtol * d)
+                                    & np.all(np.abs(lm - l) <= self.rtol * l, axis=1)
+                                    & np.all(np.abs(cm - c) <= self.ctol, axis=1)))
+
     def add(self, M):
         """Add ONE candidate cell (3x3 basis, columns a,b,c) to the running histogram.
 
         A cell inside the tolerance of SEVERAL groups is direct evidence that those groups are one
         lattice which arrival-order grouping split (tolerance matching is not transitive -- see
         GROUPING ORDER above), so they are folded together. The HEAVIEST group survives as the object
-        that carries the combined weight, but its representative is REPLACED by the arriving witness:
-        the witness is inside the tolerance of every group it merged, whereas the heaviest group's
-        founder need not cover the others, and the representative is what gets locked and gated on.
-        This is the repair for non-transitivity that fits THIS path: the witness is the arriving cell,
-        so it needs no hypothesis pool and no periodic re-grouping, which is the cost that kept
-        glint#102's densest-neighbourhood seeding in the batch path only. It is not free in time --
-        see MERGE-ON-MULTI-MATCH above for the measured scan cost. ``merge=False`` restores the
-        pre-fix first-match-wins behaviour exactly.
+        that carries the combined members; its representative is then RE-CHOSEN among that group's
+        own representative, the arriving witness and the other merged groups' representatives, by
+        how many of the combined members each covers, and the support is RECOUNTED as that coverage
+        (REPRESENTATIVE AFTER A MERGE above: the witness used to be taken unconditionally, and could
+        carry votes it did not cover -- the representative is what gets locked and gated on). This is
+        the repair for non-transitivity that fits THIS path: it needs the members but no periodic
+        re-grouping, which is the cost that kept glint#102's densest-neighbourhood seeding in the
+        batch path only. It is not free in time -- see MERGE-ON-MULTI-MATCH above for the measured
+        scan cost. ``merge=False`` restores the pre-fix first-match-wins behaviour exactly.
         """
         M = np.asarray(M, float)
         l, c = reduced_params(M); d = abs(np.linalg.det(M))
@@ -262,8 +315,8 @@ class RunningConsensus:
         if not self.merge:
             for g in self.groups:
                 if self._match(l, c, d, g):
-                    g[4] += 1; return
-            self.groups.append([M, l, c, d, 1]); self._push_fp(l, c, d)
+                    g[4] += 1; g[5].append((M, l, c, d)); return
+            self._push(M, l, c, d)
             return
         # Volume is the cheap half of _match and rejects almost every group, so gate on it inline
         # before paying for the reduced-parameter comparisons. Without this the multi-match scan
@@ -273,21 +326,33 @@ class RunningConsensus:
         if not hits:
             self._push(M, l, c, d); return
         keep = max(hits, key=lambda g: g[4])
-        drop = set()
-        for g in hits:
-            if g is not keep:
-                keep[4] += g[4]; drop.add(id(g))
-        if drop:                                          # by IDENTITY: `==` is ambiguous on arrays
-            self.groups = [g for g in self.groups if id(g) not in drop]
-            # The WITNESS becomes the representative of the coalesced group. It is inside the
-            # tolerance of every group it merged -- that is what selected them -- whereas the
-            # heaviest group's founder need not cover the others, so keeping the founder would
-            # expose a combined support whose voters do not all match the matrix that gets locked.
-            # StreamDriver locks this matrix and its alias gate only collects candidates matching
-            # it, so an uncovered representative would gate away a chunk of its own voters.
-            keep[0] = M; keep[1] = l; keep[2] = c; keep[3] = d
-            self._rebuild_fp()
-        keep[4] += 1
+        keep[5].append((M, l, c, d))
+        if len(hits) == 1:
+            keep[4] += 1; return                          # matched the representative: covered by construction
+        # A multi-match MERGE. Fold the other groups' members into the heaviest one, then choose the
+        # representative that covers the most of the combined members. Candidates, in tie-break
+        # order: the heaviest group's own representative (the lock churns least if it stays), the
+        # witness (the pre-#182 choice -- it always covers every FORMER representative, but not
+        # necessarily their members), then the other merged groups' representatives, heaviest
+        # first. Members the winner does not cover stay in the group -- they are not re-seeded as
+        # groups of their own -- but do not count: support is what the representative COMMANDS,
+        # because StreamDriver locks this matrix and its alias gate only collects candidates
+        # matching it (the pre-#182 code credited the witness with every merged member, and a lock
+        # could carry a support its own gate then could not find).
+        others = sorted((g for g in hits if g is not keep), key=lambda g: g[4], reverse=True)
+        for g in others:
+            keep[5].extend(g[5])
+        drop = {id(g) for g in others}                    # by IDENTITY: `==` is ambiguous on arrays
+        self.groups = [g for g in self.groups if id(g) not in drop]
+        best, best_n = None, -1
+        pool = self._member_arrays(keep[5])               # built once, scored against h+1 candidates
+        for cand in [keep[:4], [M, l, c, d]] + [g[:4] for g in others]:
+            n = self._covered(cand[1], cand[2], cand[3], pool)
+            if n > best_n:
+                best, best_n = cand, n
+        keep[0], keep[1], keep[2], keep[3] = best
+        keep[4] = best_n
+        self._rebuild_fp()
 
     def add_frame(self, cells):
         """Add one frame's candidate cells (iterable of 3x3 bases; may be empty / contain None)."""
@@ -305,6 +370,20 @@ class RunningConsensus:
         g = sorted(self.groups, key=lambda x: x[4], reverse=True)
         return g[0][0], g[0][4], (g[1][4] if len(g) > 1 else 0)
 
+    def leader_counts(self):
+        """(support, members) of the current leader -- (0, 0) with no votes yet.
+
+        support = hypotheses within tolerance of the leader's representative: what ``leaders()`` and
+        ``verdict()`` report and the stop rule gates on. members = every hypothesis folded into the
+        group, which exceeds support only when a merge absorbed cells the chosen representative does
+        not cover (REPRESENTATIVE AFTER A MERGE, glint#182). The difference is the vote the group
+        carries but its representative does not command -- reported so it can be seen rather than
+        silently counted, as it was before #182."""
+        if not self.groups:
+            return 0, 0
+        g = max(self.groups, key=lambda x: x[4])          # the same first-max leaders() returns
+        return g[4], len(g[5])
+
     def _adapt_gap(self):
         """Raise the gap when the leader accumulates slowly (the mosaic signature).
 
@@ -317,6 +396,10 @@ class RunningConsensus:
 
     def verdict(self, gap=None):
         """Return (locked_cell, support, lead) if the stop rule fires now, else (None, support, lead).
+
+        support is the number of pooled hypotheses within tolerance of the leader's representative
+        -- the cell returned here -- not merely the number folded into its group; ``leader_counts()``
+        gives both (glint#182).
 
         gap overrides the (possibly adapted) gap -- pass gap=0 after the last frame to reproduce the
         batch consensus_cell result, which is exact only under GLINT_CONSENSUS_STABLE=0 (the module

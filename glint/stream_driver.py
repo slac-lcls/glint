@@ -616,7 +616,7 @@ def _conventional_tetragonal(M):
     the 4/mmm operators are built on and the frames predicted against it can no longer land in
     different settings (glint#181: for c > a cells the frame's 4-fold ended up in b and the grid
     missed ~19% of its predictions). Cells with no equal pair fall back to (long, long, short)."""
-    return standardize_axes(M)
+    return standardize_axes(M, laue="4/mmm")
 
 
 class StreamDriver:

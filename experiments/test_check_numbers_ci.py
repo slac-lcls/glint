@@ -60,6 +60,24 @@ def _brute_p10(n01, n10, n, d, steps=200000):
     return best[1]
 
 
+
+def test_bare_86_of_120_needs_to_say_whose_it_is():
+    """86/120 is xgandalf's blind rate AND GLINT's oracle-reachable ceiling. The rule must fire on an
+    unlabelled one, stay silent on either labelling, and -- the trap that caught its own first draft
+    -- not skip a value that ends a sentence: (?![\\d.]) rejects ANY following period, so
+    "below XGANDALF's 86/120." went unseen on the one line that disambiguates it correctly."""
+    fires = lambda t: _fires(t, "bare-86-of-120")
+    assert fires("the counts (92/120 and 86/120) are reproduced")
+    assert fires("GLINT reaches 86 of 120 frames")
+    for ok in ("below XGANDALF's 86/120.",                 # sentence-final, labelled
+               "the oracle-reachable ceiling is 86/120",
+               "xgandalf & blind & 72\\% (86/120) \\\\",
+               next(r.instead for r in _cn.AMBIGUOUS if r.name == "bare-86-of-120")):   # never flag its own advice
+        assert not fires(ok), ok
+    for no in ("a value of 86.120 in the fit", "frames 186/120 nonsense"):
+        assert not fires(no), no
+
+
 def test_closed_form_mle_matches_brute_force():
     for (n01, n10), d in ((( 10, 29), -0.04), ((29, 54), -0.05), ((32, 21), 0.02), ((29, 27), 0.0)):
         got, want = p10_mle(n01, n10, N, d), _brute_p10(n01, n10, N, d)
@@ -1406,6 +1424,7 @@ if __name__ == "__main__":
              test_ceiling_required_passes_and_fires,
              test_negatives_required_passes_and_fires,
              test_new_required_rules_stay_silent_without_their_trigger,
+             test_bare_86_of_120_needs_to_say_whose_it_is,
 )
     ok = 0
     for t in tests:

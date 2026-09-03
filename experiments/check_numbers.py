@@ -1432,6 +1432,29 @@ AMBIGUOUS = [
     # other quantity. Widening the escape hatch, not the rule.
     # [\s~]* here too: fixing the tie blind spot only in the RETIRED rules would have left the
     # identical hole one screen further down. Fix a class, not an instance.
+    # 86/120 means TWO different things in this project and nothing bound either of them. It is
+    # xgandalf's blind rate in tab:summary (72%, 86/120), and it is ALSO GLINT's own oracle-reachable
+    # ceiling, the sf_ceiling_of120 banked above -- which sits one apart from the 85 lattice-bar count
+    # it already gets conflated with, so the reader has three neighbouring integers (85, 86, 86) for
+    # three different quantities, two of them the same digits. The ceiling does not appear as a
+    # literal in the manuscript today, which is exactly when to fence it: the collision is latent, and
+    # the cost of writing it once unlabelled is a competitor's rate read as our own reachability.
+    #
+    # Already live and unlabelled at the time this rule was written: "the head-to-head counts of
+    # Table~\ref{tab:summary} (92/120 and 86/120) are reproduced exactly" names neither method.
+    #
+    # ⚑ The lookahead is (?!\d|\.\d), NOT the (?![\d.]) used by the numeric rules above. Those reject
+    # ANY following period, so they silently skip a value that ends a sentence -- "below XGANDALF's
+    # 86/120." was missed by the first draft of this very rule, on the one line that disambiguates it
+    # correctly. A trailing period is a sentence, not a decimal; only a period FOLLOWED BY A DIGIT
+    # continues the number.
+    Rule("bare-86-of-120", r"(?<![\d.])86\s*(?:of|/)\s*120(?!\d|\.\d)",
+         "86/120 is BOTH xgandalf's blind rate on the cxidb-17 benchmark (tab:summary) and GLINT's "
+         "own oracle-reachable ceiling (FACTS sf_ceiling_of120); a bare one cannot be told apart, "
+         "and the two say opposite things about whose method the number flatters",
+         "name whose it is -- 'xgandalf's 86/120' for the baseline, or 'oracle-reachable ceiling' "
+         "for ours",
+         needs=("xgandalf", "ceiling", "oracle", "reachable")),
     Rule("subms-no-batch", r"0\.(?:17|33)[\s~]*ms",
          "a sub-millisecond known-cell figure is throughput amortized over a batch, not a per-frame "
          "latency; without the batch it reads as latency next to ffbidx's 4.4 ms",

@@ -79,7 +79,7 @@ LENGTH_ORDER_LAUE = ("mmm",)                                            # a <= b
 # rhombohedral 3-fold, and for cubic every axis is equivalent so any permutation is already standard.
 
 
-def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL):
+def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL, centering=None):
     """Bravais-aware standard setting of a real-space basis (columns of ``M`` = a, b, c).
 
     The ONE axis-setting rule behind ``predict._canonical_axes`` (the per-frame setting the merge and
@@ -98,7 +98,8 @@ def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL):
         unique axis, so the closest-length pair becomes a, b (a the SHORTER of the two) and the
         outlier becomes c, the axis the operators rotate about, whether c is short or long.
       * ``LENGTH_ORDER_LAUE`` (orthorhombic) -- a <= b <= c, with NO tolerance anywhere in the
-        decision. The three axes are inequivalent, so the setting has to be a total order.
+        decision. A/B/C-centered cells are left in their labelled setting because permuting their
+        axes would change the centering letter.
       * anything else, and ``laue=None`` on a caller that knows no class -- see below.
 
     Passing the class is what makes the setting stable. Deciding it from lengths alone cannot work
@@ -144,7 +145,8 @@ def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL):
 
     if laue is not None and laue in UNIQUE_C_LAUE:
         order = _unique_c_order()
-    elif laue is not None and laue in LENGTH_ORDER_LAUE:
+    elif (laue is not None and laue in LENGTH_ORDER_LAUE
+          and str(centering or "").upper() not in ("A", "B", "C")):
         order = _sorted_order()                    # a <= b <= c, no tolerance in the decision
     elif laue is not None:
         return M.copy()                            # triclinic / monoclinic / rhombohedral / cubic

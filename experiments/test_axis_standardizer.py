@@ -46,7 +46,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from glint.lattice import cell_to_Ar, cell_params, random_rotation
-from glint.predict import _canonical_axes, predict_spots
+from glint.predict import (_canonical_axes, _laue_hint_for_integration,
+                           _laue_hint_from_lattice_type, predict_spots)
 from glint.stream_driver import HKLGrid, _conventional_tetragonal
 
 try:                                              # absent on the pre-fix code: reported as a FAIL below,
@@ -242,6 +243,11 @@ for cell in NEAR:
         out = standardize_axes(P_in, laue="mmm")
         ok_mmm &= bool(np.allclose(_lens(out), sorted(cell))) and np.linalg.det(out) > 0
 check("mmm: a <= b <= c, and the incoming column order cannot change it", ok_mmm)
+base_centered = cell_to_Ar(50.0, 30.0, 32.0, 90, 90, 90)
+for centering in ("A", "B", "C"):
+    check(f"mmm/{centering}: base-centered axis semantics are preserved",
+          np.array_equal(standardize_axes(base_centered, laue="mmm", centering=centering),
+                         base_centered))
 
 orders = {_order_of(standardize_axes(cell_to_Ar(*c, 90, 90, 90)), c) for c in NEAR}
 print(f" no class, 100/103/106 vs 100/102.8/106 -> axis orders {sorted(orders)}")
@@ -251,6 +257,10 @@ check("no class: two pairs inside the tolerance -> both take the same (long, lon
 unamb = all(np.allclose(_lens(standardize_axes(cell_to_Ar(*c, 90, 90, 90))), c)
             for c in ((58.0, 58.0, 130.0), (79.02, 79.02, 37.98), (100.0, 103.0, 150.0)))
 check("no class: exactly one pair inside the tolerance still gets the unique-axis rule", unamb)
+check("trigonal Bravais refinement uses rhombohedral axes",
+      _laue_hint_for_integration("trigonal", None) == "-3m_R")
+check("a trigonal lattice_type record still means hexagonal axes",
+      _laue_hint_for_integration(None, "trigonal") == _laue_hint_from_lattice_type("trigonal") == "-3m1")
 
 M_OBL = cell_to_Ar(50.0, 30.0, 32.0, 90, 100.0, 90)
 idem = all(np.array_equal(standardize_axes(standardize_axes(M_OBL, laue=q), laue=q),

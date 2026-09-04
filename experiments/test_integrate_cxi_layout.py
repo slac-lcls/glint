@@ -275,6 +275,8 @@ check("--event-axis help no longer scopes itself to --peaks only",
       "--integrate --peaks:" not in cli_src and "--images" in cli_src.split("--event-axis", 1)[1][:600])
 check("glint_cli maps a tetragonal lattice code to the lattice_type hint integrate_cxi uses",
       _lattice_type_from_lattice_code("tPc") == "tetragonal")
+check("glint_cli does not treat the default --lattice value as an integration hint",
+      'ap.add_argument("--lattice",' in cli_src and 'ap.add_argument("--lattice", default=' not in cli_src)
 ann_lns = [node.lineno for node in ast.walk(tree)
            if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "setdefault"
            and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == "lattice_type"]

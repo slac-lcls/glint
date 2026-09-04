@@ -123,7 +123,7 @@ def main():
     # Was --fromfile, which named the flag after CrystFEL's READER (--fromfile-input-file) even though
     # GLINT is the WRITER -- so it read backwards from this side. Kept working, hidden from --help.
     ap.add_argument("--fromfile", metavar="SOL", help=argparse.SUPPRESS)
-    ap.add_argument("--lattice", default="aP",
+    ap.add_argument("--lattice",
                     help="Bravais lattice code for --tofile (e.g. tPc tetragonal, aP triclinic); default aP")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
@@ -207,8 +207,9 @@ def main():
             print("  note: --fromfile is deprecated, use --tofile (GLINT WRITES this file; "
                   "'fromfile' was named for CrystFEL, which reads it)", file=sys.stderr)
         from glint.predict import write_fromfile
-        nsol = write_fromfile(results, sol_path, args.lattice)
-        print(f"  solution file      : {nsol} ({args.lattice}) -> {sol_path}"
+        lattice_code = args.lattice or "aP"
+        nsol = write_fromfile(results, sol_path, lattice_code)
+        print(f"  solution file      : {nsol} ({lattice_code}) -> {sol_path}"
               f"  [indexamajig --indexing=file --fromfile-input-file={sol_path} --tolerance=10,10,10,3]")
 
 

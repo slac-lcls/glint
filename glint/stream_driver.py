@@ -702,6 +702,7 @@ class StreamDriver:
         self._pkq = [None] * self.B                             # observed peaks aligned with _q (stream_peaks)
         self._n = 0
         self._frame_no = 0
+        self.stream_symmetry = dict(stream_symmetry or {})
 
         # Merge symmetry (glint#180). This used to be `laue_ops_4mmm()` unconditionally, so any
         # non-tetragonal cell had its completeness/CC*/Rsplit merged under 4/mmm while the stream
@@ -787,7 +788,6 @@ class StreamDriver:
                 stream_out, geom_text=stream_geom_text, panel_name=names[0], panel_names=names,
                 photon_eV=(12398.419843320026 / self.wavelength_A), clen_m=self.clen_m)
         self.stream_image = str(stream_image)
-        self.stream_symmetry = dict(stream_symmetry or {})
         # Emit the OBSERVED peak list per chunk: None (off) | "flagged" | "all".
         # Why it matters: a chunk otherwise carries only the PREDICTED reflections, computed under the
         # orientation the driver chose -- so it cannot rescue a frame whose orientation WAS the
@@ -1017,10 +1017,11 @@ class StreamDriver:
     def _standardize(self, M, ref=None):
         """Cell setting for the merge operators (see _lock), decided by the Laue CLASS rather than by
         lengths alone: `standardize_axes(M, laue=self.laue)` puts the unique axis in c for the
-        tetragonal/trigonal/hexagonal classes (where laue_ops rotates about c), orders an
-        orthorhombic cell a <= b <= c, and leaves triclinic, monoclinic, rhombohedral and cubic cells
-        exactly as handed in -- no length rule can locate a monoclinic unique axis or a rhombohedral
-        3-fold, and for cubic every permutation is already standard.
+        tetragonal/trigonal/hexagonal classes (where laue_ops rotates about c), orders a primitive,
+        body- or face-centered orthorhombic cell a <= b <= c, and leaves base-centered
+        orthorhombic, triclinic, monoclinic, rhombohedral and cubic cells exactly as handed in --
+        permuting a base-centered cell changes its centering letter, no length rule can locate a
+        monoclinic unique axis or a rhombohedral 3-fold, and for cubic every permutation is standard.
 
         The class is the input a length rule cannot supply: a cell whose three axes all sit inside the
         equal-length tolerance has no pair a tolerance can identify, and guessing one made the setting
@@ -1040,9 +1041,12 @@ class StreamDriver:
         # Whether a canonical setting was imposed is a property of the CLASS, not of object identity:
         # standardize_axes returns a copy for the classes it leaves alone, so an `out is M` test would
         # silently stop relabelling the moment that copy was introduced.
+        base_centered = (self.laue in LENGTH_ORDER_LAUE
+                         and str(self.stream_symmetry.get("centering", "")).upper() in ("A", "B", "C"))
         imposed = (not self._ops_explicit) and (
-            self.laue in UNIQUE_C_LAUE or self.laue in LENGTH_ORDER_LAUE)
-        out = M if self._ops_explicit else standardize_axes(M, laue=self.laue)
+            self.laue in UNIQUE_C_LAUE or (self.laue in LENGTH_ORDER_LAUE and not base_centered))
+        out = M if self._ops_explicit else standardize_axes(
+            M, laue=self.laue, centering=self.stream_symmetry.get("centering"))
         if ref is not None and not imposed:
             out = _relabel_like(out, ref)
         return out

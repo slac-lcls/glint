@@ -233,6 +233,10 @@ def test_lock_standardizes_the_setting_under_the_driver_class():
     d._lock(ortho_perm, standardize=True)
     assert np.allclose(np.linalg.norm(d.Mc, axis=0), (30.0, 32.0, 50.0)), np.linalg.norm(d.Mc, axis=0)
     assert np.linalg.det(d.Mc) > 0, "the permutation must keep a right-handed basis"
+    for centering in ("A", "B", "C"):
+        d = _driver(ortho_perm, stream_symmetry=dict(
+            lattice_type="orthorhombic", centering=centering, unique_axis="*"))
+        assert np.array_equal(d.Mc, ortho_perm), (centering, np.linalg.norm(d.Mc, axis=0))
     # 6/mmm takes the unique-axis rule (its outlier is c); the classes with no length rule at all --
     # triclinic, monoclinic, rhombohedral, cubic -- are left exactly as handed in.
     d = _driver(ORTHO, laue="6/mmm")

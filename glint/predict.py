@@ -519,7 +519,13 @@ def _laue_hint_from_lattice_type(lattice_type):
     }.get(c)
 
 
-def _canonical_axes(M, laue=None):
+def _laue_hint_for_integration(sym_refine, lattice_type):
+    if str(sym_refine or "").strip().lower() == "trigonal":
+        return "-3m_R"
+    return _laue_hint_from_lattice_type(sym_refine or lattice_type)
+
+
+def _canonical_axes(M, laue=None, centering=None):
     """Per-frame-consistent cell setting (columns of ``M`` = real-space a, b, c) so tetragonal /
     orthorhombic reflections co-merge under the point group: the choice of unique axis c is what a
     422/mmm merge does NOT absorb (a<->b and the Friedel/handedness ambiguity it does).
@@ -532,7 +538,7 @@ def _canonical_axes(M, laue=None):
     4-fold axis in b while the reference cell's ``HKLGrid`` and 4/mmm operators had it in c
     (glint#181). ``write_fromfile`` (the CrystFEL handoff), ``integrate_cxi`` (native merge) and the
     streaming driver's ``_integrate_one`` all use it, so every merge path shares one setting."""
-    return standardize_axes(M, laue=laue)
+    return standardize_axes(M, laue=laue, centering=centering)
 
 
 def write_fromfile(results, path, lattice_code="aP"):
@@ -551,11 +557,12 @@ def write_fromfile(results, path, lattice_code="aP"):
     """
     rows = []
     laue = _laue_hint_from_lattice_code(lattice_code)
+    centering = str(lattice_code or "")[1:2]
     for r in results:
         M = r.get("M")
         if M is None:
             continue
-        Are = _canonical_axes(M, laue=laue)                        # standard setting: unique axis c
+        Are = _canonical_axes(M, laue=laue, centering=centering)   # standard setting: unique axis c
         Br = np.linalg.inv(Are).T * 10.0                           # reciprocal a*,b*,c* in nm^-1 (1/A -> 1/nm)
         v = Br[:, 0].tolist() + Br[:, 1].tolist() + Br[:, 2].tolist()
         ev = r.get("event", "")
@@ -964,7 +971,8 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
                 qobs = qobs[np.isfinite(qobs).all(1)]
                 if len(qobs) >= 6:
                     M_raw, _, _, _ = refine_bravais(qobs, M_raw, sym_refine, sym_refine_tol)
-            M = _canonical_axes(M_raw, laue=_laue_hint_from_lattice_type(sym_refine or r.get("lattice_type")))
+            laue = _laue_hint_for_integration(sym_refine, r.get("lattice_type"))
+            M = _canonical_axes(M_raw, laue=laue, centering=r.get("centering"))
             # standard setting (unique axis c): cross-frame-consistent hkl for the merge
             f = _h5(str(r.get("image")))
             ev = int(r.get("event", 0))

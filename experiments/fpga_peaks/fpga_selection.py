@@ -26,8 +26,12 @@ import numpy as np
 
 ROOT = os.environ.get("GLINT_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
-from glint.hybrid_stream import hybrid_index          # noqa: E402
-from glint.multishot import same_lattice              # noqa: E402
+# Torch-backed imports are DEFERRED into main(). Importing glint.hybrid_stream initialises torch and
+# fixes the visible devices, so it must happen AFTER --device has had its say -- otherwise the option
+# is advertised and inert, and `--device cpu` still runs on CUDA wherever a GPU is present.
+# glint/glint_cli.py:124-137 gates the same import for the same reason.
+hybrid_index = None                                   # bound in main(), after the device gate
+same_lattice = None                                   # bound in main(), after the device gate
 
 # Synthetic panel geometry -- the same constants q_to_peaks.py uses to invert q-frames to a detector.
 RES, CLEN, NPX, CORNER = 10000.0, 0.15, 3000, -1500.0     # px/m, m, panel px, corner (px)
@@ -96,8 +100,35 @@ def make_seam(tfs, tss, w):
         return ~near_seam(fs, ss, tfs, tss, w)
     return arm
 
+def make_tilecap(cap, tfs, tss, bias="none"):
+    """Keep at most `cap` peaks PER TILE -- the actual small-buffer model an edge emitter imposes.
+
+    This is not the same experiment as the frame-global cap below, and the difference is the point:
+    a per-tile buffer overflows locally, so the peaks it drops are SPATIALLY CORRELATED (a bright
+    tile loses many, an empty tile loses none), whereas a frame-global sample of the same total size
+    thins uniformly. A frame-global cap therefore cannot answer the per-tile-buffer question the
+    README poses -- it can only bound it."""
+    def arm(fs, ss, rng):
+        keep = np.zeros(fs.shape[0], bool)
+        ti, tj = tile_id(fs, ss, tfs, tss)
+        # one bucket per occupied tile; enforce the cap inside each independently
+        for key in set(zip(ti.tolist(), tj.tolist())):
+            m = np.flatnonzero((ti == key[0]) & (tj == key[1]))
+            if m.size <= cap:
+                keep[m] = True
+                continue
+            if bias == "lowq":
+                r = np.hypot(fs[m] + CORNER, ss[m] + CORNER)
+                keep[m[np.argsort(r)[:cap]]] = True
+            else:
+                keep[m[rng.choice(m.size, cap, replace=False)]] = True
+        return keep
+    return arm
+
+
 def make_countcap(cap, bias):
-    """Keep at most `cap` peaks/frame. bias='none' random; bias='lowq' keeps smallest-radius first
+    """Keep at most `cap` peaks/frame, FRAME-GLOBALLY -- not a per-tile buffer (see make_tilecap).
+    bias='none' random; bias='lowq' keeps smallest-radius first
     (a worst-case proxy for a resolution-biased keep, since the lists have no intensity)."""
     def arm(fs, ss, rng):
         n = fs.shape[0]
@@ -149,9 +180,19 @@ def score(frames, ref_cell):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--frames", default=os.path.join(ROOT, "experiments", "frames_cxidb_clean.txt"))
-    ap.add_argument("--device", default="cpu")
+    # 'auto' is the honest default: run_fpga.sh relies on picking up the A100, and the previous
+    # default of 'cpu' described a behaviour the script never had.
+    ap.add_argument("--device", choices=("auto", "cpu"), default="auto")
     ap.add_argument("--json", default=None)
     a = ap.parse_args()
+
+    # BEFORE importing anything torch-backed -- see the note at the top of this file.
+    if a.device == "cpu":
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    global hybrid_index, same_lattice
+    from glint.hybrid_stream import hybrid_index as _hybrid_index
+    from glint.multishot import same_lattice as _same_lattice
+    hybrid_index, same_lattice = _hybrid_index, _same_lattice
 
     frames = load_frames(a.frames)
     print(f"loaded {len(frames)} frames, mean {np.mean([len(f) for f in frames]):.0f} peaks/frame")
@@ -186,6 +227,13 @@ def main():
         ("seam mask w=12, ASIC grain", make_seam(ASIC_FS, ASIC_SS, 12), True, ASIC_FS, ASIC_SS),
         ("count cap 48/frame, unbiased", make_countcap(48, "none"), True, PANEL_FS, PANEL_SS),
         ("count cap 48/frame, low-|q| biased", make_countcap(48, "lowq"), True, PANEL_FS, PANEL_SS),
+        # PER-TILE caps: the actual edge-buffer model. Swept rather than matched to the frame-global
+        # 48, because the mean kept/frame a given per-tile cap yields is not known in advance -- read
+        # the kept-per-frame column to find the arm that matches the global cap's budget, and compare
+        # THAT pair: same total peaks, different spatial correlation in which ones were dropped.
+        ("per-tile cap 2/tile, PANEL grain", make_tilecap(2, PANEL_FS, PANEL_SS), True, PANEL_FS, PANEL_SS),
+        ("per-tile cap 4/tile, PANEL grain", make_tilecap(4, PANEL_FS, PANEL_SS), True, PANEL_FS, PANEL_SS),
+        ("per-tile cap 8/tile, PANEL grain", make_tilecap(8, PANEL_FS, PANEL_SS), True, PANEL_FS, PANEL_SS),
     ]
     rows = []
     for name, arm, integer, tfs, tss in arms:

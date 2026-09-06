@@ -728,8 +728,11 @@ class StreamDriver:
         # watchdog LOCKS a new cell they are re-indexed against it -- recovering the INDEXING rate of
         # the pre-lock misses. q-only => tiny (no raw-pixel ring); integrate/merge rescue is a deferred
         # later layer. `fanout` batches the watchdog's blind indexing across workers (default = serial
-        # single-GPU loop, BIT-IDENTICAL to today); opt-in glint.warmup_batch.mpi_fanout detects the
-        # change in ~one blind-frame-time. Both seams (`_fanout`, `_known_index`) let CPU tests inject
+        # single-GPU loop, BIT-IDENTICAL to today); opt-in glint.warmup_batch.mpi_fanout cuts the
+        # detection latency roughly in proportion to the workers, down to a floor of about five
+        # blind-frame-times set by the host-side consensus vote -- NOT the "~one blind-frame-time"
+        # this comment used to claim; measured in glint/warmup_batch.py's header (job 37198405).
+        # Both seams (`_fanout`, `_known_index`) let CPU tests inject
         # fakes with no GPU, mirroring the `_blind_index` seam.
         self.n_rescued = 0
         self._missbuf = (deque(maxlen=int(rescue_buffer))

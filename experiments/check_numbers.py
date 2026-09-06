@@ -667,8 +667,8 @@ FACTS: dict[str, float | str] = {
     # defaults against 1147 ms fast. xgandalf_blind_ms above was measured on a different host
     # (EPYC 7542), so the fast latency is carried as the default divided by that same-host ratio
     # rather than as a raw millisecond figure from the wrong machine.
-    "xgandalf_fast_ratio":    11.0,    # = default median / fast median, SAME host, measured
-    "xgandalf_fast_blind_ms": 1049.3,  # = xgandalf_blind_ms / xgandalf_fast_ratio
+    "xgandalf_fast_ratio":    11.003,  # = 12620/1147 (default median / fast median), SAME host, measured
+    "xgandalf_fast_blind_ms": 1049.0,  # = xgandalf_blind_ms / xgandalf_fast_ratio
     "xgandalf_fast_speedup":  40.8,    # = xgandalf_fast_blind_ms / blind_ms; paper says "~40x"
     "ffbidx_latency_ms":   4.4,     # per single call -- a LATENCY
     "ffbidx_pipelined_ms": 3.1,     # persistent indexer -- the THROUGHPUT comparator

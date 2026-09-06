@@ -146,6 +146,25 @@ FACTS: dict[str, float | str] = {
     "glint1_lattice_rate_pct":     96,  # = round(100 * glint1_lattice_of120 / 120)
     "xgandalf_lattice_of120":      94,  # xgandalf blind, same bar, same peak list
     "xgandalf_lattice_rate_pct":   78,  # = round(100 * xgandalf_lattice_of120 / 120)
+    # XGANDALF IN ITS FAST-EXECUTION MODE. Measured 2026-09-05, S3DF job 37187585, sdfrome041
+    # (EPYC 7702): the same 120 frames, the same xg_driver, the same gate, both arms in one job on
+    # one node. CrystFEL's --xgandalf-fast-execution is documented as a shortcut for sampling-pitch
+    # 2 (standard) + grad-desc-iterations 3 (many), against the defaults of 6
+    # (denseWithSeondaryMillerIndices) + 4 (manyMany) that xg_driver.cpp sets.
+    # ⚠ THE POINT: fast execution is ~11x FASTER **AND** indexes MORE frames on both bars. It is not
+    # a speed-for-accuracy trade on this benchmark, which is the opposite of the natural assumption
+    # -- a manuscript sentence asserting the trade was written and had to be retracted. The default
+    # arm of the same job reproduced the published 94 and 86 EXACTLY, which is what makes these
+    # trustworthy.
+    "xgandalf_fast_strict_of120":   88,  # fast execution, strict gate (vs 86 at the defaults)
+    "xgandalf_fast_lattice_of120":  96,  # fast execution, correct-lattice bar (vs 94)
+    # Paired per-frame McNemar against GLINT-(1)'s 92/120, job 37192335, same gate. Parity holds
+    # against the baseline's BEST configuration and more comfortably than against its default
+    # (p = 0.070 at the defaults, discordant 7:1). Note the default-arm control gave 7:1 where the
+    # paper records 8:2 -- same margin, one frame-pair differs, which is GLINT's per-frame consensus
+    # varying between runs rather than a scoring error.
+    "mcnemar120_fast_glint_only":    7,  # discordant: GLINT indexes, fast-execution xgandalf does not
+    "mcnemar120_fast_xgandalf_only": 3,  # and the other way -- exact two-sided McNemar p = 0.344
     # THE SINGLE-FRAME BLIND FRONT END -- which is NOT the GLINT-(1) pair above: no cross-frame
     # consensus, no known-cell rescue. These are the rates Sec. 4.2 (sec:ceiling) and the SI's
     # tab:negatives are about, and nothing guarded them until 2026-09-01. That is how tab:negatives'
@@ -641,8 +660,16 @@ FACTS: dict[str, float | str] = {
     "hit_rate":            0.10,
     "hits_per_s":          3500.0,  # = rep_rate_hz * hit_rate
     "gpus_at_10pct":       0.6,     # = rep_rate_hz * hit_rate * fused_b120_ms/1000
-    "xgandalf_blind_ms":   11542.0,
+    "xgandalf_blind_ms":   11542.0,  # CrystFEL DEFAULT settings (pitch 6, grad-desc 4)
     "xgandalf_speedup":    449.0,   # = xgandalf_blind_ms / blind_ms
+    # The same baseline in --xgandalf-fast-execution. The RATIO is the measured quantity: both arms
+    # ran on one node (job 37187585, EPYC 7702) so the host cancels -- median 12620 ms at the
+    # defaults against 1147 ms fast. xgandalf_blind_ms above was measured on a different host
+    # (EPYC 7542), so the fast latency is carried as the default divided by that same-host ratio
+    # rather than as a raw millisecond figure from the wrong machine.
+    "xgandalf_fast_ratio":    11.0,    # = default median / fast median, SAME host, measured
+    "xgandalf_fast_blind_ms": 1049.3,  # = xgandalf_blind_ms / xgandalf_fast_ratio
+    "xgandalf_fast_speedup":  40.8,    # = xgandalf_fast_blind_ms / blind_ms; paper says "~40x"
     "ffbidx_latency_ms":   4.4,     # per single call -- a LATENCY
     "ffbidx_pipelined_ms": 3.1,     # persistent indexer -- the THROUGHPUT comparator
     "ffbidx_speedup":      18.0,    # = ffbidx_pipelined_ms / fused_b120_ms (throughput vs throughput)
@@ -2040,6 +2067,12 @@ def check_arithmetic() -> list[str]:
           float(F["integ_before_ms"]) / float(F["integ_after_ms"]))
     close("xgandalf_speedup = xgandalf_ms/blind_ms", float(F["xgandalf_speedup"]),
           float(F["xgandalf_blind_ms"]) / float(F["blind_ms"]), tol=0.05)
+    close("xgandalf_fast_blind_ms = xgandalf_blind_ms/xgandalf_fast_ratio",
+          float(F["xgandalf_fast_blind_ms"]),
+          float(F["xgandalf_blind_ms"]) / float(F["xgandalf_fast_ratio"]), tol=0.05)
+    close("xgandalf_fast_speedup = xgandalf_fast_blind_ms/blind_ms",
+          float(F["xgandalf_fast_speedup"]),
+          float(F["xgandalf_fast_blind_ms"]) / float(F["blind_ms"]), tol=0.05)
     close("hits_per_s = rep_rate * hit_rate", float(F["hits_per_s"]),
           float(F["rep_rate_hz"]) * float(F["hit_rate"]))
     close("fused_share = index_b40 + integrate", float(F["fused_share_ms"]),

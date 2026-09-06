@@ -150,7 +150,7 @@ FACTS: dict[str, float | str] = {
     # (EPYC 7702): the same 120 frames, the same xg_driver, the same gate, both arms in one job on
     # one node. CrystFEL's --xgandalf-fast-execution is documented as a shortcut for sampling-pitch
     # 2 (standard) + grad-desc-iterations 3 (many), against the defaults of 6
-    # (denseWithSeondaryMillerIndices) + 4 (manyMany) that xg_driver.cpp sets.
+    # (denseWithSeondaryMillerIndices; spelling matches IndexerPlain enum) + 4 (manyMany) that xg_driver.cpp sets.
     # ⚠ THE POINT: fast execution is ~11x FASTER **AND** indexes MORE frames on both bars. It is not
     # a speed-for-accuracy trade on this benchmark, which is the opposite of the natural assumption
     # -- a manuscript sentence asserting the trade was written and had to be retracted. The default

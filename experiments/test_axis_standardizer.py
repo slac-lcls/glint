@@ -283,6 +283,23 @@ hex_in = cell_to_Ar(40.0, 40.0, 65.0, 90, 90, 120)[:, [1, 0, 2]]   # odd permuta
 hex_out = standardize_axes(hex_in, laue="6/mmm")
 check("hexagonal handedness fix preserves gamma=120 setting", abs(cell_params(hex_out)[5] - 120.0) < 1e-9)
 
+# The handedness flip is a function of the RULE, not of whether the caller knew the class. A
+# left-handed 58/58/130 basis takes the unique-axis-c rule down BOTH paths, so both must negate c;
+# while the class-free path negated a instead, the two settings differed by 2|c| = 260 A and every
+# frame was predicted against a grid in the other one (glint#185).
+lh = cell_to_Ar(58.0, 58.0, 130.0, 90, 90, 90)[:, [1, 0, 2]]        # odd permutation -> det < 0
+check("left-handed unique-axis-c cell: class-free flip == class-aware flip",
+      np.allclose(standardize_axes(lh), standardize_axes(lh, laue="4/mmm")),
+      f"max |diff| = {np.abs(standardize_axes(lh) - standardize_axes(lh, laue='4/mmm')).max():.4g}")
+P_lh = standardize_axes(lh)
+check("...and it is c that was negated, a and b untouched",
+      np.allclose(P_lh[:, 2], -lh[:, 2]) and np.allclose(P_lh[:, :2], lh[:, :2]))
+# The length-order fallback keeps the a-flip: no equal pair, so no unique axis to attach the sign to.
+lo = cell_to_Ar(100.0, 103.0, 106.0, 90, 90, 90) * np.array([1.0, 1.0, -1.0])   # left-handed, even perm
+P_lo = standardize_axes(lo)                       # two pairs inside rtol -> (long, long, short)
+check("length-order fallback still negates a",
+      np.linalg.det(P_lo) > 0 and np.allclose(P_lo[:, 0], -lo[:, 1]) and np.allclose(P_lo[:, 2], lo[:, 0]))
+
 
 print("\nHKLGrid built from the reference cell covers every predict_spots reflection of a canonicalised frame")
 rng = np.random.default_rng(1810)

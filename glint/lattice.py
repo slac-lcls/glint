@@ -120,9 +120,15 @@ def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL, centering=None):
     tetragonal cell a <-> b is a 4/mmm operator, so which of two equal-to-the-jitter axes is called a
     cannot affect the merge or the grid.
 
-    The result is a column permutation of ``M``; when that permutation is odd, column a is negated so
-    det > 0 (a proper, right-handed basis). The a -> -a flip sends (h,k,l) to (-h,k,l), which the mmm
-    / 4/mmm merge absorbs (the mirror perpendicular to a is one of its operators). Idempotent:
+    The result is a column permutation of ``M``; when that permutation is odd one column is negated so
+    det > 0 (a proper, right-handed basis). WHICH column is the same function of the setting rule in
+    every branch: the unique-axis-c rule negates c, the length-order rule negates a. It has to be the
+    same on both sides, because ``predict._canonical_axes`` (no class) and ``_conventional_tetragonal``
+    (laue="4/mmm") standardize the SAME left-handed cell and must land on the same basis -- when the
+    class-free path flipped a while the class-aware path flipped c, the two disagreed by 2|c| on
+    58/58/130 and the frames were predicted against a grid in the other setting (glint#185). Either
+    flip is a merge operator of the class that selects the rule -- (h,k,l) -> (h,k,-l) for 4/mmm and
+    mmm, (h,k,l) -> (-h,k,l) for mmm -- so neither can move a reflection out of its ASU. Idempotent:
     ``standardize_axes(standardize_axes(M, laue), laue)`` equals ``standardize_axes(M, laue)``.
     """
     M = np.asarray(M, float)
@@ -144,26 +150,28 @@ def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL, centering=None):
         return [i, j, k]                           # order inside it, never the incoming columns
 
     if laue is not None and laue in UNIQUE_C_LAUE:
-        order = _unique_c_order()
+        order, unique_c = _unique_c_order(), True
     elif (laue is not None and laue in LENGTH_ORDER_LAUE
           and str(centering or "").upper() not in ("A", "B", "C")):
-        order = _sorted_order()                    # a <= b <= c, no tolerance in the decision
+        order, unique_c = _sorted_order(), False   # a <= b <= c, no tolerance in the decision
     elif laue is not None:
         return M.copy()                            # triclinic / monoclinic / rhombohedral / cubic
     else:
         near = [p for p in pairs if _reldiff(p[0], p[1]) <= rtol]
         if len(near) == 1:                         # exactly one candidate: unambiguous, use it
-            order = _unique_c_order()
+            order, unique_c = _unique_c_order(), True
         else:                                      # none, or an ambiguous near-cubic cell
             o = np.argsort(L, kind="stable")       # -> (long, long, short), the historical order
-            order = [int(o[1]), int(o[2]), int(o[0])]
+            order, unique_c = [int(o[1]), int(o[2]), int(o[0])], False
     P = M[:, order].copy()
     if (laue in ("-3", "-3m1", "-31m", "6/m", "6/mmm")
             and np.dot(P[:, 0], P[:, 1]) > 0):
         P[:, 1] = -P[:, 1]                     # conventional hexagonal gamma is obtuse (120 degrees)
     if np.linalg.det(P) < 0:
-        k = 2 if (laue is not None and laue in UNIQUE_C_LAUE) else 0
-        P[:, k] = -P[:, k]                     # keep a proper (right-handed) basis
+        # The RULE decides the flip, not the caller's class: the class-free path takes the
+        # unique-axis-c rule too, and must flip the same column the class-aware path does or the
+        # frames and the reference cell land 2|c| apart (glint#185).
+        P[:, 2 if unique_c else 0] *= -1        # keep a proper (right-handed) basis
     return P
 
 

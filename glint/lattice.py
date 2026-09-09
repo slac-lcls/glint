@@ -178,8 +178,11 @@ def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL, centering=None):
         if len(near) == 1:                         # exactly one candidate: unambiguous, use it
             order, unique_c = _unique_c_order(), True
         else:                                      # none, or an ambiguous near-cubic cell
-            o = np.argsort(L, kind="stable")       # -> (long, long, short), the historical order
-            order, unique_c = [int(o[1]), int(o[2]), int(o[0])], False
+            if L[1] >= L[0] >= L[2]:               # already (middle, long, short), including ties
+                order, unique_c = [0, 1, 2], False
+            else:
+                o = np.argsort(L, kind="stable")   # -> (long, long, short), the historical order
+                order, unique_c = [int(o[1]), int(o[2]), int(o[0])], False
     P = M[:, order].copy()
     if (laue in ("-3", "-3m1", "-31m", "6/m", "6/mmm")
             and np.dot(P[:, 0], P[:, 1]) > 0):

@@ -119,6 +119,18 @@ def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL, centering=None):
     tetragonal cell a <-> b is a 4/mmm operator, so which of two equal-to-the-jitter axes is called a
     cannot affect the merge or the grid.
 
+    KNOWN LIMIT -- the classes where a <-> b is NOT an operator. 4/m, -3 and 6/m contain only powers
+    of the c-axis rotation plus inversion, so the reindexing that relates [a, b, c] to [b, a, -c] (a
+    2-fold about [110]) lies outside the group, and two frames of the same crystal whose refined a
+    and b differ only by noise can be sorted into settings the merge then treats as inequivalent.
+    This is the ordinary merohedral indexing ambiguity of those classes, not something the sort
+    introduces: the two settings are indistinguishable from the cell metric, which is all any
+    standardizer sees, and resolving them needs the INTENSITIES (a Brehm-Diederichs-style pass over
+    the merged data). Sorting by length at least makes the choice deterministic per frame rather than
+    inheriting the indexer's column order. Nothing in the merge currently resolves it, so results
+    merged under 4/m, -3 or 6/m carry that ambiguity; the tetragonal work in this repo runs under
+    4/mmm, where a <-> b is an operator and the question does not arise (Copilot review of glint#185).
+
     The result is a column permutation of ``M``; when that permutation is odd one column is negated so
     det > 0 (a proper, right-handed basis). WHICH column is the same function of the setting rule in
     every branch: the unique-axis-c rule negates c, the length-order rule negates a. It has to be the

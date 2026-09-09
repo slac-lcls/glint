@@ -149,7 +149,10 @@ def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL, centering=None):
         # systematic absences it implies, or the label written into the stream. Refused on EVERY
         # branch, not only the orthorhombic one -- an oC cell with two near-equal axes reaches the
         # unique-axis-c rule down the class-free path as well (glint#185).
-        return M.copy()
+P = M.copy()
+        if np.linalg.det(P) < 0:
+            P *= -1
+        return P
     L = np.linalg.norm(M, axis=0)
     pairs = [(0, 1, 2), (0, 2, 1), (1, 2, 0)]
 

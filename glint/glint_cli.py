@@ -179,10 +179,14 @@ def main():
         if args.images:                                          # stacked .cxi: read data[event] directly (self-contained)
             from glint.predict import integrate_cxi
             from glint.lute_bridge import parse_geom as _pg
-            lt = _lattice_type_from_lattice_code(args.lattice)
+code = str(args.lattice or "").strip()
+            lt = _lattice_type_from_lattice_code(code)
             if lt is not None:
+                centering = code[1:2].upper()
                 for r in results:
                     r.setdefault("lattice_type", lt)
+                    if centering:
+                        r.setdefault("centering", centering)
             nint, tot = integrate_cxi(results, args.geom, wavelength_A=args.wavelength,
                                       dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
                                       data_key=args.data_path, event_axis=_ev_axis)

@@ -253,6 +253,13 @@ def test_lock_standardizes_the_setting_under_the_driver_class():
     d = _driver(ORTHO)
     d._lock(ortho_perm, standardize=True)
     assert not np.array_equal(d.Mc, ortho_perm) and np.allclose(np.linalg.norm(d.Mc, axis=0), (30.0, 32.0, 50.0))
+    # A cell supplied to the CONSTRUCTOR is standardized too, not only one locked by consensus: the
+    # grid, the operator count and every frame's _canonical_axes have to share one setting whether the
+    # cell arrived from --cell or from the running consensus (review finding #185-1).
+    d = _driver(tet_perm, laue="4/mmm")
+    assert np.allclose(np.linalg.norm(d.Mc, axis=0), (40.0, 40.0, 25.0)), np.linalg.norm(d.Mc, axis=0)
+    assert np.allclose(d.grid.Mc if hasattr(d.grid, "Mc") else d.Mc, d.Mc), "the grid is built from the standardized cell"
+    assert d.n_theoretical == theoretical_unique(d.Mc, DMIN, laue_ops("4/mmm"))
 
 
 def _relock_driver(Mc_active, Mc_new, **kw):

@@ -98,8 +98,7 @@ def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL, centering=None):
         unique axis, so the closest-length pair becomes a, b (a the SHORTER of the two) and the
         outlier becomes c, the axis the operators rotate about, whether c is short or long.
       * ``LENGTH_ORDER_LAUE`` (orthorhombic) -- a <= b <= c, with NO tolerance anywhere in the
-        decision. A/B/C-centered cells are left in their labelled setting because permuting their
-        axes would change the centering letter.
+        decision.
       * anything else, and ``laue=None`` on a caller that knows no class -- see below.
 
     Passing the class is what makes the setting stable. Deciding it from lengths alone cannot work
@@ -132,6 +131,13 @@ def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL, centering=None):
     ``standardize_axes(standardize_axes(M, laue), laue)`` equals ``standardize_axes(M, laue)``.
     """
     M = np.asarray(M, float)
+    if str(centering or "").upper() in ("A", "B", "C"):
+        # A base-centered cell names the centered face by the axes it is written on: permute them and
+        # oC becomes oA, so the standardized cell no longer matches its own centering letter, the
+        # systematic absences it implies, or the label written into the stream. Refused on EVERY
+        # branch, not only the orthorhombic one -- an oC cell with two near-equal axes reaches the
+        # unique-axis-c rule down the class-free path as well (glint#185).
+        return M.copy()
     L = np.linalg.norm(M, axis=0)
     pairs = [(0, 1, 2), (0, 2, 1), (1, 2, 0)]
 
@@ -151,8 +157,7 @@ def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL, centering=None):
 
     if laue is not None and laue in UNIQUE_C_LAUE:
         order, unique_c = _unique_c_order(), True
-    elif (laue is not None and laue in LENGTH_ORDER_LAUE
-          and str(centering or "").upper() not in ("A", "B", "C")):
+    elif laue is not None and laue in LENGTH_ORDER_LAUE:
         order, unique_c = _sorted_order(), False   # a <= b <= c, no tolerance in the decision
     elif laue is not None:
         return M.copy()                            # triclinic / monoclinic / rhombohedral / cubic

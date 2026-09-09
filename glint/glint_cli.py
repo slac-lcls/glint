@@ -17,7 +17,17 @@ import numpy as np
 
 
 def _lattice_type_from_lattice_code(lattice_code):
+    """Bravais code -> lattice_type, or None when the code asserts no symmetry.
+
+    ``aP`` is CrystFEL's placeholder for "unconstrained", which is also what --tofile writes when
+    the flag is absent -- so it must NOT be read back as a claim that the crystal is triclinic.
+    Doing so set laue="-1" on every integrated frame, and "-1" is one of the classes
+    ``standardize_axes`` leaves exactly as handed in: the per-frame setting the merge depends on
+    was silently switched off, and it was off by default (glint#185). No code and ``aP`` both mean
+    "no class", which takes the length rule instead."""
     c = str(lattice_code or "").strip().lower()
+    if c in ("", "ap"):
+        return None
     if c.startswith("hr"):
         return "rhombohedral"
     return {"a": "triclinic", "m": "monoclinic", "o": "orthorhombic",
@@ -124,7 +134,11 @@ def main():
     # GLINT is the WRITER -- so it read backwards from this side. Kept working, hidden from --help.
     ap.add_argument("--fromfile", metavar="SOL", help=argparse.SUPPRESS)
     ap.add_argument("--lattice",
-                    help="Bravais lattice code for --tofile (e.g. tPc tetragonal, aP triclinic); default aP")
+                    help="Bravais lattice code (e.g. tPc tetragonal, oP orthorhombic). Labels the "
+                         "--tofile solution file, and with --images --integrate also names the Laue "
+                         "class the per-frame axis setting is standardized under. Default and 'aP' "
+                         "both mean unconstrained: the file is labelled aP and the setting is "
+                         "decided by axis lengths alone")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
     if (args.peaks or args.images) and not args.geom:

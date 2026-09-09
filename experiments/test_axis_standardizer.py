@@ -248,6 +248,15 @@ for centering in ("A", "B", "C"):
     check(f"mmm/{centering}: base-centered axis semantics are preserved",
           np.array_equal(standardize_axes(base_centered, laue="mmm", centering=centering),
                          base_centered))
+    # ...on every branch, not only the orthorhombic one. An oC cell with two near-equal axes reaches
+    # the unique-axis-c rule down the class-free path, and permuting it would relabel oC as oA
+    # (glint#185). A cell that keeps its own centering letter is worth more than a canonical order.
+    oC_pseudo_tet = cell_to_Ar(59.0, 58.0, 130.0, 90, 90, 90)
+    check(f"no class/{centering}: base-centering blocks the unique-axis-c rule too",
+          np.array_equal(standardize_axes(oC_pseudo_tet, centering=centering), oC_pseudo_tet))
+    check(f"4/mmm/{centering}: and the class-aware unique-axis rule as well",
+          np.array_equal(standardize_axes(oC_pseudo_tet, laue="4/mmm", centering=centering),
+                         oC_pseudo_tet))
 
 orders = {_order_of(standardize_axes(cell_to_Ar(*c, 90, 90, 90)), c) for c in NEAR}
 print(f" no class, 100/103/106 vs 100/102.8/106 -> axis orders {sorted(orders)}")

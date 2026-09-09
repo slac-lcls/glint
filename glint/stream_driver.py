@@ -1021,8 +1021,8 @@ class StreamDriver:
         """Cell setting for the merge operators (see _lock), decided by the Laue CLASS rather than by
         lengths alone: `standardize_axes(M, laue=self.laue)` puts the unique axis in c for the
         tetragonal/trigonal/hexagonal classes (where laue_ops rotates about c), orders a primitive,
-        body- or face-centered orthorhombic cell a <= b <= c, and leaves base-centered
-        orthorhombic, triclinic, monoclinic, rhombohedral and cubic cells exactly as handed in --
+        body- or face-centered orthorhombic cell a <= b <= c, and leaves base-centered cells of any
+        class, plus triclinic, monoclinic, rhombohedral and cubic, exactly as handed in --
         permuting a base-centered cell changes its centering letter, no length rule can locate a
         monoclinic unique axis or a rhombohedral 3-fold, and for cubic every permutation is standard.
 
@@ -1044,10 +1044,13 @@ class StreamDriver:
         # Whether a canonical setting was imposed is a property of the CLASS, not of object identity:
         # standardize_axes returns a copy for the classes it leaves alone, so an `out is M` test would
         # silently stop relabelling the moment that copy was introduced.
-        base_centered = (self.laue in LENGTH_ORDER_LAUE
-                         and str(self.stream_symmetry.get("centering", "")).upper() in ("A", "B", "C"))
-        imposed = (not self._ops_explicit) and (
-            self.laue in UNIQUE_C_LAUE or (self.laue in LENGTH_ORDER_LAUE and not base_centered))
+        # Base-centering blocks the permutation in EVERY class, not just the orthorhombic one: the
+        # centering letter names the face by the axes, so a permuted oC cell is an oA cell wearing
+        # the wrong label (glint#185). standardize_axes refuses it; this mirrors the refusal so the
+        # reference relabel still runs, which is the only setting such a cell can get.
+        base_centered = str(self.stream_symmetry.get("centering", "")).upper() in ("A", "B", "C")
+        imposed = (not self._ops_explicit) and (not base_centered) and (
+            self.laue in UNIQUE_C_LAUE or self.laue in LENGTH_ORDER_LAUE)
         out = M if self._ops_explicit else standardize_axes(
             M, laue=self.laue, centering=self.stream_symmetry.get("centering"))
         if ref is not None and not imposed:

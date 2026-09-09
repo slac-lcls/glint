@@ -242,6 +242,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_seqstop_replay.py
 
+      # A merged consensus group's SUPPORT must equal the hypotheses within tolerance of the matrix
+      # that gets locked (glint#182): the pre-fix witness-as-representative reported support 6 on a
+      # pool where only 3 cells matched the lock, and the replay above never takes the merge path,
+      # so nothing else here could have noticed. The issue's probe, a witness that really covers
+      # everyone, randomised forced merges with the invariant checked after every add, and the
+      # driver's consensus_members diagnostic. Numpy only.
+      - name: experiments/test_consensus_voter_set.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_consensus_voter_set.py
+
 
       # The GPU comparison itself cannot run here, but its PASS/FAIL RULES can: without cupy this
       # runs compare_outputs' sabotage self-test (NaN/inf in each of the four outputs, tolerance

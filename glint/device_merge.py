@@ -68,6 +68,8 @@ class MergeAccumulatorDevice:
         self._asu_key = _asu_key
         self.thr = np.asarray(snr_bins, float)
         self.nb = len(self.thr)
+        # ops=None keeps the historical 4/mmm for direct construction only: StreamDriver always
+        # passes the operator set it resolved from laue/ops/stream_symmetry (glint#180).
         self.ops = ops if ops is not None else laue_ops_4mmm()
         self.n_meas = 0
         self.n_frames = 0

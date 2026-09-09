@@ -82,9 +82,9 @@ def _instrument(drv):
     calls = []
     real = drv._integrate_one
 
-    def wrapped(i, M, grid, acc, cell_id=0):
+    def wrapped(i, M, grid, acc, cell_id=0, **kw):
         calls.append((i, cell_id))
-        return real(i, M, grid, acc, cell_id=cell_id)
+        return real(i, M, grid, acc, cell_id=cell_id, **kw)
     drv._integrate_one = wrapped
     return calls
 
@@ -172,6 +172,32 @@ def test_arms_are_complementary():
     assert s["n_cascade_retried"] == 3 and s["n_cascade_rescued"] == 2, s
     assert s["n_cascade_by_arm"] == {"blind_nbest_k10": 1, "known_perframe": 1}, s["n_cascade_by_arm"]
     assert s["gate_rejected"] == 1, "the frame no arm saves still takes the ordinary miss path"
+
+
+def test_known_perframe_retry_relabels_back_to_the_reference_order():
+    """A known-perframe rescue must be integrated as known-cell so identity-setting classes relabel
+    the shortest-first indexer output back into the reference order before prediction."""
+    rng = np.random.default_rng(SEED + 3)
+    ref = cell_to_Ar(50.0, 30.0, 32.0, 90, 100.0, 90)
+    order = np.argsort(np.linalg.norm(ref, axis=0), kind="stable")
+    shortest_first = ref[:, order]
+    q = frame_on(ref, rng)
+    drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                       use_gpu=False, retry_cascade=True, laue="2/m_uab")
+    drv._blind_index = lambda q, k: []
+    drv._known_perframe = lambda q, Mc: shortest_first.copy()
+    seen = {}
+    real = drv.grid.predict
+
+    def spy(M, *a, _real=real, **kw):
+        seen["M"] = np.array(M, float)
+        return _real(M, *a, **kw)
+
+    drv.grid.predict = spy
+    _load(drv, [q])
+    drv.flush()
+    assert np.allclose(seen["M"], ref), np.linalg.norm(seen["M"], axis=0)
+    assert drv.stats()["n_cascade_by_arm"] == {"known_perframe": 1}
 
 
 def test_wrong_lattice_candidate_is_refused():

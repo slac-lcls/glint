@@ -52,6 +52,7 @@ except ImportError:                      # pragma: no cover - CI installs h5py; 
 
 from glint.lattice import cell_to_Ar
 from glint.lute_bridge import lambda_from_eV, parse_geom
+from glint.glint_cli import _lattice_type_from_lattice_code
 from glint.predict import _panel_slab, integrate_cxi, predict_spots
 
 FAILS = []
@@ -272,6 +273,17 @@ check("...and still integrate_frames with event_axis=", "event_axis" in calls.ge
       calls.get("integrate_frames"))
 check("--event-axis help no longer scopes itself to --peaks only",
       "--integrate --peaks:" not in cli_src and "--images" in cli_src.split("--event-axis", 1)[1][:600])
+check("glint_cli maps a tetragonal lattice code to the lattice_type hint integrate_cxi uses",
+      _lattice_type_from_lattice_code("tPc") == "tetragonal")
+check("glint_cli does not treat the default --lattice value as an integration hint",
+      'ap.add_argument("--lattice",' in cli_src and 'ap.add_argument("--lattice", default=' not in cli_src)
+ann_lns = [node.lineno for node in ast.walk(tree)
+           if isinstance(node, ast.Call) and getattr(node.func, "attr", None) == "setdefault"
+           and node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == "lattice_type"]
+call_lns = [node.lineno for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) == "integrate_cxi"]
+check("glint_cli annotates --images results with lattice_type before integrate_cxi",
+      bool(ann_lns) and bool(call_lns) and min(ann_lns) < min(call_lns), (ann_lns, call_lns))
 
 print(f"\nFAILURES: {len(FAILS)}" + ("" if not FAILS else "  " + ", ".join(FAILS)))
 sys.exit(1 if FAILS else 0)

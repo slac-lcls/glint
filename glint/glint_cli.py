@@ -16,6 +16,24 @@ import os, sys, argparse
 import numpy as np
 
 
+def _lattice_type_from_lattice_code(lattice_code):
+    """Bravais code -> lattice_type, or None when the code asserts no symmetry.
+
+    ``aP`` is CrystFEL's placeholder for "unconstrained", which is also what --tofile writes when
+    the flag is absent -- so it must NOT be read back as a claim that the crystal is triclinic.
+    Doing so set laue="-1" on every integrated frame, and "-1" is one of the classes
+    ``standardize_axes`` leaves exactly as handed in: the per-frame setting the merge depends on
+    was silently switched off, and it was off by default (glint#185). No code and ``aP`` both mean
+    "no class", which takes the length rule instead."""
+    c = str(lattice_code or "").strip().lower()
+    if c in ("", "ap"):
+        return None
+    if c.startswith("hr"):
+        return "rhombohedral"
+    return {"a": "triclinic", "m": "monoclinic", "o": "orthorhombic",
+            "t": "tetragonal", "h": "hexagonal", "c": "cubic"}.get(c[:1])
+
+
 def _load_frames(args):
     """Return (frames [list of (N,3) q in 1/A], images [list of {image,event}])."""
     from glint.geom import parse_geom, read_crystfel_peaks, peaks_to_q
@@ -115,8 +133,12 @@ def main():
     # Was --fromfile, which named the flag after CrystFEL's READER (--fromfile-input-file) even though
     # GLINT is the WRITER -- so it read backwards from this side. Kept working, hidden from --help.
     ap.add_argument("--fromfile", metavar="SOL", help=argparse.SUPPRESS)
-    ap.add_argument("--lattice", default="aP",
-                    help="Bravais lattice code for --tofile (e.g. tPc tetragonal, aP triclinic); default aP")
+    ap.add_argument("--lattice",
+                    help="Bravais lattice code (e.g. tPc tetragonal, oP orthorhombic). Labels the "
+                         "--tofile solution file, and with --images --integrate also names the Laue "
+                         "class the per-frame axis setting is standardized under. Default and 'aP' "
+                         "both mean unconstrained: the file is labelled aP and the setting is "
+                         "decided by axis lengths alone")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
     if (args.peaks or args.images) and not args.geom:
@@ -157,6 +179,14 @@ def main():
         if args.images:                                          # stacked .cxi: read data[event] directly (self-contained)
             from glint.predict import integrate_cxi
             from glint.lute_bridge import parse_geom as _pg
+            code = str(args.lattice or "").strip()
+            lt = _lattice_type_from_lattice_code(code)
+            if lt is not None:
+                centering = code[1:2].upper()
+                for r in results:
+                    r.setdefault("lattice_type", lt)
+                    if centering:
+                        r.setdefault("centering", centering)
             nint, tot = integrate_cxi(results, args.geom, wavelength_A=args.wavelength,
                                       dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
                                       data_key=args.data_path, event_axis=_ev_axis)
@@ -195,8 +225,9 @@ def main():
             print("  note: --fromfile is deprecated, use --tofile (GLINT WRITES this file; "
                   "'fromfile' was named for CrystFEL, which reads it)", file=sys.stderr)
         from glint.predict import write_fromfile
-        nsol = write_fromfile(results, sol_path, args.lattice)
-        print(f"  solution file      : {nsol} ({args.lattice}) -> {sol_path}"
+        lattice_code = args.lattice or "aP"
+        nsol = write_fromfile(results, sol_path, lattice_code)
+        print(f"  solution file      : {nsol} ({lattice_code}) -> {sol_path}"
               f"  [indexamajig --indexing=file --fromfile-input-file={sol_path} --tolerance=10,10,10,3]")
 
 

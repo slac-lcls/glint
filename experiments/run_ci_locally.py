@@ -48,6 +48,8 @@ STEPS = [
     "experiments/test_lock_probe.py",
     "experiments/test_running_consensus.py",
     "experiments/test_lock_gate_wiring.py",
+    "experiments/test_laue_ops.py",
+    "experiments/test_streamdriver_laue.py",
     "experiments/test_multilattice.py",
     "experiments/test_warmup_batch.py",
     "experiments/test_missbuf_rescue.py",
@@ -67,6 +69,7 @@ STEPS = [
     "experiments/test_seqstop_replay.py",
     "experiments/test_consensus_voter_set.py",
     "experiments/test_gate_project.py",
+    "experiments/test_axis_standardizer.py",
     "experiments/bench_integrate_fused.py",
     # torch-CPU job: runs for real there (CPU torch), SKIPs here with torch blocked.
     "experiments/test_nbest_prefix.py",

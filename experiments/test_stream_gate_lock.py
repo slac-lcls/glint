@@ -116,6 +116,7 @@ def test_stats_reports_refusals_in_both_branches():
     d._blind = False                                    # ...and the locked branch, same counter
     d.acc = type("Acc", (), {"stats": staticmethod(lambda thr=0.0, n_theoretical=None: {})})()
     d.locked_after, d.consensus_support, d.n_theoretical = 6, 9, 4200
+    d.laue = "4/mmm"                                    # the class the merge ran under (glint#180)
     d.consensus_members = 9                             # the lock record's folded count (glint#182)
     d.n_indexed = d.n_integrated = 25
     d.n_gate_rejected = d.n_fanout_errors = d.n_fanout_missed = 0

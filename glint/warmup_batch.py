@@ -24,7 +24,7 @@ serial and fanned out.
 
 What the numbers say. Subtracting the pure blind work (frames/ranks x ~20.4 ms) leaves a SERIAL
 REMAINDER of ~76 ms that does not shrink with ranks (89 / 68 / 72 ms at 1 / 2 / 4) -- the pooling
-and the consensus vote over ranks*nbest hypotheses, plus the allgather. So the Amdahl floor is
+and the consensus vote over frames*nbest hypotheses, plus the allgather. So the Amdahl floor is
 ~76 + ~20 = ~96 ms, about 4.8 blind-frame-times, and the ceiling on speedup is ~7.6x however many
 workers are added. Efficiency is already falling at four ranks (91% at 2, 78% at 4).
 

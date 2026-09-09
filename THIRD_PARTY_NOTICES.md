@@ -10,7 +10,7 @@ directory, no git submodule, and no third-party source file in the tree.
 
 ## 1. Third-party code incorporated
 
-### psana `Detector/UtilsCommonMode.py` — REMOVED 2026-08-24, no psana code remains
+### psana `Detector/UtilsCommonMode.py` — REMOVED from the working tree 2026-08-24
 
 `experiments/xtc_bridge/test_gpu_calib_cm.py` previously contained a verbatim transcription of five
 functions — `common_mode_rows`, `common_mode_cols`, `common_mode_2d`,
@@ -21,10 +21,22 @@ functions — `common_mode_rows`, `common_mode_cols`, `common_mode_2d`,
 Upstream (`github.com/lcls-psana/Detector`) publishes no LICENSE, COPYING or NOTICE file, so no
 grant attached to that code and it could not be covered by this repository's licence.
 
-**The transcription has been deleted.** The test imports those five names from psana when it is
-available, and falls back to checked-in golden outputs when it is not. No psana code remains in
-this repository. Verified against psana `ana-4.0.59-py3-minipytorch`: all five modes and the
-`npix_min` boundary agree to `maxdiff 0.000e+00`.
+**The transcription has been deleted** from the working tree, in commit `7a8ab57` (#133). The test
+imports those five names from psana when it is available, and falls back to checked-in golden
+outputs when it is not. No psana code is present in the current tree, and none is shipped: the
+wheel contains only the `glint` and `fftindex` packages, not `experiments/`. Verified against psana
+`ana-4.0.59-py3-minipytorch`: all five modes and the `npix_min` boundary agree to
+`maxdiff 0.000e+00`.
+
+**It does, however, remain in this repository's git history**, and `git show
+7a8ab57^:experiments/xtc_bridge/test_gpu_calib_cm.py` still returns it. Deleting a file does not
+remove it from the commits that contained it, so anyone who can read this repository can recover
+those five functions. This notice previously said "no psana code remains in this repository",
+which was true of the tree and not of the repository; the distinction matters because the reason
+for the deletion was the absence of a grant, and history is published along with everything else.
+History has deliberately NOT been rewritten: this repository has many collaborators and its commit
+hashes are cited in provenance records, so purging the blobs would cost more than it buys for code
+that is SLAC-authored and sits in a SLAC-owned repository.
 
 Coverage was preserved rather than lost. The test compares against **golden outputs generated once
 from real psana** (`experiments/xtc_bridge/common_mode_golden.npz`, `ana-4.0.59-py3-minipytorch`) —

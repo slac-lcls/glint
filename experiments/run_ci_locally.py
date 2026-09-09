@@ -69,6 +69,7 @@ STEPS = [
     "experiments/test_seqstop_replay.py",
     "experiments/test_consensus_voter_set.py",
     "experiments/test_gate_project.py",
+    "experiments/test_axis_standardizer.py",
     "experiments/bench_integrate_fused.py",
     # torch-CPU job: runs for real there (CPU torch), SKIPs here with torch blocked.
     "experiments/test_nbest_prefix.py",

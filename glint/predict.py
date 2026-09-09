@@ -16,6 +16,8 @@ from __future__ import annotations
 import os
 import numpy as np
 
+from glint.lattice import standardize_axes
+
 Z_HAT = np.array([0.0, 0.0, 1.0])
 
 
@@ -490,15 +492,53 @@ class StreamWriter:
         return False
 
 
-def _canonical_axes(M):
-    """Reorder real-space axes (columns of ``M``) to (long, long, short) -- a per-frame-consistent cell
-    setting so tetragonal/orthorhombic reflections co-merge under the point group (c = the unique short
-    axis, which a 422/mmm merge does NOT absorb, unlike a<->b and the Friedel/handedness ambiguity).
-    Idempotent. Both ``write_fromfile`` (the CrystFEL handoff) and ``integrate_cxi`` (native merge) use it,
-    so the two merge paths share one setting."""
-    Ar = np.asarray(M, float)
-    o = np.argsort(np.linalg.norm(Ar, axis=0))                 # shortest axis first
-    return Ar[:, [o[1], o[2], o[0]]]                           # -> (long, long, short)
+def _laue_hint_from_lattice_code(lattice_code):
+    c = str(lattice_code or "").strip().lower()
+    if c.startswith("t"):
+        return "4/mmm"
+    if c.startswith("o"):
+        return "mmm"
+    if c.startswith("hr"):
+        return "-3m_R"
+    if c.startswith("h"):
+        return "6/mmm"
+    return None
+
+
+def _laue_hint_from_lattice_type(lattice_type):
+    c = str(lattice_type or "").strip().lower()
+    return {
+        "triclinic": "-1",
+        "monoclinic": "2/m_uab",
+        "orthorhombic": "mmm",
+        "tetragonal": "4/mmm",
+        "hexagonal": "6/mmm",
+        "trigonal": "-3m1",
+        "rhombohedral": "-3m_R",
+        "cubic": "m-3m",
+    }.get(c)
+
+
+def _laue_hint_for_integration(sym_refine, lattice_type):
+    if str(sym_refine or "").strip().lower() == "trigonal":
+        return "-3m_R"
+    return _laue_hint_from_lattice_type(sym_refine or lattice_type)
+
+
+def _canonical_axes(M, laue=None, centering=None):
+    """Per-frame-consistent cell setting (columns of ``M`` = real-space a, b, c) so tetragonal /
+    orthorhombic reflections co-merge under the point group: the choice of unique axis c is what a
+    422/mmm merge does NOT absorb (a<->b and the Friedel/handedness ambiguity it does).
+
+    A thin wrapper over ``glint.lattice.standardize_axes``, the ONE rule shared with
+    ``stream_driver._conventional_tetragonal``: the equal-length pair is a, b and the outlier is c --
+    the unique axis, whether it is the SHORT one (lysozyme 79/79/38) or the LONG one (58/58/130) --
+    falling back to (long, long, short) when no two lengths are equal. Right-handed (det > 0) and
+    idempotent. This used to sort by length to (long, long, short), which for c > a cells put the
+    4-fold axis in b while the reference cell's ``HKLGrid`` and 4/mmm operators had it in c
+    (glint#181). ``write_fromfile`` (the CrystFEL handoff), ``integrate_cxi`` (native merge) and the
+    streaming driver's ``_integrate_one`` all use it, so every merge path shares one setting."""
+    return standardize_axes(M, laue=laue, centering=centering)
 
 
 def write_fromfile(results, path, lattice_code="aP"):
@@ -509,15 +549,20 @@ def write_fromfile(results, path, lattice_code="aP"):
 
         <image> //<event> a*x a*y a*z b*x b*y b*z c*x c*y c*z shift_x shift_y <lattice_code>
 
-    with the reciprocal cell in nm^-1 and axes reordered to (long, long, short) so the standard setting
-    matches the lattice code (e.g. ``tPc`` for tetragonal lysozyme; ``--tolerance=10,10,10,3`` recommended).
+    with the reciprocal cell in nm^-1 and axes in the standard setting of ``_canonical_axes`` -- the
+    equal-length pair as a, b and the unique axis as c, whether c is the short axis (lysozyme) or the
+    long one (a 58/58/130 cell) -- so the setting matches the lattice code's unique axis (e.g. ``tPc``
+    for tetragonal lysozyme; ``--tolerance=10,10,10,3`` recommended). Before glint#181 the axes were
+    sorted to (long, long, short), which for c > a cells labelled the 4-fold axis "b", not "c".
     """
     rows = []
+    laue = _laue_hint_from_lattice_code(lattice_code)
+    centering = str(lattice_code or "")[1:2]
     for r in results:
         M = r.get("M")
         if M is None:
             continue
-        Are = _canonical_axes(M)                                   # (long, long, short) canonical setting
+        Are = _canonical_axes(M, laue=laue, centering=centering)   # standard setting: unique axis c
         Br = np.linalg.inv(Are).T * 10.0                           # reciprocal a*,b*,c* in nm^-1 (1/A -> 1/nm)
         v = Br[:, 0].tolist() + Br[:, 1].tolist() + Br[:, 2].tolist()
         ev = r.get("event", "")
@@ -926,7 +971,9 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
                 qobs = qobs[np.isfinite(qobs).all(1)]
                 if len(qobs) >= 6:
                     M_raw, _, _, _ = refine_bravais(qobs, M_raw, sym_refine, sym_refine_tol)
-            M = _canonical_axes(M_raw)                             # (long,long,short): cross-frame-consistent hkl for the merge
+            laue = _laue_hint_for_integration(sym_refine, r.get("lattice_type"))
+            M = _canonical_axes(M_raw, laue=laue, centering=r.get("centering"))
+            # standard setting (unique axis c): cross-frame-consistent hkl for the merge
             f = _h5(str(r.get("image")))
             ev = int(r.get("event", 0))
             clen = _meta(clen_spec, f, ev, 0.1)

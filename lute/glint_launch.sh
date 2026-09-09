@@ -63,8 +63,12 @@ while [ $i -le $# ]; do
     i=$((i + 2))
 done
 # Report what was dropped. These are glint_cli-only options with no meaning for raw xtc (--peaks,
-# --images, --peakfinder, --top-peaks, --integrate, --tofile, --image-dir, --event-axis, -N ...). Staying silent
+# --images, --top-peaks, --tofile, --image-dir, --event-axis, -N ...). Staying silent
 # would let a run look as though it had honoured a setting the indexer never received.
+# NB: --integrate and --peakfinder are NOT in that set -- glint_xtc.py accepts both, so both are
+# whitelisted above and forwarded. They were listed here as dropped until 2026-09-03; the list had
+# drifted from the whitelist it describes, which is exactly the confusion the stderr report exists
+# to prevent.
 if [ ${#dropped[@]} -gt 0 ]; then
     echo "glint_launch: xtc route; dropped flags that do not apply to glint_xtc.py: ${dropped[*]}" >&2
 fi

@@ -44,6 +44,7 @@ except Exception:                                            # pragma: no cover 
     cp = None
     _HAVE_CP = False
 
+from glint.lattice import LENGTH_ORDER_LAUE, UNIQUE_C_LAUE, standardize_axes
 from glint.lute_bridge import peaks_to_q
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
                            _hkl_grid, project_q)
@@ -607,16 +608,15 @@ def _conventional_tetragonal(M):
     """Permute a tetragonal cell's columns so the unique (4-fold) axis is c, matching laue_ops_4mmm.
 
     Buerger reduction orders axes by length, so the short 4-fold axis of a cell like 79/79/38 can land
-    in column a. The two most-equal-length columns are taken as a,b; the length outlier becomes c.
-    Handedness is preserved (negate one column if the permutation flipped the determinant sign)."""
-    M = np.asarray(M, float)
-    L = np.linalg.norm(M, axis=0)
-    i, j, k = min([(0, 1, 2), (0, 2, 1), (1, 2, 0)],
-                  key=lambda p: abs(L[p[0]] - L[p[1]]) / max(L[p[0]], L[p[1]]))
-    P = M[:, [i, j, k]].copy()
-    if np.linalg.det(P) < 0:
-        P[:, 0] = -P[:, 0]
-    return P
+    in column a. The two equal-length columns are taken as a,b; the length outlier becomes c.
+    Handedness is preserved (negate one column if the permutation flipped the determinant sign).
+
+    A thin wrapper over ``glint.lattice.standardize_axes`` -- the SAME function ``_canonical_axes``
+    applies to every accepted frame in ``_integrate_one``, so the reference cell the ``HKLGrid`` and
+    the 4/mmm operators are built on and the frames predicted against it can no longer land in
+    different settings (glint#181: for c > a cells the frame's 4-fold ended up in b and the grid
+    missed ~19% of its predictions). Cells with no equal pair fall back to (long, long, short)."""
+    return standardize_axes(M, laue="4/mmm")
 
 
 class StreamDriver:
@@ -702,6 +702,7 @@ class StreamDriver:
         self._pkq = [None] * self.B                             # observed peaks aligned with _q (stream_peaks)
         self._n = 0
         self._frame_no = 0
+        self.stream_symmetry = dict(stream_symmetry or {})
 
         # Merge symmetry (glint#180). This used to be `laue_ops_4mmm()` unconditionally, so any
         # non-tetragonal cell had its completeness/CC*/Rsplit merged under 4/mmm while the stream
@@ -787,7 +788,6 @@ class StreamDriver:
                 stream_out, geom_text=stream_geom_text, panel_name=names[0], panel_names=names,
                 photon_eV=(12398.419843320026 / self.wavelength_A), clen_m=self.clen_m)
         self.stream_image = str(stream_image)
-        self.stream_symmetry = dict(stream_symmetry or {})
         # Emit the OBSERVED peak list per chunk: None (off) | "flagged" | "all".
         # Why it matters: a chunk otherwise carries only the PREDICTED reflections, computed under the
         # orientation the driver chose -- so it cannot rescue a frame whose orientation WAS the
@@ -1015,27 +1015,45 @@ class StreamDriver:
             from glint.glint_fast import index_blind_nbest      # torch; imported only in blind mode
             self._blind_index = index_blind_nbest
         else:
-            self._lock(np.asarray(Mc, float))
+            self._lock(np.asarray(Mc, float), standardize=True)
 
     def _standardize(self, M, ref=None):
-        """Cell setting for the merge operators (see _lock). The tetragonal classes need the 4-fold
-        axis in c, where laue_ops puts it, and _conventional_tetragonal arranges that by length;
-        every other class takes the cell exactly as handed in -- an orthorhombic cell has no unique
-        axis to find, and no length rule locates the unique axis of a monoclinic or hexagonal one, so
-        the setting is the caller's (known-cell) or the reducer's (blind lock) responsibility.
+        """Cell setting for the merge operators (see _lock), decided by the Laue CLASS rather than by
+        lengths alone: `standardize_axes(M, laue=self.laue)` puts the unique axis in c for the
+        tetragonal/trigonal/hexagonal classes (where laue_ops rotates about c), orders a primitive,
+        body- or face-centered orthorhombic cell a <= b <= c, and leaves base-centered cells of any
+        class, plus triclinic, monoclinic, rhombohedral and cubic, exactly as handed in --
+        permuting a base-centered cell changes its centering letter, no length rule can locate a
+        monoclinic unique axis or a rhombohedral 3-fold, and for cubic every permutation is standard.
+
+        The class is the input a length rule cannot supply: a cell whose three axes all sit inside the
+        equal-length tolerance has no pair a tolerance can identify, and guessing one made the setting
+        flip between frames on a refine-sized change (glint#185 review). The same function and the
+        same class canonicalize every frame in _integrate_one, so the grid, the prediction and the
+        merge cannot land in different settings.
+
+        For the classes it leaves alone there IS no canonical setting to land in, so a reference is
+        used instead when one is given: the known-cell indexer returns its axes shortest-first
+        whatever order the reference was written in, and `_relabel_like` undoes exactly that
+        permutation (glint#186 review). The two halves compose -- the class fixes the setting where
+        one exists, the reference supplies it where none does.
 
         With explicit `ops` this is the identity: `laue` is then a reporting label only, and using it
-        to permute axes would impose a setting the supplied operators never asked for -- e.g.
-        ops=laue_ops("-1"), laue="4/mmm" would otherwise tetragonally permute a triclinic merge
-        (glint#186 review)."""
+        to permute axes would impose a setting the supplied operators never asked for."""
         M = np.asarray(M, float)
-        out = M if self._ops_explicit else (
-            _conventional_tetragonal(M) if self.laue in TETRAGONAL_LAUE else M)
-        if ref is not None and out is M:
-            # No canonical setting was imposed, so the frame is still in the indexer's shortest-first
-            # order while the grid and the operators are in the reference's -- relabel it (glint#186
-            # review). Where a canonical setting WAS imposed the reference went through the same
-            # function, so the two already agree.
+        # Whether a canonical setting was imposed is a property of the CLASS, not of object identity:
+        # standardize_axes returns a copy for the classes it leaves alone, so an `out is M` test would
+        # silently stop relabelling the moment that copy was introduced.
+        # Base-centering blocks the permutation in EVERY class, not just the orthorhombic one: the
+        # centering letter names the face by the axes, so a permuted oC cell is an oA cell wearing
+        # the wrong label (glint#185). standardize_axes refuses it; this mirrors the refusal so the
+        # reference relabel still runs, which is the only setting such a cell can get.
+        base_centered = str(self.stream_symmetry.get("centering", "")).upper() in ("A", "B", "C")
+        imposed = (not self._ops_explicit) and (not base_centered) and (
+            self.laue in UNIQUE_C_LAUE or self.laue in LENGTH_ORDER_LAUE)
+        out = M if self._ops_explicit else standardize_axes(
+            M, laue=self.laue, centering=self.stream_symmetry.get("centering"))
+        if ref is not None and not imposed:
             out = _relabel_like(out, ref)
         return out
 
@@ -1044,9 +1062,8 @@ class StreamDriver:
 
         standardize: put the cell in the setting self.ops assume (_standardize: for the tetragonal
         classes the 4-fold axis in c, so laue_ops / theoretical_unique count in the conventional
-        setting; other classes are left as received). Needed for a consensus-locked cell (Buerger
-        reduction orders axes by length, so the short 4-fold axis can land in a/b); a user-supplied
-        known cell is taken as authoritative and left as-is."""
+        setting; other classes are left as received). Needed for both consensus-locked and supplied
+        known cells so the grid, prediction and merge share one setting."""
         Mc = np.asarray(Mc, float)
         if standardize:
             Mc = self._standardize(Mc)

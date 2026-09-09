@@ -179,7 +179,7 @@ def main():
         if args.images:                                          # stacked .cxi: read data[event] directly (self-contained)
             from glint.predict import integrate_cxi
             from glint.lute_bridge import parse_geom as _pg
-code = str(args.lattice or "").strip()
+            code = str(args.lattice or "").strip()
             lt = _lattice_type_from_lattice_code(code)
             if lt is not None:
                 centering = code[1:2].upper()

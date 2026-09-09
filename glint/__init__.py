@@ -1,8 +1,10 @@
 """GLINT — GPU-native blind serial-crystallography indexing.
 
 Copyright (c) 2026, The Board of Trustees of the Leland Stanford Junior University, through SLAC National Accelerator Laboratory (subject to receipt of any required approvals from the U.S. Dept. of Energy). All rights reserved. This work is
-supported [in part] by the U.S. Department of Energy, Office of Basic Energy Sciences
-under contract DE-AC02-76SF00515.
+supported in part by the U.S. Department of Energy, Office of Basic Energy Sciences
+under contract DE-AC02-76SF00515. Y.N. acknowledges support from the ILLUMINE project,
+supported by the U.S. Department of Energy, Office of Science, Advanced Scientific
+Computing Research program.
 
 Neither the name of the Leland Stanford Junior University, SLAC National Accelerator
 Laboratory, U.S. Department of Energy nor the names of its contributors may be used to

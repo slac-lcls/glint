@@ -195,6 +195,8 @@ def main():
     hybrid_index, same_lattice = _hybrid_index, _same_lattice
 
     frames = load_frames(a.frames)
+    if not frames:
+        sys.exit("error: no frames found")
     print(f"loaded {len(frames)} frames, mean {np.mean([len(f) for f in frames]):.0f} peaks/frame")
 
     # Self-check. The committed q carry real excitation error (not exactly on the Ewald sphere), so

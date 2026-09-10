@@ -1,0 +1,80 @@
+{
+ "baseline": 117,
+ "cell_edges": [
+  37.8,
+  78.6,
+  78.9
+ ],
+ "rows": [
+  {
+   "arm": "baseline (projection round-trip)",
+   "indexed": 117,
+   "total": 120,
+   "kept_per_frame": 137.9,
+   "support": 90
+  },
+  {
+   "arm": "integer positions",
+   "indexed": 118,
+   "total": 120,
+   "kept_per_frame": 137.9,
+   "support": 92
+  },
+  {
+   "arm": "seam mask w=8, PANEL grain",
+   "indexed": 118,
+   "total": 120,
+   "kept_per_frame": 129.6,
+   "support": 89
+  },
+  {
+   "arm": "seam mask w=8, ASIC grain",
+   "indexed": 116,
+   "total": 120,
+   "kept_per_frame": 120.5,
+   "support": 82
+  },
+  {
+   "arm": "seam mask w=12, ASIC grain",
+   "indexed": 117,
+   "total": 120,
+   "kept_per_frame": 107.9,
+   "support": 81
+  },
+  {
+   "arm": "count cap 48/frame, unbiased",
+   "indexed": 115,
+   "total": 120,
+   "kept_per_frame": 47.6,
+   "support": 45
+  },
+  {
+   "arm": "count cap 48/frame, low-|q| biased",
+   "indexed": 103,
+   "total": 120,
+   "kept_per_frame": 47.6,
+   "support": 58
+  },
+  {
+   "arm": "per-tile cap 2/tile, PANEL grain",
+   "indexed": 115,
+   "total": 120,
+   "kept_per_frame": 35.0,
+   "support": 32
+  },
+  {
+   "arm": "per-tile cap 4/tile, PANEL grain",
+   "indexed": 113,
+   "total": 120,
+   "kept_per_frame": 59.7,
+   "support": 61
+  },
+  {
+   "arm": "per-tile cap 8/tile, PANEL grain",
+   "indexed": 117,
+   "total": 120,
+   "kept_per_frame": 91.5,
+   "support": 84
+  }
+ ]
+}

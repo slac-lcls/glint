@@ -28,10 +28,11 @@ and the consensus vote over frames*nbest hypotheses, plus the allgather. So the 
 ~76 + ~20 = ~96 ms, about 4.8 blind-frame-times, and the ceiling on speedup is ~7.6x however many
 workers are added. Efficiency is already falling at four ranks (91% at 2, 78% at 4).
 
-Consequence for anyone sizing this: past roughly eight workers the blind indexes are no longer the
-bottleneck and more GPUs buy almost nothing. The remaining cost is the same_lattice vote on the
-host, which is a CPU-side algorithmic target -- and unlike the warp-per-candidate mapping in
-fused_kernels, speeding it up need not cost bit-exactness.
+Consequence for anyone sizing this: past roughly eight workers host work, not the blind indexes,
+becomes the dominant term. More GPUs can still reduce latency toward the ~96 ms floor, but with
+diminishing returns because the remaining cost is the same_lattice vote on the host, which is a
+CPU-side algorithmic target -- and unlike the warp-per-candidate mapping in fused_kernels,
+speeding it up need not cost bit-exactness.
 
 The buffered frames not chosen for warm-up are not lost: after the cell locks they drain through the
 fast known-cell path, so triage sets only the ORDER of blind attempts, not which frames are kept.

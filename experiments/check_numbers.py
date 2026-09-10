@@ -1855,6 +1855,35 @@ REQUIRED = [
              "partialator merge. The abstract, sec:realdata, the S12 note and the cover letter all "
              "quote this CC*, so a cell edited here silently disagrees with four other sites",
              window=120),
+    Required("xgandalf-fast-accuracy-facts",
+             r"xgandalf-fast-execution|fast[- ]execution",
+             (_lit(f"{int(FACTS['xgandalf_fast_lattice_of120'])}") + r"/120",
+              _lit(f"{int(FACTS['xgandalf_fast_strict_of120'])}") + r"/120",
+              _lit(f"{int(FACTS['xgandalf_lattice_of120'])}") + r"/120",
+              _lit(f"{int(FACTS['xgandalf_blind_strict_of120'])}") + r"/120"),
+             f"any deliverable that mentions xgandalf fast execution must tie it to the measured "
+             f"120-frame result it exists to support: fast {FACTS['xgandalf_fast_lattice_of120']}/120 "
+             f"at the lattice bar and {FACTS['xgandalf_fast_strict_of120']}/120 at the strict gate, "
+             f"against the default arm's {FACTS['xgandalf_lattice_of120']}/120 and "
+             f"{FACTS['xgandalf_blind_strict_of120']}/120. Otherwise the 'fast is better on both bars' "
+             f"claim is decorative and can drift green",
+             window=1200),
+    Required("xgandalf-fast-speedup-facts",
+             r"xgandalf-fast-execution|fast[- ]execution",
+             (r"(?:~|about\s+)?(?:40(?:\.8)?|41)\s*(?:x|times)\b",),
+             f"any deliverable that mentions xgandalf fast execution must tie it to the FACTS-derived "
+             f"speedup claim: xgandalf_fast_speedup = xgandalf_fast_blind_ms / blind_ms = "
+             f"{float(FACTS['xgandalf_fast_speedup']):.1f}, i.e. about 40x. Without that, the ~40x "
+             f"comparison that motivated these keys can drift unchecked",
+             window=1200),
+    Required("xgandalf-fast-mcnemar-facts",
+             r"xgandalf-fast-execution|fast[- ]execution",
+             (r"\b0\.344\b", r"\b7\s*:\s*3\b|\b7\s+vs\s+3\b"),
+             f"any deliverable that mentions xgandalf fast execution must tie the parity claim to the "
+             f"measured discordant split ({int(FACTS['mcnemar120_fast_glint_only'])}:"
+             f"{int(FACTS['mcnemar120_fast_xgandalf_only'])}) and exact two-sided McNemar p = 0.344. "
+             f"Otherwise the p-value can drift away from its supporting counts",
+             window=1200),
 ]
 
 
@@ -2684,6 +2713,39 @@ def check_arithmetic() -> list[str]:
         bad.append("  FACTS: GLINT-(1) no longer leads xgandalf on the 120-frame subset -- sec:comparison "
                    "discusses that lead and its 8:2 discordant split explicitly. Rewrite that passage, "
                    "do not renumber it")
+    _fast_strict = int(F["xgandalf_fast_strict_of120"])
+    _fast_lattice = int(F["xgandalf_fast_lattice_of120"])
+    _fast_glint_only = int(F["mcnemar120_fast_glint_only"])
+    _fast_xgandalf_only = int(F["mcnemar120_fast_xgandalf_only"])
+    for _name, _value in (("xgandalf_fast_strict_of120", _fast_strict),
+                          ("xgandalf_fast_lattice_of120", _fast_lattice),
+                          ("mcnemar120_fast_glint_only", _fast_glint_only),
+                          ("mcnemar120_fast_xgandalf_only", _fast_xgandalf_only)):
+        if not 0 <= _value <= 120:
+            bad.append(f"  FACTS: {_name} must be an integer count in [0, 120], got {_value}")
+    if _fast_glint_only + _fast_xgandalf_only > 120:
+        bad.append("  FACTS: the fast-vs-GLINT discordant counts exceed the 120-frame benchmark")
+    if _fast_lattice < _fast_strict:
+        bad.append("  FACTS: xgandalf fast execution has fewer correct-lattice frames than strict-gate "
+                   "frames on the same 120-frame set. The looser bar cannot be smaller")
+    if _fast_strict <= int(F["xgandalf_blind_strict_of120"]):
+        bad.append("  FACTS: xgandalf fast execution no longer beats the default arm at the strict gate "
+                   f"({_fast_strict} vs {F['xgandalf_blind_strict_of120']}) -- rewrite the claim, do not "
+                   "renumber it")
+    if _fast_lattice <= int(F["xgandalf_lattice_of120"]):
+        bad.append("  FACTS: xgandalf fast execution no longer beats the default arm at the lattice bar "
+                   f"({_fast_lattice} vs {F['xgandalf_lattice_of120']}) -- rewrite the claim, do not "
+                   "renumber it")
+    _fast_p = _mcnemar_p(_fast_glint_only, _fast_xgandalf_only)
+    if abs(_fast_p - 0.344) > 0.001:
+        bad.append(f"  FACTS: the fast-vs-GLINT 120-frame discordant split now gives exact McNemar "
+                   f"p = {_fast_p:.3f}, not the recorded 0.344")
+    if _fast_p <= 0.05:
+        bad.append(f"  FACTS: xgandalf fast execution is no longer at parity with GLINT-(1) on the "
+                   f"120-frame subset ({_fast_glint_only} vs {_fast_xgandalf_only}, p={_fast_p:.3g})")
+    if _fast_glint_only - _fast_xgandalf_only != int(F["glint1_strict_of120"]) - _fast_strict:
+        bad.append("  FACTS: the fast-vs-GLINT discordant counts and strict totals disagree -- their "
+                   "difference must equal 92 - 88 on the same 120-frame set")
     # THE claim the paper now leads with: at n=480 the two are INDISTINGUISHABLE. That is a statement
     # about the discordant pairs, not about the rates, so check it where it lives -- recompute the exact
     # two-sided McNemar and fail if it stops supporting "indistinguishable". A rate edit that leaves the

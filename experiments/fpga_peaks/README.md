@@ -6,8 +6,8 @@ buffer, seams where a local finder cannot compute its background — does GLINT 
 
 **Answer (measured):** integer emission and seam masking stay within 1–2 frames of the 117/120
 baseline; a per-tile buffer of 8 peaks is free (117/120), and even 2 peaks per tile — a quarter of
-the available peaks — holds 115/120. The one policy that costs real frames is a resolution-biased
-cap (103/120). *What* is dropped matters; *how many* barely does, over this range.
+the available peaks — holds 115/120. The frame-global 48-peak caps cost 2 frames when unbiased
+and 14 when low-\|q\|-biased: *what* is dropped matters more than *how many*, over this range.
 
 ## What runs
 

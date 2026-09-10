@@ -23,8 +23,18 @@ Both reductions are accumarrays, but of two different shapes:
     looks good on a tiny toy image). The one step that is genuinely not a reduction, connected-component
     labelling, stays ndimage.label. One code path runs on the GPU (cupy) or CPU (numpy/scipy).
 
-Performance: ~5 ms/frame on a real 3000^2 CSPAD frame in fp32 (A100), ~2x faster than pyFAI's OpenCL
-OCL_PeakFinder (~10.5 ms) at the same recovered peaks, and ~1.9x throughput again via find_stream.
+Performance, re-measured 2026-09-10 (CUDA events, median of 15 after 3 warmups) on a SYNTHETIC
+3000^2 frame -- smooth radial background + Poisson + 120 planted Gaussians, all 120 recovered:
+
+    A100-SXM4-40GB   fp64 7.25 ms/frame   fp32 4.23 ms   (1.71x)
+    H200 NVL         fp64 3.23 ms/frame   fp32 2.26 ms   (1.43x)
+
+⚠ NOT a real CSPAD frame. Peak density drives the label + per-peak reduction, so a real frame with
+many more peaks is slower than this; the number bounds the background loop, not a busy detector.
+⚠ TWO CLAIMS HERE ARE UNVERIFIED -- no runnable source exists for either in this repo: "~2x faster
+than pyFAI's OpenCL OCL_PeakFinder (~10.5 ms) at the same recovered peaks", and the ~1.9x from
+``find_stream`` (see its own docstring). They are kept because they may well be true, not because
+they have been checked. Do not quote either as measured.
 
 Credit: peakfinder8 algorithm -- A. Barty et al., "Cheetah", J. Appl. Cryst. 47, 1118-1131 (2014); also
 CrystFEL (T. A. White et al.). The accumarray idea (build a sparse group-reduce, or scatter-add to groups)
@@ -140,13 +150,21 @@ def _bwd_kernel():
 class PeakFinder8:
     """Build the sparse radial operator ``M`` ONCE for a geometry, then call ``.find(image)`` per frame.
     ``M`` (and the pixel grids) depend only on the geometry, so the per-frame cost is dominated by the
-    iterative radial-background matvecs (``M @ .`` forward, ``M.T @ .`` back). On a real 3000^2 CSPAD frame
-    (A100): ~9-13 ms/frame, of which the background loop is ~9 ms and the label+reduction ~1.5 ms.
+    iterative radial-background matvecs (``M @ .`` forward, ``M.T @ .`` back). Synthetic 3000^2 frame,
+    120 peaks, fp64 (2026-09-10): **A100-SXM4-40GB 7.25 ms/frame -- background loop 4.76 ms (66%),
+    everything else (label + per-peak reduction) 2.49 ms**; H200 NVL 3.23 ms.
+
+    The figures that stood here before (~9-13 ms total, ~9 ms background, ~1.5 ms label+reduction) were
+    wrong in BOTH directions: they overstated the background and understated the label+reduce, which made
+    the background look like ~85% of the frame when it is about two thirds. That matters, because it is
+    the split that says which stage is worth optimising next.
 
     Two measured tuning notes baked in here: (1) the three forward stats per iteration are three separate
     SpMVs, NOT one SpMM over a stacked RHS -- cupyx ``csrmm`` is ~2.7x SLOWER than looping ``csrmv`` for
-    this tall-skinny operator; (2) ``dtype=cupy.float32`` runs the loop in fp32, ~1.35x faster (13.3->9.9 ms)
-    and validated to give BIT-IDENTICAL peaks on real CSPAD data (default fp64 for safety on high-count
+    this tall-skinny operator; (2) ``dtype=cupy.float32`` runs the loop in fp32:
+    measured 2026-09-10 as **1.71x on A100 (7.25->4.23 ms) and 1.43x on H200 (3.23->2.26 ms)**, the
+    background stage alone going 4.76->1.74 ms on A100; previously recorded as ~1.35x (13.3->9.9 ms).
+    Validated separately to give BIT-IDENTICAL peaks on real CSPAD data (default fp64 for safety on high-count
     detectors, where the E[I^2]-E[I]^2 variance can lose fp32 precision). Parameters as in ``peakfinder8``.
     """
 
@@ -154,7 +172,7 @@ class PeakFinder8:
                  min_pix=2, max_pix=200, r_min=0.0, n_iter=3, dtype=None, graph=False, smooth=0,
                  thr_adu=None):
         xp = _xp(q_per_pixel); self._xp = xp; self._ndi = _ndimage(xp)
-        self.dt = xp.float64 if dtype is None else dtype   # fp32 ~25% faster background loop (verify recall)
+        self.dt = xp.float64 if dtype is None else dtype   # fp32 background loop is ~2.7x, not ~25%: 4.76->1.74 ms (A100, 2026-09-10)
         self._smooth = int(smooth)                          # opt-in (>1): uniform_filter1d the radial mu/sig
         # profile each iter -- denoises the background where rings are UNDER-SAMPLED/noisy (few px/ring). No
         # recall gain on well-sampled synthetic frames in our tests (misses are CC-merge/edge, not bg noise),
@@ -303,7 +321,11 @@ class PeakFinder8:
         The transfer is a real cost that single-frame timing hides: a 36 MB frame is ~5.2 ms pageable /
         ~1.9 ms pinned, vs ~5 ms compute. This pins the frames once (fast async H2D) and double-buffers on
         a copy stream -- frame i+1 copies while frame i computes -- so throughput jumps ~1.9x (e.g. 92 ->
-        178 f/s at 3000^2 on an A100) by overlapping the (pinned) transfer with compute. CPU falls back to
+        178 f/s at 3000^2 on an A100) by overlapping the (pinned) transfer with compute. ⚠ THE 1.9x IS
+        UNVERIFIED: it has no runnable source here, and a 2026-09-10 attempt to reproduce it measured
+        0.71x -- but at only N=12 frames, and since this method pins the WHOLE batch up front (see the
+        note below), a 12-frame run need not amortise the pin. That is a limitation of the attempt, not
+        a refutation. It needs a harness that sweeps N before either number is quoted. CPU falls back to
         a plain loop. NOTE: pins the whole batch, so for very large N (or an unbounded live stream) feed
         frames that already live in a pinned ring buffer instead and reuse ``.find()`` with your own
         double-buffering; here N should be a manageable chunk.

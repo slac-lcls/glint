@@ -238,13 +238,46 @@ def same_lattice(M1, M2, rtol=0.05, ctol=0.06, vtol=0.10):
     inserted an extra signature entry and shifted the positional comparison ->
     spurious reject (injected true axes scored only 23/49 vs the correct 49/49).
     Reduced-cell + volume is degeneracy-robust and also rejects super/sub-cells that
-    share short lattice vectors (e.g. a basis built from lyso face diagonals)."""
+    share short lattice vectors (e.g. a basis built from lyso face diagonals).
+
+    SYMMETRY (fixed 2026-09-10): both relative gates normalise by the MEAN of the two
+    quantities, not by the second argument. Previously `vtol * |det(M2)|` and `rtol * l2`
+    made the relation depend on argument order -- measured, argument order decided the
+    verdict for 1.87% of perturbed-cell pairs overall and 4.5% in the 2-4% band where
+    refine drift actually lives. That matters because this function is used two ways: as
+    the paper's accuracy gate, where the reference is always the SECOND argument and the
+    asymmetry was invisible, and as the grouping relation in _consensus_exact /
+    glint_fast dedup / the stream-driver voters, where BOTH arguments are candidates and
+    group membership therefore depended on which member happened to be the representative.
+
+    The mean was chosen by measurement over min/mean/max on 20 000 candidates against the
+    LYSO truth: mean flips 292 individual verdicts but moves the aggregate accept count by
+    -8 (0.04%), because it is unbiased and the flips nearly cancel. min is uniformly
+    stricter (-284) and max uniformly looser (+274), either of which would shift every
+    published rate by ~1.4%. `ctol` is an absolute tolerance on cosines and was already
+    symmetric.
+
+    ⚠ This buys SYMMETRY, not TRANSITIVITY. A tolerance relation is never transitive
+    (a~b, b~c, a!~c is still reachable, and experiments/test_same_lattice_symmetry.py
+    asserts it still is), so greedy grouping is order-dependent in principle. Making group
+    membership well-defined needs a canonical key or a fixed-order clustering, not a tweak
+    to this predicate.
+
+    But the predicted residual order-dependence was LOOKED FOR AND NOT FOUND: consensus_cell
+    over 14 true-cell hypotheses plus 6 spurious, 60 shuffles at each of 0.01/0.02/0.03/0.04
+    jitter, returned an identical support every time (14/14/10/8). So non-transitivity is a
+    real property of the predicate that did not express itself as order-dependence in that
+    test. Do not cite the in-principle argument as if it were a measured defect -- and note
+    the test is synthetic and well-separated, so it bounds nothing about real hypothesis
+    sets."""
     if M1 is None or M2 is None:
         return False
-    if abs(abs(np.linalg.det(M1)) - abs(np.linalg.det(M2))) > vtol * abs(np.linalg.det(M2)):
+    d1, d2 = abs(np.linalg.det(M1)), abs(np.linalg.det(M2))
+    if abs(d1 - d2) > vtol * (0.5 * (d1 + d2)):
         return False
     (l1, c1), (l2, c2) = reduced_params(M1), reduced_params(M2)
-    return bool(np.all(np.abs(l1 - l2) <= rtol * l2) and np.all(np.abs(c1 - c2) <= ctol))
+    return bool(np.all(np.abs(l1 - l2) <= rtol * (0.5 * (l1 + l2)))
+                and np.all(np.abs(c1 - c2) <= ctol))
 
 
 def _select_known(vecs, g, tol_abs, Lref, sig_ref, topk=12, len_tol=0.08,

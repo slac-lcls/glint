@@ -7,7 +7,32 @@ and the raw-frame buffer that piles up meanwhile. This module makes the warm-up
   (1) PICKY  -- ranking the startup stack by Bragg-peak COUNT sends blind compute to the most
                 indexable frames first (and skips blanks / water); and
   (2) PARALLEL -- the independent blind indexes fan across workers/GPUs and pool into ONE consensus
-                round, so lock latency is ~one blind-frame-time instead of n of them.
+                round, so lock latency falls with the number of workers instead of costing n
+                blind-frame-times.
+
+MEASURED, because this file used to claim the floor was "~one blind-frame-time" and it is not.
+S3DF job 37198405, one node, 4x A100, 32 triaged cxidb-17 frames, nbest=3, mpirun (OpenMPI here is
+not built with SLURM PMI, so `srun` direct-launch aborts in MPI_Init):
+
+    ranks   serial      fanout     speedup    fanout / one-frame-time
+      1     737.7 ms    735.4 ms    1.00x       36.4
+      2     728.2 ms    397.9 ms    1.83x       19.4
+      4     737.7 ms    235.5 ms    3.13x       11.5
+
+Answer-preserving at every rank count: identical cell [37.8 78.6 78.7] and identical support 28,
+serial and fanned out.
+
+What the numbers say. Subtracting the pure blind work (frames/ranks x ~20.4 ms) leaves a SERIAL
+REMAINDER of ~76 ms that does not shrink with ranks (89 / 68 / 72 ms at 1 / 2 / 4) -- the pooling
+and the consensus vote over frames*nbest hypotheses, plus the allgather. So the Amdahl floor is
+~76 + ~20 = ~96 ms, about 4.8 blind-frame-times, and the ceiling on speedup is ~7.6x however many
+workers are added. Efficiency is already falling at four ranks (91% at 2, 78% at 4).
+
+Consequence for anyone sizing this: past roughly eight workers host work, not the blind indexes,
+becomes the dominant term. More GPUs can still reduce latency toward the ~96 ms floor, but with
+diminishing returns because the remaining cost is the same_lattice vote on the host, which is a
+CPU-side algorithmic target -- and unlike the warp-per-candidate mapping in fused_kernels,
+speeding it up need not cost bit-exactness.
 
 The buffered frames not chosen for warm-up are not lost: after the cell locks they drain through the
 fast known-cell path, so triage sets only the ORDER of blind attempts, not which frames are kept.

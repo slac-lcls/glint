@@ -45,7 +45,9 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from glint.lattice import cell_to_Ar                      # noqa: E402
-from glint.multishot import same_lattice                  # noqa: E402
+from glint.lattice import reduced_params                  # noqa: E402
+from glint.multishot import _grp_reduced, same_lattice    # noqa: E402
+from glint.running_consensus import RunningConsensus      # noqa: E402
 
 LYSO_A, LYSO_C = 79.02, 37.98
 
@@ -56,16 +58,28 @@ def _perturbed(rng, scale):
                       LYSO_C * (1 + rng.normal(0, scale)), 90, 90, 90)
 
 
+def _fp(M):
+    l, c = reduced_params(M)
+    return l, c, abs(np.linalg.det(M))
+
+
+def _grp_count(*cells):
+    RP = [((l, c), d) for l, c, d in map(_fp, cells)]
+    return _grp_reduced(list(enumerate([1] * len(cells))), RP, 0.05, 0.06, 0.10)[0][1]
+
+
 def test_symmetry():
     """same_lattice(A,B) == same_lattice(B,A) on 20 000 pairs across the undecided bands."""
     rng = np.random.default_rng(0)
     # 0.02-0.04 is where the old relation disagreed with itself most often; the wider span keeps
     # clearly-same and clearly-different pairs in the sample so the check is not vacuous.
     bands = [0.005, 0.01, 0.02, 0.03, 0.04, 0.05, 0.08]
+    base, rem = divmod(20000, len(bands))
+    counts = [base + (i < rem) for i in range(len(bands))]
     n_true = n_false = 0
     failures = []
-    for scale in bands:
-        for _ in range(20000 // len(bands)):
+    for scale, n in zip(bands, counts):
+        for _ in range(n):
             A, B = _perturbed(rng, scale), _perturbed(rng, scale)
             ab, ba = same_lattice(A, B), same_lattice(B, A)
             if ab != ba:
@@ -97,6 +111,35 @@ def test_worked_cases():
         assert same_lattice(P, A) == expected, f"unexpected length-gate result for (P,A) at f={f}"
 
 
+def test_consensus_paths_use_mean_normalisation():
+    """The same boundary cases must drive the batch and streaming consensus gates identically."""
+    s = (1.0 / 0.905) ** (1.0 / 3.0)
+    A = cell_to_Ar(LYSO_A, LYSO_A, LYSO_C, 90, 90, 90)
+    B = cell_to_Ar(LYSO_A * s, LYSO_A * s, LYSO_C * s, 90, 90, 90)
+    P = cell_to_Ar(LYSO_A * 0.95, LYSO_A, LYSO_C, 90, 90, 90)
+    rc = RunningConsensus(min_support=2, adaptive=False)
+    la, ca, da = _fp(A)
+    lb, cb, db = _fp(B)
+    lp, cp, dp = _fp(P)
+
+    assert _grp_count(A, B) == 2 and _grp_count(B, A) == 2, "_grp_reduced split the accepted boundary pair"
+    assert _grp_count(A, P) == 1 and _grp_count(P, A) == 1, "_grp_reduced merged the rejected boundary pair"
+
+    assert rc._match(la, ca, da, [B, lb, cb, db, 1]) and rc._match(lb, cb, db, [A, la, ca, da, 1])
+    assert not rc._match(la, ca, da, [P, lp, cp, dp, 1]) and not rc._match(lp, cp, dp, [A, la, ca, da, 1])
+
+    rc._push(A, la, ca, da)
+    assert tuple(rc._candidates(lb, cb, db)) == (0,)
+    assert tuple(rc._candidates(lp, cp, dp)) == ()
+
+    rc = RunningConsensus(min_support=2, adaptive=False)
+    rc._push(B, lb, cb, db)
+    assert tuple(rc._candidates(la, ca, da)) == (0,)
+    lm = np.array([la, lb]); cm = np.array([ca, cb]); dm = np.array([da, db])
+    assert rc._covered(la, ca, da, (lm, cm, dm)) == 2
+    assert rc._covered(lp, cp, dp, (np.array([la, lp]), np.array([ca, cp]), np.array([da, dp]))) == 1
+
+
 def test_transitivity_is_still_violable():
     """NOT a wish. Symmetry does not buy transitivity, and the fix must not be read as if it did.
 
@@ -122,6 +165,8 @@ if __name__ == "__main__":
     print(f"symmetry      OK  (20000 pairs; {n_true} accepted / {n_false} rejected, non-vacuous)")
     test_worked_cases()
     print("worked cases  OK  (volume ratio 0.905; length steps 0.90-1.10)")
+    test_consensus_paths_use_mean_normalisation()
+    print("consensus     OK  (_grp_reduced, _match, _candidates and _covered agree on the boundaries)")
     test_transitivity_is_still_violable()
     print("transitivity  still violable, as documented (a~b, b~c, a!~c)")
     print("\nPASS")

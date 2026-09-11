@@ -445,7 +445,8 @@ def _grp_reduced(reps, RP, rtol, ctol, vtol):
         (li, ci), di = RP[idx]
         for grp in groups:
             (lj, cj), dj = RP[grp[0]]
-            if (abs(di - dj) <= vtol * dj and bool(np.all(np.abs(li - lj) <= rtol * lj))
+            if (abs(di - dj) <= vtol * (0.5 * (di + dj))
+                    and bool(np.all(np.abs(li - lj) <= rtol * (0.5 * (li + lj))))
                     and bool(np.all(np.abs(ci - cj) <= ctol))):
                 grp[1] += w; grp[2].append(idx)
                 break

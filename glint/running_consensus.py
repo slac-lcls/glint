@@ -221,8 +221,8 @@ class RunningConsensus:
 
     def _match(self, l, c, d, g):
         lg, cg, dg = g[1], g[2], g[3]
-        return (abs(d - dg) <= self.vtol * dg
-                and bool(np.all(np.abs(l - lg) <= self.rtol * lg))
+        return (abs(d - dg) <= self.vtol * (0.5 * (d + dg))
+                and bool(np.all(np.abs(l - lg) <= self.rtol * (0.5 * (l + lg))))
                 and bool(np.all(np.abs(c - cg) <= self.ctol)))
 
     def _grow(self):
@@ -264,8 +264,8 @@ class RunningConsensus:
         if not n:
             return ()
         dv = self._dets[:n]; lv = self._lens[:n]; cv = self._cos[:n]
-        return np.nonzero((np.abs(d - dv) <= self.vtol * dv)
-                          & np.all(np.abs(l - lv) <= self.rtol * lv, axis=1)
+        return np.nonzero((np.abs(d - dv) <= self.vtol * (0.5 * (d + dv)))
+                          & np.all(np.abs(l - lv) <= self.rtol * (0.5 * (l + lv)), axis=1)
                           & np.all(np.abs(c - cv) <= self.ctol, axis=1))[0]
 
     @staticmethod
@@ -289,8 +289,8 @@ class RunningConsensus:
         ``_member_arrays``; the two are exactly equivalent, and the merge loop passes the triple."""
         lm, cm, dm = (members if isinstance(members, tuple) and len(members) == 3
                       else self._member_arrays(members))
-        return int(np.count_nonzero((np.abs(dm - d) <= self.vtol * d)
-                                    & np.all(np.abs(lm - l) <= self.rtol * l, axis=1)
+        return int(np.count_nonzero((np.abs(dm - d) <= self.vtol * (0.5 * (dm + d)))
+                                    & np.all(np.abs(lm - l) <= self.rtol * (0.5 * (lm + l)), axis=1)
                                     & np.all(np.abs(cm - c) <= self.ctol, axis=1)))
 
     def add(self, M):

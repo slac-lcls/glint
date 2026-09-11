@@ -87,12 +87,14 @@ def test_worked_cases():
     s = (0.905) ** (1.0 / 3.0)
     A = cell_to_Ar(LYSO_A, LYSO_A, LYSO_C, 90, 90, 90)
     B = cell_to_Ar(LYSO_A * s, LYSO_A * s, LYSO_C * s, 90, 90, 90)
-    assert same_lattice(A, B) == same_lattice(B, A), "volume gate is order-dependent"
+    assert same_lattice(A, B), "volume gate should accept the documented 0.905 ratio (A,B)"
+    assert same_lattice(B, A), "volume gate should accept the documented 0.905 ratio (B,A)"
 
-    # Length gate: a chain at the 5% relative step, the case that used to flip.
-    for f in (1.05, 1.10, 0.95, 0.90):
-        P = cell_to_Ar(LYSO_A * f, LYSO_A * f, LYSO_C * f, 90, 90, 90)
-        assert same_lattice(A, P) == same_lattice(P, A), f"length gate order-dependent at f={f}"
+    # Length gate: one-axis perturbations around the 5% relative step.
+    for f, expected in ((1.05, True), (1.10, False), (0.95, False), (0.90, False)):
+        P = cell_to_Ar(LYSO_A * f, LYSO_A, LYSO_C, 90, 90, 90)
+        assert same_lattice(A, P) == expected, f"unexpected length-gate result for (A,P) at f={f}"
+        assert same_lattice(P, A) == expected, f"unexpected length-gate result for (P,A) at f={f}"
 
 
 def test_transitivity_is_still_violable():

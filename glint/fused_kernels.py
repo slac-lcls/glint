@@ -290,8 +290,8 @@ def _cpu_stage_gpu(best, pol, mp, mainb, Mc, rtol=0.05, ctol=0.06, vtol=0.10):
     dett = rgb.det3(Mct[None]).abs()
     l1, c1, ok = _buerger_batch(pol)
     detp = rgb.det3(pol).abs()
-    vol_ok = (detp - dett).abs() <= vtol * dett
-    len_ok = ((l1 - l2).abs() <= rtol * l2).all(1)
+    vol_ok = (detp - dett).abs() <= vtol * (0.5 * (detp + dett))
+    len_ok = ((l1 - l2).abs() <= rtol * (0.5 * (l1 + l2))).all(1)
     ang_ok = ((c1 - c2).abs() <= ctol).all(1)
     lattice_ok = ok & vol_ok & len_ok & ang_ok
     use_pol = (mp >= mainb) & lattice_ok

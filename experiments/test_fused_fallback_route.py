@@ -156,5 +156,24 @@ print(f"[{tag}] part 3 -- obj candidate split at K={Ksplit}: "
 if not inl_exact: fail.append("candidate-split obj changed inl")
 if not sub_exact: fail.append("candidate-split obj changed sub")
 
+# ---------------------------------------------------------------------------------------------
+# Part 4: the polished-vs-best guard must match the stock host tail on mean-normalised boundaries.
+s = (1.0 / 0.905) ** (1.0 / 3.0)
+best_np = np.stack([Mcn, Mcn])
+pol_np = np.stack([Mcn * s, np.diag([Mcn[0, 0] / 1.051, Mcn[1, 1], Mcn[2, 2]])])
+best_t = torch.as_tensor(best_np, dtype=rgb.FP, device=rgb.DEV)
+pol_t = torch.as_tensor(pol_np, dtype=rgb.FP, device=rgb.DEV)
+mp_t = torch.tensor([5, 5], device=rgb.DEV)
+main_t = torch.tensor([5, 5], device=rgb.DEV)
+want = rgb._cpu_stage(best_t, pol_t, mp_t, main_t, Mcn)
+got = fk._cpu_stage_gpu(best_t, pol_t, mp_t, main_t, Mcn)
+host_pol = [bool(np.allclose(a, b)) for a, b in zip(want, pol_np)]
+fused_pol = [bool(np.allclose(a, b)) for a, b in zip(got, pol_np)]
+print(f"[{tag}] part 4 -- cpu-stage boundary parity: host {host_pol}   fused {fused_pol}")
+if host_pol != [True, True]:
+    fail.append(f"stock _cpu_stage missed the boundary cases {host_pol}")
+if fused_pol != host_pol:
+    fail.append(f"_cpu_stage_gpu diverged from stock on the boundary cases {fused_pol} vs {host_pol}")
+
 print("   " + ("FAIL: " + "; ".join(fail) if fail else "PASS"))
 sys.exit(1 if fail else 0)

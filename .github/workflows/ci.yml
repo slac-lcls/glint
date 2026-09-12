@@ -252,6 +252,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_consensus_voter_set.py
 
+      - name: experiments/test_same_lattice_symmetry.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_same_lattice_symmetry.py
+
 
       # The GPU comparison itself cannot run here, but its PASS/FAIL RULES can: without cupy this
       # runs compare_outputs' sabotage self-test (NaN/inf in each of the four outputs, tolerance

@@ -1,0 +1,762 @@
+<meta charset="utf-8">
+<title>GLINT streaming driver · cxidb-17 480-frame replay</title>
+<style>
+  :root{
+    color-scheme:light dark;
+    --page:#eef1f4; --surface:#ffffff; --surface2:#f7f8fb; --inset:#f0f2f6;
+    --ink:#12151b; --ink2:#565b66; --muted:#8a8f99; --hair:#e3e6ec; --grid:#edeff3;
+    /* crystal species (categorical slots) */
+    --s1:#2a78d6; --s2:#eb6834; --s3:#159d6e; --s4:#d99000; --s5:#d95f96; --s6:#5a4bc4;
+    /* semantics */
+    --veto:#a3a9b3; --buf:#dd8b12; --rescue:#0ca30c; --accent:#0e93ab; --serious:#e0672e;
+    --good:#0ca30c;
+    --font:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+    --shadow:0 1px 2px rgba(16,22,30,.05),0 12px 34px -22px rgba(16,22,30,.4);
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --page:#0a0d12; --surface:#141922; --surface2:#0f141c; --inset:#0c1017;
+    --ink:#eef2f7; --ink2:#a9b1bf; --muted:#6f7784; --hair:#232b37; --grid:#1a212b;
+    --s1:#3f8ceb; --s2:#e5713f; --s3:#25bd85; --s4:#e2ab34; --s5:#e688b4; --s6:#9084ec;
+    --veto:#586170; --buf:#f0a637; --rescue:#2fb350; --accent:#2cc0d6; --serious:#ef8a5a;
+    --good:#2fb350;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 16px 40px -24px rgba(0,0,0,.75);
+  }}
+  :root[data-theme="dark"]{
+    --page:#0a0d12; --surface:#141922; --surface2:#0f141c; --inset:#0c1017;
+    --ink:#eef2f7; --ink2:#a9b1bf; --muted:#6f7784; --hair:#232b37; --grid:#1a212b;
+    --s1:#3f8ceb; --s2:#e5713f; --s3:#25bd85; --s4:#e2ab34; --s5:#e688b4; --s6:#9084ec;
+    --veto:#586170; --buf:#f0a637; --rescue:#2fb350; --accent:#2cc0d6; --serious:#ef8a5a;
+    --good:#2fb350;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 16px 40px -24px rgba(0,0,0,.75);
+  }
+  :root[data-theme="light"]{
+    --page:#eef1f4; --surface:#ffffff; --surface2:#f7f8fb; --inset:#f0f2f6;
+    --ink:#12151b; --ink2:#565b66; --muted:#8a8f99; --hair:#e3e6ec; --grid:#edeff3;
+    --s1:#2a78d6; --s2:#eb6834; --s3:#159d6e; --s4:#d99000; --s5:#d95f96; --s6:#5a4bc4;
+    --veto:#a3a9b3; --buf:#dd8b12; --rescue:#0ca30c; --accent:#0e93ab; --serious:#e0672e;
+    --good:#0ca30c;
+    --shadow:0 1px 2px rgba(16,22,30,.05),0 12px 34px -22px rgba(16,22,30,.4);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--page);color:var(--ink);font-family:var(--font);
+    -webkit-font-smoothing:antialiased;line-height:1.4;}
+  .app{max-width:1320px;margin:0 auto;padding:18px 18px 40px;}
+
+  /* ---------- header ---------- */
+  header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px;}
+  .brand{display:flex;flex-direction:column;gap:2px;margin-right:auto;}
+  .brand .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--accent);font-weight:600;}
+  .brand h1{margin:0;font-size:20px;font-weight:750;letter-spacing:-.01em;}
+  .phase{display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border-radius:999px;
+    font-family:var(--mono);font-size:12.5px;font-weight:600;border:1px solid var(--hair);
+    background:var(--surface);white-space:nowrap;}
+  .phase .pdot{width:9px;height:9px;border-radius:50%;background:var(--good);
+    box-shadow:0 0 0 0 currentColor;}
+  .phase.discovering{color:var(--buf);border-color:color-mix(in srgb,var(--buf) 40%,var(--hair));}
+  .phase.rescuing{color:var(--rescue);border-color:color-mix(in srgb,var(--rescue) 40%,var(--hair));}
+  .phase.steady{color:var(--good);}
+  .phase.discovering .pdot{background:var(--buf);animation:pulse 1s infinite;}
+  .phase.rescuing .pdot{background:var(--rescue);animation:pulse .7s infinite;}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 currentColor}70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
+  body.paused .phase .pdot{animation:none;}
+  .phase{cursor:help;}
+  .controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .btn{font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--ink);
+    background:var(--surface);border:1px solid var(--hair);border-radius:9px;padding:8px 12px;
+    cursor:pointer;display:inline-flex;align-items:center;gap:7px;user-select:none;}
+  .btn:hover{border-color:var(--accent);color:var(--accent);}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  .btn.accent{background:var(--accent);color:#fff;border-color:var(--accent);}
+  .btn.accent:hover{filter:brightness(1.08);color:#fff;border-color:var(--accent);}
+  .speed{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--ink2);}
+  .speed input{accent-color:var(--accent);width:104px;}
+  .clock{font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap;
+    font-variant-numeric:tabular-nums;}
+  .clock b{color:var(--ink);font-weight:600;}
+
+  /* ---------- kpi strip ---------- */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px;}
+  .kpi{background:var(--surface);border:1px solid var(--hair);border-radius:13px;padding:12px 14px;
+    box-shadow:var(--shadow);display:flex;flex-direction:column;gap:7px;min-width:0;}
+  .kpi .klab{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);font-weight:600;display:flex;align-items:center;gap:6px;}
+  .kpi .kval{font-size:27px;font-weight:750;letter-spacing:-.02em;font-variant-numeric:tabular-nums;
+    line-height:1;display:flex;align-items:baseline;gap:6px;}
+  .kpi .kval .u{font-size:13px;font-weight:600;color:var(--muted);}
+  .kpi .ksub{font-family:var(--mono);font-size:11px;color:var(--ink2);
+    font-variant-numeric:tabular-nums;}
+  .meter{height:6px;border-radius:4px;background:var(--inset);overflow:hidden;}
+  .meter>i{display:block;height:100%;border-radius:4px;transition:width .18s ease;}
+  /* compact metrics strip: several live bars in ONE box */
+  .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:6px 20px;background:var(--surface);
+    border:1px solid var(--hair);border-radius:13px;padding:11px 16px;box-shadow:var(--shadow);margin-bottom:12px;}
+  @media (max-width:920px){.metrics{grid-template-columns:repeat(2,1fr);}}
+  .m{display:flex;flex-direction:column;gap:4px;min-width:0;border-left:2px solid var(--hair);padding-left:12px;}
+  .m:first-child{border-left:none;padding-left:0;}
+  .m .ml{font-family:var(--mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600;}
+  .m .mv{font-size:19px;font-weight:750;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1;
+    display:flex;align-items:baseline;gap:5px;}
+  .m .mv .u{font-size:11px;font-weight:600;color:var(--muted);}
+  .m .ms{font-family:var(--mono);font-size:9.5px;color:var(--ink2);font-variant-numeric:tabular-nums;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+  /* ---------- main grid ---------- */
+  .main{display:grid;grid-template-columns:1.62fr 1fr;gap:14px;align-items:start;}
+  @media (max-width:920px){.main{grid-template-columns:1fr;}.kpis{grid-template-columns:repeat(2,1fr);}}
+  .col{display:flex;flex-direction:column;gap:14px;min-width:0;}
+  .panel{background:var(--surface);border:1px solid var(--hair);border-radius:14px;
+    padding:14px 15px;box-shadow:var(--shadow);}
+  .panel>.ph{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;}
+  .panel .ph h2{margin:0;font-size:12px;font-family:var(--mono);letter-spacing:.06em;text-transform:uppercase;
+    color:var(--muted);font-weight:700;}
+  .panel .ph .note{font-family:var(--mono);font-size:11px;color:var(--muted);}
+
+  /* cell cards */
+  .cells{display:grid;grid-template-columns:1fr;gap:11px;}
+  .cell{border:1px solid var(--hair);border-radius:12px;padding:11px 12px;background:var(--surface2);
+    display:flex;flex-direction:column;gap:9px;position:relative;overflow:hidden;min-height:126px;}
+  .cell .rail{position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--cc,var(--muted));}
+  .cell.empty{border-style:dashed;background:transparent;align-items:center;justify-content:center;color:var(--muted);
+    font-family:var(--mono);font-size:11.5px;}
+  .cell .chead{display:flex;align-items:flex-start;gap:8px;}
+  .cell .chip{width:12px;height:12px;border-radius:3px;background:var(--cc);flex:none;margin-top:2px;}
+  .cell .cname{font-size:14px;font-weight:700;line-height:1.15;}
+  .cell .csys{font-family:var(--mono);font-size:10.5px;color:var(--muted);}
+  .cell.pend{border-style:dashed;}
+  .cell.pend .cname{color:var(--ink2);font-weight:600;font-style:italic;}
+  .cell .pill{margin-left:auto;font-family:var(--mono);font-size:10px;font-weight:700;
+    padding:2px 7px;border-radius:999px;border:1px solid;white-space:nowrap;letter-spacing:.02em;}
+  .pill.locked{color:var(--good);border-color:color-mix(in srgb,var(--good) 45%,var(--hair));}
+  .pill.disc{color:var(--buf);border-color:color-mix(in srgb,var(--buf) 45%,var(--hair));}
+  .cell .params{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums;
+    color:var(--ink);display:flex;flex-direction:column;gap:2px;}
+  .cell .params .lbl{color:var(--muted);}
+  .cell .foot{margin-top:auto;display:flex;align-items:baseline;gap:6px;}
+  .cell .share{font-size:19px;font-weight:750;font-variant-numeric:tabular-nums;color:var(--cc);}
+  .cell .fmeta{font-family:var(--mono);font-size:10.5px;color:var(--muted);
+    font-variant-numeric:tabular-nums;margin-left:auto;text-align:right;}
+
+  /* geometry boxes */
+  .geo{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .gbox{border:1px solid var(--hair);border-radius:11px;padding:10px 11px;background:var(--surface2);
+    display:flex;flex-direction:column;gap:6px;}
+  .gbox .gl{font-family:var(--mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600;}
+  .gbox .gv{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em;}
+  .gbox .gv small{font-size:11px;color:var(--muted);font-weight:600;}
+  .gbox .gj{font-family:var(--mono);font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums;}
+  .gconv{height:4px;border-radius:3px;background:var(--inset);overflow:hidden;}
+  .gconv>i{display:block;height:100%;background:var(--accent);border-radius:3px;}
+
+  /* mixture */
+  .mixbar{height:24px;border-radius:7px;overflow:hidden;display:flex;background:var(--inset);
+    border:1px solid var(--hair);}
+  .mixbar>span{height:100%;transition:width .25s ease;}
+  .mixlist{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:11px;}
+  .mitem{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--ink2);
+    font-family:var(--mono);font-variant-numeric:tabular-nums;}
+  .mitem .sw{width:11px;height:11px;border-radius:3px;flex:none;}
+  .mitem.off{opacity:.32;}
+  .mitem b{color:var(--ink);font-weight:600;}
+
+  /* operational QA: injected reference + calibrant */
+  .qa{display:flex;flex-direction:column;gap:9px;}
+  .qarow{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;
+    padding:8px 10px;border-radius:8px;background:var(--inset);border:1px solid transparent;}
+  .qarow.ok{border-color:color-mix(in srgb,var(--good) 34%,transparent);}
+  .qarow.bad{border-color:color-mix(in srgb,var(--serious) 46%,transparent);}
+  .qarow.idle{opacity:.5;}
+  .qalab{font-size:12px;color:var(--ink2);display:flex;align-items:center;gap:7px;}
+  .qalab .dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none;}
+  .qarow.ok .qalab .dot{background:var(--good);}
+  .qarow.bad .qalab .dot{background:var(--serious);}
+  .qaval{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12px;
+    font-weight:600;color:var(--ink);white-space:nowrap;}
+  .qarow.bad .qaval{color:var(--serious);}
+  .qasub{grid-column:1/-1;font-family:var(--mono);font-size:11px;color:var(--muted);
+    font-variant-numeric:tabular-nums;}
+  /* correlation bar with the 0.90 alert threshold marked */
+  .qabar{grid-column:1/-1;position:relative;height:5px;border-radius:3px;
+    background:var(--grid);overflow:hidden;margin-top:1px;}
+  .qabar>i{position:absolute;inset:0 auto 0 0;border-radius:3px;background:var(--good);
+    transition:width .3s ease,background .3s ease;}
+  .qarow.bad .qabar>i{background:var(--serious);}
+  .qabar>u{position:absolute;top:-2px;bottom:-2px;width:1.5px;background:var(--ink2);opacity:.55;}
+  .qaverdict{font-size:12px;line-height:1.45;padding:8px 10px;border-radius:8px;
+    background:color-mix(in srgb,var(--serious) 12%,var(--surface));
+    color:var(--ink);border:1px solid color-mix(in srgb,var(--serious) 34%,transparent);}
+  .qaverdict b{color:var(--serious);}
+  .qaverdict.quiet{background:var(--surface2);border-color:var(--hair);color:var(--muted);}
+  .qaverdict.quiet b{color:var(--ink2);}
+  .qasm{padding:8px 10px;border-radius:8px;background:var(--inset);}
+  .qasmh{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:6px;
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--muted);font-weight:600;}
+  .qasmh .note{text-transform:none;letter-spacing:0;font-weight:400;}
+  /* injection history: one chip per injection so far. The latest value alone looks frozen --
+     the run only has two QA states -- so show the whole sequence and where we are in it. */
+  .qachips{grid-column:1/-1;display:flex;gap:3px;align-items:center;margin-top:3px;min-height:10px;}
+  .qachips i{width:9px;height:9px;border-radius:2px;background:var(--muted);opacity:.3;flex:none;}
+  .qachips i.ok{background:var(--good);opacity:1;}
+  .qachips i.mon{background:var(--buf);opacity:1;}
+  .qachips i.bad{background:var(--serious);opacity:1;}
+  .qachips i.now{box-shadow:0 0 0 1.5px var(--surface),0 0 0 3px currentColor;}
+  .qachips i.ok.now{color:var(--good);} .qachips i.bad.now{color:var(--serious);}
+  .qachips i.mon.now{color:var(--buf);}
+  .qachips em{font-family:var(--mono);font-size:10px;color:var(--muted);font-style:normal;
+    margin-left:5px;font-variant-numeric:tabular-nums;}
+
+  /* buffer */
+  .bufwrap{display:flex;align-items:center;gap:14px;}
+  .bufgauge{flex:none;width:118px;}
+  .bufgauge .bn{font-size:30px;font-weight:750;font-variant-numeric:tabular-nums;line-height:1;}
+  .bufgauge .bn small{font-size:13px;color:var(--muted);font-weight:600;}
+  .bufgauge .bl{font-family:var(--mono);font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:3px;}
+  .bufbars{flex:1;min-width:0;}
+  .bstat{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--ink2);margin-top:8px;}
+  .bstat b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;}
+  .bstat .fleet{color:var(--accent);}
+
+  canvas{display:block;width:100%;}
+  .cwrap{position:relative;}
+  .legend{display:flex;flex-wrap:wrap;gap:5px 13px;margin-top:10px;}
+  .legend .k{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;color:var(--ink2);}
+  .legend .k .sw{width:10px;height:10px;border-radius:2.5px;flex:none;}
+  .legend .k .swl{width:16px;height:3px;border-radius:2px;flex:none;}
+
+  .app.printmode .controls .btn,
+  .app.printmode .controls .speed{display:none;}
+  .foot{margin-top:16px;font-family:var(--mono);font-size:11px;color:var(--muted);
+    border-top:1px solid var(--hair);padding-top:12px;line-height:1.6;}
+  .foot b{color:var(--ink2);font-weight:600;}
+</style>
+
+<div class="app">
+  <header>
+    <div class="brand">
+      <span class="eyebrow">GLINT · device-resident streaming driver · recorded replay</span>
+      <h1>cxidb-17 · 480-frame replay</h1>
+    </div>
+    <div class="controls">
+      <button id="play" class="btn" aria-label="Play or pause">⏸ Pause</button>
+      <div class="speed"><span>speed</span><input id="speed" type="range" min="0.25" max="4" step="0.25" value="1"><span id="speedTxt">1.0×</span></div>
+      <button id="reset" class="btn">↺ Reset</button>
+      <span class="clock"><b id="frames">0</b> frames · <b id="clk">0.0</b>s</span>
+    </div>
+  </header>
+
+  <div class="main">
+    <div class="col">
+      <div class="panel">
+        <div class="ph"><div id="phase" class="phase steady"><span class="pdot"></span><span id="phaseTxt">Steady — locked</span></div><span class="note">recorded peaks (benchmark) → ring → GLINT</span></div>
+        <div class="cwrap"><canvas id="pipe" height="316" style="height:316px"></canvas></div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="panel">
+        <div class="ph"><h2>Recovered cell</h2><span class="note" id="cellNote">discovered blind</span></div>
+        <div class="cells" id="cells"></div>
+      </div>
+      <div class="panel">
+        <div class="ph"><h2>Stream composition &amp; rates</h2><span class="note"><span style="color:var(--accent)">strict</span> &amp; <span style="color:var(--ink2)">accepted</span> share · newest →</span></div>
+        <!-- explicit CSS height, like geobox/pipe: without it the element's layout height
+             follows the height ATTRIBUTE, so fit() writing height=clientHeight*DPR grows the
+             element, which grows clientHeight... At DPR 2 the buffer ran away 110->220->440
+             and the stream drew off-region (blank panel on every retina display). -->
+        <div class="cwrap"><canvas id="wf" height="110" style="height:110px"></canvas></div>
+        <div class="legend" id="legend"></div>
+      </div>
+    </div>
+  </div>
+
+  <p class="foot">
+    <b>Recorded replay — not a live beamline, and not a simulation.</b> Every frame pushed through this
+    monitor is a peak list from the <b>480-frame extension of the cxidb-17 sparse lysozyme run</b>
+    (CXIDB entry 17, CC0) — the paper's primary streaming set, four times the published 120-frame
+    subset, and the <i>same run and the same crystals</i>: 480 buys statistical power, not generality.
+    One protein. Nothing injected, nothing planted, no second species, no drift.
+    <br><br>
+    <b>Where the peaks come from.</b> They are <b>CrystFEL 0.12.0 peakfinder8</b> peaks, read out of the
+    blind <code>indexamajig</code> stream for these 480 images and converted to reciprocal-space
+    q-vectors through <b>the package's own bridge</b>, <code>glint.geom.read_crystfel_peaks</code> +
+    <code>peaks_to_q</code> — not a re-derivation, so panel membership, <code>coffset</code> and the
+    wavelength convention cannot drift. Following the published 120-frame benchmark, <b>one fixed
+    wavelength (1.322216 Å, 9377.00 eV — frame 0's photon energy) is used for every frame</b> rather
+    than the per-shot SASE energy; that is the convention the published q lists were built under, and
+    it is worth a few frames per arm, so it is stated rather than assumed. No pixels are replayed and
+    <b>no peak finder runs here</b> — the driver is fed q-vectors, so no peak-finding lane is claimed.
+    <br><br>
+    <b>The first 120 of this list are not the published 120-frame subset.</b> Sliced to its first 120
+    frames this input gives 76 / 79 at the strict bar where the published subset gives 73 / 78: the
+    rebuilt lists keep peaks in the last fractional pixel of each panel that the pre-fix geometry code
+    dropped. Different peak lists, expected, not a discrepancy — but it is why the number on this page
+    should be quoted with its input named.
+    <br><br>
+    The indexer is the <b>shipped</b> <code>glint.stream_driver.StreamDriver</code> at commit
+    <code>2d6eacb53a33</code>, cold-started with no cell (<code>Mc=None</code>), at its constructor
+    defaults plus the two published opt-ins <code>warmup_rescue=True</code> and
+    <code>adaptive_relock=True</code>: <code>B=20</code>, <code>dmin=2.0</code>, <code>tol=0.002</code>, <code>warmup_nbest=3</code>, live accept gate <code>min_inlier_frac=0.15</code>, <code>min_inliers=10</code>. <b>OFF:</b> retry cascade, live geometry
+    refinement, second-lattice detection, alias gate, lock probe, miss-buffer rescue. Panels those
+    options would have filled are removed rather than left idle, which is why there is no geometry box,
+    no injected-QA row and no spurious meter on this build.
+    <br><br>
+    Consensus locked the cell after <b>5 frames</b> on 4 votes; the
+    5 frames spent on discovery were re-indexed against it and
+    <b>3 of them cleared the strict bar</b>. The driver accepted
+    <b>451 of 480</b> at its own live gate and refused 24. Scored at the paper's strict
+    research bar (≥25% of spots <i>and</i> ≥10 reflections, correct lattice), the run indexes
+    <b>331/480</b> (69.0%) — 328 post-lock plus the 3 rescued. That is the
+    <b>high end</b> of the range the paper quotes for the streaming driver on this set,
+    <b>“67-69% of the 480-frame set”</b> (323–331 of 480): the low end is
+    <b>the same driver with warmup_rescue and adaptive_relock both off</b>, so the two options enabled here are published arms, not tuned ones. The
+    offline known-cell reference on the same frames and the same gate is
+    <b>357/480</b> (74.4%).
+    <br><br>
+    <b>What 480 frames show that 120 cannot.</b> Across 120 frames of this same list the watchdog
+    fires zero times. Across these 480 it performs <b>6 individual rescues</b> — frames the
+    batch pass missed, blind-solved again one at a time and accepted after all — and <b>one re-lock</b>,
+    at frame 364. Read the re-lock honestly: it does not replace the locked cell, it
+    <b>adds a second cell to the active set</b>, and that added cell is <b>not</b> the lysozyme lattice
+    (87.5, 87.6, 109.5, 69.3, 72.7, 100.7) — it is a cell voted by frames the active set could not explain. Every number on
+    this page is scored against the <b>first</b> locked cell only, so the re-lock adds nothing to
+    the count; it is on screen because it is what the mechanism did.
+    <br><br>
+    Recorded on NVIDIA A100-SXM4-40GB (sdfampere042), cupy 12.3.0, torch
+    2.1.0.post302, numpy 1.26.3; 10.5 s of wall time for the whole replay.
+    Playback is looped and the frame rate is a display choice; every counter, the recovered cell, the
+    lock frame, the ring occupancy, the rescues and the re-lock are read out of that one recorded run.
+    The cell is printed as measured and is not re-jittered for the animation.
+  </p>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const $=id=>document.getElementById(id);
+  const rand=Math.random, clamp=(x,a,b)=>x<a?a:x>b?b:x;
+  const cssv=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+  // ---- RECORDED run of the SHIPPED glint.stream_driver.StreamDriver -------------------------
+  // Input: the cxidb-17 480-frame extension of the same run (CXIDB entry 17, CC0). The peaks are
+  // CrystFEL 0.12.0 peakfinder8's, read out of the blind indexamajig stream and converted to
+  // q-vectors through the package's OWN bridge (glint.geom.read_crystfel_peaks + peaks_to_q).
+  // No pixels are replayed and no peak finder runs here: the driver is fed q-vectors.
+  // Config: constructor defaults + warmup_rescue=True + adaptive_relock=True -- both published
+  // opt-ins, which is the 331/480 arm. Everything else opt-in is OFF.
+  // Every quantity below is read out of the recorded trace. Nothing is simulated.
+  const META={"nframes":480,"locked_after":5,"consensus_support":4,"batch_B":20,"n_accepted_live":451,"n_gate_rejected":24,"n_warmup":5,"n_warmup_rescued":5,"strict_total":331,"strict_postlock":328,"strict_warmup":3,"cell":[78.706,78.792,37.813,90.189,90.083,89.811],"gate_live":{"min_inlier_frac":0.15,"min_inliers":10,"min_peaks":6},"gate_strict":{"frac":0.25,"min_refl":10,"lattice":"same_lattice vs the driver's own locked cell"},"driver_kw":{"B":20,"dmin":2.0,"tol":0.002,"warmup_nbest":3,"warmup_rescue":true,"adaptive_relock":true,"min_inliers":10},"same_lattice_vs_reference":true,"n_watchdog_rescued":6,"n_relock":1,"relock_frame":364,"published_band":{"low":323,"high":331,"of":480,"pct":"67-69%","low_arm":"the same driver with warmup_rescue and adaptive_relock both off","offline":357},"provenance":{"host":"sdfampere042","python":"3.9.18","numpy":"1.26.3","cupy":"12.3.0","torch":"2.1.0.post302","gpu":"NVIDIA A100-SXM4-40GB","use_gpu":true,"git":"2d6eacb53a33237a8d64ce62d765abac2a5ae8e6","elapsed_s":10.5}};
+  const SPECIES=[{id:'lyso',name:'Lysozyme',sys:'tetragonal (metric) \u00b7 recovered blind',
+                  cc:'--s1',cell:[78.706, 78.792, 37.813, 90.189, 90.083, 89.811]}];
+  const NS=1;
+  const TRACE=[{"npk":60,"o":2,"buf":1,"wu":1,"lock":-1,"resc":0,"resc_ok":0,"sup":1,"m":13,"frac":0.2167,"ok":0,"flush":0,"wresc":0,"relock":0,"lead":1},{"npk":68,"o":2,"buf":2,"wu":1,"lock":-1,"resc":0,"resc_ok":0,"sup":2,"m":32,"frac":0.4706,"ok":1,"flush":0,"wresc":0,"relock":0,"lead":1},{"npk":41,"o":2,"buf":3,"wu":1,"lock":-1,"resc":0,"resc_ok":0,"sup":2,"m":13,"frac":0.3171,"ok":1,"flush":0,"wresc":0,"relock":0,"lead":1},{"npk":70,"o":2,"buf":4,"wu":1,"lock":-1,"resc":0,"resc_ok":0,"sup":3,"m":43,"frac":0.6143,"ok":1,"flush":0,"wresc":0,"relock":0,"lead":2},{"npk":110,"o":2,"buf":0,"wu":1,"lock":0,"resc":5,"resc_ok":3,"sup":4,"m":19,"frac":0.1727,"ok":0,"flush":0,"wresc":0,"relock":0,"lead":2},{"npk":75,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":23,"frac":0.3067,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":74,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":28,"frac":0.3784,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":60,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":26,"frac":0.4333,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":62,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":30,"frac":0.4839,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":102,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":68,"frac":0.6667,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":54,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":27,"frac":0.5,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":190,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":78,"frac":0.4105,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":130,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":57,"frac":0.4385,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":167,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":55,"frac":0.3293,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":136,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":52,"frac":0.3824,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":167,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":50,"frac":0.2994,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":70,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.1857,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":46,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2391,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":286,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":63,"frac":0.2203,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":72,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.1806,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":120,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":55,"frac":0.4583,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":107,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":47,"frac":0.4393,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":162,"o":2,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":425,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":133,"frac":0.3129,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":168,"o":2,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":20,"wresc":0,"relock":0},{"npk":59,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":23,"frac":0.3898,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":112,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":72,"frac":0.6429,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":167,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":76,"frac":0.4551,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":102,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":37,"frac":0.3627,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":64,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":15,"frac":0.2344,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":83,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":28,"frac":0.3373,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":77,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":51,"frac":0.6623,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":123,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":35,"frac":0.2846,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":233,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":97,"frac":0.4163,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":55,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2182,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":313,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":106,"frac":0.3387,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":69,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":27,"frac":0.3913,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":105,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":32,"frac":0.3048,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":61,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.1803,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":219,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":109,"frac":0.4977,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":55,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2182,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":100,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":41,"frac":0.41,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":82,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":38,"frac":0.4634,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":124,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":47,"frac":0.379,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":125,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":73,"frac":0.584,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":183,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":38,"frac":0.2077,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":44,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.2273,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":338,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":76,"frac":0.2249,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":48,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.25,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":178,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":62,"frac":0.3483,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":166,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":75,"frac":0.4518,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":189,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":97,"frac":0.5132,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":60,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":340,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":166,"frac":0.4882,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":94,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":43,"frac":0.4574,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":66,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":41,"frac":0.6212,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":45,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2444,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":270,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":112,"frac":0.4148,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":85,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":35,"frac":0.4118,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":352,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":183,"frac":0.5199,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":168,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":84,"frac":0.5,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":182,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":70,"frac":0.3846,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":63,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.1746,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":94,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":34,"frac":0.3617,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":158,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":84,"frac":0.5316,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":88,"o":2,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":68,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.1912,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":375,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":156,"frac":0.416,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":76,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":37,"frac":0.4868,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":288,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":66,"frac":0.2292,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":66,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.197,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":62,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.2097,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":55,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":28,"frac":0.5091,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":82,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":29,"frac":0.3537,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":177,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":84,"frac":0.4746,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":55,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":137,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":34,"frac":0.2482,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":45,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":19,"frac":0.4222,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":77,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":15,"frac":0.1948,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":50,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.2,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":40,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.25,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":138,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":76,"frac":0.5507,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":62,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.2097,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":44,"o":2,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":273,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":83,"frac":0.304,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":372,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":163,"frac":0.4382,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":59,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.2203,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":107,"o":2,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":177,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":31,"frac":0.1751,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":97,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":29,"frac":0.299,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":74,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":47,"frac":0.6351,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":299,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":103,"frac":0.3445,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":74,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":34,"frac":0.4595,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":55,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":57,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.193,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":443,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":136,"frac":0.307,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":559,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":142,"frac":0.254,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":65,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":16,"frac":0.2462,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":80,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":33,"frac":0.4125,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":190,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":69,"frac":0.3632,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":150,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":68,"frac":0.4533,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":54,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":25,"frac":0.463,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":214,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":44,"frac":0.2056,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":475,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":141,"frac":0.2968,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":111,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":59,"frac":0.5315,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":149,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":64,"frac":0.4295,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":101,"o":2,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":185,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":41,"frac":0.2216,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":372,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":77,"frac":0.207,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":214,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":96,"frac":0.4486,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":319,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":79,"frac":0.2476,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":139,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":84,"frac":0.6043,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":97,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":30,"frac":0.3093,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":223,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":89,"frac":0.3991,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":41,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2927,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":43,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2558,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":86,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":45,"frac":0.5233,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":151,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":53,"frac":0.351,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":89,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":15,"frac":0.1685,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":58,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":30,"frac":0.5172,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":56,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2143,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":388,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":128,"frac":0.3299,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":154,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":60,"frac":0.3896,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":184,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":52,"frac":0.2826,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":145,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":41,"frac":0.2828,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":145,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":45,"frac":0.3103,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":84,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":57,"frac":0.6786,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":114,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":37,"frac":0.3246,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":400,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":96,"frac":0.24,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":56,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":29,"frac":0.5179,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":165,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":46,"frac":0.2788,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":38,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.3421,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":119,"o":2,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":69,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.1884,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":61,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":31,"frac":0.5082,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":87,"o":2,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":236,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":93,"frac":0.3941,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":54,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":15,"frac":0.2778,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":73,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":42,"frac":0.5753,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":50,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.26,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":105,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":42,"frac":0.4,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":66,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":34,"frac":0.5152,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":303,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":49,"frac":0.1617,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":216,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":97,"frac":0.4491,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":76,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":28,"frac":0.3684,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":76,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":49,"frac":0.6447,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":400,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":84,"frac":0.21,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":78,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":14,"frac":0.1795,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":63,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.2063,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":438,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":153,"frac":0.3493,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":54,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":24,"frac":0.4444,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":143,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":35,"frac":0.2448,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":196,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":94,"frac":0.4796,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":96,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":29,"frac":0.3021,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":183,"o":2,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":59,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":21,"frac":0.3559,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":72,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.1528,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":107,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":70,"frac":0.6542,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":187,"o":2,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":404,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":136,"frac":0.3366,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":92,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":33,"frac":0.3587,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":60,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":15,"frac":0.25,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":73,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":39,"frac":0.5342,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":53,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.2453,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":119,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":31,"frac":0.2605,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":103,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":18,"frac":0.1748,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":321,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":103,"frac":0.3209,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":59,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":24,"frac":0.4068,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":174,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":42,"frac":0.2414,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":126,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":46,"frac":0.3651,"ok":1,"flush":0,"wresc":1,"relock":0},{"npk":239,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":115,"frac":0.4812,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":565,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":140,"frac":0.2478,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":254,"o":2,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":131,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":39,"frac":0.2977,"ok":1,"flush":0,"wresc":1,"relock":0},{"npk":53,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2075,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":48,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.2083,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":169,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":100,"frac":0.5917,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":60,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.1833,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":59,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":14,"frac":0.2373,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":59,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2034,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":66,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":14,"frac":0.2121,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":173,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":83,"frac":0.4798,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":226,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":87,"frac":0.385,"ok":1,"flush":0,"wresc":1,"relock":0},{"npk":299,"o":2,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":84,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":30,"frac":0.3571,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":183,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":57,"frac":0.3115,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":184,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":61,"frac":0.3315,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":89,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":44,"frac":0.4944,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":69,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":40,"frac":0.5797,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":57,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.2281,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":262,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":75,"frac":0.2863,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":50,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.26,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":183,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":121,"frac":0.6612,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":63,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":15,"frac":0.2381,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":84,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.1548,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":46,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.2174,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":98,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":51,"frac":0.5204,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":165,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":56,"frac":0.3394,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":45,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.2222,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":257,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":124,"frac":0.4825,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":103,"o":2,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":269,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":87,"frac":0.3234,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":228,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":115,"frac":0.5044,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":107,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":60,"frac":0.5607,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":241,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":102,"frac":0.4232,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":189,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":74,"frac":0.3915,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":91,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":54,"frac":0.5934,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":238,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":78,"frac":0.3277,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":359,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":131,"frac":0.3649,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":219,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":95,"frac":0.4338,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":237,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":95,"frac":0.4008,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":311,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":103,"frac":0.3312,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":261,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":75,"frac":0.2874,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":180,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":71,"frac":0.3944,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":317,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":97,"frac":0.306,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":77,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":15,"frac":0.1948,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":47,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2553,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":252,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":96,"frac":0.381,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":651,"o":2,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":218,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":111,"frac":0.5092,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":263,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":71,"frac":0.27,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":153,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":53,"frac":0.3464,"ok":1,"flush":0,"wresc":1,"relock":0},{"npk":219,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":110,"frac":0.5023,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":198,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":62,"frac":0.3131,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":86,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":16,"frac":0.186,"ok":0,"flush":20,"wresc":0,"relock":0},{"npk":1010,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":236,"frac":0.2337,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":265,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":91,"frac":0.3434,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":436,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":66,"frac":0.1514,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":278,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":102,"frac":0.3669,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":217,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":79,"frac":0.3641,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":172,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":94,"frac":0.5465,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":187,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":52,"frac":0.2781,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":111,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":59,"frac":0.5315,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":94,"o":2,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":267,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":88,"frac":0.3296,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":188,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":46,"frac":0.2447,"ok":0,"flush":0,"wresc":1,"relock":0},{"npk":81,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":14,"frac":0.1728,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":151,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":35,"frac":0.2318,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":449,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":136,"frac":0.3029,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":125,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":40,"frac":0.32,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":148,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":50,"frac":0.3378,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":50,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.22,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":206,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":73,"frac":0.3544,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":51,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2157,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":55,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":28,"frac":0.5091,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":112,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":57,"frac":0.5089,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":194,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":56,"frac":0.2887,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":267,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":93,"frac":0.3483,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":133,"o":2,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":76,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":15,"frac":0.1974,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":258,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":103,"frac":0.3992,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":40,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.275,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":72,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.1806,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":57,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":17,"frac":0.2982,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":41,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2683,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":254,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":95,"frac":0.374,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":148,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":87,"frac":0.5878,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":68,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":15,"frac":0.2206,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":70,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":24,"frac":0.3429,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":191,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":97,"frac":0.5079,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":90,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":62,"frac":0.6889,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":116,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":50,"frac":0.431,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":90,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":39,"frac":0.4333,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":84,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":49,"frac":0.5833,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":319,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":136,"frac":0.4263,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":132,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":44,"frac":0.3333,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":375,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":150,"frac":0.4,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":141,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":77,"frac":0.5461,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":52,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2115,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":67,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":36,"frac":0.5373,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":64,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":37,"frac":0.5781,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":51,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":24,"frac":0.4706,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":315,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":136,"frac":0.4317,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":125,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":43,"frac":0.344,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":52,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2115,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":49,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.2041,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":302,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":173,"frac":0.5728,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":52,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2115,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":232,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":92,"frac":0.3966,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":153,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":35,"frac":0.2288,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":88,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":53,"frac":0.6023,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":63,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.1905,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":297,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":119,"frac":0.4007,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":446,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":106,"frac":0.2377,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":117,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":89,"frac":0.7607,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":99,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":39,"frac":0.3939,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":196,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":105,"frac":0.5357,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":107,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":17,"frac":0.1589,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":46,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":21,"frac":0.4565,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":149,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":53,"frac":0.3557,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":215,"o":2,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":69,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":29,"frac":0.4203,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":116,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":81,"frac":0.6983,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":313,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":184,"frac":0.5879,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":461,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":118,"frac":0.256,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":138,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":37,"frac":0.2681,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":49,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2449,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":158,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":48,"frac":0.3038,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":86,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":39,"frac":0.4535,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":53,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2264,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":327,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":104,"frac":0.318,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":49,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2245,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":165,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":67,"frac":0.4061,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":40,"o":2,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":258,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":82,"frac":0.3178,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":71,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.169,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":336,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":78,"frac":0.2321,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":71,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":27,"frac":0.3803,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":172,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":66,"frac":0.3837,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":80,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.15,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":336,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":92,"frac":0.2738,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":385,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":115,"frac":0.2987,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":100,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":32,"frac":0.32,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":103,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":41,"frac":0.3981,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":41,"o":2,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":109,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":39,"frac":0.3578,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":188,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":91,"frac":0.484,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":135,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":82,"frac":0.6074,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":177,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":44,"frac":0.2486,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":65,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":32,"frac":0.4923,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":181,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":87,"frac":0.4807,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":56,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":14,"frac":0.25,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":185,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":78,"frac":0.4216,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":119,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":33,"frac":0.2773,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":95,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":36,"frac":0.3789,"ok":1,"flush":20,"wresc":1,"relock":0},{"npk":48,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.2708,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":169,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":51,"frac":0.3018,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":177,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":66,"frac":0.3729,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":100,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":34,"frac":0.34,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":224,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":48,"frac":0.2143,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":40,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.25,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":113,"o":2,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":254,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":81,"frac":0.3189,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":81,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":29,"frac":0.358,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":141,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":71,"frac":0.5035,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":474,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":122,"frac":0.2574,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":61,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.2131,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":140,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":76,"frac":0.5429,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":50,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.22,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":66,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":28,"frac":0.4242,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":80,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":15,"frac":0.1875,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":143,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":48,"frac":0.3357,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":200,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":101,"frac":0.505,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":112,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":58,"frac":0.5179,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":213,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":59,"frac":0.277,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":85,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":16,"frac":0.1882,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":119,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":47,"frac":0.395,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":544,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":181,"frac":0.3327,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":143,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":50,"frac":0.3497,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":566,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":106,"frac":0.1873,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":89,"o":2,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":102,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":17,"frac":0.1667,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":56,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2143,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":68,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":30,"frac":0.4412,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":358,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":109,"frac":0.3045,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":65,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":29,"frac":0.4462,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":109,"o":2,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":54,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.1852,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":136,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":42,"frac":0.3088,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":107,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":36,"frac":0.3364,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":163,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":32,"frac":0.1963,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":314,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":90,"frac":0.2866,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":60,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":26,"frac":0.4333,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":51,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":23,"frac":0.451,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":346,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":102,"frac":0.2948,"ok":1,"flush":20,"wresc":0,"relock":1},{"npk":714,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":125,"frac":0.1751,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":50,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":23,"frac":0.46,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":164,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":60,"frac":0.3659,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":336,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":75,"frac":0.2232,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":377,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":175,"frac":0.4642,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":139,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":42,"frac":0.3022,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":81,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":15,"frac":0.1852,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":94,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":19,"frac":0.2021,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":62,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":14,"frac":0.2258,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":45,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.2222,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":50,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":17,"frac":0.34,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":67,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":18,"frac":0.2687,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":191,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":116,"frac":0.6073,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":64,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":36,"frac":0.5625,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":325,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":98,"frac":0.3015,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":122,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":47,"frac":0.3852,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":146,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":49,"frac":0.3356,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":152,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":63,"frac":0.4145,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":288,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":76,"frac":0.2639,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":255,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":103,"frac":0.4039,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":142,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":62,"frac":0.4366,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":101,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":61,"frac":0.604,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":54,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2222,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":328,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":106,"frac":0.3232,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":100,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":53,"frac":0.53,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":152,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":34,"frac":0.2237,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":124,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":34,"frac":0.2742,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":407,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":208,"frac":0.5111,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":220,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":52,"frac":0.2364,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":290,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":113,"frac":0.3897,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":51,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2353,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":610,"o":2,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":326,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":158,"frac":0.4847,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":87,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":30,"frac":0.3448,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":278,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":124,"frac":0.446,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":48,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.2083,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":139,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":52,"frac":0.3741,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":176,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":44,"frac":0.25,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":149,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":55,"frac":0.3691,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":217,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":71,"frac":0.3272,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":48,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.25,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":190,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":101,"frac":0.5316,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":51,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.1961,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":203,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":57,"frac":0.2808,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":84,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":24,"frac":0.2857,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":250,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":117,"frac":0.468,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":129,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":24,"frac":0.186,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":153,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":49,"frac":0.3203,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":59,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":29,"frac":0.4915,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":51,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2157,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":56,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.1786,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":133,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":37,"frac":0.2782,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":160,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":53,"frac":0.3312,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":50,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.22,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":55,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.2364,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":84,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.1548,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":100,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":17,"frac":0.17,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":156,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":71,"frac":0.4551,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":58,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":15,"frac":0.2586,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":76,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":31,"frac":0.4079,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":152,"o":2,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":0,"frac":0.0,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":217,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":102,"frac":0.47,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":246,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":94,"frac":0.3821,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":141,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":66,"frac":0.4681,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":206,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":82,"frac":0.3981,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":83,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":45,"frac":0.5422,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":41,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2683,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":53,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":27,"frac":0.5094,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":162,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":52,"frac":0.321,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":102,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":61,"frac":0.598,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":46,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":20,"frac":0.4348,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":76,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":36,"frac":0.4737,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":71,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":26,"frac":0.3662,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":196,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":52,"frac":0.2653,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":100,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":54,"frac":0.54,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":79,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":34,"frac":0.4304,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":48,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":13,"frac":0.2708,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":690,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":104,"frac":0.1507,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":390,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":69,"frac":0.1769,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":46,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2391,"ok":0,"flush":20,"wresc":0,"relock":0},{"npk":362,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":106,"frac":0.2928,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":66,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":30,"frac":0.4545,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":85,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":42,"frac":0.4941,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":54,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2037,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":45,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.2444,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":167,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":87,"frac":0.521,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":273,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":93,"frac":0.3407,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":50,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.22,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":230,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":114,"frac":0.4957,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":118,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":41,"frac":0.3475,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":41,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":12,"frac":0.2927,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":112,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":56,"frac":0.5,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":222,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":91,"frac":0.4099,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":49,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":10,"frac":0.2041,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":52,"o":1,"buf":15,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":14,"frac":0.2692,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":369,"o":1,"buf":16,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":93,"frac":0.252,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":98,"o":1,"buf":17,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":29,"frac":0.2959,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":322,"o":1,"buf":18,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":171,"frac":0.5311,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":196,"o":1,"buf":19,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":49,"frac":0.25,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":119,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":58,"frac":0.4874,"ok":1,"flush":20,"wresc":0,"relock":0},{"npk":189,"o":1,"buf":1,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":56,"frac":0.2963,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":88,"o":1,"buf":2,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":20,"frac":0.2273,"ok":0,"flush":0,"wresc":0,"relock":0},{"npk":44,"o":1,"buf":3,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":11,"frac":0.25,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":172,"o":1,"buf":4,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":50,"frac":0.2907,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":241,"o":1,"buf":5,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":151,"frac":0.6266,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":133,"o":1,"buf":6,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":64,"frac":0.4812,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":228,"o":1,"buf":7,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":115,"frac":0.5044,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":65,"o":1,"buf":8,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":26,"frac":0.4,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":77,"o":1,"buf":9,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":39,"frac":0.5065,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":120,"o":1,"buf":10,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":41,"frac":0.3417,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":95,"o":1,"buf":11,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":63,"frac":0.6632,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":394,"o":1,"buf":12,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":136,"frac":0.3452,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":218,"o":1,"buf":13,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":83,"frac":0.3807,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":411,"o":1,"buf":14,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":111,"frac":0.2701,"ok":1,"flush":0,"wresc":0,"relock":0},{"npk":297,"o":1,"buf":0,"wu":0,"lock":-1,"resc":0,"resc_ok":0,"sup":-1,"m":98,"frac":0.33,"ok":1,"flush":15,"wresc":0,"relock":0}];
+  const NF_TRACE=TRACE.length;
+  const B_RING=META.batch_B;                 // device-resident ring depth (StreamDriver B)
+  const SUPPORT=META.consensus_support;      // consensus votes the lock actually fired on
+  const BIN=8, PLAY_FPS=12;                  // frames per composition bar / playback rate
+
+  let S;
+  function freshBin(){ return {total:0,veto:0,gen:0,idx:new Array(NS).fill(0),buf:new Array(NS).fill(0)}; }
+  function fresh(){
+    S={ tf:0, t:0, frames:0, pushed:0, accepted:0, strict:0, refused:0, rescued:0, warmup:0,
+      ring:0, wbuf:0, locked:false, support:0, lead:0, lockFrame:0,
+      idxR:0, okR:0, phase:'warmup', phaseHold:0, rescueFlash:0, flushFlash:0, batchFlash:0,
+      wdog:0, relocks:0, relockFrame:0, wdogFlash:0, relockFlash:0,
+      bins:[], curBin:freshBin(), histIdx:[], histOk:[], histRing:[] };
+  }
+  fresh();
+  function resetForLoop(){ const t=S.t; fresh(); S.t=t; }
+
+  // Composition bins. The categories are the driver's OWN three outcomes per pushed frame:
+  //   idx  = cleared the strict research bar (>=25% of spots AND >=10 reflections, right cell)
+  //   buf  = accepted at the driver's live gate but below that bar
+  //   gen  = refused at the live gate (min_inlier_frac 0.15) -- dropped, and counted
+  function binAdd(cat){ const b=S.curBin;
+    if(cat==='gen')b.gen++; else if(cat==='idx')b.idx[0]++; else b.buf[0]++;
+    if(++b.total>=BIN){ S.bins.push(b); if(S.bins.length>200)S.bins.shift(); S.curBin=freshBin(); } }
+  function ema(k,x){ const a=0.06; S[k]+=(x-S[k])*a; }
+
+  function playFrame(){
+    if(S.tf>=NF_TRACE){ S.tf=0; resetForLoop(); }
+    const r=TRACE[S.tf++]; S.frames++; S.pushed++;
+    if(r.wu){
+      // Warm-up: the frame casts a blind consensus vote and is HELD. It is not indexed yet, so it
+      // scores nothing yet -- the credit lands at the lock, when the rescue re-indexes it.
+      S.warmup++; S.wbuf=r.buf; S.support=r.sup; S.lead=r.lead||0;
+      S.phase='warmup'; binAdd('buf');
+      ema('idxR',0); ema('okR',0);
+    } else {
+      S.ring=r.buf;
+      if(r.o===1){ S.accepted++; S.strict+=r.ok?1:0; binAdd(r.ok?'idx':'buf'); }
+      else { S.refused++; binAdd('gen'); }
+      ema('idxR', r.o===1?1:0); ema('okR', r.ok?1:0);
+    }
+    if(r.lock>=0){
+      S.locked=true; S.lockFrame=S.frames; S.support=r.sup;
+      S.rescued+=r.resc; S.strict+=r.resc_ok; S.wbuf=0;
+      S.rescueFlash=1; S.phase='rescuing'; S.phaseHold=Math.round(PLAY_FPS*1.4);
+    }
+    // The watchdog. Both of these are counters the 120-frame replay could not draw, because on
+    // 120 frames of this same peak list the watchdog fires zero times. r.wresc marks a frame the
+    // batch pass MISSED and the watchdog then indexed individually; r.relock marks the flush at
+    // which the accumulated misses voted a recurring cell the active set did not explain, which
+    // ADDS a second cell rather than replacing the locked one.
+    if(r.wresc){ S.wdog++; S.wdogFlash=1; }
+    if(r.relock){
+      S.relocks++; S.relockFrame=S.frames; S.relockFlash=1;
+      S.phase='relock'; S.phaseHold=Math.round(PLAY_FPS*2.0);
+    }
+    if(r.flush){ S.batchFlash=1; S.ring=0; }   // the ring drained: B frames indexed as one batch
+  }
+
+  let carry=0;
+  function advance(dtSim){
+    let nf=PLAY_FPS*dtSim+carry; const N=Math.floor(nf); carry=nf-N;
+    for(let i=0;i<N;i++) playFrame();
+    S.t+=dtSim;
+    S.rescueFlash*=Math.pow(0.5, dtSim/0.9);
+    S.batchFlash *=Math.pow(0.5, dtSim/0.35);
+    S.wdogFlash  *=Math.pow(0.5, dtSim/0.7);
+    S.relockFlash*=Math.pow(0.5, dtSim/1.6);
+    if(S.phaseHold>0){ S.phaseHold-=N; if(S.phaseHold<0)S.phaseHold=0; }
+    else S.phase = S.locked ? 'steady' : 'warmup';
+    S.histIdx.push(S.idxR); S.histOk.push(S.okR); S.histRing.push(S.ring/B_RING);
+    const H=260; if(S.histIdx.length>H){S.histIdx.shift();S.histOk.shift();S.histRing.shift();}
+  }
+
+
+  // ================= RENDER =================
+  const wf=$('wf'), wfx=wf.getContext('2d');
+  // geometry panel removed: geom_refine=False, the driver refines nothing
+  const pipe=$('pipe'), pcx=pipe.getContext('2d');
+  let DPR=Math.min(2,window.devicePixelRatio||1);
+  // h must come from the CSS box, not cv.height: cv.height is the BUFFER, so reading it and
+  // writing back h*DPR made fit() non-idempotent — each call multiplied the buffer by DPR again
+  // (two calls at DPR 2 gave 110->220->440, and the stream drew off-region on every retina display).
+  function fit(cv){ const w=cv.clientWidth||cv.parentElement.clientWidth,
+      h=cv.clientHeight||cv.height;
+    cv.width=w*DPR; cv.height=h*DPR; const x=cv.getContext('2d'); x.setTransform(DPR,0,0,DPR,0,0); return [w,h]; }
+  function fitAll(){ DPR=Math.min(2,window.devicePixelRatio||1);
+    wf._d=fit(wf); }   // geobox + pipe self-size in their own draw fns via clientWidth/clientHeight
+  window.addEventListener('resize',function(){
+    fitAll();                          // this CLEARS every canvas (cv.width= resets the backing store)
+    try{ render(); drawPipeline(); }catch(e){}   // ...so repaint now: render() is rAF-throttled to ~90 ms
+  });
+
+  function col(v){ return cssv(v)||'#888'; }
+  const spColors=()=>SPECIES.map(s=>col(s.cc));
+  function drawStream(){
+    // One bar per BIN pushed frames, normalised to that bin's frame count. Bottom-up the stack is
+    // the driver's own three outcomes: cleared the strict bar (solid), accepted at the live gate but
+    // below it (faint), refused at the live gate (grey). The two envelopes are the two rates those
+    // categories define, so the strict line always nests under the accept line by construction.
+    const [w,h]=wf._d||fit(wf); wfx.clearRect(0,0,w,h);
+    const arr = S.curBin.total>0 ? S.bins.concat([S.curBin]) : S.bins;
+    const n=arr.length; if(!n) return;
+    const VIS=Math.min(n,64), start=n-VIS, bw=w/VIS;
+    const sc=col('--s1'), cg=col('--muted');
+    const accOf=b=>b.total>0?(b.idx[0]+b.buf[0])/b.total:0;
+    const okOf =b=>b.total>0? b.idx[0]/b.total:0;
+    const Y=f=>h-2-(h-4)*clamp(f,0,1);
+    for(let k=start;k<n;k++){
+      const b=arr[k], T=b.total; if(T<=0) continue;
+      const x=(k-start)*bw, bwid=Math.max(1,bw-0.7); let a=0;
+      const seg=(cn,color,alpha)=>{ if(cn<=0)return; const y0=Y(a), y1=Y(a+cn/T);
+        wfx.fillStyle=color; wfx.globalAlpha=alpha; wfx.fillRect(x,y1,bwid,y0-y1+0.4); a+=cn/T; };
+      seg(b.idx[0], sc, 1); seg(b.buf[0], sc, 0.32); seg(b.gen, cg, 0.5);
+    }
+    wfx.globalAlpha=1;
+    const env=(frac,color,wd,dash)=>{ wfx.beginPath(); wfx.setLineDash(dash||[]);
+      for(let k=start;k<n;k++){ const X=(k-start+0.5)*bw, Yy=Y(frac(arr[k])); (k===start)?wfx.moveTo(X,Yy):wfx.lineTo(X,Yy); }
+      wfx.strokeStyle=color; wfx.lineWidth=wd; wfx.lineJoin='round'; wfx.stroke(); wfx.setLineDash([]); };
+    env(accOf, col('--ink2'), 1.4, [3,2]);
+    env(okOf,  col('--accent'), 2, []);
+  }
+
+  function drawSpark(x,ser,fillMode){
+    const cv=ser.cv, ctx=ser.ctx, [w,h]=cv._d||fit(cv);
+    ctx.clearRect(0,0,w,h);
+    // grid
+    ctx.strokeStyle=col('--grid'); ctx.lineWidth=1;
+    for(let g=0;g<=1;g+=0.5){ const y=h-6-(h-12)*g; ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke(); }
+    ser.lines.forEach(L=>{
+      const d=L.data(); if(d.length<2)return;
+      const n=d.length; const xs=i=>w-(n-1-i)*(w/(Math.max(60,n-1)));
+      const ymap=v=>h-6-(h-12)*clamp((v-L.min)/(L.max-L.min),0,1);
+      if(L.fill){ ctx.beginPath(); ctx.moveTo(xs(0),h);
+        for(let i=0;i<n;i++)ctx.lineTo(xs(i),ymap(d[i])); ctx.lineTo(xs(n-1),h); ctx.closePath();
+        ctx.fillStyle=L.fill; ctx.globalAlpha=.16; ctx.fill(); ctx.globalAlpha=1; }
+      ctx.beginPath(); for(let i=0;i<n;i++){const X=xs(i),Y=ymap(d[i]); i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);}
+      ctx.strokeStyle=L.color; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.stroke();
+    });
+  }
+
+  // build static bits
+  function buildLegend(){
+    const L=$('legend'); if(!L) return; L.innerHTML='';
+    const add=html=>{const k=document.createElement('span');k.className='k';k.innerHTML=html;L.appendChild(k);};
+    add(`<span class="sw" style="background:${col('--s1')}"></span>cleared the strict bar`);
+    add(`<span class="sw" style="background:${col('--s1')};opacity:.4"></span>accepted, below it`);
+    add(`<span class="sw" style="background:${col('--muted')};opacity:.55"></span>refused at the live gate`);
+    add(`<span class="swl" style="background:${col('--accent')}"></span>strict rate`);
+    add(`<span class="swl" style="background:${col('--ink2')};opacity:.8"></span>live accept rate`);
+    const note=document.createElement('span'); note.className='k'; note.style.opacity='.7';
+    note.textContent='one bar = 8 pushed frames'; L.appendChild(note);
+  }
+  function buildGeo(){}  // no geometry box on this build   // geometry = one COMPACT 3-D box drawn each frame by drawGeoBox()
+  // front face = beam centre (x,y), depth = camera length (clen). The box is CENTRED on the
+  // converged fit; the dot jitters within its live uncertainty (which shrinks as the fit converges)
+  // and settles to centre; a fading trail shows the path and a hollow ring marks the converged centre.
+  // geometry-box constants removed with the panel (they read the sim's TRUE_GEO)
+  function hexa(c,aa){ return (c && c[0]==='#' && c.length===7) ? c+aa : c; }
+  function drawGeoBox(){}   // geometry panel removed
+
+  // ---- animated pipeline schematic: two paths + buffer, particles flow at each pipe's live throughput ----
+  let pipeParts=[], pipeAcc={}, pipePrevF=0;
+  function rr(x,y,w,h,r){ pcx.beginPath(); pcx.moveTo(x+r,y); pcx.arcTo(x+w,y,x+w,y+h,r);
+    pcx.arcTo(x+w,y+h,x,y+h,r); pcx.arcTo(x,y+h,x,y,r); pcx.arcTo(x,y,x+w,y,r); pcx.closePath(); }
+  function drawPipeline(){
+    const w=pipe.clientWidth, h=pipe.clientHeight; if(!w||!h||!S) return;
+    if(pipe.width!==Math.round(w*DPR)||pipe.height!==Math.round(h*DPR)){ pipe.width=Math.round(w*DPR); pipe.height=Math.round(h*DPR); }
+    pcx.setTransform(DPR,0,0,DPR,0,0); pcx.clearRect(0,0,w,h);
+    const acc=col('--accent'), good=col('--good'), bcol=col('--buf'), gold=col('--s4'),
+          coral=col('--serious'), ink=col('--ink'), mut=col('--muted'), hair=col('--hair'),
+          surf=col('--surface'), FONT=cssv('--mono');
+    // The schematic scales with the panel: this build gives it a whole column, and node boxes sized
+    // for the template's 200 px strip read as dust at 392. K is that scale, capped so it stays a
+    // diagram rather than becoming a poster.
+    const K=Math.min(1.3, Math.max(1, h/232));
+    const R1=h*0.235, R2=h*0.715;
+    // The SHIPPED driver's actual dataflow. Row 1 is the locked steady state, row 2 the blind
+    // warm-up that gets it there. No lane here is decorative: each carries a counter from the trace.
+    const SRC=[w*0.075,R1], PK=[w*0.235,R1], RING=[w*0.455,R1], GL=[w*0.665,R1], IDX=[w*0.885,R1],
+          BLIND=[w*0.245,R2], CONS=[w*0.485,R2], DROP=[w*0.80,R2];
+    const pipes={ i1:{a:SRC,b:PK,c:mut,wd:3}, feed:{a:PK,b:RING,c:acc,wd:4.5},
+      batch:{a:RING,b:GL,c:acc,wd:5}, fast:{a:GL,b:IDX,c:good,wd:5},
+      drop:{a:GL,b:DROP,c:mut,wd:2.6},
+      warm:{a:PK,b:BLIND,c:gold,wd:3.2}, vote:{a:BLIND,b:CONS,c:gold,wd:3.2},
+      lock:{a:CONS,b:GL,c:good,wd:3}, resc:{a:CONS,b:IDX,c:col('--rescue'),wd:2.8},
+      // The watchdog lane. It reaches BACK into the miss box: a frame the batch pass could not
+      // register is blind-solved again on its own, and if that solution is the same lattice as a
+      // cell already in the active set it is indexed after all. Six frames take this path here.
+      wdog:{a:DROP,b:IDX,c:coral,wd:2.4},
+      // ...and the misses that are NOT the active cell vote among themselves. One re-lock.
+      wvote:{a:DROP,b:CONS,c:coral,wd:2.0} };
+    pcx.lineCap='round';
+    for(const k in pipes){ const p=pipes[k]; pcx.strokeStyle=hair; pcx.globalAlpha=0.5; pcx.lineWidth=p.wd;
+      pcx.setLineDash(k==='i1'?[4,3]:[]);        // the images themselves are not replayed here
+      pcx.beginPath(); pcx.moveTo(p.a[0],p.a[1]); pcx.lineTo(p.b[0],p.b[1]); pcx.stroke(); }
+    pcx.setLineDash([]); pcx.globalAlpha=1;
+    const idx=clamp(S.idxR,0,1), ok=clamp(S.okR,0,1), warm=S.locked?0:1,
+          rfill=clamp(S.ring/B_RING,0,1), wfill=clamp(S.wbuf/Math.max(META.n_warmup,1),0,1);
+    const spawn=(k,rate,sz)=>{ if(rate<=0)return; pipeAcc[k]=(pipeAcc[k]||0)+rate;
+      while(pipeAcc[k]>=1){ pipeAcc[k]-=1; const p=pipes[k];
+        pipeParts.push({a:p.a,b:p.b,t:0,spd:0.02+rand()*0.012,c:p.c,r:sz}); } };
+    spawn('i1',0.30,1.9); spawn('feed',0.55,2.3);
+    spawn('batch',0.10+1.5*S.batchFlash,2.5); spawn('fast',0.06+0.85*idx,2.4);
+    spawn('drop',0.02+0.9*(1-idx),1.6);
+    spawn('warm',0.55*warm,2.1); spawn('vote',0.5*warm,2.1);
+    // The watchdog lanes carry traffic ONLY when the recorded trace says they fired. They are not
+    // idle decoration and they are not a steady trickle: six rescue events and one re-lock, in the
+    // 480 frames of this run.
+    spawn('wdog',1.6*S.wdogFlash,2.4); spawn('wvote',1.2*S.relockFlash,2.2);
+    if(S.rescueFlash>pipePrevF+0.25){
+      for(let i=0;i<9;i++) pipeParts.push({a:CONS,b:GL,t:i*0.05,spd:0.03,c:good,r:2.6});
+      for(let i=0;i<7;i++) pipeParts.push({a:CONS,b:IDX,t:i*0.05,spd:0.028,c:col('--rescue'),r:2.7}); }
+    pipePrevF=S.rescueFlash;
+    for(let i=pipeParts.length-1;i>=0;i--){ const q=pipeParts[i]; q.t+=q.spd; if(q.t>=1){ pipeParts.splice(i,1); continue; }
+      const x=q.a[0]+(q.b[0]-q.a[0])*q.t, y=q.a[1]+(q.b[1]-q.a[1])*q.t;
+      pcx.globalAlpha=0.9; pcx.fillStyle=q.c; pcx.beginPath(); pcx.arc(x,y,q.r,0,7); pcx.fill(); }
+    pcx.globalAlpha=1; if(pipeParts.length>500) pipeParts.splice(0,pipeParts.length-500);
+    // lane labels
+    pcx.fillStyle=mut; pcx.font='600 '+(7*K).toFixed(1)+'px '+FONT; pcx.textAlign='center'; pcx.textBaseline='middle';
+    const mid=(p,dx,dy,t)=>pcx.fillText(t,(p.a[0]+p.b[0])/2+dx,(p.a[1]+p.b[1])/2+dy);
+    // above the node band, not level with it: at K>1 a label on the centre line is eaten by the boxes
+    mid(pipes.feed,0,-25,'spot positions'); mid(pipes.batch,0,-25,'batch of '+B_RING);
+    mid(pipes.drop,-26,17,'missed'); mid(pipes.warm,-6,4,'blind'); mid(pipes.lock,-18,8,'lock');
+    mid(pipes.resc,12,-9,'rescue');
+    // Both watchdog labels are offset off their own mid-points: 'watchdog' on the line would sit on
+    // top of the rescue counter under the indexed node, and 're-lock vote' on the line would sit on
+    // top of the warm-up hold box. Placed clear of both, on the same side as the lane they name.
+    pcx.fillStyle=S.wdogFlash>0.05?coral:mut;  mid(pipes.wdog,-24,16,'watchdog');
+    pcx.fillStyle=S.relockFlash>0.05?coral:mut; mid(pipes.wvote,40,34,'re-lock vote');
+    pcx.fillStyle=mut;
+    const node=(P,rx,ry,lab,glow,gc,fs,dash)=>{ rx*=K; ry*=K; fs=(fs||9.5)*K;
+      pcx.fillStyle=surf; pcx.strokeStyle=gc; pcx.lineWidth=1.5*K;
+      if(glow>0.02){ pcx.shadowColor=gc; pcx.shadowBlur=3+11*glow; } rr(P[0]-rx,P[1]-ry,rx*2,ry*2,6); pcx.fill();
+      pcx.shadowBlur=0; if(dash)pcx.setLineDash([3,2.5]); pcx.stroke(); pcx.setLineDash([]);
+      pcx.fillStyle=dash?mut:ink; pcx.font='600 '+fs.toFixed(1)+'px '+FONT; pcx.fillText(lab,P[0],P[1]); };
+    node(SRC,30,12,'cxidb-17',0.12,mut,8,true);
+    node(PK,47,14,'recorded peaks',0.5,acc,8.5);
+    node(GL,30,14,'GLINT',idx,good,10.5);
+    node(IDX,29,13,'indexed',0.3+0.5*ok,good,9);
+    node(BLIND,40,13,'blind warm-up',0.15+0.8*warm,gold,8.5);
+    node(CONS,42,13,S.locked?'consensus ✓':'consensus',
+         S.locked?(0.85+0.6*S.relockFlash):0.2+0.6*warm,
+         S.relockFlash>0.05?coral:(S.locked?good:gold),8.5);
+    node(DROP,26,11,'missed',0.1+0.7*S.wdogFlash,S.wdogFlash>0.05?coral:mut,8,true);
+    pcx.fillStyle=mut; pcx.font='600 '+(6.8*K).toFixed(1)+'px '+FONT; pcx.textAlign='center'; pcx.textBaseline='middle';
+    // ONE line, on the canvas floor: the provenance claim this whole build turns on. Kept out of
+    // the node captions because two short captions under adjacent nodes collided at every width.
+    pcx.fillText('peaks are CrystFEL peakfinder8’s, read from the recorded stream — no live peak-finding pass here',
+                 w/2, h-7);
+    // the device-resident ring, drawn as the tank it is: fills to B, drains when the batch indexes
+    const twd=60*K,tht=30*K,tx=RING[0]-twd/2,ty=RING[1]-tht/2;
+    pcx.fillStyle=surf; pcx.strokeStyle=bcol; pcx.lineWidth=1.5; rr(tx,ty,twd,tht,4); pcx.fill();
+    pcx.save(); rr(tx,ty,twd,tht,4); pcx.clip(); pcx.globalAlpha=0.5; pcx.fillStyle=bcol;
+    pcx.fillRect(tx,ty+tht*(1-rfill),twd,tht*rfill); pcx.globalAlpha=1; pcx.restore();
+    if(S.batchFlash>0.05){ pcx.save(); pcx.globalAlpha=0.55*S.batchFlash; pcx.strokeStyle=acc;
+      pcx.lineWidth=2.5; rr(tx-2,ty-2,twd+4,tht+4,5); pcx.stroke(); pcx.restore(); }
+    rr(tx,ty,twd,tht,4); pcx.stroke();
+    pcx.textAlign='center'; pcx.textBaseline='middle';
+    pcx.fillStyle=ink; pcx.font='700 '+(12*K).toFixed(1)+'px '+FONT; pcx.fillText(S.ring,RING[0],RING[1]-3*K);
+    pcx.fillStyle=mut; pcx.font='600 '+(7*K).toFixed(1)+'px '+FONT; pcx.fillText('device ring',RING[0],RING[1]+9*K);   // batch size is already on the pipe above ('batch of B')
+    // the warm-up hold, beside the consensus node -- this is the buffer the rescue drains
+    const hwd=30*K,hht=22*K,hx=CONS[0]+58*K,hy=CONS[1]-hht/2;
+    pcx.fillStyle=surf; pcx.strokeStyle=S.locked?col('--rescue'):gold; pcx.lineWidth=1.4;
+    rr(hx,hy,hwd,hht,4); pcx.fill();
+    pcx.save(); rr(hx,hy,hwd,hht,4); pcx.clip(); pcx.globalAlpha=0.45;
+    pcx.fillStyle=gold; pcx.fillRect(hx,hy+hht*(1-wfill),hwd,hht*wfill); pcx.globalAlpha=1; pcx.restore();
+    rr(hx,hy,hwd,hht,4); pcx.stroke();
+    pcx.fillStyle=ink; pcx.font='700 '+(10*K).toFixed(1)+'px '+FONT; pcx.fillText(S.wbuf,hx+hwd/2,hy+hht/2-2*K);
+    pcx.fillStyle=mut; pcx.font='600 '+(6.5*K).toFixed(1)+'px '+FONT; pcx.fillText('held',hx+hwd/2,hy+hht/2+8*K);
+    // ---- live counters, every one of them a trace readout ----
+    pcx.font='700 '+(8*K).toFixed(1)+'px '+FONT;
+    pcx.fillStyle=acc;  pcx.fillText(S.pushed+' / '+NF_TRACE+' pushed', PK[0], R1+34*K);
+    pcx.fillStyle=good; pcx.fillText(S.accepted+' accepted', GL[0], R1+22*K);
+    pcx.fillStyle=mut;  pcx.font='700 '+(7*K).toFixed(1)+'px '+FONT;
+    pcx.fillText('live gate: \u2265'+Math.round(META.gate_live.min_inlier_frac*100)+'% of spots fit', GL[0], R1+32*K);
+    pcx.fillStyle=good; pcx.font='700 '+(9.5*K).toFixed(1)+'px '+FONT;
+    pcx.fillText(S.strict+' / '+NF_TRACE, IDX[0], R1+23*K);
+    pcx.fillStyle=mut;  pcx.font='700 '+(6.6*K).toFixed(1)+'px '+FONT;
+    pcx.fillText('solved = correct lattice,', IDX[0], R1+33*K);
+    pcx.fillText('≥25% of spots · ≥10 refl', IDX[0], R1+42*K);
+    if(S.rescued>0){ pcx.fillStyle=col('--rescue'); pcx.font='700 '+(7.6*K).toFixed(1)+'px '+FONT;
+      pcx.fillText('↑'+S.rescued+' rescued at lock', IDX[0], R1+53*K); }
+    if(S.wdog>0){ pcx.fillStyle=coral; pcx.font='700 '+(7.6*K).toFixed(1)+'px '+FONT;
+      pcx.fillText('↑'+S.wdog+' watchdog rescue'+(S.wdog>1?'s':''), IDX[0], R1+63*K); }
+    pcx.fillStyle=mut; pcx.font='700 '+(7*K).toFixed(1)+'px '+FONT;
+    pcx.fillText(S.refused+' of '+NF_TRACE, DROP[0], DROP[1]+16*K);
+    pcx.fillStyle=S.locked?good:gold; pcx.font='700 '+(7.8*K).toFixed(1)+'px '+FONT;
+    pcx.fillText(S.locked?('locked at frame '+S.lockFrame):('support '+S.support+'/'+SUPPORT),
+                 CONS[0], CONS[1]+21*K);
+    // The re-lock, once it has happened, stays on screen as a standing fact -- it changed the
+    // active set, so it is not a flash that goes away.
+    if(S.relocks>0){ pcx.fillStyle=coral; pcx.font='700 '+(7.4*K).toFixed(1)+'px '+FONT;
+      pcx.fillText('re-lock ×'+S.relocks+' at frame '+S.relockFrame+' · 2nd cell',
+                   CONS[0], CONS[1]+31*K); }
+    pcx.textAlign='left'; pcx.textBaseline='alphabetic';
+  }
+
+  // dynamic render (throttled)
+  const pct=x=>(x*100).toFixed(x>=0.995?0:1);
+  function render(){
+    $('frames').textContent=S.frames.toLocaleString();
+    $('clk').textContent=S.t.toFixed(1);
+    const ph=$('phase'),pt=$('phaseTxt');
+    // The re-lock badge is AMBER, not the green 'rescuing' state. Green would read as an
+    // endorsement, and on this run the cell the re-lock added is not the sample's lattice — it is
+    // a recurring cell voted by frames nothing in the active set explained. Amber says "a
+    // mechanism fired", which is all the trace supports.
+    ph.className='phase '+(S.phase==='warmup'||S.phase==='relock'?'discovering':S.phase);
+    pt.textContent = S.phase==='warmup'?'Blind warm-up — no cell yet'
+                   : S.phase==='rescuing'?'Locked + rescuing warm-up frames'
+                   : S.phase==='relock'?'Watchdog re-lock — second cell added'
+                   : 'Steady — locked, known-cell batch';
+    ph.title = S.phase==='warmup'
+        ? 'Mc=None: the driver has no cell. It indexes the opening frames one at a time and pools their candidates in a running cross-frame consensus.'
+      : S.phase==='rescuing'
+        ? 'The consensus fired. The frames spent on discovery are re-indexed against the freshly locked cell (warmup_rescue).'
+      : S.phase==='relock'
+        ? 'adaptive_relock: the misses the batch pass could not explain voted a recurring cell of their own. It is ADDED to the active set — the first locked cell is not replaced, and the score on this page is against that first cell.'
+        : 'The cell is locked: frames fill the device-resident ring and are indexed a batch at a time against it.';
+    renderCells();
+    drawStream();
+  }
+
+  // Injected-check readout. Two injections answering two different questions: the protein
+  // reference exercises the indexing paths, the calibrant probes the geometry. They flip
+  // together on a detector shift -- and the calibrant is the one that says it WAS the
+  // detector, which the indexing rate alone cannot distinguish from a dozen other causes.
+  const QA_ALERT=0.90;                       // below this correlation the geometry is flagged
+  // One chip per injection so far, newest marked. Without this the panel looks frozen: the run
+  // has only two QA states, so the latest-value readout changes exactly once per loop.
+  function chips(el, items, cls, label){
+    if(!el) return;
+    const want=items.map(cls).join('|')+'#'+items.length;
+    if(el._sig===want) return;               // rebuild only when the sequence actually changes
+    el._sig=want; el.innerHTML='';
+    items.forEach((it,i)=>{ const c=document.createElement('i');
+      c.className=cls(it)+(i===items.length-1?' now':''); el.appendChild(c); });
+    if(items.length){ const em=document.createElement('em');
+      em.textContent=label(items); el.appendChild(em); }
+  }
+  function renderQA(){}      // no injections on a benchmark replay
+
+  // Spurious meter, per indexed frame. Plots the true orientation's peak count against the
+  // extreme-value floor mean+std*sqrt(2 ln K) that a K-way blind search has to beat. z alone
+  // is a poor summary -- z=44 sounds decisive but says nothing about the search size actually
+  // being run; the gap to THIS floor is the margin that makes a lock believable.
+  const smx=$('qasm'), smcx=smx?smx.getContext('2d'):null;
+  function drawSpurious(){} // lock_probe=False -- no spurious meter is computed
+  function renderCells(){
+    const host=$('cells'); if(!host) return;
+    const sd=SPECIES[0], locked=S.locked;
+    const c = locked ? col(sd.cc) : col('--muted');
+    // The recovered cell, printed exactly as the driver reported it. The sim template jittered these
+    // digits (updateMeas); that function is deleted in this build -- a recorded cell is a measurement.
+    const cs = locked ? sd.cell.map((v,k)=> k<3? v.toFixed(2): v.toFixed(2)) : ['—','—','—','—','—','—'];
+    const nm  = locked ? sd.name : 'Discovering…';
+    const sys = locked ? sd.sys  : 'no cell yet · blind warm-up';
+    const pill = locked?`<span class="pill locked">LOCKED ✓</span>`
+                       :`<span class="pill disc">CONSENSUS ${Math.min(S.support,SUPPORT)}/${SUPPORT}</span>`;
+    host.innerHTML=`<div class="cell${locked?'':' pend'}" style="--cc:${c}">
+      <div class="rail"></div>
+      <div class="chead"><span class="chip"></span>
+        <div><div class="cname">${nm}</div><div class="csys">${sys}</div></div>${pill}</div>
+      <div class="params">
+        <div><span class="lbl">a b c&nbsp;</span>${cs[0]} · ${cs[1]} · ${cs[2]} <span class="lbl">Å</span></div>
+        <div><span class="lbl">α β γ&nbsp;</span>${cs[3]} · ${cs[4]} · ${cs[5]} <span class="lbl">°</span></div>
+      </div>
+      <div class="foot"><span class="share">${locked?((100*S.strict/Math.max(S.pushed,1)).toFixed(0)+'%'):'—'}</span>
+        <span class="fmeta">${S.accepted.toLocaleString()} accepted${locked?'':' · holding'}<br>pushed ${S.pushed.toLocaleString()}</span></div>
+    </div>`;
+  }
+
+  // ================= LOOP =================
+  let playing=true, speed=1, last=performance.now(), lastRender=0;
+  function loop(now){
+    const dtReal=Math.min(0.05,(now-last)/1000); last=now;
+    if(playing){ advance(dtReal*speed); }
+    drawGeoBox(); drawPipeline();   // every frame (60 fps) → smooth, live dot + flowing pipes
+    if(now-lastRender>90){ if(wf.clientWidth && (!wf._d||wf.clientWidth!==wf._d[0])) fitAll(); render(); lastRender=now; }
+    requestAnimationFrame(loop);
+  }
+
+  // controls
+  $('play').addEventListener('click',()=>{ playing=!playing;
+    $('play').textContent=playing?'⏸ Pause':'▶ Play';
+    document.body.classList.toggle('paused',!playing);
+    if(playing)last=performance.now(); });
+  $('speed').addEventListener('input',e=>{ speed=+e.target.value; $('speedTxt').textContent=speed.toFixed(2).replace(/0$/,'')+'×'; });
+  $('reset').addEventListener('click',()=>{ fresh(); });
+  const _inj=$('inject');   // absent on replay builds
+  if(_inj) _inj.addEventListener('click',()=>{ injectSample();
+    if(!playing){ playing=true; $('play').textContent='⏸ Pause'; document.body.classList.remove('paused'); last=performance.now(); } });
+
+  const _qs=new URLSearchParams(location.search);
+  const _th=_qs.get('theme'); if(_th) document.documentElement.dataset.theme=_th;
+  if(_qs.get('print')) document.querySelector('.app').classList.add('printmode');
+  buildLegend(); buildGeo(); fitAll();
+  // optional ?warm=N : pre-advance N sim-seconds (start warmed / for static previews)
+  const warm=+(new URLSearchParams(location.search).get('warm')||0);
+  if(warm>0){ for(let acc=0;acc<warm;acc+=0.033) advance(0.033); fitAll(); render(); }
+  if(_qs.get('print')) playing=false;   // freeze the still exactly at ?warm=
+  // theme change may alter DPR/colors → rebuild statics
+  const mo=new MutationObserver(()=>{ buildLegend(); buildGeo(); });
+  mo.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+  requestAnimationFrame(loop);
+})();
+</script>

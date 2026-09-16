@@ -20,6 +20,30 @@ indexing is and what GLINT does*, plus how to set up, run, and contribute.
 script, data and command that regenerates it — including what reproduces on a laptop from data
 committed here, and what does not reproduce from this checkout at all.
 
+## The streaming driver, replayed
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/streaming_cxidb17_480_dark.gif">
+  <img alt="Recorded replay of the GLINT streaming driver over the 480-frame cxidb-17 lysozyme run: the driver schematic with the blind warm-up, consensus, device ring, batched known-cell indexing and watchdog rescue, the recovered cell, and the stream composition chart, with the strict indexed count ending at 331 of 480" src="docs/media/streaming_cxidb17_480_light.gif" width="900">
+</picture>
+
+A recorded replay of the shipped `glint.stream_driver.StreamDriver`, cold-started with no cell —
+not a live beamline and not a simulation. The input is the 480-frame extension of the cxidb-17
+lysozyme run (CXIDB entry 17, Boutet *et al.* 2012, CC0): CrystFEL peakfinder8 peaks converted to
+q-vectors at one fixed wavelength, the paper's primary streaming set and *not* the published
+120-frame subset. The arm is the paper's: the constructor defaults (apart from a batch of 20 and
+the live gate's `min_inliers=10`) plus the two published opt-ins `warmup_rescue` and
+`adaptive_relock`, recorded on one NVIDIA A100 — other boxes differ by a frame. Consensus locks
+the cell at frame 5 and the five frames spent on discovery are re-indexed against it; the
+watchdog then rescues six frames the batch pass had missed; near event 364 the adaptive re-lock
+*adds* a second cell to the active set — a spurious one, not lysozyme, voted by frames the locked
+cell does not explain — and it adds nothing to the count, which is scored against the first
+locked cell only. The run ends at **331/480 frames indexed at the strict correct-lattice bar
+(≥25% of spots and ≥10 reflections), 69.0%**, the top of the paper's 67–69% band on this set
+(the 67% is the same driver at its shipped defaults; the two opt-ins buy the last two points). The frame rate is a display choice; every counter, the lock frame, the rescues and the
+re-lock are read out of that one recorded run. Provenance, per-frame semantics, stills and the
+regeneration recipe are in [`docs/streaming_replay.md`](docs/streaming_replay.md).
+
 ## Install
 
 ```bash

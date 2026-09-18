@@ -654,7 +654,12 @@ class StreamDriver:
                  retry_cascade=False, retry_nbest=None, bg_mode="clipmean",
                  laue=None, ops=None,
                  # glint#199: named cell registry + per-frame event trace + peaks-in ingest (all opt-in)
-                 roster=None, events=False, on_event=None, cell_window=200):
+                 roster=None, events=False, on_event=None, cell_window=200,
+                 # which active cell takes a frame that fits more than one: "first" (the cascade, the
+                 # published behaviour) or "best" (a challenger takes it from the first-fit cell when it
+                 # explains at least max(assign_margin, assign_margin_frac * n_peaks) more peaks) --
+                 # see _index_best_fit
+                 assign="first", assign_margin=8, assign_margin_frac=0.05):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -704,6 +709,7 @@ class StreamDriver:
         self._pkq = [None] * self.B                             # observed peaks aligned with _q (stream_peaks)
         self._haspix = [True] * self.B                          # False = push_peaks/push_q slot: index-only, no pixels to integrate
         self._src = [None] * self.B                             # (image, event) the caller says this slot came from, for the .stream
+        self._inl_alt = [None] * self.B                         # assign="best": inlier count under EVERY active cell, for the event
         self._n = 0
         self._frame_no = 0
         self.stream_symmetry = dict(stream_symmetry or {})
@@ -1019,6 +1025,31 @@ class StreamDriver:
         self._on_event = on_event
         self._events_on = bool(events) or on_event is not None
         self.events = [] if events else None
+        # Cell ASSIGNMENT when more than one cell is active. "first" is the cascade every published
+        # number was recorded with: the primary cell is tried first and keeps whatever passes the
+        # live gate, the extras only see its misses. That is cheap (one known-cell call per batch
+        # plus one per extra cell on the leftovers) and blind to a specific failure: a dense frame of
+        # crystal B gives cell A enough chance near-integer peaks to pass the live gate, so A claims
+        # it and B never sees it (the two-species replay of glint#202 measured 85 of 446 Proteinase K
+        # frames claimed by the lysozyme cell this way, median 30 live inliers on 170-peak frames,
+        # none clearing the strict bar under that cell). "best" indexes every frame against EVERY
+        # active cell; the first-fit cell stays the incumbent, and a challenger takes the frame only
+        # when it explains at least max(assign_margin, assign_margin_frac * n_peaks) MORE peaks.
+        # The margin is what makes this safe on weak frames: a wrong cell's best orientation fits
+        # 12-15% of the peaks by chance, more for a larger cell, so on a frame that is marginal
+        # under every cell a raw count comparison is a coin flip biased toward the bigger cell (on
+        # the same stream, plain argmax moved 40 lysozyme frames into the Proteinase K cell, for a
+        # +1..+6 count difference, while the frames it exists for win by ~70). With margin 0 this
+        # IS the plain argmax. The live gate is applied to the winner; the gate is monotone in the
+        # count for a given frame, so a winner that fails it means no cell fits. Cost: one known-cell
+        # call per active cell per batch. With a single active cell the branch is never taken, so
+        # the single-cell path and the 480-frame gate are untouched.
+        if assign not in ("first", "best"):
+            raise ValueError(f"assign must be 'first' or 'best', got {assign!r}")
+        self.assign = assign
+        self.assign_margin, self.assign_margin_frac = int(assign_margin), float(assign_margin_frac)
+        if self.assign_margin < 0 or self.assign_margin_frac < 0:
+            raise ValueError("assign_margin and assign_margin_frac must be >= 0")
 
         # Blind warm-up: with Mc=None the driver has no cell yet, so it indexes the first frames
         # blind (~26 ms/frame) one at a time, accumulating cross-frame consensus; when the running
@@ -1244,6 +1275,9 @@ class StreamDriver:
             rec["M"] = np.asarray(M, float).tolist()
             if q is not None and len(q):
                 n = self._inliers(q, np.asarray(M, float)); rec["n_inl"] = n; rec["frac"] = n / len(q)
+        alt = getattr(self, "_inl_alt", None)
+        if alt is not None and alt[i] is not None:
+            rec["inl_by_cell"] = [int(v) for v in alt[i]]   # assign="best": what every active cell saw
         if getattr(self, "events_keep_q", False) and q is not None:
             rec["q"] = np.asarray(q, float).tolist()        # opt-in (plain attribute): a recorder that never
         self._emit(rec)                                     # saw the pixels can still score the frame
@@ -1521,10 +1555,14 @@ class StreamDriver:
         watchdog's candidate check, the lock-probe's frame pick, and the warm-up / miss-buffer
         rescues -- cannot drift apart. See min_inlier_frac in __init__ for why a count alone is not a
         sufficient test. With min_inlier_frac=0 this reduces exactly to the historical count gate."""
-        n = self._inliers(q, M)
+        return self._gate_count(self._inliers(q, M), len(q))
+
+    def _gate_count(self, n, n_peaks):
+        """_fits on an inlier count already in hand (best-fit assignment counts every cell once and
+        must not count again). The one place the gate's arithmetic lives."""
         if n < self.min_inliers:
             return False
-        return not self.min_inlier_frac or n >= self.min_inlier_frac * len(q)
+        return not self.min_inlier_frac or n >= self.min_inlier_frac * n_peaks
 
     def _integrate_one(self, i, M, grid, acc, cell_id=0, known_cell=False, outcome="indexed"):
         """Canonicalize + predict + integrate slot i under an ALREADY-ACCEPTED matrix M into acc.
@@ -1713,6 +1751,47 @@ class StreamDriver:
                         self._emit_frame(i, "gate_rejected")
                 continue
             self._integrate_one(i, M, grid, acc, cell_id=cell_id, known_cell=True)
+        return missed
+
+    def _index_best_fit(self, slots):
+        """assign="best": index `slots` against EVERY active cell. The incumbent is the first cell (in
+        cell order) whose registration passes the live gate -- first-fit's answer; the challenger is
+        the cell with the most near-integer peaks, and it takes the frame only when it beats the
+        incumbent by max(assign_margin, assign_margin_frac * n_peaks) peaks (see __init__). Integrates
+        the frame under the winner. Returns the missed slots (no cell passes the live gate), for the
+        retry cascade / watchdog exactly as the first-fit cascade returns them.
+
+        Same registration call (rgb.index_fused), same non-degeneracy test and same live gate
+        (_gate_count == _fits) as _index_integrate, so a frame that passes under exactly one cell
+        lands where first-fit would have put it; only frames that pass under more than one can move."""
+        qs = [self._q[i] for i in slots]
+        cells = self._all_cells()
+        fits = []                                              # fits[k][j] = (M or None, n_inliers) for cell k, slot j
+        for Mk in cells:
+            Ms = rgb.index_fused(qs, Mk, B=max(len(qs), 1))
+            row = []
+            for i, M in zip(slots, Ms):
+                M = np.asarray(M, float) if M is not None else None
+                if M is None or abs(np.linalg.det(M)) < 1.0:
+                    row.append((None, 0))
+                else:
+                    row.append((M, self._inliers(self._q[i], M)))
+            fits.append(row)
+        missed = []
+        for j, i in enumerate(slots):
+            npk = len(self._q[i])
+            counts = [fits[k][j][1] for k in range(len(cells))]
+            k0 = next((k for k, n in enumerate(counts) if self._gate_count(n, npk)), None)
+            if k0 is None:                                      # the gate is monotone in the count: no cell fits
+                missed.append(i)
+                continue
+            kb = int(np.argmax(counts))                          # argmax takes the FIRST maximum: cell order on ties
+            k = k0
+            if kb != k0 and counts[kb] - counts[k0] >= max(self.assign_margin, self.assign_margin_frac * npk):
+                k = kb
+            self._inl_alt[i] = counts                           # the event shows what every cell saw
+            grid, acc = self._cell_sink(k)
+            self._integrate_one(i, fits[k][j][0], grid, acc, cell_id=k, known_cell=True)
         return missed
 
     def _all_cells(self):
@@ -2084,6 +2163,15 @@ class StreamDriver:
                 if self._events_on:
                     for i in still:
                         self._emit_frame(i, "gate_rejected")
+        elif slots and self.assign == "best" and self.extra:
+            remaining = self._index_best_fit(slots)            # every cell sees every frame; most inliers wins
+            cached_nbest = None
+            if remaining and self.retry_cascade:
+                remaining, cached_nbest = self._cascade_retry(remaining)
+            if remaining:
+                if self._missbuf is not None:
+                    self._missbuf.extend((self._idx[i], self._q[i].copy()) for i in remaining)
+                self._watchdog(remaining, cached_nbest)
         elif slots:
             remaining = self._index_integrate(slots, self.Mc, self.grid, self.acc, gate=True)
             for k, e in enumerate(self.extra, 1):               # try each additional active cell in turn
@@ -2106,6 +2194,7 @@ class StreamDriver:
         self._pkq = [None] * self.B
         self._haspix = [True] * self.B
         self._src = [None] * self.B
+        self._inl_alt = [None] * self.B
 
     def stats(self, thr=0.0):
         if self._blind:                                         # not yet locked -- warm-up in progress

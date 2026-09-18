@@ -1236,13 +1236,16 @@ class StreamDriver:
     def _emit_frame(self, i, outcome, cell=None, M=None):
         q = self._q[i]
         rec = self._event_base(self._idx[i], outcome, cell)
+        rec["slot"] = int(i)                                # the ring slot, valid until this flush ends
         rec["n_peaks"] = 0 if q is None else len(q)
         rec["frac"] = rec["n_inl"] = rec["M"] = None
         if M is not None:
             rec["M"] = np.asarray(M, float).tolist()
             if q is not None and len(q):
                 n = self._inliers(q, np.asarray(M, float)); rec["n_inl"] = n; rec["frac"] = n / len(q)
-        self._emit(rec)
+        if getattr(self, "events_keep_q", False) and q is not None:
+            rec["q"] = np.asarray(q, float).tolist()        # opt-in (plain attribute): a recorder that never
+        self._emit(rec)                                     # saw the pixels can still score the frame
 
     def _emit_retro(self, ev, q, M, outcome, cell):
         rec = self._event_base(ev, outcome, cell)
@@ -1250,6 +1253,8 @@ class StreamDriver:
         M = np.asarray(M, float); rec["M"] = M.tolist()
         n = self._inliers(q, M) if q is not None and len(q) else 0
         rec["n_inl"] = n; rec["frac"] = n / len(q) if q is not None and len(q) else None
+        if getattr(self, "events_keep_q", False) and q is not None:
+            rec["q"] = np.asarray(q, float).tolist()
         self._emit(rec)
 
     def _emit_blind(self, ev, n_peaks, outcome, sup, lead, locked):
@@ -1459,7 +1464,7 @@ class StreamDriver:
             ok = np.isfinite(qq).all(1); qq = qq[ok]
             if len(qq) >= self.min_peaks:
                 q = qq
-                if self.stream_peaks:
+                if self.stream_peaks or self.geom_refine:
                     pkq = np.stack([fs[ok], ss[ok], pi[ok]], 1)
         self._queue_q(q, n_peaks=int(fs.size), pkq=pkq)
 
@@ -1479,9 +1484,11 @@ class StreamDriver:
         slot = self._n
         self._q[slot] = q
         self._idx[slot] = self.n_pushed
-        self._pkq[slot] = pkq
+        self._pkq[slot] = pkq if self.stream_peaks else None
         self._haspix[slot] = False
         self._pk[slot] = None                                # nothing is predicted for an index-only slot
+        if self.geom_refine and pkq is not None and len(pkq):
+            self._pk[slot] = np.asarray(pkq[:, :2], float)   # ...but observed peaks still refine the geometry
         if q is None and self._events_on:
             self._emit_blank(self.n_pushed, n_peaks)
         self._n += 1
@@ -1562,6 +1569,8 @@ class StreamDriver:
                     self.n_dh_null_tested += 1
                     self.n_dh_null_acc += bool(vn["accepted"])
         if not self._haspix[i]:                             # peaks-in slot: registered + counted, nothing to integrate
+            if self._grefiner is not None and self._pk[i] is not None:
+                self._grefiner.add_frame(recip_from_M(Mcan), self._pk[i], None)   # it predicts for itself
             if self._writer is not None:
                 q = self._q[i]
                 frac = self._inliers(q, M) / max(len(q), 1)
@@ -1598,6 +1607,11 @@ class StreamDriver:
                 self._writer.write(self._stream_record(i, Mcan, pred, I, sig, pkI, bg, keep,
                                                        cell_id, frac, low_conf))
             self.n_integrated += 1; self._frame_no += 1
+            if self._events_on:                             # marker, not a terminal outcome: the frame's
+                rec = self._event_base(self._idx[i], "integrated", cell_id)      # `indexed` record precedes it
+                rec.update(slot=int(i), n_pred=int(len(pred)), n_refl=int(keep.sum()),
+                           frame_no=self._frame_no - 1, frac=frac, low_conf=low_conf)
+                self._emit(rec)
 
     def _stream_record(self, i, Mcan, pred, I, sig, pkI, bg, keep, cell_id, frac, low_conf):
         """One .stream chunk's worth of this frame, stamped with the state IN EFFECT FOR IT.

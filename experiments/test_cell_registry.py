@@ -20,6 +20,7 @@ COLUMNS = real-space axes in Angstrom and `q @ M = hkl`.
 Dual mode: `pytest experiments/test_cell_registry.py`, or `python experiments/...` for PASS/FAIL.
 """
 import contextlib
+import numbers
 import inspect
 import os
 import sys
@@ -375,6 +376,7 @@ def test_pixel_path_emits_integrated_marker_with_slot_and_optional_q():
         for m, npl in zip(marks, n_planted):
             assert m["n_refl"] >= 1 and m["n_pred"] >= m["n_refl"], m
             assert m["frame_no"] in (0, 1) and m["cell"] == 0 and m["slot"] in (0, 1)
+            assert isinstance(m["frac"], numbers.Real), m
         # the marker never counts as a frame outcome
         assert sum(1 for e in drv.events if e["outcome"] in TERMINAL) == 2
         assert drv.n_integrated == 2 and drv.stats()["integrated"] == 2

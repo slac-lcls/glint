@@ -38,6 +38,25 @@ not lysozyme — and uncounted. Result: **331/480 indexed at the strict correct-
 of the paper's 67–69% band on this set (the 67% is the same driver at its shipped defaults). Frame rate is
 a display choice. Provenance, per-frame semantics and stills: [`docs/streaming_replay.md`](docs/streaming_replay.md).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/streaming_multicell_dark.gif">
+  <img alt="Recorded replay of the GLINT streaming driver over a two-species stream, real lysozyme and Proteinase K peak lists interleaved by a planted schedule: the driver schematic, two cell cards named from a roster after the driver finds each cell, the planted schedule with its playhead, and the per-cell composition chart over a ribbon of the planted species, with the strict count ending at 582 of 900" src="docs/media/streaming_multicell_light.gif" width="900">
+</picture>
+
+The same driver, two species, one stream: real lysozyme frames (the cxidb-17 extension above) and real
+Proteinase K frames (CXIDB 45, Masuda *et al.* 2017, CC0; the deposit's top-170 peak lists, the same lists
+DIALS was given in the paper) interleaved by a seeded schedule — the interleaving is the one planted thing
+on the page, and it is drawn as such. Cold start, same arm, plus a 64-frame rescue buffer and a *roster* that
+names a cell after the driver finds it, never before. The consensus locks lysozyme at frame 5; when
+Proteinase K blends in, its misses vote a second cell and at frame 146 the driver adds it, names it from
+the roster and re-indexes the 10 buffered misses against it — one re-lock, no alias; the watchdog rescues 15
+frames on its own. Scored against each frame's own species: **582 of 900** at the strict bar — lysozyme
+309 of 454 (311 alone on the same frames), Proteinase K 273 of 446 (375 alone). The gap is mostly one
+mechanism, shown rather than hidden: 85 Proteinase K frames were claimed first by the lysozyme cell —
+first-fit over the active cells, on 170-peak frames — and none of them pass the strict bar there. Index-only
+(no pixels); the GIF plays every second frame, 2× real time.
+[`docs/streaming_replay.md`](docs/streaming_replay.md#two-species-replay--the-cell-registry-at-work).
+
 ## Install
 
 ```bash

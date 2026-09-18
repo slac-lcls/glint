@@ -211,6 +211,8 @@ def _list_entry(line):
     """One CrystFEL list line -> (file, event|None): `file.h5` or `file.h5 //12` or `file.h5 entry_1//12`."""
     parts = line.split()
     return parts[0], (_event_index(parts[1]) if len(parts) > 1 else None)
+
+
 def is_pixel_input(path):
     return path.endswith(".stream") or path.endswith(".lst")
 
@@ -432,8 +434,9 @@ def main(argv=None):
         drv = sd.StreamDriver(None, panels, clen_m, wave, shape, dtype=np.float32, mask=good, use_gpu=a.cupy, **kw)
         # the finder as CONSTRUCTED -- every active setting, not just the overrides -- so the run reproduces
         # after a default changes
-        geom_meta["finder"] = dict(window_radius=int(drv.finder.r), **{k: (float(v) if isinstance(v, float) else v)
-                                                                       for k, v in drv.finder.p.items()})
+        geom_meta["finder"] = dict(window_radius=int(drv.finder.r), dtype=np.dtype(drv.finder.dt).name,
+                                   **{k: (float(v) if isinstance(v, float) else v)
+                                      for k, v in drv.finder.p.items()})
     else:
         data_key = None
         t0 = time.time()

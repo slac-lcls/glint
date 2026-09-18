@@ -1,8 +1,9 @@
 # The streaming driver, replayed — provenance of the README animation
 
-The animation at the top of [`README.md`](../README.md) (`docs/media/streaming_cxidb17_480_dark.gif`
+The first animation in [`README.md`](../README.md) (`docs/media/streaming_cxidb17_480_dark.gif`
 and `_light.gif`, one per colour scheme) is a **screen recording of a replay page** that plays back
-**one recorded run** of the shipped `glint.stream_driver.StreamDriver`. It is not a live beamline, not a
+**one recorded run** of the shipped `glint.stream_driver.StreamDriver`; the second (the two-species
+replay, [below](#two-species-replay--the-cell-registry-at-work)) is built the same way from a second recorded run. It is not a live beamline, not a
 simulation, and nothing on it is drawn from a model: every counter, the recovered cell, the lock
 frame, the ring occupancy, the rescues and the re-lock are read out of a trace the driver wrote while
 it ran. This page says exactly what that run was, how each animation frame maps onto it, what the
@@ -156,3 +157,119 @@ Capture recipe (macOS, Google Chrome 152 headless, Pillow 10.4; no ffmpeg):
 
 The on-screen percentages are rounded to whole numbers by the page (69% at the end); the README quotes
 331/480 = 69.0% to one decimal because the band it sits in is printed to the percent.
+
+## Two-species replay — the cell registry at work
+
+`docs/media/streaming_multicell_dark.gif` / `_light.gif` are a screen recording of a second replay page,
+[`docs/streaming_replay/glint_streaming_multicell_real.html`](streaming_replay/glint_streaming_multicell_real.html),
+built by [`build_multicell_monitor.py`](streaming_replay/build_multicell_monitor.py) from
+[`multicell_strace_a100.json`](streaming_replay/multicell_strace_a100.json) — the JSON
+`experiments/record_stream_replay.py` wrote while the shipped driver indexed a **two-species** stream. Same
+rules as above: nothing is simulated, every counter is a trace readout, and the page removes what the run
+cannot honestly fill. It differs from the 480-frame replay in what it *keeps*, because this run exercises
+the driver's cell registry and its adaptive re-lock with a real second lattice to find.
+
+### What was run
+
+| | |
+|---|---|
+| Inputs | **cxidb-17 lysozyme**: the 480-frame extension above, as CrystFEL peakfinder8 q-lists at the fixed 1.322216 Å (digest `bf3422`; 454 frames used). **Proteinase K** (CXIDB entry 45, Masuda *et al.* 2017, CC0): `experiments/prok_q.npz`, the deposit's reciprocal-lattice-point lists capped at the **170 brightest peaks per frame** — the same lists DIALS was given in the paper's head-to-head, so the cap is part of the record (digest `f01472`; 446 of 907 used). Both real. No pixels are replayed, no peak finder runs, **nothing is integrated**: every frame is index-only (`push_q`). |
+| Interleaving | **Planted.** `experiments/schedules/lyso_prok_switch.json`, seed 7: eight scenes — lysozyme hold (120) → 50/50 blend (40) → ProK-major 70/30 (200) → blend (40) → lysozyme-major 60/40 (200) → blend (40) → ProK hold (160) → lysozyme tail (100); the species is redrawn every 2 frames inside a mixed scene, frames are taken in file order, none reused. The page shows the schedule as the ground truth it is, labelled planted: the scene panel with the playhead, and the ribbon under the composition chart. |
+| Indexer | `glint.stream_driver.StreamDriver` at `bd79038e77d4` (glint#199), cold-started with no cell (`Mc=None`). |
+| Arm | The 480 arm — `B=20, dmin=2.0, tol=0.002, warmup_nbest=3, min_inliers=10, min_inlier_frac=0.15, warmup_rescue, adaptive_relock` — plus `rescue_buffer=64` (the retroactive index-only rescue a re-lock performs on the misses it still holds), `events=True`, and a **roster** `{lyso, prok}` of the two reference cells. The roster names a cell *after* the driver finds it; it never hands the indexer a cell. |
+| Off | retry cascade, geometry refinement, second-lattice detection, alias gate, lock probe. |
+| Box | NVIDIA A100-SXM4-40GB (`sdfampere036`), torch 2.1.0.post302, numpy 1.26.3; 4.1 s of wall time for the 900 frames. |
+| Scoring | The strict bar (≥25% of spots *and* ≥10 reflections) against **each frame's own species' reference lattice**, so a frame claimed by the wrong cell scores zero. The trace also carries the old convention (strict against the driver's first cell only), which is meaningless for two species and is not shown. |
+
+### What happened
+
+Consensus locked the first cell after **5 frames**; the registry named it **lyso** from the roster, and 4 of
+the 5 discovery frames were re-indexed against it (2 clear the strict bar). Proteinase K enters at frame 123
+(the first blend); its frames miss, the watchdog's misses vote a recurring cell the active set does not
+explain, and on the flush at record 145 (on-screen frame **146**) the driver **adds** a second cell, named
+**prok** from the roster — one re-lock, no alias — and re-indexes the 10 misses still in its rescue buffer
+against it (8 clear the strict bar). Fifteen individual watchdog rescues over the run (frames 189, 248, 266,
+274, 285, 317, 418, 530, 585, 641, 761, 794, 815, 840, 863). Final active set: two cells, lysozyme
+78.79 · 78.82 · 37.80 Å and Proteinase K 69.05 · 68.86 · 109.34 Å (medians over the frames the driver
+attributed to each, printed as measured).
+
+| strict, own-species reference | lysozyme (454) | Proteinase K (446) | total |
+|---|---|---|---|
+| solo, same frames, same arm (`gate480.json`, `prok907.json`) | 311 | 375 | — |
+| **this run** | **309** | **273** | **582 / 900** |
+
+Attribution, planted species → cell the driver claimed the frame for: lysozyme frames → lyso 427, missed 19,
+prok 8; Proteinase K frames → **lyso 85**, prok 307, missed 54. Lysozyme pays two frames for the mixture.
+**Proteinase K pays about a hundred, and 85 of them are one mechanism**: the first-fit cascade tries cell 0
+first, and a dense 170-peak frame gives the lysozyme cell enough chance near-integer hits to pass the live
+gate (median 30 live inliers on those frames) — none of the 85 clear the strict bar under that cell. This is
+the measured case for best-fit rather than first-fit cell assignment; the run does not do it, and the page
+shows the cost (the colour disagreement between the composition bars and the planted ribbon) rather than
+hiding it.
+
+### Per-frame semantics of this trace
+
+The recorder's JSON has a `header` (inputs with digests and peak-count ranges, references, roster, the
+schedule as used, `driver_kw`, the strict-gate definition, totals, per-species totals, the confusion table,
+the driver's counters, its cell registry, provenance) and 900 `records`, one per pushed frame, in the order
+pushed: `truth` (planted species) and `src_index` (frame index in its pool); the driver's terminal outcome
+`o` (`warmup_vote`, `warmup_lock`, `indexed`, `rescued_watchdog`, `miss`, …), `cell`/`cell_name` (the
+registry entry the frame was attributed to), `buf` (misses held in the rescue buffer), `M` (accepted
+orientation), `frac_live`/`n_inl` (the live gate's fraction and count), `wresc`, `relock`/`relock_cell`,
+`resc`/`resc_cell`/`M_retro` (a retroactive rescue and the cell that rescued it), and the score `ok`, `m`,
+`frac`. The builder converts these into the compact records the page plays (one terminal outcome per frame,
+the rescues folded into the lock and re-lock records) and computes each cell's printed parameters as the
+median of `cell_params(M)` over its frames, reordered to the registry's standardized axes.
+
+Animation frame *i* is the state after record *i* − 1, as above. **The GIF plays every second record at
+12 frames per second — 2× real-time** — 451 frames, 80 ms each as stored (GIF delays are centiseconds), 36.1 s
+per loop, so the frame counter advances by two per GIF frame; the page itself plays every record. Cumulative strict counts read off the trace: 2 after
+frame 5, 96 after 146, 192 after 300, 408 after 620, 582 after 900.
+
+### Regeneration
+
+```bash
+# 1. record (S3DF, one A100; ~/q480_fix.txt is the lysozyme q-list, digest bf3422)
+PYTHONPATH=. python experiments/record_stream_replay.py \
+    --input lyso=~/q480_fix.txt --input prok=experiments/prok_q.npz --ref prok=68.7,68.7,108.6,90,90,90 \
+    --schedule experiments/schedules/lyso_prok_switch.json \
+    --B 20 --dmin 2.0 --tol 0.002 --warmup-nbest 3 --min-inliers 10 --warmup-rescue --adaptive-relock \
+    --rescue-buffer 64 --cupy --out mixed_rb64.json
+# the two solo controls: the same arm on each input alone (gate480.json, prok907.json)
+# 2. build the page (template outside the repo; the built HTML is committed)
+GLINT_REPLAY_TEMPLATE=... python3 docs/streaming_replay/build_multicell_monitor.py \
+    docs/streaming_replay/multicell_strace_a100.json --control lyso=gate480.json --control prok=prok907.json
+# 3. capture and assemble (docs/streaming_replay/capture_gif.py: headless Chrome per frame, PIL GIF)
+python3 docs/streaming_replay/capture_gif.py frames docs/streaming_replay/glint_streaming_multicell_real.html \
+    --theme dark --last 900 --step 2 --out cap_dark --pipe-box 40,120,700,470 --stream-box 60,560,700,670
+python3 docs/streaming_replay/capture_gif.py gif cap_dark docs/media/streaming_multicell_dark.gif --crop 6,0,1314,778 --width 900 --fps 12
+python3 docs/streaming_replay/capture_gif.py stills docs/streaming_replay/glint_streaming_multicell_real.html \
+    --theme dark --frames 0,5,146,300,620,900 --out docs/media/stills --crop 6,0,1314,778
+```
+
+The builder refuses any trace whose header is not this run (900 frames, 582 strict, 1 re-lock, 15 watchdog
+rescues, 10 buffered rescues), and refuses to build if `build_schedule` no longer reproduces the recorded
+frame order from the schedule in the header.
+
+### Filmstrip (dark theme; light-theme twins are `light_f*.png` alongside)
+
+| Still | Frame | What it shows |
+|---|---|---|
+| ![frame 0](media/stills/multicell_dark_f0000.png) | 0 | Nothing pushed: "Blind warm-up — no cell yet", one card "Discovering…", the planted schedule at scene 1 (lysozyme hold). |
+| ![frame 5](media/stills/multicell_dark_f0005.png) | 5 | The lock: "locked at frame 5 · Lysozyme", card LOCKED f5 with the measured cell, "↑4 rescued at lock"; strict 2 / 900. |
+| ![frame 146](media/stills/multicell_dark_f0146.png) | 146 | The re-lock: "Watchdog re-lock — Proteinase K added", second card RE-LOCK f145, "re-lock ×1 · frame 146 · +Proteinase K", "↑10 rescued at re-lock", rescue buffer drained; strict 96 / 900. |
+| ![frame 300](media/stills/multicell_dark_f0300.png) | 300 | ProK-major steady state: two cells, composition bars mostly orange under a mostly-orange ribbon, blue bars where the lysozyme cell claimed ProK frames; strict 192 / 900. |
+| ![frame 620](media/stills/multicell_dark_f0620.png) | 620 | Lysozyme-major scene; strict 408 / 900. |
+| ![frame 900](media/stills/multicell_dark_f0900.png) | 900 | The end: 900 pushed, 813 accepted, 82 missed, two cells with their final claims (427 lyso · 85 ProK; 307 ProK · 8 lyso); **strict 582 / 900**. |
+
+### Not in the animation: the same driver on pixels
+
+Everything above is a q-level replay. glint#200 adds pixel input to the same recorder — the detector array
+through the driver's own PeakFinderV4, `peaks_to_q` under the CrystFEL geometry, prediction and integration
+on the pixels, a `.stream` with reflections — and was run on the same 480 lysozyme frames (Cheetah-corrected
+CSPAD data on S3DF, list order). Read against pf8's peak lists through `--peaks-in` the driver reproduces the
+q-list result within a frame (334/480); on the pixels with its own finder (peakfinder8's 300-ADU threshold
+as `abs_thr`, a 2-px ASIC-edge mask) it indexes and **integrates 454 of 480** and scores 362/480 at the strict
+bar **on its own peak lists** — a different denominator from the pf8 lists, not a better indexer (310 frames
+clear the bar under both lists, 52 only with the finder's, 24 only with pf8's). A two-species *pixel* stream
+would need two species recorded on one detector; the CXIDB 45 deposit is MPCCD data, so the mixture stays at the q level.

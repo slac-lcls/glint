@@ -1452,7 +1452,11 @@ class StreamDriver:
         index-only: registered, counted, written to the .stream as a crystal with zero reflections
         (plus the observed peaks when stream_peaks is on), never integrated."""
         fs = np.asarray(fs, float).ravel(); ss = np.asarray(ss, float).ravel()
+        if fs.size != ss.size:
+            raise ValueError(f"fs and ss must have equal lengths, got {fs.size} and {ss.size}")
         pi = np.asarray(intensity, float).ravel() if intensity is not None else np.zeros(fs.size)
+        if pi.size != fs.size:
+            raise ValueError(f"intensity must match fs/ss length {fs.size}, got {pi.size}")
         q = pkq = None
         if fs.size >= self.min_peaks:
             qq = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)

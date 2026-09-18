@@ -338,7 +338,9 @@ def _write_chunk(f, serial, r, panel_name="p0", photon_eV=9392.7, clen_m=0.15, p
     valid = M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
     f.write("----- Begin chunk -----\n")
     f.write(f"Image filename: {r.get('image', 'glint.cxi')}\n")
-    f.write(f"Event: //{r.get('event', 0)}\n")
+    ev = r.get('event', 0)
+    if ev is not None:                       # None = a one-image-per-file source: CrystFEL writes no Event line
+        f.write(f"Event: //{ev}\n")
     f.write(f"Image serial number: {serial}\n")
     f.write("hit = 1\n")
     f.write(f"indexed_by = {'file' if valid else 'none'}\n")   # 'file' = externally-supplied orientation

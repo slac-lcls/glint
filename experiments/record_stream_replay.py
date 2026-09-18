@@ -155,12 +155,7 @@ def load_pixel_list(path, root=None, order=None):
             if line.startswith("Image filename:"):
                 fname = line.split(":", 1)[1].strip(); ev = None; cur = []
             elif line.startswith("Event:") and fname is not None:
-                tok = line.split(":", 1)[1].strip()
-                tail = tok.strip().strip("/").rsplit("/", 1)[-1]
-                try:
-                    ev = int(tail)
-                except ValueError:
-                    raise SystemExit(f"{path}: cannot read a frame index out of Event {tok!r}") from None
+                ev = _event_index(line.split(":", 1)[1])
             elif line.startswith("Peaks from peak search"):
                 inpk = True
             elif line.startswith("End of peak list"):
@@ -180,12 +175,16 @@ def load_pixel_list(path, root=None, order=None):
         if not items:
             raise SystemExit(f"{path}: no frames found")
         if order:
-            want = [l.split()[0] for l in open(os.path.expanduser(order)) if l.strip() and not l.startswith("#")]
-            pos = {f: i for i, f in enumerate(want)}
-            missing = [f for f, _ in items if f not in pos]
+            want = [_list_entry(l) for l in open(os.path.expanduser(order)) if l.strip() and not l.startswith("#")]
+            with_ev = any(ev is not None for _, ev in want)
+            key = (lambda f, ev: (f, ev)) if with_ev else (lambda f, ev: f)   # a one-image-per-file list
+            pos = {key(f, ev): i for i, (f, ev) in enumerate(want)}          # names no events: rank by file
+            missing = [(f, ev) for f, ev in items if key(f, ev) not in pos]
             if missing:
-                raise SystemExit(f"--order {order}: {len(missing)} chunk file(s) not in the list, e.g. {missing[0]}")
-            perm = sorted(range(len(items)), key=lambda k: pos[items[k][0]])
+                raise SystemExit(f"--order {order}: {len(missing)} chunk(s) not in the list, e.g. {missing[0]}")
+            if len(pos) != len(want):
+                raise SystemExit(f"--order {order}: the list repeats an entry; chunks could not be ranked")
+            perm = sorted(range(len(items)), key=lambda k: pos[key(*items[k])])
             items = [items[k] for k in perm]; peaks = [peaks[k] for k in perm]
         return PixelPool(items, root, peaks=peaks)
     else:
@@ -193,14 +192,25 @@ def load_pixel_list(path, root=None, order=None):
             t = line.strip()
             if not t or t.startswith("#"):
                 continue
-            parts = t.split()
-            ev = None
-            if len(parts) > 1 and parts[1].startswith("//"):
-                digits = parts[1].strip("/"); ev = int(digits) if digits.isdigit() else None
-            items.append((parts[0], ev))
+            items.append(_list_entry(t))
     if not items:
         raise SystemExit(f"{path}: no frames found")
     return PixelPool(items, root)
+
+
+def _event_index(tok):
+    """CrystFEL event id -> frame index: '//12' -> 12, 'entry_1//7' -> 7 (the trailing numeric field)."""
+    tail = tok.strip().strip("/").rsplit("/", 1)[-1]
+    try:
+        return int(tail)
+    except ValueError:
+        raise SystemExit(f"cannot read a frame index out of event id {tok!r}") from None
+
+
+def _list_entry(line):
+    """One CrystFEL list line -> (file, event|None): `file.h5` or `file.h5 //12` or `file.h5 entry_1//12`."""
+    parts = line.split()
+    return parts[0], (_event_index(parts[1]) if len(parts) > 1 else None)
 
 
 def is_pixel_input(path):
@@ -250,7 +260,13 @@ def build_schedule(pools, sched):
         hold = max(1, int(scene.get("hold", 1)))
         sp = None
         for t in range(int(scene["length"])):
-            if t % hold == 0 or sp is None:
+            out = sp is not None and cursor[sp] >= len(pools[sp])          # the held species ran dry
+            if out and exhausted == "stop":
+                return order, cursor                                        # "stop": the run ends here
+            if out and exhausted == "wrap":
+                cursor[sp] = 0
+            if t % hold == 0 or sp is None or (out and exhausted == "skip"):
+                # (re)draw NOW -- a species running out mid-hold costs the scene no position
                 avail = {k: w for k, w in weights.items() if cursor[k] < len(pools[k]) or exhausted == "wrap"}
                 if not avail:
                     if exhausted == "stop":
@@ -258,11 +274,8 @@ def build_schedule(pools, sched):
                     break                                   # scene ends: no species has frames left
                 names = sorted(avail); w = np.array([avail[k] for k in names], float); w /= w.sum()
                 sp = names[int(rng.choice(len(names), p=w))]
-            if cursor[sp] >= len(pools[sp]):
-                if exhausted == "wrap":
+                if cursor[sp] >= len(pools[sp]):            # only reachable under "wrap"
                     cursor[sp] = 0
-                else:
-                    sp = None; continue
             order.append((sp, cursor[sp])); cursor[sp] += 1
     return order, cursor
 
@@ -302,6 +315,11 @@ def main(argv=None):
     ap.add_argument("--rescue-buffer", type=int, default=0); ap.add_argument("--retry-cascade", action="store_true")
     ap.add_argument("--lock-probe", action="store_true"); ap.add_argument("--cell-window", type=int, default=200)
     ap.add_argument("--stream-out", default=None); ap.add_argument("--cupy", action="store_true", help="use_gpu=True")
+    ap.add_argument("--stream-symmetry", default=None, metavar="lattice_type=..,centering=..,unique_axis=..",
+                    help="CrystFEL symmetry record stamped on every .stream chunk; also fixes the driver's merge class "
+                         "(laue_from_symmetry) unless --laue names one. Without it the chunks say triclinic/P/* and the live "
+                         "merge runs under the historical 4/mmm default")
+    ap.add_argument("--laue", default=None, help="Laue class for the driver's live merge (e.g. 4/mmm, 4/m, -3m)")
     ap.add_argument("--geom", default=None, help="CrystFEL geometry for PIXEL inputs (panels, data path, clen)")
     ap.add_argument("--data-root", default=None, help="directory relative file names in a .stream/.lst resolve against")
     ap.add_argument("--order", default=None, help="replay a .stream input's chunks in this list file's order (see load_pixel_list)")
@@ -372,6 +390,14 @@ def main(argv=None):
         kw["geom_refine"] = True
         if a.geom_refine_kw:
             kw["geom_refine_kw"] = json.loads(a.geom_refine_kw)
+    if a.stream_symmetry:
+        sym = dict(kv.split("=", 1) for kv in a.stream_symmetry.split(","))
+        bad = set(sym) - {"lattice_type", "centering", "unique_axis"}
+        if bad:
+            raise SystemExit(f"--stream-symmetry: unknown keys {sorted(bad)}")
+        kw["stream_symmetry"] = sym
+    if a.laue:
+        kw["laue"] = a.laue
     geom_meta = None
     if pixel_pools or a.geom:
         if not a.geom:
@@ -406,6 +432,11 @@ def main(argv=None):
                          edge_mask=a.edge_mask, masked_frac=round(float(1.0 - good.mean()), 5), pf_kw=pf_kw)
         t0 = time.time()
         drv = sd.StreamDriver(None, panels, clen_m, wave, shape, dtype=np.float32, mask=good, use_gpu=a.cupy, **kw)
+        # the finder as CONSTRUCTED -- every active setting, not just the overrides -- so the run reproduces
+        # after a default changes
+        geom_meta["finder"] = dict(window_radius=int(drv.finder.r), dtype=np.dtype(drv.finder.dt).name,
+                                           **{k: (float(v) if isinstance(v, float) else v)
+                                              for k, v in drv.finder.p.items()})
     else:
         data_key = None
         t0 = time.time()
@@ -418,23 +449,27 @@ def main(argv=None):
     t_read = 0.0
     for i, (sp, j, q) in enumerate(stream):
         was_blind = not drv.locked
+        if sp in pixel_pools:
+            item = pools[sp].items[j]                        # (file, event|None): stamped on the .stream chunk
+            src = os.path.basename(item[0])
         if sp in pixel_pools and a.peaks_in:
             pk = pools[sp].peaks[j] if pools[sp].peaks is not None else None
             if pk is None:
                 raise SystemExit("--peaks-in needs a .stream input with peak lists")
-            drv.push_peaks(pk[:, 0], pk[:, 1], pk[:, 2])
-            npk = int(len(pk)); src = os.path.basename(pools[sp].items[j][0])
+            drv.push_peaks(pk[:, 0], pk[:, 1], pk[:, 2], src=item)
+            npk = int(len(pk))
         elif sp in pixel_pools:
             tr = time.time(); img = pools[sp].read(j, data_key); t_read += time.time() - tr
-            drv.push(img)
+            drv.push(img, src=item)
             npk = None                                       # from the terminal event
-            src = os.path.basename(pools[sp].items[j][0])
         else:
             drv.push_q(q); npk = int(len(q)); src = None
         recs.append(dict(i=i, ev=i, truth=sp, src_index=j, npk=npk, wu=int(was_blind),
                          lock=int(drv.locked), flush=int((not was_blind) and drv._n == 0 and drv.locked)))
         if src is not None:
             recs[-1]["src"] = src
+            if item[1] is not None:
+                recs[-1]["src_event"] = item[1]
         if a.geom_refine and drv._n == 0 and getattr(drv, "_grefiner", None) is not None:
             c = drv._grefiner.correction()
             geom_trace.append(dict(i=i, **{k: (float(v) if isinstance(v, (float, np.floating)) else int(v)) for k, v in c.items()}))
@@ -546,7 +581,7 @@ def main(argv=None):
             m["npk"] = [int(min(ks)), int(np.median(ks)), int(max(ks))] if ks else None
 
     header = dict(inputs=meta_in, refs={k: [round(x, 4) for x in cell_params(v)] for k, v in refs.items() if k in pools},
-                  roster=kw["roster"], schedule=sched, n=n, driver_kw={k: v for k, v in kw.items() if k not in ("roster", "events")},
+                  roster=kw["roster"], schedule=sched, n=n, driver_kw={k: v for k, v in kw.items() if k not in ("roster", "events", "stream_geom_text")},
                   gate=dict(frac=GATE_FRAC, min_refl=GATE_MIN, lattice="same_lattice vs own species reference"),
                   totals=tot, by_species=by_sp, confusion=confusion, counters=counters,
                   cells=st.get("cells"), primary_cell=[round(x, 3) for x in cell_params(Mc_final)] if Mc_final is not None else None,

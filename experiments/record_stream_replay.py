@@ -435,8 +435,8 @@ def main(argv=None):
         # the finder as CONSTRUCTED -- every active setting, not just the overrides -- so the run reproduces
         # after a default changes
         geom_meta["finder"] = dict(window_radius=int(drv.finder.r), dtype=np.dtype(drv.finder.dt).name,
-                                           **{k: (float(v) if isinstance(v, float) else v)
-                                              for k, v in drv.finder.p.items()})
+                                   **{k: (float(v) if isinstance(v, float) else v)
+                                      for k, v in drv.finder.p.items()})
     else:
         data_key = None
         t0 = time.time()

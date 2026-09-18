@@ -13,6 +13,20 @@ q list in this repository uses (glint.geom.peaks_to_q / glint.lute_bridge.peaks_
 
   NAME=path.txt   FRAME-block text as written by stream2q.py (`FRAME <i> <n>` then n rows `qx qy qz`)
   NAME=path.npz   keys q_0 .. q_<n-1> (experiments/prok_q.npz)
+  NAME=path.stream  PIXELS: one frame per chunk, the file named by `Image filename:` (and `Event:` when
+                  present), in chunk order -- the order q480_fix.txt was written in from the same stream
+  NAME=path.lst   PIXELS: one file per line (CrystFEL list), in file order
+
+A pixel input goes through the driver's own front end -- `push(frame)`: PeakFinderV4 on the detector
+array, peaks_to_q under the CrystFEL geometry passed with --geom, prediction and integration on the
+pixels, a .stream chunk WITH reflections when --stream-out is given. It needs --geom (the panels, the
+data path, clen) and --wavelength (the geometry files of this era point photon_energy at an HDF5 path;
+the published lysozyme convention is a fixed 1.322216 A). --pf-kw passes PeakFinderV4 settings, e.g.
+'{"abs_thr":300,"son_min":5,"min_pix":2,"sig_floor":9}' -- peakfinder8's --threshold 300 / --min-snr 5 /
+--min-pix-count 2 in the finder's own vocabulary; --edge-mask N masks N pixels along every panel border
+of the data array (the CSPAD ASICs are adjacent in the array but not in space). Relative file names
+resolve against --data-root. The frame's q reaches the scorer through the event log
+(driver attribute events_keep_q), so scoring is identical for both kinds of input.
 
 With one input and no --schedule the frames are replayed in file order; that is the configuration
 that must reproduce the published 480-frame result (see --expect). With several inputs a --schedule
@@ -86,9 +100,113 @@ CLEN_M = DIST_MM / 1000.0
 TERMINAL = ("blank", "warmup_vote", "warmup_lock", "indexed", "rescued_watchdog", "rescued_cascade",
             "miss", "gate_rejected")
 RETRO = ("rescued_warmup", "rescued_relock")
+MARKERS = ("relock", "integrated")                        # neither replaces a frame's terminal outcome
 
 
 # ----------------------------------------------------------------------------- inputs -----------
+class PixelPool:
+    """A pool of detector frames addressed by file (one shot per file, or file + event index).
+    Frames are read at push time; len()/indexing give (path, event) so the schedule machinery
+    treats it like a list of q arrays."""
+
+    def __init__(self, items, root=None, peaks=None):
+        self.items = list(items)                     # [(relative_or_abs_path, event_or_None)]
+        self.root = root
+        self.peaks = peaks                           # per frame (n,3) fs/ss/I from the .stream's peak lists, or None
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, i):
+        return self.items[i]
+
+    def resolve(self, i):
+        path, ev = self.items[i]
+        path = os.path.expanduser(path)
+        if self.root and not os.path.isabs(path):
+            path = os.path.join(os.path.expanduser(self.root), path)
+        return path, ev
+
+    def read(self, i, data_key, dtype=np.float32):
+        import h5py
+        path, ev = self.resolve(i)
+        with h5py.File(path, "r") as f:
+            d = f[data_key]
+            arr = d[ev] if (ev is not None and d.ndim == 3) else d[()]
+        return np.ascontiguousarray(np.asarray(arr, dtype))
+
+    def digest(self):
+        h = hashlib.sha256()
+        for path, ev in self.items:
+            h.update(os.path.basename(path).encode()); h.update(b"|%s;" % (b"" if ev is None else str(ev).encode()))
+        return h.hexdigest()[:6]
+
+
+def load_pixel_list(path, root=None, order=None):
+    """CrystFEL .stream (chunk order: `Image filename:` + optional `Event:`) or .lst -> PixelPool.
+    `order`: a list file; the stream's chunks are then replayed in that file order (indexamajig -j writes
+    chunks in completion order, so a stream's order is not the list's -- q480_fix.txt is in list order)."""
+    path = os.path.expanduser(path)
+    items = []
+    if path.endswith(".stream"):
+        peaks, cur, inpk = [], [], False
+        fname = ev = None
+        for line in open(path):
+            if line.startswith("Image filename:"):
+                fname = line.split(":", 1)[1].strip(); ev = None; cur = []
+            elif line.startswith("Event:") and fname is not None:
+                tok = line.split(":", 1)[1].strip()
+                tail = tok.strip().strip("/").rsplit("/", 1)[-1]
+                try:
+                    ev = int(tail)
+                except ValueError:
+                    raise SystemExit(f"{path}: cannot read a frame index out of Event {tok!r}") from None
+            elif line.startswith("Peaks from peak search"):
+                inpk = True
+            elif line.startswith("End of peak list"):
+                inpk = False
+            elif inpk and not line.startswith("fs/px"):
+                t = line.split()
+                if len(t) >= 4:
+                    try:
+                        cur.append((float(t[0]), float(t[1]), float(t[3])))
+                    except ValueError:
+                        pass
+            elif line.startswith("----- End chunk"):
+                if fname is not None:
+                    items.append((fname, ev))
+                    peaks.append(np.asarray(cur, float).reshape(-1, 3))
+                fname = ev = None; cur = []; inpk = False
+        if not items:
+            raise SystemExit(f"{path}: no frames found")
+        if order:
+            want = [l.split()[0] for l in open(os.path.expanduser(order)) if l.strip() and not l.startswith("#")]
+            pos = {f: i for i, f in enumerate(want)}
+            missing = [f for f, _ in items if f not in pos]
+            if missing:
+                raise SystemExit(f"--order {order}: {len(missing)} chunk file(s) not in the list, e.g. {missing[0]}")
+            perm = sorted(range(len(items)), key=lambda k: pos[items[k][0]])
+            items = [items[k] for k in perm]; peaks = [peaks[k] for k in perm]
+        return PixelPool(items, root, peaks=peaks)
+    else:
+        for line in open(path):
+            t = line.strip()
+            if not t or t.startswith("#"):
+                continue
+            parts = t.split()
+            ev = None
+            if len(parts) > 1 and parts[1].startswith("//"):
+                digits = parts[1].strip("/"); ev = int(digits) if digits.isdigit() else None
+            items.append((parts[0], ev))
+    if not items:
+        raise SystemExit(f"{path}: no frames found")
+    return PixelPool(items, root)
+
+
+def is_pixel_input(path):
+    return path.endswith(".stream") or path.endswith(".lst")
+
+
 def load_frames(path):
     """FRAME-block .txt or q_<i>.npz -> list of (n_i, 3) float64 arrays, file order."""
     path = os.path.expanduser(path)
@@ -180,12 +298,24 @@ def main(argv=None):
     ap.add_argument("--B", type=int, default=20); ap.add_argument("--dmin", type=float, default=2.0)
     ap.add_argument("--tol", type=float, default=0.002); ap.add_argument("--warmup-nbest", type=int, default=3)
     ap.add_argument("--min-inliers", type=int, default=GATE_MIN); ap.add_argument("--min-inlier-frac", type=float, default=0.15)
-    ap.add_argument("--warmup-rescue", action=argparse.BooleanOptionalAction, default=True)
-    ap.add_argument("--adaptive-relock", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--warmup-rescue", action="store_true"); ap.add_argument("--adaptive-relock", action="store_true")
+    ap.add_argument("--rescue-buffer", type=int, default=0); ap.add_argument("--retry-cascade", action="store_true")
     ap.add_argument("--lock-probe", action="store_true"); ap.add_argument("--cell-window", type=int, default=200)
-    ap.add_argument("--rescue-buffer", type=int, default=0)
-    ap.add_argument("--retry-cascade", action=argparse.BooleanOptionalAction, default=False)
     ap.add_argument("--stream-out", default=None); ap.add_argument("--cupy", action="store_true", help="use_gpu=True")
+    ap.add_argument("--geom", default=None, help="CrystFEL geometry for PIXEL inputs (panels, data path, clen)")
+    ap.add_argument("--data-root", default=None, help="directory relative file names in a .stream/.lst resolve against")
+    ap.add_argument("--order", default=None, help="replay a .stream input's chunks in this list file's order (see load_pixel_list)")
+    ap.add_argument("--data-key", default=None, help="HDF5 dataset of the detector array (default: the geometry's `data`)")
+    ap.add_argument("--wavelength", type=float, default=None, help="fixed wavelength in A for pixel inputs")
+    ap.add_argument("--clen", type=float, default=None, help="override the geometry's clen (m)")
+    ap.add_argument("--pf-kw", default=None, help="JSON of PeakFinderV4 settings for pixel inputs")
+    ap.add_argument("--edge-mask", type=int, default=0, help="mask this many pixels along every panel border")
+    ap.add_argument("--mask", default=None, help=".npy bool array (True = good pixel), ANDed with the edge mask")
+    ap.add_argument("--geom-refine", action="store_true", help="run the diagnostic geometry refiner (pixel or peaks input)")
+    ap.add_argument("--peaks-in", action="store_true",
+                    help="for .stream inputs: push the stream's own peak lists through push_peaks() -- no pixels are read; "
+                         "the control that separates the finder from the rest of the pixel path")
+    ap.add_argument("--geom-refine-kw", default=None, help="JSON kwargs for GeomRefiner")
     ap.add_argument("--out", default="replay.json")
     # regression gate
     ap.add_argument("--expect", metavar="OK/N", help="refuse to write unless strict_ok/n matches")
@@ -198,10 +328,17 @@ def main(argv=None):
     pools, meta_in = {}, []
     for spec in a.input:
         name, path = spec.split("=", 1)
-        fr = load_frames(path)
-        pools[name] = fr
-        meta_in.append(dict(name=name, path=os.path.expanduser(path), n=len(fr), digest=digest(fr),
-                            npk=[int(min(len(q) for q in fr)), int(np.median([len(q) for q in fr])), int(max(len(q) for q in fr))]))
+        if is_pixel_input(path):
+            fr = load_pixel_list(path, a.data_root, order=a.order)
+            pools[name] = fr
+            meta_in.append(dict(name=name, path=os.path.expanduser(path), n=len(fr), digest=fr.digest(),
+                                kind="pixels", data_root=a.data_root, order=a.order, npk=None))   # npk filled from the events
+        else:
+            fr = load_frames(path)
+            pools[name] = fr
+            meta_in.append(dict(name=name, path=os.path.expanduser(path), n=len(fr), digest=digest(fr), kind="q",
+                                npk=[int(min(len(q) for q in fr)), int(np.median([len(q) for q in fr])), int(max(len(q) for q in fr))]))
+    pixel_pools = {k for k, v in pools.items() if isinstance(v, PixelPool)}
     refs = {"lyso": np.asarray(LYSO, float)}
     for spec in a.ref:
         name, M = parse_ref(spec); refs[name] = M
@@ -231,17 +368,80 @@ def main(argv=None):
               roster={k: cell_params(v) for k, v in refs.items() if k in pools}, events=True)
     if a.stream_out:
         kw["stream_out"] = a.stream_out
-    t0 = time.time()
-    drv = sd.StreamDriver(None, PANELS, CLEN_M, WAVE_A, (N_PX, N_PX), dtype=np.uint16, use_gpu=a.cupy, **kw)
+    if a.geom_refine:
+        kw["geom_refine"] = True
+        if a.geom_refine_kw:
+            kw["geom_refine_kw"] = json.loads(a.geom_refine_kw)
+    geom_meta = None
+    if pixel_pools or a.geom:
+        if not a.geom:
+            raise SystemExit("pixel inputs need --geom")
+        from glint.lute_bridge import parse_geom
+        panels, gl = parse_geom(os.path.expanduser(a.geom))
+        clen_m = a.clen if a.clen is not None else float(gl["clen"])
+        wave = a.wavelength
+        if wave is None:
+            try:
+                wave = 12398.419843320026 / float(gl.get("photon_energy"))
+            except (TypeError, ValueError):
+                raise SystemExit("--wavelength is required: the geometry's photon_energy is not a number")
+        data_key = a.data_key or gl.get("data") or "/data/data"
+        shape = (max(p["max_ss"] for p in panels) + 1, max(p["max_fs"] for p in panels) + 1)
+        good = np.ones(shape, bool)
+        if a.edge_mask > 0:
+            e = a.edge_mask
+            for p in panels:
+                f0, f1, s0, s1 = p["min_fs"], p["max_fs"], p["min_ss"], p["max_ss"]
+                good[s0:s0 + e, f0:f1 + 1] = False; good[s1 + 1 - e:s1 + 1, f0:f1 + 1] = False
+                good[s0:s1 + 1, f0:f0 + e] = False; good[s0:s1 + 1, f1 + 1 - e:f1 + 1] = False
+        if a.mask:
+            good &= np.load(os.path.expanduser(a.mask)).astype(bool)
+        pf_kw = json.loads(a.pf_kw) if a.pf_kw else None
+        if pf_kw:
+            kw["pf_kw"] = pf_kw
+        if a.stream_out:
+            kw["stream_geom_text"] = open(os.path.expanduser(a.geom)).read()
+        geom_meta = dict(path=os.path.expanduser(a.geom), md5=hashlib.md5(open(os.path.expanduser(a.geom), "rb").read()).hexdigest()[:8],
+                         n_panels=len(panels), shape=list(shape), clen_m=clen_m, wavelength_A=wave, data_key=data_key,
+                         edge_mask=a.edge_mask, masked_frac=round(float(1.0 - good.mean()), 5), pf_kw=pf_kw)
+        t0 = time.time()
+        drv = sd.StreamDriver(None, panels, clen_m, wave, shape, dtype=np.float32, mask=good, use_gpu=a.cupy, **kw)
+    else:
+        data_key = None
+        t0 = time.time()
+        drv = sd.StreamDriver(None, PANELS, CLEN_M, WAVE_A, (N_PX, N_PX), dtype=np.uint16, use_gpu=a.cupy, **kw)
+    drv.events_keep_q = True                                # the scorer needs each frame's q, pixels or not
 
     # ---- run: push_q per frame, drain the event log after every push
     recs = []
+    geom_trace = []
+    t_read = 0.0
     for i, (sp, j, q) in enumerate(stream):
         was_blind = not drv.locked
-        drv.push_q(q)
-        recs.append(dict(i=i, ev=i, truth=sp, src_index=j, npk=int(len(q)), wu=int(was_blind),
+        if sp in pixel_pools and a.peaks_in:
+            pk = pools[sp].peaks[j] if pools[sp].peaks is not None else None
+            if pk is None:
+                raise SystemExit("--peaks-in needs a .stream input with peak lists")
+            drv.push_peaks(pk[:, 0], pk[:, 1], pk[:, 2])
+            npk = int(len(pk)); src = os.path.basename(pools[sp].items[j][0])
+        elif sp in pixel_pools:
+            tr = time.time(); img = pools[sp].read(j, data_key); t_read += time.time() - tr
+            drv.push(img)
+            npk = None                                       # from the terminal event
+            src = os.path.basename(pools[sp].items[j][0])
+        else:
+            drv.push_q(q); npk = int(len(q)); src = None
+        recs.append(dict(i=i, ev=i, truth=sp, src_index=j, npk=npk, wu=int(was_blind),
                          lock=int(drv.locked), flush=int((not was_blind) and drv._n == 0 and drv.locked)))
+        if src is not None:
+            recs[-1]["src"] = src
+        if a.geom_refine and drv._n == 0 and getattr(drv, "_grefiner", None) is not None:
+            c = drv._grefiner.correction()
+            geom_trace.append(dict(i=i, **{k: (float(v) if isinstance(v, (float, np.floating)) else int(v)) for k, v in c.items()}))
     drv.close()
+    if a.geom_refine and getattr(drv, "_grefiner", None) is not None:
+        c = drv._grefiner.correction()
+        geom_trace.append(dict(i=n - 1, **{k: (float(v) if isinstance(v, (float, np.floating)) else int(v)) for k, v in c.items()}))
     events = list(drv.events)
 
     # ---- consume events -> per-frame records
@@ -254,12 +454,21 @@ def main(argv=None):
             by_ev[k].setdefault("relock", 0); by_ev[k]["relock"] += 1
             by_ev[k]["relock_cell"] = e["cell_name"]
             continue
+        if oc == "integrated":
+            r = by_ev[e["ev"]]
+            r["n_pred"] = e["n_pred"]; r["n_refl"] = e["n_refl"]; r["frame_no"] = e["frame_no"]
+            r["int_frac"] = None if e.get("frac") is None else round(float(e["frac"]), 4)
+            continue
         r = by_ev[e["ev"]]
+        if "q" in e and e["q"] is not None and r.get("_q") is None:
+            r["_q"] = np.asarray(e["q"], float)              # the q the driver used (pixel inputs have no other)
         if oc in TERMINAL:
             assert "o" not in r, f"two terminal outcomes for ev {e['ev']}: {r['o']} then {oc}"
             n_term += 1
             r["o"] = oc; r["cell"] = e["cell"]; r["cell_name"] = e["cell_name"]
             r["buf"] = e["buffer"]; r["n_active"] = e["n_active"]
+            if r.get("npk") is None:
+                r["npk"] = int(e.get("n_peaks") or 0)
             if "support" in e:                               # blind-mode records carry the consensus state
                 r["sup"] = e.get("support"); r["lead"] = e.get("lead")
             r["M"] = e["M"]; r["frac_live"] = e["frac"]; r["n_inl"] = e["n_inl"]
@@ -277,9 +486,17 @@ def main(argv=None):
     tot = dict(n=n, strict_ok=0, strict_ok_drv=0, blank=0, indexed=0, miss=0, gate_rejected=0, warmup=0)
     by_sp = {sp: dict(n=0, ok=0, ok_drv=0, indexed=0, miss=0, blank=0, warmup=0, rescued=0) for sp in pools}
     confusion = {}
+    tot["integrated"] = 0
     for r in recs:
-        sp = r["truth"]; q = stream[r["i"]][2]; ref = refs[sp]
+        sp = r["truth"]; ref = refs[sp]
+        q = r.pop("_q", None)
+        if q is None and sp not in pixel_pools:
+            q = stream[r["i"]][2]
+        if q is None:
+            q = np.zeros((0, 3))                              # a blank pixel frame: nothing to score
         by_sp[sp]["n"] += 1
+        if r.get("n_refl") is not None:
+            tot["integrated"] += 1
         M = r.get("M"); Mr = r.get("M_retro")
         ok, m, frac = strict_gate(M, q, ref)
         if not ok and Mr is not None:
@@ -310,7 +527,8 @@ def main(argv=None):
     counters = dict(locked_after=st.get("locked_after"), n_relock=st.get("n_relock", 0),
                     n_watchdog_rescued=st.get("n_watchdog_rescued", 0), n_rescued=st.get("n_rescued", 0),
                     n_warmup_rescued=st.get("n_warmup_rescued", 0), n_cascade_rescued=st.get("n_cascade_rescued", 0),
-                    indexed=st.get("indexed", 0), gate_rejected=st.get("gate_rejected", 0))
+                    indexed=st.get("indexed", 0), gate_rejected=st.get("gate_rejected", 0),
+                    integrated=st.get("integrated", 0))
     # self-checks: the event log must agree with the driver's own counters
     s_wresc = sum(r["wresc"] for r in recs); s_relock = sum(r.get("relock", 0) for r in recs)
     s_rl = sum(1 for r in recs if r.get("resc") == "rescued_relock")
@@ -319,14 +537,22 @@ def main(argv=None):
                             ("relocks", s_relock, counters["n_relock"]),
                             ("relock rescues", s_rl, counters["n_rescued"]),
                             ("warm-up rescues", s_wu, counters["n_warmup_rescued"]),
-                            ("indexed", tot["indexed"], counters["indexed"])):
+                            ("indexed", tot["indexed"], counters["indexed"]),
+                            ("integrated", tot["integrated"], counters["integrated"])):
         assert got == want, f"event log disagrees with the driver on {name}: {got} vs {want}"
+    for m in meta_in:                                        # pixel pools: peak counts come from the run
+        if m.get("kind") == "pixels":
+            ks = [r["npk"] for r in recs if r["truth"] == m["name"] and r.get("npk") is not None]
+            m["npk"] = [int(min(ks)), int(np.median(ks)), int(max(ks))] if ks else None
 
     header = dict(inputs=meta_in, refs={k: [round(x, 4) for x in cell_params(v)] for k, v in refs.items() if k in pools},
                   roster=kw["roster"], schedule=sched, n=n, driver_kw={k: v for k, v in kw.items() if k not in ("roster", "events")},
                   gate=dict(frac=GATE_FRAC, min_refl=GATE_MIN, lattice="same_lattice vs own species reference"),
                   totals=tot, by_species=by_sp, confusion=confusion, counters=counters,
                   cells=st.get("cells"), primary_cell=[round(x, 3) for x in cell_params(Mc_final)] if Mc_final is not None else None,
+                  geometry=geom_meta, geom_correction=st.get("geom_correction"), geom_trace=geom_trace or None,
+                  ingest=("peaks_in" if a.peaks_in else ("pixels" if pixel_pools else "q")),
+                  read_s=round(t_read, 1),
                   provenance=dict(git=git_head(), host=socket.gethostname(), python=platform.python_version(),
                                   numpy=np.__version__, use_gpu=a.cupy, argv=sys.argv[1:],
                                   elapsed_s=round(time.time() - t0, 1), timestamp=time.strftime("%Y-%m-%dT%H:%M:%S%z")))
@@ -340,7 +566,13 @@ def main(argv=None):
     key = "strict_ok" if a.expect_mode == "species" else "strict_ok_drv"
     print(f"{n} frames | strict (own species) {tot['strict_ok']}/{n} | strict (driver primary) {tot['strict_ok_drv']}/{n} | "
           f"locked_after {counters['locked_after']} | watchdog rescues {counters['n_watchdog_rescued']} | "
-          f"relocks {counters['n_relock']} | relock rescues {counters['n_rescued']} | warm-up rescues {counters['n_warmup_rescued']}")
+          f"relocks {counters['n_relock']} | relock rescues {counters['n_rescued']} | warm-up rescues {counters['n_warmup_rescued']} | "
+          f"integrated {counters['integrated']}")
+    if geom_meta:
+        print(f"  geometry {geom_meta['n_panels']} panels {geom_meta['shape']} clen {geom_meta['clen_m']} m  lambda {geom_meta['wavelength_A']} A  "
+              f"masked {geom_meta['masked_frac']:.3%}  pf_kw {geom_meta['pf_kw']}  read {t_read:.0f}s")
+    if st.get("geom_correction"):
+        print(f"  geom_correction {st['geom_correction']}")
     for sp, d in by_sp.items():
         print(f"  {sp:12s} n={d['n']:5d}  strict {d['ok']:5d}  indexed {d['indexed']:5d}  miss {d['miss']:4d}  "
               f"blank {d['blank']:3d}  warmup {d['warmup']:3d}  rescued {d['rescued']:4d}   -> {confusion.get(sp)}")

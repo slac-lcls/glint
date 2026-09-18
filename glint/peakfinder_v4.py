@@ -88,7 +88,7 @@ def _pfv4_kernel(fp32=None):
         variance = "mbar*mbar" if fp32 else "(double)mu*mu"
         _PFV4[fp32] = cupy.RawKernel(r"""
         extern "C" __global__ void pfv4_stats(const float* I, const float* good, int H, int W, int r, int lmr,
-            float thr_low, float thr_high, float min_sig,
+            float thr_low, float thr_high, float min_sig, float abs_thr, float sig_floor,
             float* snr, float* sub, float* var, unsigned char* grow, unsigned char* seed){
           int idx = blockIdx.x*blockDim.x + threadIdx.x; if(idx >= H*W) return;
           int yy = idx / W, xx = idx % W; float Ic = I[idx];
@@ -108,14 +108,15 @@ def _pfv4_kernel(fp32=None):
           float mu = nn>0.5 ? (float)(mbar__UNSHIFT__) : 0.0f;
           float vv = nn>0.5 ? (float)(sq/nn - __MEAN_SQ__) : 0.0f; if(vv<0.0f) vv=0.0f;
           float sg = sqrtf(vv); int valid = (good[idx]>0.5f) && (nn>0.5) && (sg>min_sig);
-          float sb = Ic - mu; float sn = valid ? sb/(sg+1e-12f) : 0.0f;
+          float sgf = sg > sig_floor ? sg : sig_floor;                 // noise floor for the SNR denominator
+          float sb = Ic - mu; float sn = valid ? sb/(sgf+1e-12f) : 0.0f;
           int islm = 1;                                        // local maximum over the (2*lmr+1) neighbourhood
           for(int dy=-lmr; dy<=lmr && islm; ++dy){ int y=yy+dy; if(y<0||y>=H) continue;
             for(int dx=-lmr; dx<=lmr; ++dx){ int x=xx+dx; if(x<0||x>=W) continue;
               if(I[y*W+x] > Ic){ islm=0; break; } } }
           snr[idx]=sn; sub[idx]= sb>0.0f? sb:0.0f; var[idx]=vv;
           grow[idx] = (valid && sn > thr_low) ? 1 : 0;
-          seed[idx] = (valid && sn > thr_high && islm) ? 1 : 0;
+          seed[idx] = (valid && sn > thr_high && islm && sb > abs_thr) ? 1 : 0;
         }""".replace("__ACC__", acc).replace("__VAL__", val)
              .replace("__SHIFT__", shift).replace("__UNSHIFT__", unshift)
              .replace("__MEAN_SQ__", variance), "pfv4_stats")
@@ -239,10 +240,16 @@ class PeakFinderV4:
       thr_high          [-]           SNR to SEED a peak (a component is kept only if it contains snr > thr_high).
       son_min           [son_min]      the integrated peak SNR sum(I-bg)/sqrt(sum sigma^2) must exceed this.
       min_sig, local_max_radius, min_pix, max_pix, dtype.
+      abs_thr           [thr]          a seed pixel must also rise abs_thr detector units above the local
+                                       background -- peakfinder8's --threshold, applied to (I - bg) rather than
+                                       to the raw pixel (identical where the background is ~0). Default 0: off.
+      sig_floor         [-]            floor on the local sigma inside the SNR only (I-bg)/max(sigma, sig_floor), so
+                                       a zero-clamped background cannot inflate the SNR. Default 0: off.
     """
 
     def __init__(self, mask=None, *, shape=None, window_radius=4, thr_low=5.0, thr_high=8.0, son_min=8.0,
-                 min_sig=0.0, local_max_radius=1, min_pix=1, max_pix=200, dtype=None):
+                 min_sig=0.0, local_max_radius=1, min_pix=1, max_pix=200, dtype=None,
+                 abs_thr=0.0, sig_floor=0.0):
         if mask is not None:
             xp = _xp(mask); good = mask.astype(bool)
         elif shape is not None:
@@ -255,7 +262,8 @@ class PeakFinderV4:
         self.H, self.W = good.shape
         self.r = int(window_radius)
         self.p = dict(thr_low=thr_low, thr_high=thr_high, son_min=son_min, min_sig=min_sig,
-                      local_max_radius=int(local_max_radius), min_pix=min_pix, max_pix=max_pix)
+                      local_max_radius=int(local_max_radius), min_pix=min_pix, max_pix=max_pix,
+                      abs_thr=float(abs_thr), sig_floor=float(sig_floor))
         self._fused_gpu = False
         # Stage-1 sync-free CCL: env selects the default path; find(..., _force_ccl=) overrides per call
         # (mandatory for single-process A/B on the SAME finder + frame). C = fixed reduce capacity.
@@ -307,16 +315,20 @@ class PeakFinderV4:
             self._pfv4((self._grid,), (self._blk,),
                        (Ic, self._goodf_flat, np.int32(H), np.int32(W), np.int32(self.r),
                         np.int32(p["local_max_radius"]), np.float32(p["thr_low"]), np.float32(p["thr_high"]),
-                        np.float32(p["min_sig"]), self._snr, self._sub, self._var, self._grow, self._seed))
+                        np.float32(p["min_sig"]), np.float32(p["abs_thr"]), np.float32(p["sig_floor"]),
+                        self._snr, self._sub, self._var, self._grow, self._seed))
             return (self._snr.reshape(H, W), self._sub.reshape(H, W), self._var.reshape(H, W),
                     self._grow.reshape(H, W), self._seed.reshape(H, W))
         mu, sig, nz = self._ring_bg(I); sub = I - mu
         valid = self.good & nz & (sig > p["min_sig"])
-        snr = xp.where(valid, sub / (sig + 1e-12), 0.0)
+        sgf = xp.maximum(sig, p["sig_floor"]) if p["sig_floor"] > 0 else sig
+        snr = xp.where(valid, sub / (sgf + 1e-12), 0.0)
         lm = 2 * p["local_max_radius"] + 1
         islm = I >= ndi.maximum_filter(I, size=lm)
         grow = valid & (snr > p["thr_low"])
         seed = valid & (snr > p["thr_high"]) & islm
+        if p["abs_thr"] > 0:
+            seed = seed & (sub > p["abs_thr"])
         return snr, xp.clip(sub, 0.0, None), sig * sig, grow, seed
 
     def find(self, image, _force_ccl=None):

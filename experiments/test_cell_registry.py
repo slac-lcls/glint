@@ -77,8 +77,10 @@ class _Oracle:
     frame into the wrong accumulator and make these tests flaky (the live gate's chance floor is
     what test_retry_cascade exercises with its JUNK; here the bookkeeping is the subject)."""
 
-    def __init__(self):
+    def __init__(self, default=None):
         self.truth = {}                          # content key -> true M
+        self.default = default                   # lattice for frames never add()ed (pixel frames: the
+                                                 # finder's centroids cannot be keyed in advance)
 
     def add(self, q, M):
         self.truth[_key(q)] = M
@@ -87,7 +89,7 @@ class _Oracle:
     def index_fused(self, qs, Mc, B=1):
         out = []
         for q in qs:
-            M = self.truth.get(_key(q))
+            M = self.truth.get(_key(q), self.default)
             out.append(M.copy() if M is not None and same_lattice(M, Mc) else None)
         return out
 
@@ -115,10 +117,10 @@ def _no_torch_needed():
             sys.modules.pop("glint.glint_fast", None)
 
 
-def _driver(Mc=A, **kw):
+def _driver(Mc=A, oracle_default=None, **kw):
     """A CPU driver wired to `oracle` for BOTH indexers. The oracle must be installed as sd.rgb
     BEFORE construction, because _known_index is bound from that module global in __init__."""
-    oracle = _Oracle()
+    oracle = _Oracle(default=oracle_default)
     sd.rgb = oracle
     kw.setdefault("B", 8); kw.setdefault("dmin", DMIN); kw.setdefault("use_gpu", False)
     if Mc is None:
@@ -306,7 +308,7 @@ def test_default_config_stats_key_set_unchanged():
         assert "cells" in d.stats(), kw
         assert d.stats()["cells"][0]["source"] == "given"
     # the registry lives on the extra dicts too, as a name only -- everything else they carried stays
-    assert "name" not in plain.extra or True
+    # Extra-cell naming is covered by test_roster_names_primary_relock_and_fallback().
     # the bare-object stats() path of test_stream_gate_lock.py must not need any new attribute
     d = object.__new__(StreamDriver)
     d._blind = False; d.acc = plain.acc; d.locked_after = 0; d.consensus_support = 3
@@ -326,13 +328,92 @@ def test_new_constructor_options_are_appended():
     assert sig["on_event"].default is None and sig["cell_window"].default == 200
 
 
+def _pixel_frame(drv, M, rng, n=36, amp=900.0, noise=3.0):
+    """A detector frame whose peaks sit at M's predicted spot positions -- the pixel path's input."""
+    pred = drv.grid.predict(M, PANELS, CLEN, WAVE, tol=0.004)
+    fs, ss = np.asarray(pred["fs"], float), np.asarray(pred["ss"], float)
+    exc = np.abs(np.asarray(pred["exc"], float))
+    on = (fs > 6) & (fs < NPX - 7) & (ss > 6) & (ss < NPX - 7)
+    order = np.argsort(np.where(on, exc, np.inf))[:n]        # the spots nearest the Ewald sphere: a peak's
+    order = order[on[order]]                                 # q (on the sphere) then sits near-integer in M
+    fs, ss = fs[order], ss[order]
+    assert len(fs) >= 12, len(fs)
+    img = rng.normal(0.0, noise, (NPX, NPX))
+    yy, xx = np.mgrid[0:NPX, 0:NPX]
+    for x, y in zip(fs, ss):
+        img += amp * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * 0.8 ** 2))
+    return np.clip(img, 0, None).astype(np.float32), len(fs)
+
+
+def test_pixel_path_emits_integrated_marker_with_slot_and_optional_q():
+    """push(frame): one `indexed` terminal record per frame, then an `integrated` MARKER for the same ev
+    carrying n_pred/n_refl/frame_no -- never a second terminal outcome. Frame events name their ring
+    slot; q rides along only when the driver attribute events_keep_q is set (a recorder that never saw
+    the pixels scores from it). The peaks come from PeakFinderV4 on the rendered frame, so the oracle
+    answers with its default lattice."""
+    rng = np.random.default_rng(SEED)
+    for keep_q in (False, True):
+        drv, _ = _driver(Mc=A, oracle_default=A, B=2, events=True, dmin=DMIN,
+                         pf_kw=dict(abs_thr=200.0, son_min=5.0, min_pix=2))
+        drv.events_keep_q = keep_q
+        n_planted = []
+        for _ in range(2):
+            img, npl = _pixel_frame(drv, A, rng); n_planted.append(npl)
+            drv.push(img)
+        drv.close()
+        term = _terminal(drv.events)
+        assert set(term) == {0, 1} and all(e["outcome"] == "indexed" for e in term.values()), \
+            [(e["ev"], e["outcome"]) for e in drv.events]
+        for e in term.values():
+            assert e["slot"] in (0, 1)
+            assert e["n_peaks"] >= 12, e["n_peaks"]
+            assert ("q" in e) == keep_q, (keep_q, list(e))
+            if keep_q:
+                assert len(e["q"]) == e["n_peaks"] and len(e["q"][0]) == 3
+        marks = [e for e in drv.events if e["outcome"] == "integrated"]
+        assert [m["ev"] for m in marks] == [0, 1], marks
+        for m, npl in zip(marks, n_planted):
+            assert m["n_refl"] >= 1 and m["n_pred"] >= m["n_refl"], m
+            assert m["frame_no"] in (0, 1) and m["cell"] == 0 and m["slot"] in (0, 1)
+        # the marker never counts as a frame outcome
+        assert sum(1 for e in drv.events if e["outcome"] in TERMINAL) == 2
+        assert drv.n_integrated == 2 and drv.stats()["integrated"] == 2
+        idx = [i for i, e in enumerate(drv.events) if e["outcome"] == "indexed"]
+        mk = [i for i, e in enumerate(drv.events) if e["outcome"] == "integrated"]
+        assert all(a < b for a, b in zip(idx, mk)), "integrated must follow its indexed record"
+
+
+def test_peaks_in_slots_feed_the_geometry_refiner():
+    """push_peaks() under geom_refine=True: the observed peaks reach GeomRefiner (which predicts for
+    itself), so live geometry refinement works from a peak list; without geom_refine nothing is kept."""
+    rng = np.random.default_rng(SEED + 1)
+    for on in (False, True):
+        drv, oracle = _driver(Mc=A, oracle_default=A, B=2, dmin=DMIN, geom_refine=on,
+                              geom_refine_kw=dict(update_every=2, min_frames=1) if on else None)
+        pred = drv.grid.predict(A, PANELS, CLEN, WAVE, tol=0.02)
+        fs, ss = np.asarray(pred["fs"], float), np.asarray(pred["ss"], float)
+        keep = np.isfinite(fs) & np.isfinite(ss)
+        fs, ss = fs[keep][:40], ss[keep][:40]
+        for _ in range(2):
+            drv.push_peaks(fs + rng.normal(0, 0.05, fs.size), ss + rng.normal(0, 0.05, ss.size))
+        drv.close()
+        assert drv.n_indexed == 2 and drv.n_integrated == 0, (drv.n_indexed, drv.n_integrated)
+        if on:
+            assert drv._grefiner is not None and drv._grefiner.n_frames == 2, drv._grefiner.n_frames
+            assert "geom_correction" in drv.stats()
+        else:
+            assert drv._grefiner is None and "geom_correction" not in drv.stats()
+
+
 TESTS = [test_roster_names_primary_relock_and_fallback,
          test_registry_counts_and_recent_share_after_scripted_flush,
          test_event_sequence_two_cells_relock_and_rescued_relock,
          test_gate_rejected_and_blank_in_single_cell_mode,
          test_push_q_blind_lock_then_index_only_with_zero_reflection_chunks,
          test_default_config_stats_key_set_unchanged,
-         test_new_constructor_options_are_appended]
+         test_new_constructor_options_are_appended,
+         test_pixel_path_emits_integrated_marker_with_slot_and_optional_q,
+         test_peaks_in_slots_feed_the_geometry_refiner]
 
 if __name__ == "__main__":
     failed = 0

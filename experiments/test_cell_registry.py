@@ -118,10 +118,35 @@ def _no_torch_needed():
             sys.modules.pop("glint.glint_fast", None)
 
 
-def _driver(Mc=A, oracle_default=None, **kw):
+class _MixedOracle(_Oracle):
+    """_Oracle plus frames that carry TWO lattices: asked for either cell, it registers such a frame
+    under that cell (the real known-cell indexer returns the asked-for cell's best orientation for
+    any frame; here only the frames marked mixed fit more than one)."""
+
+    def __init__(self, lattices, default=None):
+        super().__init__(default=default)
+        self.lattices = list(lattices)
+        self.mixed = set()
+
+    def add_mixed(self, q):
+        self.mixed.add(_key(q))
+        return q
+
+    def index_fused(self, qs, Mc, B=1):
+        out = []
+        for q in qs:
+            if _key(q) in self.mixed:
+                M = next((L for L in self.lattices if same_lattice(L, Mc)), None)
+                out.append(M.copy() if M is not None else None)
+            else:
+                out.extend(super().index_fused([q], Mc, B=1))
+        return out
+
+
+def _driver(Mc=A, oracle_default=None, oracle=None, **kw):
     """A CPU driver wired to `oracle` for BOTH indexers. The oracle must be installed as sd.rgb
     BEFORE construction, because _known_index is bound from that module global in __init__."""
-    oracle = _Oracle(default=oracle_default)
+    oracle = oracle if oracle is not None else _Oracle(default=oracle_default)
     sd.rgb = oracle
     kw.setdefault("B", 8); kw.setdefault("dmin", DMIN); kw.setdefault("use_gpu", False)
     if Mc is None:
@@ -323,10 +348,120 @@ def test_default_config_stats_key_set_unchanged():
 
 def test_new_constructor_options_are_appended():
     params = list(inspect.signature(StreamDriver.__init__).parameters)
-    assert params[-4:] == ["roster", "events", "on_event", "cell_window"], params[-6:]
+    assert params[-7:] == ["roster", "events", "on_event", "cell_window",
+                           "assign", "assign_margin", "assign_margin_frac"], params[-9:]
     sig = inspect.signature(StreamDriver.__init__).parameters
     assert sig["roster"].default is None and sig["events"].default is False
     assert sig["on_event"].default is None and sig["cell_window"].default == 200
+    assert (sig["assign"].default, sig["assign_margin"].default, sig["assign_margin_frac"].default) == ("first", 8, 0.05)
+
+
+def _two_cells(oracle, rng, **kw):
+    """A driver with TWO active cells: the primary A and B added by the adaptive re-lock (four B
+    frames miss, the watchdog votes B, the driver adds it) -- the driver's own path, no hand-built
+    extra. Events on, no rescue buffer, the 480 arm's live gate."""
+    drv, oracle = _driver(adaptive_relock=True, roster=ROSTER, events=True, rescue_buffer=0,
+                          min_inliers=10, min_inlier_frac=0.15, oracle=oracle, **kw)
+    for slot in range(4):
+        drv._q[slot] = oracle.add(frame_on(B, rng), B); drv._idx[slot] = slot
+    drv._n = 4; drv.n_pushed = 4
+    drv.flush()
+    assert drv.n_relock == 1 and [c["name"] for c in drv.stats()["cells"]] == ["lyso", "other"]
+    drv.events.clear()
+    return drv
+
+
+def test_best_fit_assignment_hands_a_frame_to_the_cell_with_more_inliers():
+    """The measured case of the two-species replay (glint#202): a dense frame of crystal B carries
+    enough chance near-integer peaks under cell A to pass the live gate, so the first-fit cascade
+    lets A claim it and B never sees it. assign="best" indexes it against both and B, which explains
+    ~70 more peaks (far beyond the margin), takes it."""
+    rng = np.random.default_rng(SEED + 7)
+    # a frame that is 30 peaks on A and 100 peaks on B: passes the live gate under A (30 >= 10,
+    # 30/130 >= 0.15) and, by far, under B
+    q_mixed = np.concatenate([frame_on(A, rng, n=30), frame_on(B, rng, n=100)])
+    q_a, q_b = frame_on(A, rng), frame_on(B, rng)
+    outcomes = {}
+    for assign in ("first", "best"):
+        oracle = _MixedOracle([A, B])
+        drv = _two_cells(oracle, rng, assign=assign)
+        oracle.add_mixed(q_mixed); oracle.add(q_a, A); oracle.add(q_b, B)
+        for slot, q in enumerate((q_mixed, q_a, q_b)):
+            drv._q[slot] = q; drv._idx[slot] = 10 + slot
+        drv._n = 3; drv.n_pushed = 13
+        drv.flush()
+        term = _terminal(drv.events)
+        assert set(term) == {10, 11, 12} and all(e["outcome"] == "indexed" for e in term.values()), \
+            {k: e["outcome"] for k, e in term.items()}
+        outcomes[assign] = term
+        # frames that fit ONE cell land in the same place under both policies
+        assert (term[11]["cell"], term[12]["cell"]) == (0, 1), (assign, term[11]["cell"], term[12]["cell"])
+        # the four re-lock votes were misses (no rescue buffer): only these three frames are indexed
+        cells = drv.stats()["cells"]
+        assert drv.n_indexed == 3 and cells[0]["n_frames"] + cells[1]["n_frames"] == 3, (drv.n_indexed, cells)
+        assert cells[0]["n_frames"] == (2 if assign == "first" else 1), (assign, cells)
+    first, best = outcomes["first"][10], outcomes["best"][10]
+    # first-fit: cell A (the primary) claims the mixed frame on its 30 chance-plus-real inliers ...
+    assert first["cell"] == 0 and first["cell_name"] == "lyso", first
+    assert 30 <= first["n_inl"] < 60 and "inl_by_cell" not in first, first
+    # ... best-fit hands it to B, and the event says what every active cell saw
+    assert best["cell"] == 1 and best["cell_name"] == "other", best
+    assert best["n_inl"] >= 100 and best["inl_by_cell"][1] == best["n_inl"], best
+    assert 30 <= best["inl_by_cell"][0] < 60 and len(best["inl_by_cell"]) == 2, best
+    assert same_lattice(np.asarray(best["M"]), B) and same_lattice(np.asarray(first["M"]), A)
+    # single-fit frames under best-fit carry the per-cell counts too; the wrong cell saw nothing
+    b11, b12 = outcomes["best"][11], outcomes["best"][12]
+    assert b11["inl_by_cell"][0] == b11["n_inl"] and b11["inl_by_cell"][1] == 0, b11
+    assert b12["inl_by_cell"][1] == b12["n_inl"] and b12["inl_by_cell"][0] == 0, b12
+
+
+def test_best_fit_margin_keeps_the_incumbent_on_a_weak_frame():
+    """The other half of the measurement: on a frame that is marginal under every cell, a raw count
+    comparison is a coin flip biased toward the larger cell. The incumbent (first-fit's cell) keeps
+    the frame unless the challenger beats it by max(assign_margin, assign_margin_frac * n_peaks)."""
+    rng = np.random.default_rng(SEED + 9)
+    # 12 peaks on A, 15 on B, 40 random: A (the incumbent) passes the live gate (12 >= 10, 12/67 >= 0.15);
+    # B explains 3 more peaks -- below the default margin of 8, so A keeps the frame ...
+    q_weak = np.concatenate([frame_on(A, rng, n=12), frame_on(B, rng, n=15), rng.normal(size=(40, 3)) * 0.05])
+    for margin, frac, want in ((8, 0.05, 0), (3, 0.0, 1), (0, 0.0, 1), (2, 0.05, 1), (2, 0.10, 0)):
+        oracle = _MixedOracle([A, B])
+        drv = _two_cells(oracle, rng, assign="best", assign_margin=margin, assign_margin_frac=frac)
+        oracle.add_mixed(q_weak)
+        drv._q[0] = q_weak; drv._idx[0] = 10
+        drv._n = 1; drv.n_pushed = 11
+        drv.flush()
+        e = _terminal(drv.events)[10]
+        assert e["outcome"] == "indexed" and e["cell"] == want, (margin, frac, e["cell"], e["inl_by_cell"])
+        a, b = e["inl_by_cell"]
+        assert 12 <= a < 20 and 15 <= b < 24 and b - a >= 1, e["inl_by_cell"]   # ... by 3 + chance
+        # margin 2 with frac 0.10 = max(2, 6.7) = 7 > the difference: incumbent keeps it
+    try:
+        _driver(assign="best", assign_margin=-1)
+    except ValueError as exc:
+        assert "assign_margin" in str(exc)
+    else:
+        raise AssertionError("negative margin accepted")
+
+
+def test_best_fit_is_first_fit_with_one_cell_and_rejects_unknown_policies():
+    rng = np.random.default_rng(SEED + 8)
+    try:
+        _driver(assign="nope")
+    except ValueError as exc:
+        assert "assign" in str(exc)
+    else:
+        raise AssertionError("assign='nope' accepted")
+    # one active cell: the best-fit branch is never taken (it needs extras), so the miss path is the
+    # published one -- a B frame misses the primary and goes to the watchdog as a miss
+    drv, oracle = _driver(adaptive_relock=True, roster=ROSTER, events=True, rescue_buffer=0, assign="best")
+    drv._q[0] = oracle.add(frame_on(A, rng), A); drv._idx[0] = 0
+    drv._q[1] = oracle.add(frame_on(B, rng), B); drv._idx[1] = 1
+    drv._n = 2; drv.n_pushed = 2
+    drv.flush()
+    term = _terminal(drv.events)
+    assert term[0]["outcome"] == "indexed" and term[0]["cell"] == 0 and "inl_by_cell" not in term[0], term[0]
+    assert term[1]["outcome"] == "miss", term[1]
+    assert drv._inl_alt == [None] * drv.B                    # slot state cleared by the flush
 
 
 def _pixel_frame(drv, M, rng, n=36, amp=900.0, noise=3.0):
@@ -452,6 +587,9 @@ TESTS = [test_roster_names_primary_relock_and_fallback,
          test_push_q_blind_lock_then_index_only_with_zero_reflection_chunks,
          test_default_config_stats_key_set_unchanged,
          test_new_constructor_options_are_appended,
+         test_best_fit_assignment_hands_a_frame_to_the_cell_with_more_inliers,
+         test_best_fit_margin_keeps_the_incumbent_on_a_weak_frame,
+         test_best_fit_is_first_fit_with_one_cell_and_rejects_unknown_policies,
          test_pixel_path_emits_integrated_marker_with_slot_and_optional_q,
          test_peaks_in_slots_feed_the_geometry_refiner,
          test_source_stamps_the_stream_chunk_and_blind_events_carry_q]

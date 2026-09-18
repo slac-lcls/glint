@@ -139,8 +139,8 @@ def page_url(path):
 
 
 def trace_length(path):
-    """Number of records in the page's embedded trace (`const TRACE=[...];`), i.e. the last frame the page
-    shows before it wraps."""
+    """Number of records in the page's embedded trace (`const TRACE=[...];`), i.e. the last non-zero
+    frame number the page shows before the next tick wraps back to the start."""
     with open(path) as fh:
         html = fh.read()
     k = html.find("const TRACE=")

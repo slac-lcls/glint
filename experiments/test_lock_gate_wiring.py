@@ -108,7 +108,8 @@ def test_new_options_stay_at_the_end_of_the_signature():
               "stream_out", "stream_geom_text", "stream_image", "stream_symmetry", "stream_peaks",
               "lock_frac", "lock_lead", "lock_pool_switch", "retry_cascade", "retry_nbest",
               "bg_mode", "laue", "ops",
-              "roster", "events", "on_event", "cell_window"]          # glint#199 (cell registry), appended
+              "roster", "events", "on_event", "cell_window",          # glint#199 (cell registry), appended
+              "assign", "assign_margin", "assign_margin_frac"]        # best-fit cell assignment, appended
     assert params == expect, (params, expect)
 
 

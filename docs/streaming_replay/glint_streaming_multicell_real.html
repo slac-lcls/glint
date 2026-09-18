@@ -805,7 +805,7 @@
   if(_qs.get('print')) document.querySelector('.app').classList.add('printmode');
   buildLegend(); buildGeo(); fitAll();
   // optional ?warm=N : pre-advance N sim-seconds (start warmed / for static previews)
-  const warm=+(new URLSearchParams(location.search).get('warm')||0);
+  const warm=+(_qs.get('warm')||0);
   if(warm>0){ for(let acc=0;acc<warm;acc+=0.033) advance(0.033); fitAll(); render(); }
   if(_qs.get('print')) playing=false;   // freeze the still exactly at ?warm=
   // theme change may alter DPR/colors → rebuild statics

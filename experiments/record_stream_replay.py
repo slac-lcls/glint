@@ -314,6 +314,11 @@ def main(argv=None):
     ap.add_argument("--warmup-rescue", action="store_true"); ap.add_argument("--adaptive-relock", action="store_true")
     ap.add_argument("--rescue-buffer", type=int, default=0); ap.add_argument("--retry-cascade", action="store_true")
     ap.add_argument("--lock-probe", action="store_true"); ap.add_argument("--cell-window", type=int, default=200)
+    ap.add_argument("--assign", choices=("first", "best"), default="first",
+                    help="which active cell takes a frame that fits more than one: the first-fit cascade "
+                         "(published) or a challenger that explains at least the margin more peaks")
+    ap.add_argument("--assign-margin", type=int, default=8, help="assign=best: challenger must explain this many more peaks ...")
+    ap.add_argument("--assign-margin-frac", type=float, default=0.05, help="... or this fraction of the frame's peaks, whichever is larger")
     ap.add_argument("--stream-out", default=None); ap.add_argument("--cupy", action="store_true", help="use_gpu=True")
     ap.add_argument("--stream-symmetry", default=None, metavar="lattice_type=..,centering=..,unique_axis=..",
                     help="CrystFEL symmetry record stamped on every .stream chunk; also fixes the driver's merge class "
@@ -384,6 +389,8 @@ def main(argv=None):
               adaptive_relock=a.adaptive_relock, rescue_buffer=a.rescue_buffer,
               retry_cascade=a.retry_cascade, lock_probe=a.lock_probe, cell_window=a.cell_window,
               roster={k: cell_params(v) for k, v in refs.items() if k in pools}, events=True)
+    if a.assign != "first":                                  # only when set, so the published runs' driver_kw is byte-identical
+        kw.update(assign=a.assign, assign_margin=a.assign_margin, assign_margin_frac=a.assign_margin_frac)
     if a.stream_out:
         kw["stream_out"] = a.stream_out
     if a.geom_refine:
@@ -507,6 +514,8 @@ def main(argv=None):
             if "support" in e:                               # blind-mode records carry the consensus state
                 r["sup"] = e.get("support"); r["lead"] = e.get("lead")
             r["M"] = e["M"]; r["frac_live"] = e["frac"]; r["n_inl"] = e["n_inl"]
+            if e.get("inl_by_cell") is not None:                 # assign="best": what every active cell saw
+                r["inl_by_cell"] = e["inl_by_cell"]
             r["wresc"] = int(oc == "rescued_watchdog")
         elif oc in RETRO:
             if e["ev"] is None:

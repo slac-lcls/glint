@@ -308,7 +308,7 @@ def test_default_config_stats_key_set_unchanged():
         assert "cells" in d.stats(), kw
         assert d.stats()["cells"][0]["source"] == "given"
     # the registry lives on the extra dicts too, as a name only -- everything else they carried stays
-    assert "name" not in plain.extra or True
+    # Extra-cell naming is covered by test_roster_names_primary_relock_and_fallback().
     # the bare-object stats() path of test_stream_gate_lock.py must not need any new attribute
     d = object.__new__(StreamDriver)
     d._blind = False; d.acc = plain.acc; d.locked_after = 0; d.consensus_support = 3

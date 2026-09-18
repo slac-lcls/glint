@@ -441,8 +441,6 @@ def test_source_stamps_the_stream_chunk_and_blind_events_carry_q():
         blind = [e for e in drv.events if e["outcome"] in ("warmup_vote", "warmup_lock")]
         assert blind, [e["outcome"] for e in drv.events]
         assert all(("q" in e) == keep for e in blind), (keep, [list(e) for e in blind])
-
-
 TESTS = [test_roster_names_primary_relock_and_fallback,
          test_registry_counts_and_recent_share_after_scripted_flush,
          test_event_sequence_two_cells_relock_and_rescued_relock,

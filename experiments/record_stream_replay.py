@@ -211,8 +211,6 @@ def _list_entry(line):
     """One CrystFEL list line -> (file, event|None): `file.h5` or `file.h5 //12` or `file.h5 entry_1//12`."""
     parts = line.split()
     return parts[0], (_event_index(parts[1]) if len(parts) > 1 else None)
-
-
 def is_pixel_input(path):
     return path.endswith(".stream") or path.endswith(".lst")
 

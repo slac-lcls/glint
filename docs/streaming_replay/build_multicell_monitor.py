@@ -150,12 +150,17 @@ def convert(tr, controls):
     # every rescued record is listed on exactly one lock / re-lock record, and the lists agree with the
     # driver's counters (the header's EXPECT check pins n_rescued; n_warmup_rescued is pinned here)
     listed = [j for d in out for j in d.get("rl", [])]
-    assert sorted(listed) == sorted(i for i, d in enumerate(out) if "rsc" in d), "rescue lists != rescued records"
+    rescued = sorted(i for i, d in enumerate(out) if "rsc" in d)
+    if sorted(listed) != rescued:
+        raise SystemExit("rescue lists != rescued records")
     for k, d in enumerate(out):                                  # the rescuing cell is the one that fired
         want = 0 if d.get("lock") else d.get("rc")
-        assert all(out[j]["rsc"] == want and j <= k for j in d.get("rl", [])), f"record {k}: rescue list"
-    assert len(wu_resc) == h["counters"]["n_warmup_rescued"], (len(wu_resc), h["counters"]["n_warmup_rescued"])
-    assert len(rl_resc) == h["counters"]["n_rescued"], (len(rl_resc), h["counters"]["n_rescued"])
+        if not all(out[j]["rsc"] == want and j <= k for j in d.get("rl", [])):
+            raise SystemExit(f"record {k}: rescue list")
+    if len(wu_resc) != h["counters"]["n_warmup_rescued"]:
+        raise SystemExit(f"warmup rescue count {len(wu_resc)} != {h['counters']['n_warmup_rescued']}")
+    if len(rl_resc) != h["counters"]["n_rescued"]:
+        raise SystemExit(f"relock rescue count {len(rl_resc)} != {h['counters']['n_rescued']}")
 
     # cells: measured parameters = median over EVERY frame the driver attributed to each cell -- the
     # frames it accepted live (their terminal M) and the frames a lock / re-lock rescued retroactively
@@ -166,7 +171,8 @@ def convert(tr, controls):
               and r["o"] in ("indexed", "rescued_watchdog", "rescued_cascade")]
         Ms += [np.asarray(r["M_retro"], float) for r in recs
                if r.get("resc_cell") == c["name"] and r.get("M_retro") is not None]
-        assert len(Ms) == c["n_frames"], f"cell {c['name']}: {len(Ms)} matrices for n_frames {c['n_frames']}"
+        if len(Ms) != c["n_frames"]:
+            raise SystemExit(f"cell {c['name']}: {len(Ms)} matrices for n_frames {c['n_frames']}")
         params = np.median(np.array([cell_params(M) for M in Ms]), axis=0) if Ms else np.full(6, np.nan)
         # per-frame M carries the frame's own axis order; print in the registry's standardized order
         # (its `axes`), carrying each axis's angle with it
@@ -199,6 +205,8 @@ def convert(tr, controls):
     ctrl = {}
     used = {s: 1 + max(r["src_index"] for r in recs if r["truth"] == s) for s in species}
     for s, path in controls.items():
+        if s not in used:
+            raise SystemExit(f"unknown control species {s!r}; known: {', '.join(species)}")
         c = json.load(open(path))
         rs = c["records"]
         ctrl[s] = dict(strict=sum(r["ok"] for r in rs if r["src_index"] < used[s]), n=used[s],

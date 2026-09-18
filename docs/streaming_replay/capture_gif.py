@@ -139,8 +139,8 @@ def page_url(path):
 
 
 def trace_length(path):
-    """Number of records in the page's embedded trace (`const TRACE=[...];`), i.e. the last frame the page
-    shows before it wraps."""
+    """Number of records in the page's embedded trace (`const TRACE=[...];`), i.e. the first non-zero
+    frame number the page does NOT show because it wraps back to the start."""
     with open(path) as fh:
         html = fh.read()
     k = html.find("const TRACE=")
@@ -152,9 +152,11 @@ def trace_length(path):
 
 def check_frames(path, frames):
     nf = trace_length(path)
-    bad = [i for i in frames if i < 0 or i > nf]
+    bad = [i for i in frames if i < 0 or (i != 0 and i >= nf)]
     if bad:
-        raise SystemExit(f"frame(s) {bad} outside this page's trace (0..{nf}); the page wraps past {nf}")
+        raise SystemExit(
+            f"frame(s) {bad} outside this page's trace (0 or 1..{nf - 1}); the page wraps before {nf}"
+        )
     return nf
 
 

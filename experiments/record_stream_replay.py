@@ -179,7 +179,7 @@ def main(argv=None):
     # driver arm -- defaults are the published 480 arm minus the two opt-ins
     ap.add_argument("--B", type=int, default=20); ap.add_argument("--dmin", type=float, default=2.0)
     ap.add_argument("--tol", type=float, default=0.002); ap.add_argument("--warmup-nbest", type=int, default=3)
-    ap.add_argument("--min-inliers", type=int, default=0); ap.add_argument("--min-inlier-frac", type=float, default=0.15)
+    ap.add_argument("--min-inliers", type=int, default=GATE_MIN); ap.add_argument("--min-inlier-frac", type=float, default=0.15)
     ap.add_argument("--warmup-rescue", action="store_true"); ap.add_argument("--adaptive-relock", action="store_true")
     ap.add_argument("--rescue-buffer", type=int, default=0); ap.add_argument("--retry-cascade", action="store_true")
     ap.add_argument("--lock-probe", action="store_true"); ap.add_argument("--cell-window", type=int, default=200)

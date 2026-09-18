@@ -155,9 +155,12 @@ def load_pixel_list(path, root=None, order=None):
             if line.startswith("Image filename:"):
                 fname = line.split(":", 1)[1].strip(); ev = None; cur = []
             elif line.startswith("Event:") and fname is not None:
-                tok = line.split(":", 1)[1].strip()          # "//12" -> 12
-                digits = tok.strip("/")
-                ev = int(digits) if digits.isdigit() else None
+                tok = line.split(":", 1)[1].strip()
+                tail = tok.strip().strip("/").rsplit("/", 1)[-1]
+                try:
+                    ev = int(tail)
+                except ValueError:
+                    raise SystemExit(f"{path}: cannot read a frame index out of Event {tok!r}") from None
             elif line.startswith("Peaks from peak search"):
                 inpk = True
             elif line.startswith("End of peak list"):

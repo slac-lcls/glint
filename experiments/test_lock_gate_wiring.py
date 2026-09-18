@@ -107,7 +107,8 @@ def test_new_options_stay_at_the_end_of_the_signature():
               "lock_probe", "probe_null", "lock_min_z", "warmup_rescue", "qc_frac_threshold",
               "stream_out", "stream_geom_text", "stream_image", "stream_symmetry", "stream_peaks",
               "lock_frac", "lock_lead", "lock_pool_switch", "retry_cascade", "retry_nbest",
-              "bg_mode", "laue", "ops"]
+              "bg_mode", "laue", "ops",
+              "roster", "events", "on_event", "cell_window"]          # glint#199 (cell registry), appended
     assert params == expect, (params, expect)
 
 

@@ -170,6 +170,9 @@ jobs:
       - name: experiments/test_retry_cascade.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_retry_cascade.py
+      - name: experiments/test_cell_registry.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_cell_registry.py
 
       - name: experiments/test_geom_bridge.py
         if: ${{ !cancelled() }}

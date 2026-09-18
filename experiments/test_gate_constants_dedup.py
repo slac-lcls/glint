@@ -48,6 +48,8 @@ FILES = [
      {"GATE_FRAC": "GATE_FRAC", "GATE_MIN": "GATE_MIN"}, "strict_gate", "module"),
     ("experiments/test_watchdog_miss_reason.py",
      {"GATE_FRAC": "GATE_FRAC", "GATE_MIN": "GATE_MIN"}, "strict_gate", "module"),
+    ("experiments/record_stream_replay.py",
+     {"GATE_FRAC": "GATE_FRAC", "GATE_MIN": "GATE_MIN"}, "strict_gate", "module"),
     ("experiments/gap_at_scale.py",
      {"GATE_FRAC": "GATE_FRAC", "GATE_MIN": "GATE_MIN"}, None, "module"),
     ("experiments/gap_on_real.py",

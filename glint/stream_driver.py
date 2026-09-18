@@ -34,7 +34,7 @@ dropped as it cancels); this affects nothing that is reported, all of which are 
 """
 import os
 import warnings
-from collections import deque
+from collections import Counter, deque
 import numpy as np
 
 try:
@@ -44,7 +44,7 @@ except Exception:                                            # pragma: no cover 
     cp = None
     _HAVE_CP = False
 
-from glint.lattice import LENGTH_ORDER_LAUE, UNIQUE_C_LAUE, standardize_axes
+from glint.lattice import LENGTH_ORDER_LAUE, UNIQUE_C_LAUE, cell_to_Ar, standardize_axes
 from glint.lute_bridge import peaks_to_q
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
                            _hkl_grid, project_q)
@@ -652,7 +652,9 @@ class StreamDriver:
                  # but the end silently rebinds every positional argument after it.
                  lock_frac=0.02, lock_lead=1.5, lock_pool_switch=72,
                  retry_cascade=False, retry_nbest=None, bg_mode="clipmean",
-                 laue=None, ops=None):
+                 laue=None, ops=None,
+                 # glint#199: named cell registry + per-frame event trace + peaks-in ingest (all opt-in)
+                 roster=None, events=False, on_event=None, cell_window=200):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -700,6 +702,7 @@ class StreamDriver:
         self._pk = [None] * self.B                              # observed (fs,ss) peaks per slot (geom refine)
         self._idx = [0] * self.B                                # global arrival index per slot (stream provenance)
         self._pkq = [None] * self.B                             # observed peaks aligned with _q (stream_peaks)
+        self._haspix = [True] * self.B                          # False = push_peaks/push_q slot: index-only, no pixels to integrate
         self._n = 0
         self._frame_no = 0
         self.stream_symmetry = dict(stream_symmetry or {})
@@ -957,6 +960,7 @@ class StreamDriver:
         # keeps warm-up bit-identical to before.
         self.warmup_rescue = bool(warmup_rescue)
         self._warmup_buf = [] if self.warmup_rescue else None
+        self._warmup_ev = [] if self.warmup_rescue else None    # arrival index per _warmup_buf entry (rescued_warmup events)
         self.n_warmup_rescued = 0
         # Per-frame confidence flag (opt-in, DIAGNOSTIC-only -- never affects what gets integrated).
         # The live accept gate above (_fits) is deliberately looser than the
@@ -988,6 +992,32 @@ class StreamDriver:
         # (Copilot review of #156, suppressed comment). n_fanout_errors counts invocations;
         # this counts frames.
         self.n_fanout_missed = 0
+
+        # Cell registry (glint#199). A metadata layer over the primary cell + the adaptive-relock
+        # extras -- NOT a new container: tests and callers keep reading self.Mc/self.grid/self.acc and
+        # self.extra[k] exactly as before. registry[k] is aligned with _all_cells()[k] and records
+        # who the cell is (a roster name, or cell<k>), where it came from (given / warmup / relock),
+        # when it locked, and how many frames it has taken, so an operator can tell "one sample
+        # changed" from "two crystal forms, mixed" without parsing a .stream. Maintained always
+        # (O(1) per accepted frame); only EVENT emission is opt-in, because it costs a fit count.
+        self.cell_window = max(1, int(cell_window))
+        self._roster = None
+        if roster is not None:
+            self._roster = []
+            for name, spec in dict(roster).items():
+                a = np.asarray(spec, float)
+                if a.shape == (6,):
+                    Mr = cell_to_Ar(*a)                         # real-space basis, same convention as Mc
+                elif a.shape == (3, 3):
+                    Mr = a
+                else:
+                    raise ValueError(f"roster[{name!r}] must be 6 cell parameters or a 3x3 basis, got shape {a.shape}")
+                self._roster.append((str(name), Mr))
+        self.registry = []
+        self._recent = deque(maxlen=self.cell_window)           # cell id of each recent attribution (recent_share)
+        self._on_event = on_event
+        self._events_on = bool(events) or on_event is not None
+        self.events = [] if events else None
 
         # Blind warm-up: with Mc=None the driver has no cell yet, so it indexes the first frames
         # blind (~26 ms/frame) one at a time, accumulating cross-frame consensus; when the running
@@ -1070,6 +1100,7 @@ class StreamDriver:
         Mc = np.asarray(Mc, float)
         if standardize:
             Mc = self._standardize(Mc)
+        source = "warmup" if self._blind else "given"
         if self._blind:
             self.locked_after = self.n_pushed; self.consensus_support = support
         self.Mc = Mc
@@ -1078,12 +1109,21 @@ class StreamDriver:
                             )
         self.n_theoretical = theoretical_unique(self.Mc, self.dmin, self.ops)
         self._blind = False
+        self._register_cell(0, self.Mc, source)
         if self._warmup_buf:                                    # retroactive index-only rescue (see __init__)
             qs, self._warmup_buf = self._warmup_buf, []
+            evs = list(self._warmup_ev or [])
+            if self._warmup_ev is not None:
+                self._warmup_ev = []
+            evs += [None] * (len(qs) - len(evs))                # harnesses that fill _warmup_buf directly carry no ev
             Ms = self._known_index(qs, self.Mc, B=max(len(qs), 1))
-            self.n_warmup_rescued += sum(1 for q, M in zip(qs, Ms)
-                                         if M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
-                                         and self._fits(q, np.asarray(M, float)))
+            for q, M, ev in zip(qs, Ms, evs):                   # same count as the old sum(...)
+                if M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0 \
+                        and self._fits(q, np.asarray(M, float)):
+                    self.n_warmup_rescued += 1
+                    self._attribute(0, ev)
+                    if self._events_on:
+                        self._emit_retro(ev, q, M, "rescued_warmup", 0)
 
     def _gate_lock(self, Mc, support):
         """Alias-gate a BLIND consensus lock. Returns the cell to lock (possibly a tighter derivative
@@ -1117,6 +1157,116 @@ class StreamDriver:
             self._gate_last_support = support
         return Mg
 
+    # ------------------------------------------------------------------ registry ----------------
+    def _cell_name(self, M, k):
+        """Roster name of lattice M (first same_lattice hit), else the positional fallback cell<k>."""
+        if self._roster:
+            for name, Mr in self._roster:
+                if same_lattice(M, Mr):
+                    return name
+        return f"cell{k}"
+
+    def _register_cell(self, k, M, source, lock_z=None):
+        """Enter (or re-enter: tests re-_lock the primary) active cell k in the registry."""
+        e = dict(id=k, name=self._cell_name(M, k), source=source, locked_at=self.n_pushed,
+                 lock_generation=self.n_relock, lock_z=lock_z, n_frames=0, last_seen=None,
+                 recent=deque(maxlen=self.cell_window))
+        if k < len(self.registry):
+            self.registry[k] = e
+        else:
+            self.registry.append(e)
+        return e
+
+    def _attribute(self, k, ev):
+        """Count one accepted frame (arrival index ev) for active cell k. Guarded: a hand-built
+        `extra` list (tests) may have no registry entry, and that must not crash a flush."""
+        if k < len(self.registry):
+            e = self.registry[k]
+            e["n_frames"] += 1; e["last_seen"] = ev; e["recent"].append(ev)
+            self._recent.append(k)
+
+    def recent_share(self):
+        """Fraction of the last `cell_window` attributed frames that went to each active cell."""
+        if not self._recent:
+            return {}
+        c = Counter(self._recent); n = len(self._recent)
+        return {k: c.get(k, 0) / n for k in range(len(self.registry))}
+
+    def cell_table(self):
+        """JSON-friendly snapshot of the registry, one row per active cell incl. the primary."""
+        share = self.recent_share(); cells = self._all_cells()
+        rows = []
+        for e in self.registry:
+            k = e["id"]
+            M = cells[k] if k < len(cells) and cells[k] is not None else None
+            rows.append(dict(id=k, name=e["name"], source=e["source"], locked_at=e["locked_at"],
+                             lock_generation=e["lock_generation"], lock_z=e["lock_z"],
+                             n_frames=e["n_frames"], last_seen=e["last_seen"],
+                             recent_share=share.get(k, 0.0),
+                             axes=list(np.linalg.norm(M, axis=0).round(2)) if M is not None else None))
+        return rows
+
+    @property
+    def locked(self):
+        return not self._blind
+
+    def _buffer_len(self):
+        if self._blind:
+            return len(self._warmup_buf) if self._warmup_buf is not None else 0
+        return len(self._missbuf) if self._missbuf is not None else 0
+
+    # ------------------------------------------------------------------ events ------------------
+    # One record per pushed frame, emitted where the decision is made (batching is invisible to the
+    # consumer): terminal outcomes blank / warmup_vote / warmup_lock / indexed / rescued_watchdog /
+    # rescued_cascade / miss / gate_rejected -- exactly one per frame, guaranteed by the control flow
+    # (each stage returns only what it did not accept). Retroactive outcomes rescued_warmup /
+    # rescued_relock refer to a PAST ev (at > ev) and never replace a terminal one; "relock" marks a
+    # new active cell. `ev` = arrival index, `at` = n_pushed when emitted.
+    def _emit(self, rec):
+        if self.events is not None:
+            self.events.append(rec)
+        if self._on_event is not None:
+            self._on_event(rec)
+
+    def _event_base(self, ev, outcome, cell):
+        return dict(ev=ev, at=self.n_pushed, outcome=outcome, cell=cell,
+                    cell_name=(self.registry[cell]["name"] if cell is not None and cell < len(self.registry) else None),
+                    n_active=(0 if self._blind else 1 + len(self.extra)), buffer=self._buffer_len())
+
+    def _emit_frame(self, i, outcome, cell=None, M=None):
+        q = self._q[i]
+        rec = self._event_base(self._idx[i], outcome, cell)
+        rec["n_peaks"] = 0 if q is None else len(q)
+        rec["frac"] = rec["n_inl"] = rec["M"] = None
+        if M is not None:
+            rec["M"] = np.asarray(M, float).tolist()
+            if q is not None and len(q):
+                n = self._inliers(q, np.asarray(M, float)); rec["n_inl"] = n; rec["frac"] = n / len(q)
+        self._emit(rec)
+
+    def _emit_retro(self, ev, q, M, outcome, cell):
+        rec = self._event_base(ev, outcome, cell)
+        rec["n_peaks"] = 0 if q is None else len(q)
+        M = np.asarray(M, float); rec["M"] = M.tolist()
+        n = self._inliers(q, M) if q is not None and len(q) else 0
+        rec["n_inl"] = n; rec["frac"] = n / len(q) if q is not None and len(q) else None
+        self._emit(rec)
+
+    def _emit_blind(self, ev, n_peaks, outcome, sup, lead, locked):
+        rec = self._event_base(ev, outcome, 0 if locked else None)
+        rec.update(n_peaks=int(n_peaks), frac=None, n_inl=None, M=None, support=sup, lead=lead)
+        self._emit(rec)
+
+    def _emit_blank(self, ev, n_peaks):
+        rec = self._event_base(ev, "blank", None)
+        rec.update(n_peaks=int(n_peaks), frac=None, n_inl=None, M=None)
+        self._emit(rec)
+
+    def _emit_relock(self, k, source, lock_z):
+        rec = self._event_base(self.n_pushed, "relock", k)
+        rec.update(source=source, lock_z=lock_z)
+        self._emit(rec)
+
     # ------------------------------------------------------------------ ingest ------------------
     def _push_blind(self, frame):
         """Warm-up ingest: peak-find + blind-index this frame, feed the running consensus, lock on fire.
@@ -1129,24 +1279,41 @@ class StreamDriver:
         pk = self.finder.find(self._ring[0]); fs = pk["x"]; ss = pk["y"]
         if self.gpu:
             fs = cp.asnumpy(fs); ss = cp.asnumpy(ss)
+        qq = None
         if fs.size >= self.min_peaks:
             qq = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
             qq = qq[np.isfinite(qq).all(1)]
-            if len(qq) >= self.min_peaks:
-                nb = self._blind_index(qq, self.warmup_nbest)   # N-best candidate cells for this frame
-                cells = [c for c, _ in nb if c is not None]
-                self._rc.add_frame(cells)
-                self.n_warmup += 1
-                if self._gate_buf is not None:
-                    self._gate_buf.append((qq, cells))          # per-frame evidence for the lock-time gate
-                if self._warmup_buf is not None:
-                    self._warmup_buf.append(qq)                 # retained for post-lock rescue (see __init__)
-        Mc, sup, _ = self._rc.verdict()
+        self._ingest_blind_q(qq, n_peaks=int(fs.size))
+
+    def _ingest_blind_q(self, qq, n_peaks=None):
+        """The q-only half of the warm-up ingest, shared by _push_blind (pixels) and push_q/push_peaks
+        (no pixels): blind-index, feed the running consensus, lock on fire. The caller has already
+        counted the frame in n_pushed, so this frame's arrival index is n_pushed - 1."""
+        ev = self.n_pushed - 1
+        voted = qq is not None and len(qq) >= self.min_peaks
+        if voted:
+            nb = self._blind_index(qq, self.warmup_nbest)       # N-best candidate cells for this frame
+            cells = [c for c, _ in nb if c is not None]
+            self._rc.add_frame(cells)
+            self.n_warmup += 1
+            if self._gate_buf is not None:
+                self._gate_buf.append((qq, cells))              # per-frame evidence for the lock-time gate
+            if self._warmup_buf is not None:
+                self._warmup_buf.append(qq)                     # retained for post-lock rescue (see __init__)
+                if self._warmup_ev is not None:
+                    self._warmup_ev.append(ev)
+        Mc, sup, lead = self._rc.verdict()
         if Mc is not None:
             Mc = self._gate_lock(Mc, sup)                       # may tighten the cell, or refuse the lock
+        locked = False
         if Mc is not None:
             self.consensus_members = self._rc.leader_counts()[1]   # folded >= sup (glint#182)
             self._lock(Mc, sup, standardize=True)               # -> known-cell batched path from here
+            locked = True
+        if self._events_on:
+            npk = len(qq) if qq is not None else (n_peaks or 0)
+            outcome = "warmup_lock" if (locked and voted) else ("warmup_vote" if voted else "blank")
+            self._emit_blind(ev, npk, outcome, sup, lead, locked)
 
     def warmup_batch(self, frames, fanout=None):
         """Parallel, PEAK-triaged blind warm-up over a buffered startup stack (blind mode only).
@@ -1180,7 +1347,6 @@ class StreamDriver:
         """
         if not self._blind:
             return True                                          # already locked -- nothing to warm up
-        from glint.warmup_batch import triage_order, warmup_consensus
         xp = cp if self.gpu else np
         counts, qmap = [], []
         for fr in frames:                                        # cheap peak-find every frame
@@ -1194,21 +1360,51 @@ class StreamDriver:
                 q = q if len(q) >= self.min_peaks else None
             counts.append(len(q) if q is not None else 0)
             qmap.append(q)
+        return self._warmup_from_qmap(qmap, fanout)
+
+    def warmup_batch_q(self, qs, fanout=None):
+        """warmup_batch for a startup stack that arrives as q-vectors (n_i, 3) per frame instead of
+        pixels -- the peaks-in twin. Same triage, consensus, gate and lock; blind mode only."""
+        if not self._blind:
+            return True
+        qmap = []
+        for q in qs:
+            q = None if q is None else np.asarray(q, float).reshape(-1, 3)
+            if q is not None:
+                q = q[np.isfinite(q).all(1)]
+            qmap.append(q if q is not None and len(q) >= self.min_peaks else None)
+        return self._warmup_from_qmap(qmap, fanout)
+
+    def _warmup_from_qmap(self, qmap, fanout):
+        """Shared tail of warmup_batch / warmup_batch_q: triage by peak count, pooled consensus, lock."""
+        from glint.warmup_batch import triage_order, warmup_consensus
+        counts = [len(q) if q is not None else 0 for q in qmap]
         picks = triage_order(counts, self.warm_topk, self.warm_floor)   # rank by peak count; skip low-signal
-        qs = [qmap[k] for k in picks if qmap[k] is not None]
-        self.n_pushed += len(frames); self.n_warmup += len(qs)
+        sel = [k for k in picks if qmap[k] is not None]
+        qs = [qmap[k] for k in sel]
+        ev0 = self.n_pushed
+        self.n_pushed += len(qmap); self.n_warmup += len(qs)
         if self._warmup_buf is not None:
             self._warmup_buf.extend(qs)                          # retained for post-lock rescue (see __init__)
+            if self._warmup_ev is not None:
+                self._warmup_ev.extend(ev0 + k for k in sel)
         Mc, sup = warmup_consensus(qs, self._blind_index, self._rc, self.warmup_nbest, fanout,
                                    sink=self._gate_buf)         # per-frame evidence for the lock-time gate
         if Mc is not None:
             Mc = self._gate_lock(Mc, sup)                        # may tighten the cell, or refuse the lock
+        locked = False
         if Mc is not None:
             self.locked_after = self.n_pushed
             self.consensus_members = self._rc.leader_counts()[1]   # folded >= sup (glint#182)
             self._lock(Mc, sup, standardize=True)
-            return True
-        return False
+            locked = True
+        if self._events_on:                                      # events for the triaged picks only:
+            _, sup_now, lead_now = self._rc.verdict()            # unpicked frames get theirs when pushed later
+            last = max(sel) if sel else None
+            for k in sel:
+                outcome = "warmup_lock" if (locked and k == last) else "warmup_vote"
+                self._emit_blind(ev0 + k, counts[k], outcome, sup_now, lead_now, locked)
+        return locked
 
     def push(self, frame):
         """Ingest one detector frame (host numpy or already-device array)."""
@@ -1240,8 +1436,54 @@ class StreamDriver:
                     self._pkq[slot] = np.stack([fs[ok], ss[ok], pi[ok]], 1)
         self._q[slot] = q
         self._idx[slot] = self.n_pushed                      # arrival index, so a stream chunk names its frame
+        self._haspix[slot] = True
+        if q is None and self._events_on:
+            self._emit_blank(self.n_pushed, int(fs.size))
         if self.geom_refine:
             self._pk[slot] = np.stack([fs, ss], 1) if fs.size else None
+        self._n += 1
+        self.n_pushed += 1
+        if self._n == self.B:
+            self.flush()
+
+    def push_peaks(self, fs, ss, intensity=None):
+        """Ingest one frame as its PEAK LIST (data-array fs/ss in px, as PeakFinderV4 emits them) --
+        the DRP reducer->indexer path, where the pixels never reach this process. The slot is
+        index-only: registered, counted, written to the .stream as a crystal with zero reflections
+        (plus the observed peaks when stream_peaks is on), never integrated."""
+        fs = np.asarray(fs, float).ravel(); ss = np.asarray(ss, float).ravel()
+        pi = np.asarray(intensity, float).ravel() if intensity is not None else np.zeros(fs.size)
+        q = pkq = None
+        if fs.size >= self.min_peaks:
+            qq = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
+            ok = np.isfinite(qq).all(1); qq = qq[ok]
+            if len(qq) >= self.min_peaks:
+                q = qq
+                if self.stream_peaks:
+                    pkq = np.stack([fs[ok], ss[ok], pi[ok]], 1)
+        self._queue_q(q, n_peaks=int(fs.size), pkq=pkq)
+
+    def push_q(self, q):
+        """Ingest one frame as reciprocal vectors (n, 3) in 1/A (q @ M = hkl). Index-only, see push_peaks."""
+        q = np.asarray(q, float).reshape(-1, 3)
+        q = q[np.isfinite(q).all(1)]
+        self._queue_q(q if len(q) >= self.min_peaks else None, n_peaks=len(q))
+
+    def _queue_q(self, q, n_peaks, pkq=None):
+        """Slot bookkeeping shared by push_peaks/push_q: blind -> warm-up ingest, locked -> ring slot.
+        The arrival index is the push position in both modes, as for push()."""
+        if self._blind:
+            self.n_pushed += 1
+            self._ingest_blind_q(q, n_peaks=n_peaks)
+            return
+        slot = self._n
+        self._q[slot] = q
+        self._idx[slot] = self.n_pushed
+        self._pkq[slot] = pkq
+        self._haspix[slot] = False
+        self._pk[slot] = None                                # nothing is predicted for an index-only slot
+        if q is None and self._events_on:
+            self._emit_blank(self.n_pushed, n_peaks)
         self._n += 1
         self.n_pushed += 1
         if self._n == self.B:
@@ -1265,7 +1507,7 @@ class StreamDriver:
             return False
         return not self.min_inlier_frac or n >= self.min_inlier_frac * len(q)
 
-    def _integrate_one(self, i, M, grid, acc, cell_id=0, known_cell=False):
+    def _integrate_one(self, i, M, grid, acc, cell_id=0, known_cell=False, outcome="indexed"):
         """Canonicalize + predict + integrate slot i under an ALREADY-ACCEPTED matrix M into acc.
         Split out of _index_integrate so _watchdog's individual rescue can integrate a validated
         blind candidate directly, without re-registering it through known-cell (which could just
@@ -1292,6 +1534,9 @@ class StreamDriver:
         # undoing a sort would be a guess (glint#186 review). Those paths keep the canonical-setting
         # behaviour only -- see glint#188.
         Mcan = self._standardize(M, ref=getattr(grid, "Mc_ref", None) if known_cell else None)
+        self._attribute(cell_id, self._idx[i])              # registry: this cell took this frame
+        if self._events_on:
+            self._emit_frame(i, outcome, cell=cell_id, M=M)
         if self.double_hit:                                 # deflate-and-reindex: a 2nd crystal in this shot?
             resid = deflate_peaks(self._q[i], Mcan)
             if len(resid) >= self.min_peaks:
@@ -1316,6 +1561,14 @@ class StreamDriver:
                                                 self._dh_index, min_peaks=self.min_peaks)
                     self.n_dh_null_tested += 1
                     self.n_dh_null_acc += bool(vn["accepted"])
+        if not self._haspix[i]:                             # peaks-in slot: registered + counted, nothing to integrate
+            if self._writer is not None:
+                q = self._q[i]
+                frac = self._inliers(q, M) / max(len(q), 1)
+                low_conf = (frac < self.qc_frac_threshold) if self.qc_frac_threshold is not None else None
+                self._writer.write(self._stream_record(i, Mcan, None, None, None, None, None, None,
+                                                       cell_id, frac, low_conf))
+            return
         pred = grid.predict(Mcan, self.panels, self.clen_m, self.wavelength_A, tol=self.tol)
         if len(pred) == 0:
             return
@@ -1361,11 +1614,14 @@ class StreamDriver:
             c = self._grefiner.correction()                 # snapshot AFTER this frame was pooled
             dx, dy = self._shift_basis @ np.array([c["dfs"], c["dss"]], float)
             dclen, n_solves = c["dclen_m"], c["n_solves"]
-        rec = dict(image=self.stream_image, event=self._idx[i], M=Mcan,
-                   pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep],
+        if pred is None:                                    # index-only chunk (push_peaks/push_q): crystal, no reflections
+            rows = dict(pred=None, I=None, sigma=None, peak=None, bg=None); fno = None
+        else:
+            rows = dict(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep]); fno = self._frame_no
+        rec = dict(image=self.stream_image, event=self._idx[i], M=Mcan, **rows,
                    clen_m=self.clen_m, det_shift_mm=(dx, dy), dclen_m=dclen,
                    geom_n_solves=n_solves, cell_id=cell_id, lock_generation=self.n_relock,
-                   matched_frac=frac, low_confidence=low_conf, frame_no=self._frame_no,
+                   matched_frac=frac, low_confidence=low_conf, frame_no=fno,
                    **self.stream_symmetry)
         # Observed peaks: always for "all", only for the flagged frames for "flagged". Paired with
         # |q| so the chunk carries a real (1/d); these are the rows a downstream re-index would use.
@@ -1420,6 +1676,8 @@ class StreamDriver:
                     missed.append(i)                    # another cell / the watchdog may still take it
                 else:
                     self.n_gate_rejected += 1           # nowhere left to send it -- dropped, but counted
+                    if self._events_on:
+                        self._emit_frame(i, "gate_rejected")
                 continue
             self._integrate_one(i, M, grid, acc, cell_id=cell_id, known_cell=True)
         return missed
@@ -1525,7 +1783,8 @@ class StreamDriver:
                 continue
             k = hit.get("k", 0)
             grid, acc = self._cell_sink(k)
-            self._integrate_one(i, M, grid, acc, cell_id=k, known_cell=(arm == "known_perframe"))
+            self._integrate_one(i, M, grid, acc, cell_id=k, known_cell=(arm == "known_perframe"),
+                                outcome="rescued_cascade")
             self.n_cascade_rescued += 1
             self.n_cascade_by_arm[arm] = self.n_cascade_by_arm.get(arm, 0) + 1
         # Only the UNRESCUED slots can reach the watchdog, so only their candidates are worth
@@ -1664,9 +1923,8 @@ class StreamDriver:
                     continue
                 for k, Mk in enumerate(cells):
                     if same_lattice(c, Mk):
-                        grid = self.grid if k == 0 else self.extra[k - 1]["grid"]
-                        acc = self.acc if k == 0 else self.extra[k - 1]["acc"]
-                        self._integrate_one(i, c, grid, acc, cell_id=k)
+                        grid, acc = self._cell_sink(k)
+                        self._integrate_one(i, c, grid, acc, cell_id=k, outcome="rescued_watchdog")
                         self.n_watchdog_rescued += 1
                         rescued = True
                         break
@@ -1684,6 +1942,9 @@ class StreamDriver:
                 watch_ev.append((q, vote_cells))        # per-frame evidence for the gate below
             still_missed.append(i)
         missed = still_missed
+        if self._events_on:
+            for i in missed:
+                self._emit_frame(i, "miss")
         Mn = self._watch.verdict()[0]
         if Mn is None:
             return
@@ -1744,23 +2005,31 @@ class StreamDriver:
             self.lock_z = lock_z
             if self._lock_min_z is not None and lock_z < self._lock_min_z:
                 return
+        k_new = len(self.extra) + 1
         self.extra.append(dict(Mc=Mn, grid=HKLGrid(Mn, self.dmin, gpu=self.gpu, panels=self.panels,
                                                    clen_m=self.clen_m, wavelength_A=self.wavelength_A,
                                                    ),
                                nth=theoretical_unique(Mn, self.dmin, self.ops),
-                               acc=MergeAccumulator(self.snr_bins, self.ops), lock_z=lock_z))
+                               acc=MergeAccumulator(self.snr_bins, self.ops), lock_z=lock_z,
+                               name=self._cell_name(Mn, k_new)))
         self.n_relock += 1
+        self._register_cell(k_new, Mn, "relock", lock_z=lock_z)
+        if self._events_on:
+            self._emit_relock(k_new, "relock", lock_z)
         if self._missbuf:                                       # retroactive INDEX-ONLY rescue of buffered misses
             # Re-index the buffered pre-lock misses against the newly locked cell Mn with the same
             # q-only fast-path indexer the batch uses (rgb.index_fused: q in, [M or None] out, no
             # pixels). Selection-misses (the recurring new cell) pass the same _inliers gate; blank/
             # spurious "generation" misses are correctly refused. No pixels, no integrate -- that is
             # the deferred merge-rescue layer.
-            qs = [q for _, q in self._missbuf]
+            evs = [e for e, _ in self._missbuf]; qs = [q for _, q in self._missbuf]
             Ms = self._known_index(qs, Mn, B=max(len(qs), 1))
-            self.n_rescued += sum(1 for q, M in zip(qs, Ms)
-                                  if M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
-                                  and self._fits(q, M))
+            for ev, q, M in zip(evs, qs, Ms):                   # same count as the old sum(...)
+                if M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0 and self._fits(q, M):
+                    self.n_rescued += 1
+                    self._attribute(k_new, ev)
+                    if self._events_on:
+                        self._emit_retro(ev, q, M, "rescued_relock", k_new)
             self._missbuf.clear()
         self._watch = RunningConsensus(min_support=3, gap=2, adaptive=False)    # reset for the next change
 
@@ -1779,6 +2048,9 @@ class StreamDriver:
             if missed:
                 still, _ = self._cascade_retry(missed)      # no watchdog here -> no cache to carry
                 self.n_gate_rejected += len(still)
+                if self._events_on:
+                    for i in still:
+                        self._emit_frame(i, "gate_rejected")
         elif slots:
             remaining = self._index_integrate(slots, self.Mc, self.grid, self.acc, gate=True)
             for k, e in enumerate(self.extra, 1):               # try each additional active cell in turn
@@ -1791,7 +2063,7 @@ class StreamDriver:
                 remaining, cached_nbest = self._cascade_retry(remaining)
             if remaining:                                       # fit no active cell -> blind watchdog
                 if self._missbuf is not None:                   # buffer q-only for retroactive rescue on lock
-                    self._missbuf.extend((self.n_pushed, self._q[i].copy()) for i in remaining)
+                    self._missbuf.extend((self._idx[i], self._q[i].copy()) for i in remaining)   # (arrival index, q)
                 # hand over the cascade's blind solves so these frames are not indexed a second time
                 self._watchdog(remaining, cached_nbest)
         self._n = 0
@@ -1799,6 +2071,7 @@ class StreamDriver:
         self._pk = [None] * self.B
         self._idx = [0] * self.B
         self._pkq = [None] * self.B
+        self._haspix = [True] * self.B
 
     def stats(self, thr=0.0):
         if self._blind:                                         # not yet locked -- warm-up in progress
@@ -1872,6 +2145,8 @@ class StreamDriver:
                 s["lock_z"] = self.lock_z                        # signal-strength z of the most recent relock
             s["extra_cells"] = [dict(axes=list(np.linalg.norm(e["Mc"], axis=0).round(1)),
                                      **e["acc"].stats(thr=thr, n_theoretical=e["nth"])) for e in self.extra]
+        if self.adaptive_relock or getattr(self, "_events_on", False) or getattr(self, "_roster", None) is not None:
+            s["cells"] = self.cell_table()                       # registry snapshot, ALL active cells incl. the primary
         if self.double_hit:
             s["n_double"] = self.n_double                    # GATED: same cell AND >= 15 deg away
             s["double_hit_rate"] = self.n_double / max(self.n_indexed, 1)

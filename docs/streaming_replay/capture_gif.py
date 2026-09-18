@@ -18,10 +18,14 @@ size-stable PNG, then kill), a fresh --user-data-dir per launch, N in parallel. 
   python3 capture_gif.py frames glint_streaming_multicell_real.html --theme light --last 900 --step 2 --out cap_light
   # 2. GIF: crop the footer-free top of the page, 900 px wide, ONE global 256-colour palette, no dither
   python3 capture_gif.py gif cap_dark  ../media/streaming_multicell_dark.gif  --crop 6,0,1314,780 --width 900 --fps 12
-  # 3. stills at device-scale-factor 2 for the filmstrip
-  python3 capture_gif.py stills glint_streaming_multicell_real.html --theme dark --frames 0,5,146,420,900 --out stills
+  # 3. stills at device-scale-factor 2 for the filmstrip (named <prefix><theme>_f<frame>.png)
+  python3 capture_gif.py stills glint_streaming_multicell_real.html --theme dark --frames 0,5,146,420,900 --out stills --prefix multicell_
 
-Requires Google Chrome (macOS path below, or CHROME=...) and Pillow; no ffmpeg.
+Frame numbers are checked against the page's trace (the `const TRACE=[...]` array the builder embeds):
+a frame past the last record is refused before Chrome starts, because the page would wrap and the file
+would carry a frame number it does not show.
+
+Requires Google Chrome (macOS path below, or CHROME=...), Pillow and NumPy; no ffmpeg.
 """
 import argparse
 import glob
@@ -134,6 +138,26 @@ def page_url(path):
     return "file://" + path
 
 
+def trace_length(path):
+    """Number of records in the page's embedded trace (`const TRACE=[...];`), i.e. the last frame the page
+    shows before it wraps."""
+    with open(path) as fh:
+        html = fh.read()
+    k = html.find("const TRACE=")
+    if k < 0:
+        raise SystemExit(f"{path}: no `const TRACE=` array -- not a built replay page")
+    end = html.find("];", k)
+    return len(json.loads(html[k + len("const TRACE="):end + 1]))
+
+
+def check_frames(path, frames):
+    nf = trace_length(path)
+    bad = [i for i in frames if i < 0 or i > nf]
+    if bad:
+        raise SystemExit(f"frame(s) {bad} outside this page's trace (0..{nf}); the page wraps past {nf}")
+    return nf
+
+
 def cmd_frames(a):
     url = page_url(a.page)
     os.makedirs(a.out, exist_ok=True)
@@ -141,6 +165,7 @@ def cmd_frames(a):
     frames = list(range(a.first, a.last + 1, a.step))
     if a.last not in frames:
         frames.append(a.last)
+    check_frames(a.page, frames)
     pipe_box = tuple(int(x) for x in a.pipe_box.split(","))
     stream_box = tuple(int(x) for x in a.stream_box.split(","))
     T0 = time.time()
@@ -215,14 +240,21 @@ def cmd_stills(a):
     os.makedirs(a.out, exist_ok=True)
     profiles = os.path.join(a.out, "_profiles"); os.makedirs(profiles, exist_ok=True)
     crop = tuple(int(x) for x in a.crop.split(",")) if a.crop else None
-    for i in (int(x) for x in a.frames.split(",")):
-        out = os.path.join(a.out, f"{a.theme}_f{i:04d}.png")
+    frames = [int(x) for x in a.frames.split(",")]
+    check_frames(a.page, frames)
+    failed = []
+    for i in frames:
+        out = os.path.join(a.out, f"{a.prefix}{a.theme}_f{i:04d}.png")
         r = capture_one(url, a.theme, i, out, dsf=2, profiles=profiles)
         if r["ok"] and crop:
             im = Image.open(out); im.crop(tuple(2 * c for c in crop)).save(out)
+        if not r["ok"]:
+            failed.append(i)
         print(f"frame {i}: warm={r['warm']} clock={r['clock']} ok={r['ok']} -> {out}")
     shutil.rmtree(profiles, ignore_errors=True)
-    return 0
+    if failed:
+        print(f"FAILED: {len(failed)} still(s) not captured: {failed}")
+    return 1 if failed else 0
 
 
 def cmd_warm(a):
@@ -252,6 +284,8 @@ def main(argv=None):
     s.add_argument("page"); s.add_argument("--theme", default="dark", choices=("dark", "light"))
     s.add_argument("--frames", required=True, help="comma-separated frame numbers")
     s.add_argument("--out", required=True); s.add_argument("--crop", default=None)
+    s.add_argument("--prefix", default="", help="filename prefix: <prefix><theme>_f<frame>.png (the committed "
+                   "multicell stills use --prefix multicell_)")
     s.set_defaults(fn=cmd_stills)
     w = sub.add_parser("warm", help="print the ?warm= value for given frames")
     w.add_argument("--frames", required=True); w.set_defaults(fn=cmd_warm)

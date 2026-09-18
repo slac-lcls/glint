@@ -116,6 +116,7 @@ def convert(tr, controls):
     for r in rl_resc:
         k = relock_for(r["i"])
         rl_by_frame.setdefault(k, []).append(r)
+    cell_id = {c["name"]: c["id"] for c in cells}
 
     out = []
     for r in recs:
@@ -126,8 +127,15 @@ def convert(tr, controls):
                  buf=int(r.get("buf") or 0), n=int(r.get("npk") or 0))
         if r["wu"]:
             d["sup"] = int(r.get("sup") or 0); d["lead"] = int(r.get("lead") or 0)
+        if r.get("resc"):
+            # a retroactive rescue (at the lock, or at a re-lock): the record keeps its terminal outcome
+            # (a warm-up vote or a miss) and ALSO the cell that later claimed it and whether the frame
+            # clears the strict bar under that cell -- the player re-colours the frame's bar when the
+            # rescue fires (r.rl on the lock / re-lock record lists the rescued records)
+            d["rsc"] = cell_id[r["resc_cell"]]; d["rok"] = int(r.get("ok", 0))
         if o == "warmup_lock":
             d["lock"] = 1; d["rs"] = len(wu_resc); d["rso"] = sum(1 for x in wu_resc if x.get("ok"))
+            d["rl"] = [x["i"] for x in wu_resc]
         if r.get("wresc"):
             d["wresc"] = 1
         if r.get("relock"):
@@ -135,15 +143,30 @@ def convert(tr, controls):
             d["rc"] = next((c["id"] for c in cells if c["name"] == r.get("relock_cell")), ncell - 1)
             rr = rl_by_frame.get(r["i"], [])
             d["rlr"] = len(rr); d["rlo"] = sum(1 for x in rr if x.get("ok"))
+            d["rl"] = [x["i"] for x in rr]
         if r.get("flush"):
             d["flush"] = 1
         out.append(d)
+    # every rescued record is listed on exactly one lock / re-lock record, and the lists agree with the
+    # driver's counters (the header's EXPECT check pins n_rescued; n_warmup_rescued is pinned here)
+    listed = [j for d in out for j in d.get("rl", [])]
+    assert sorted(listed) == sorted(i for i, d in enumerate(out) if "rsc" in d), "rescue lists != rescued records"
+    for k, d in enumerate(out):                                  # the rescuing cell is the one that fired
+        want = 0 if d.get("lock") else d.get("rc")
+        assert all(out[j]["rsc"] == want and j <= k for j in d.get("rl", [])), f"record {k}: rescue list"
+    assert len(wu_resc) == h["counters"]["n_warmup_rescued"], (len(wu_resc), h["counters"]["n_warmup_rescued"])
+    assert len(rl_resc) == h["counters"]["n_rescued"], (len(rl_resc), h["counters"]["n_rescued"])
 
-    # cells: measured parameters = median over the frames the driver attributed to each cell
+    # cells: measured parameters = median over EVERY frame the driver attributed to each cell -- the
+    # frames it accepted live (their terminal M) and the frames a lock / re-lock rescued retroactively
+    # (their M_retro); the count must equal the registry's n_frames
     cell_meta = []
     for c in cells:
         Ms = [np.asarray(r["M"], float) for r in recs if r.get("cell") == c["id"] and r.get("M") is not None
               and r["o"] in ("indexed", "rescued_watchdog", "rescued_cascade")]
+        Ms += [np.asarray(r["M_retro"], float) for r in recs
+               if r.get("resc_cell") == c["name"] and r.get("M_retro") is not None]
+        assert len(Ms) == c["n_frames"], f"cell {c['name']}: {len(Ms)} matrices for n_frames {c['n_frames']}"
         params = np.median(np.array([cell_params(M) for M in Ms]), axis=0) if Ms else np.full(6, np.nan)
         # per-frame M carries the frame's own axis order; print in the registry's standardized order
         # (its `axes`), carrying each axis's angle with it
@@ -227,7 +250,7 @@ def engine(tr, cv):
       wdog:0, relocks:0, relockFrame:0, relockCell:-1, rlResc:0, wdogFlash:0, relockFlash:0,
       cn:new Array(NC).fill(0), cs:new Array(NC).fill(0), win:[],
       seen:new Array(NC).fill(false),
-      bins:[], curBin:freshBin(), histIdx:[], histOk:[], histRing:[] }};
+      bins:[], binsDropped:0, curBin:freshBin(), histIdx:[], histOk:[], histRing:[] }};
   }}
   fresh();
   function resetForLoop(){{ const t=S.t; fresh(); S.t=t; }}
@@ -235,7 +258,14 @@ def engine(tr, cv):
   function binAdd(cat,c,t){{ const b=S.curBin;
     if(cat==='gen')b.gen++; else if(cat==='bl')b.bl++; else if(cat==='idx')b.idx[c]++; else b.buf[c]++;
     if(t>=0) b.truth[t]++;
-    if(++b.total>=BIN){{ S.bins.push(b); if(S.bins.length>240)S.bins.shift(); S.curBin=freshBin(); }} }}
+    if(++b.total>=BIN){{ S.bins.push(b); if(S.bins.length>240){{S.bins.shift(); S.binsDropped++;}} S.curBin=freshBin(); }} }}
+  // A retroactive rescue: trace record j (played earlier as a warm-up vote or a miss -> grey) was
+  // re-indexed against cell c when the lock / re-lock fired. Move its unit from grey to the cell's
+  // colour in the bin it fell in (record j is the (j % BIN)-th entry of bin floor(j/BIN): every
+  // record adds exactly one unit to exactly one bin).
+  function amend(j,c,ok){{ const bi=Math.floor(j/BIN)-S.binsDropped; if(bi<0) return;
+    const b = bi===S.bins.length ? S.curBin : S.bins[bi]; if(!b||b.gen<=0) return;
+    b.gen--; if(ok) b.idx[c]++; else b.buf[c]++; }}
   function ema(k,x){{ const a=0.06; S[k]+=(x-S[k])*a; }}
   function attribute(c,n){{ for(let i=0;i<n;i++){{ S.win.push(c); if(S.win.length>WIN)S.win.shift(); }} S.cn[c]+=n; S.seen[c]=true; }}
   function share(c){{ if(!S.win.length) return 0; let k=0; for(const x of S.win) if(x===c)k++; return k/S.win.length; }}
@@ -246,7 +276,7 @@ def engine(tr, cv):
     const r=TRACE[S.tf++]; S.frames++; S.pushed++;
     if(r.wu){{
       S.warmup++; S.wbuf=r.buf; S.support=r.sup||0; S.lead=r.lead||0;
-      S.phase='warmup'; binAdd('buf',0,r.t);
+      S.phase='warmup'; binAdd('gen',0,r.t);   // grey until the lock decides which votes it rescues
       ema('idxR',0); ema('okR',0);
     }} else {{
       S.ring++; S.mbuf=r.buf;           // r.buf = misses held in the rescue buffer (the driver's own count)
@@ -260,6 +290,7 @@ def engine(tr, cv):
       // discovery are re-indexed against it -- those rescues are attributed to cell 0 here, as the driver did
       S.locked=true; S.lockFrame=S.frames; S.seen[0]=true;
       S.rescued+=r.rs; S.strict+=r.rso; S.cs[0]+=r.rso; attribute(0,r.rs); S.wbuf=0;
+      for(const j of (r.rl||[])) amend(j, TRACE[j].rsc, TRACE[j].rok);
       S.rescueFlash=1; S.phase='rescuing'; S.phaseHold=Math.round(PLAY_FPS*1.4);
     }}
     if(r.wresc){{ S.wdog++; S.wdogFlash=1; }}
@@ -269,6 +300,7 @@ def engine(tr, cv):
       // re-indexed against it -- the retroactive rescue the rescue_buffer exists for.
       S.relocks++; S.relockFrame=S.frames; S.relockCell=r.rc; S.seen[r.rc]=true;
       S.rlResc+=r.rlr; S.strict+=r.rlo; S.cs[r.rc]+=r.rlo; attribute(r.rc,r.rlr);
+      for(const j of (r.rl||[])) amend(j, TRACE[j].rsc, TRACE[j].rok);
       S.relockFlash=1; S.phase='relock'; S.phaseHold=Math.round(PLAY_FPS*2.0); S.mbuf=0;
     }}
     if(r.flush){{ S.batchFlash=1; S.ring=0; }}
@@ -510,8 +542,10 @@ RENDER_CELLS = r"""  function renderCells(){
 
 DRAW_STREAM = r"""  function drawStream(){
     // One bar per BIN pushed frames. Bottom-up: frames attributed to each cell that cleared the strict
-    // bar (solid, cell colour), accepted below it (faint), refused at the live gate (grey). Under the
-    // bars, a thin ribbon of the PLANTED species per bin -- the truth the attribution is judged against.
+    // bar (solid, cell colour), accepted below it (faint), then grey: missed at the live gate, or a
+    // warm-up vote. A retroactive rescue (lock, re-lock) re-colours its frame's unit when it fires, so
+    // the bars show the driver's FINAL attribution, the one the registry counts. Under the bars, a thin
+    // ribbon of the PLANTED species per bin -- the truth the attribution is judged against.
     const [w,h]=wf._d||fit(wf); wfx.clearRect(0,0,w,h);
     const arr = S.curBin.total>0 ? S.bins.concat([S.curBin]) : S.bins;
     const n=arr.length; if(!n) return;
@@ -548,7 +582,7 @@ BUILD_LEGEND = r"""  function buildLegend(){
     const add=html=>{const k=document.createElement('span');k.className='k';k.innerHTML=html;L.appendChild(k);};
     for(let k=0;k<NC;k++) add(`<span class="sw" style="background:${col(CELLS[k].cc)}"></span>attributed to ${CELLS[k].display}, strict`);
     add(`<span class="sw" style="background:${col(CELLS[0].cc)};opacity:.4"></span>accepted, below the bar`);
-    add(`<span class="sw" style="background:${col('--muted')};opacity:.55"></span>refused / missed`);
+    add(`<span class="sw" style="background:${col('--muted')};opacity:.55"></span>missed (or a warm-up vote never rescued)`);
     add(`<span class="swl" style="background:${col('--accent')}"></span>strict rate`);
     add(`<span class="swl" style="background:${col('--ink2')};opacity:.8"></span>live accept rate`);
     const note=document.createElement('span'); note.className='k'; note.style.opacity='.7';

@@ -190,8 +190,8 @@ explain, and on the flush at record 145 (on-screen frame **146**) the driver **a
 **prok** from the roster — one re-lock, no alias — and re-indexes the 10 misses still in its rescue buffer
 against it (8 clear the strict bar). Fifteen individual watchdog rescues over the run (frames 189, 248, 266,
 274, 285, 317, 418, 530, 585, 641, 761, 794, 815, 840, 863). Final active set: two cells, lysozyme
-78.79 · 78.82 · 37.80 Å and Proteinase K 69.05 · 68.86 · 109.34 Å (medians over the frames the driver
-attributed to each, printed as measured).
+78.79 · 78.82 · 37.80 Å and Proteinase K 69.06 · 68.86 · 109.34 Å (medians over every frame the driver
+attributed to each — accepted live or rescued retroactively, 512 and 315 frames — printed as measured).
 
 | strict, own-species reference | lysozyme (454) | Proteinase K (446) | total |
 |---|---|---|---|
@@ -217,9 +217,13 @@ pushed: `truth` (planted species) and `src_index` (frame index in its pool); the
 registry entry the frame was attributed to), `buf` (misses held in the rescue buffer), `M` (accepted
 orientation), `frac_live`/`n_inl` (the live gate's fraction and count), `wresc`, `relock`/`relock_cell`,
 `resc`/`resc_cell`/`M_retro` (a retroactive rescue and the cell that rescued it), and the score `ok`, `m`,
-`frac`. The builder converts these into the compact records the page plays (one terminal outcome per frame,
-the rescues folded into the lock and re-lock records) and computes each cell's printed parameters as the
-median of `cell_params(M)` over its frames, reordered to the registry's standardized axes.
+`frac`. The builder converts these into the compact records the page plays: one terminal outcome per frame;
+a rescued frame also carries the cell that rescued it and its strict verdict (`rsc`, `rok`), and the lock and
+re-lock records list the frames they rescued (`rl`), so the composition chart re-colours those frames — from
+grey to the rescuing cell's colour — at the moment the rescue fires, and its bars end at the driver's final
+attribution (the registry's `n_frames`: 512 and 315). Each cell's printed parameters are the median of
+`cell_params(M)` over every frame attributed to it, the live `M` or the rescue's `M_retro`, reordered to the
+registry's standardized axes.
 
 Animation frame *i* is the state after record *i* − 1, as above. **The GIF plays every second record at
 12 frames per second — 2× real-time** — 451 frames, 80 ms each as stored (GIF delays are centiseconds), 36.1 s
@@ -244,20 +248,22 @@ python3 docs/streaming_replay/capture_gif.py frames docs/streaming_replay/glint_
     --theme dark --last 900 --step 2 --out cap_dark --pipe-box 40,120,700,470 --stream-box 60,560,700,670
 python3 docs/streaming_replay/capture_gif.py gif cap_dark docs/media/streaming_multicell_dark.gif --crop 6,0,1314,778 --width 900 --fps 12
 python3 docs/streaming_replay/capture_gif.py stills docs/streaming_replay/glint_streaming_multicell_real.html \
-    --theme dark --frames 0,5,146,300,620,900 --out docs/media/stills --crop 6,0,1314,778
+    --theme dark --frames 0,5,146,300,620,900 --out docs/media/stills --crop 6,0,1314,778 --prefix multicell_
 ```
+(`capture_gif.py` refuses a frame number past the page's trace — the page would wrap — and exits nonzero
+when a frame or still fails to capture.)
 
 The builder refuses any trace whose header is not this run (900 frames, 582 strict, 1 re-lock, 15 watchdog
 rescues, 10 buffered rescues), and refuses to build if `build_schedule` no longer reproduces the recorded
 frame order from the schedule in the header.
 
-### Filmstrip (dark theme; light-theme twins are `light_f*.png` alongside)
+### Filmstrip (dark theme; light-theme twins are `multicell_light_f*.png` alongside)
 
 | Still | Frame | What it shows |
 |---|---|---|
 | ![frame 0](media/stills/multicell_dark_f0000.png) | 0 | Nothing pushed: "Blind warm-up — no cell yet", one card "Discovering…", the planted schedule at scene 1 (lysozyme hold). |
-| ![frame 5](media/stills/multicell_dark_f0005.png) | 5 | The lock: "locked at frame 5 · Lysozyme", card LOCKED f5 with the measured cell, "↑4 rescued at lock"; strict 2 / 900. |
-| ![frame 146](media/stills/multicell_dark_f0146.png) | 146 | The re-lock: "Watchdog re-lock — Proteinase K added", second card RE-LOCK f145, "re-lock ×1 · frame 146 · +Proteinase K", "↑10 rescued at re-lock", rescue buffer drained; strict 96 / 900. |
+| ![frame 5](media/stills/multicell_dark_f0005.png) | 5 | The lock: "locked at frame 5 · Lysozyme", card LOCKED f5 with the measured cell, "↑4 rescued at lock"; the first composition bar turns from grey to lysozyme blue for the 4 rescued votes (2 solid, 2 faint) and keeps one grey unit for the vote never rescued; strict 2 / 900. |
+| ![frame 146](media/stills/multicell_dark_f0146.png) | 146 | The re-lock: "Watchdog re-lock — Proteinase K added", second card RE-LOCK f145, "re-lock ×1 · frame 146 · +Proteinase K", "↑10 rescued at re-lock", rescue buffer drained; the 10 rescued misses (records 80–143) turn orange in the bars they fell in (8 solid, 2 faint); strict 96 / 900. |
 | ![frame 300](media/stills/multicell_dark_f0300.png) | 300 | ProK-major steady state: two cells, composition bars mostly orange under a mostly-orange ribbon, blue bars where the lysozyme cell claimed ProK frames; strict 192 / 900. |
 | ![frame 620](media/stills/multicell_dark_f0620.png) | 620 | Lysozyme-major scene; strict 408 / 900. |
 | ![frame 900](media/stills/multicell_dark_f0900.png) | 900 | The end: 900 pushed, 813 accepted, 82 missed, two cells with their final claims (427 lyso · 85 ProK; 307 ProK · 8 lyso); **strict 582 / 900**. |

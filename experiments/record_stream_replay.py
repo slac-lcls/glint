@@ -142,8 +142,10 @@ class PixelPool:
         return h.hexdigest()[:6]
 
 
-def load_pixel_list(path, root=None):
-    """CrystFEL .stream (chunk order: `Image filename:` + optional `Event:`) or .lst -> PixelPool."""
+def load_pixel_list(path, root=None, order=None):
+    """CrystFEL .stream (chunk order: `Image filename:` + optional `Event:`) or .lst -> PixelPool.
+    `order`: a list file; the stream's chunks are then replayed in that file order (indexamajig -j writes
+    chunks in completion order, so a stream's order is not the list's -- q480_fix.txt is in list order)."""
     path = os.path.expanduser(path)
     items = []
     if path.endswith(".stream"):
@@ -174,6 +176,14 @@ def load_pixel_list(path, root=None):
                 fname = ev = None; cur = []; inpk = False
         if not items:
             raise SystemExit(f"{path}: no frames found")
+        if order:
+            want = [l.split()[0] for l in open(os.path.expanduser(order)) if l.strip() and not l.startswith("#")]
+            pos = {f: i for i, f in enumerate(want)}
+            missing = [f for f, _ in items if f not in pos]
+            if missing:
+                raise SystemExit(f"--order {order}: {len(missing)} chunk file(s) not in the list, e.g. {missing[0]}")
+            perm = sorted(range(len(items)), key=lambda k: pos[items[k][0]])
+            items = [items[k] for k in perm]; peaks = [peaks[k] for k in perm]
         return PixelPool(items, root, peaks=peaks)
     else:
         for line in open(path):
@@ -291,6 +301,7 @@ def main(argv=None):
     ap.add_argument("--stream-out", default=None); ap.add_argument("--cupy", action="store_true", help="use_gpu=True")
     ap.add_argument("--geom", default=None, help="CrystFEL geometry for PIXEL inputs (panels, data path, clen)")
     ap.add_argument("--data-root", default=None, help="directory relative file names in a .stream/.lst resolve against")
+    ap.add_argument("--order", default=None, help="replay a .stream input's chunks in this list file's order (see load_pixel_list)")
     ap.add_argument("--data-key", default=None, help="HDF5 dataset of the detector array (default: the geometry's `data`)")
     ap.add_argument("--wavelength", type=float, default=None, help="fixed wavelength in A for pixel inputs")
     ap.add_argument("--clen", type=float, default=None, help="override the geometry's clen (m)")
@@ -315,10 +326,10 @@ def main(argv=None):
     for spec in a.input:
         name, path = spec.split("=", 1)
         if is_pixel_input(path):
-            fr = load_pixel_list(path, a.data_root)
+            fr = load_pixel_list(path, a.data_root, order=a.order)
             pools[name] = fr
             meta_in.append(dict(name=name, path=os.path.expanduser(path), n=len(fr), digest=fr.digest(),
-                                kind="pixels", data_root=a.data_root, npk=None))   # npk filled from the events
+                                kind="pixels", data_root=a.data_root, order=a.order, npk=None))   # npk filled from the events
         else:
             fr = load_frames(path)
             pools[name] = fr

@@ -41,10 +41,18 @@ and index-only slots never predict -- but the constructor wants one.
 
   python experiments/record_stream_replay.py --input lyso=~/q480_fix.txt --B 20 --dmin 2.0 \\
       --warmup-rescue --adaptive-relock --min-inliers 10 --out replay480.json \\
-      --expect 331/480 --expect-wresc 6 --expect-relock 1        # the published arm, as a gate
-  python experiments/record_stream_replay.py --input lyso=~/q480_fix.txt --input prok=experiments/prok_q.npz \\
-      --ref prok=68.7,68.7,108.6,90,90,90 --schedule experiments/schedules/lyso_prok_switch.json \\
-      --warmup-rescue --adaptive-relock --min-inliers 10 --rescue-buffer 64 --out mixed.json
+      --expect 333/480 --expect-wresc 10 --expect-relock 1       # the published arm, as a gate
+
+The gate numbers are what this recorder AND experiments/test_streamdriver_vs_offline.py ("BOTH new
+mechanisms" row) print for the same arm on the same node -- A100 sdfampere036, 18 Sep 2026, bd79038:
+453 indexed, 4 warm-up rescues, 10 watchdog rescues, 1 relock (frame 405, the same spurious
+87.5/87.6/109.5 cell the published trace records), strict 331/453 post-lock + 2/4 warm-up-rescued
+= 333/480. The published trace (docs/streaming_replay/cxidb480_strace_a100.json: 328 post-lock + 3
+warm-up = 331, 6 watchdog rescues, relock at 364) was recorded at 2d6eacb on sdfampere042, before
+glint#170 (live-gate pin), glint#187 (running_consensus recount) and glint#197 (symmetric
+same_lattice), so its rescue/relock dynamics are not expected to match frame for frame; agreement
+between this recorder and the harness on one node is the test that the peaks-in path is the
+driver's own path. Regenerate the expectation from the harness when the driver changes.
 """
 import argparse
 import hashlib

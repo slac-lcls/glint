@@ -196,16 +196,25 @@ attributed to each — accepted live or rescued retroactively, 512 and 315 frame
 | strict, own-species reference | lysozyme (454) | Proteinase K (446) | total |
 |---|---|---|---|
 | solo, same frames, same arm (`gate480.json`, `prok907.json`) | 311 | 375 | — |
-| **this run** | **309** | **273** | **582 / 900** |
+| **this run** (first-fit cell assignment, the default) | **309** | **273** | **582 / 900** |
+| this run with `assign="best"` (glint#204; same stream, same node) | 309 | 341 | 650 / 900 |
 
 Attribution, planted species → cell the driver claimed the frame for: lysozyme frames → lyso 427, missed 19,
 prok 8; Proteinase K frames → **lyso 85**, prok 307, missed 54. Lysozyme pays two frames for the mixture.
 **Proteinase K pays about a hundred, and 85 of them are one mechanism**: the first-fit cascade tries cell 0
 first, and a dense 170-peak frame gives the lysozyme cell enough chance near-integer hits to pass the live
 gate (median 30 live inliers on those frames) — none of the 85 clear the strict bar under that cell. This is
-the measured case for best-fit rather than first-fit cell assignment; the run does not do it, and the page
-shows the cost (the colour disagreement between the composition bars and the planted ribbon) rather than
-hiding it.
+the measured case for best-fit rather than first-fit cell assignment. glint#204 adds it as an opt-in
+(`assign="best"`: every frame is indexed against every active cell, and a challenger takes it from the
+first-fit cell only when it explains at least max(8, 5 % of the peaks) more). Re-run on this stream on the same
+A100 (job 38563622; first-fit reproduces this trace record for record): **650 / 900** strict, Proteinase K
+**341**, lysozyme unchanged at 309 — 69 of the 85 misclaimed frames move to the Proteinase K cell (68 clear the
+strict bar; on them that cell explains a median 112 of 170 peaks against the lysozyme cell's 30), not one
+lysozyme frame moves. The margin is what keeps it honest on weak frames: plain argmax (margin 0) gives 649 but
+moves 21 lysozyme frames into the Proteinase K cell on a +1..+6 count difference, because a wrong cell's best
+orientation explains 12–15 % of the peaks by chance, more for the larger cell. The animation stays the
+first-fit run — it is the published default, and the cost it shows (the colour disagreement between the
+composition bars and the planted ribbon) is real.
 
 ### Per-frame semantics of this trace
 

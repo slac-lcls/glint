@@ -703,6 +703,7 @@ class StreamDriver:
         self._idx = [0] * self.B                                # global arrival index per slot (stream provenance)
         self._pkq = [None] * self.B                             # observed peaks aligned with _q (stream_peaks)
         self._haspix = [True] * self.B                          # False = push_peaks/push_q slot: index-only, no pixels to integrate
+        self._src = [None] * self.B                             # (image, event) the caller says this slot came from, for the .stream
         self._n = 0
         self._frame_no = 0
         self.stream_symmetry = dict(stream_symmetry or {})
@@ -1257,9 +1258,11 @@ class StreamDriver:
             rec["q"] = np.asarray(q, float).tolist()
         self._emit(rec)
 
-    def _emit_blind(self, ev, n_peaks, outcome, sup, lead, locked):
+    def _emit_blind(self, ev, n_peaks, outcome, sup, lead, locked, q=None):
         rec = self._event_base(ev, outcome, 0 if locked else None)
         rec.update(n_peaks=int(n_peaks), frac=None, n_inl=None, M=None, support=sup, lead=lead)
+        if getattr(self, "events_keep_q", False) and q is not None:
+            rec["q"] = np.asarray(q, float).tolist()
         self._emit(rec)
 
     def _emit_blank(self, ev, n_peaks):
@@ -1273,7 +1276,7 @@ class StreamDriver:
         self._emit(rec)
 
     # ------------------------------------------------------------------ ingest ------------------
-    def _push_blind(self, frame):
+    def _push_blind(self, frame, src=None):
         """Warm-up ingest: peak-find + blind-index this frame, feed the running consensus, lock on fire.
 
         Runs per frame (not batched) so the cell can lock at the first few frames; slot 0 is scratch
@@ -1318,7 +1321,7 @@ class StreamDriver:
         if self._events_on:
             npk = len(qq) if qq is not None else (n_peaks or 0)
             outcome = "warmup_lock" if (locked and voted) else ("warmup_vote" if voted else "blank")
-            self._emit_blind(ev, npk, outcome, sup, lead, locked)
+            self._emit_blind(ev, npk, outcome, sup, lead, locked, q=qq)
 
     def warmup_batch(self, frames, fanout=None):
         """Parallel, PEAK-triaged blind warm-up over a buffered startup stack (blind mode only).
@@ -1408,14 +1411,18 @@ class StreamDriver:
             last = max(sel) if sel else None
             for k in sel:
                 outcome = "warmup_lock" if (locked and k == last) else "warmup_vote"
-                self._emit_blind(ev0 + k, counts[k], outcome, sup_now, lead_now, locked)
+                self._emit_blind(ev0 + k, counts[k], outcome, sup_now, lead_now, locked,
+                                 q=qmap[k] if k < len(qmap) else None)
         return locked
 
-    def push(self, frame):
-        """Ingest one detector frame (host numpy or already-device array)."""
+    def push(self, frame, src=None):
+        """Ingest one detector frame (host numpy or already-device array). `src` = (image, event) or
+        an image filename: where the frame came from, stamped on its .stream chunk instead of the
+        `stream_image` placeholder and the arrival index (event None = one image per file, no Event line)."""
         if self._blind:
-            self._push_blind(frame); return
+            self._push_blind(frame, src=src); return
         slot = self._n
+        self._src[slot] = src
         xp = cp if self.gpu else np
         self._ring[slot][...] = xp.asarray(frame)            # single H2D into the resident slot
         pk = self.finder.find(self._ring[slot])              # peak-find ON DEVICE, no readback of pixels
@@ -1451,7 +1458,7 @@ class StreamDriver:
         if self._n == self.B:
             self.flush()
 
-    def push_peaks(self, fs, ss, intensity=None):
+    def push_peaks(self, fs, ss, intensity=None, src=None):
         """Ingest one frame as its PEAK LIST (data-array fs/ss in px, as PeakFinderV4 emits them) --
         the DRP reducer->indexer path, where the pixels never reach this process. The slot is
         index-only: registered, counted, written to the .stream as a crystal with zero reflections
@@ -1470,15 +1477,15 @@ class StreamDriver:
                 q = qq
                 if self.stream_peaks or self.geom_refine:
                     pkq = np.stack([fs[ok], ss[ok], pi[ok]], 1)
-        self._queue_q(q, n_peaks=int(fs.size), pkq=pkq)
+        self._queue_q(q, n_peaks=int(fs.size), pkq=pkq, src=src)
 
-    def push_q(self, q):
+    def push_q(self, q, src=None):
         """Ingest one frame as reciprocal vectors (n, 3) in 1/A (q @ M = hkl). Index-only, see push_peaks."""
         q = np.asarray(q, float).reshape(-1, 3)
         q = q[np.isfinite(q).all(1)]
-        self._queue_q(q if len(q) >= self.min_peaks else None, n_peaks=len(q))
+        self._queue_q(q if len(q) >= self.min_peaks else None, n_peaks=len(q), src=src)
 
-    def _queue_q(self, q, n_peaks, pkq=None):
+    def _queue_q(self, q, n_peaks, pkq=None, src=None):
         """Slot bookkeeping shared by push_peaks/push_q: blind -> warm-up ingest, locked -> ring slot.
         The arrival index is the push position in both modes, as for push()."""
         if self._blind:
@@ -1490,6 +1497,7 @@ class StreamDriver:
         self._idx[slot] = self.n_pushed
         self._pkq[slot] = pkq if self.stream_peaks else None
         self._haspix[slot] = False
+        self._src[slot] = src
         self._pk[slot] = None                                # nothing is predicted for an index-only slot
         if self.geom_refine and pkq is not None and len(pkq):
             self._pk[slot] = np.asarray(pkq[:, :2], float)   # ...but observed peaks still refine the geometry
@@ -1598,8 +1606,8 @@ class StreamDriver:
         keep = I != 0.0                                     # off-frame boxes integrate to exactly 0
         if keep.any():
             frac = None
-            if self.qc_frac_threshold is not None or self._writer is not None:
-                frac = self._inliers(self._q[i], M) / len(self._q[i])
+            if self.qc_frac_threshold is not None or self._writer is not None or self._events_on:
+                frac = self._inliers(self._q[i], M) / len(self._q[i])   # the marker carries it too
             low_conf = None
             if self.qc_frac_threshold is not None:
                 low_conf = frac < self.qc_frac_threshold
@@ -1636,7 +1644,14 @@ class StreamDriver:
             rows = dict(pred=None, I=None, sigma=None, peak=None, bg=None); fno = None
         else:
             rows = dict(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep]); fno = self._frame_no
-        rec = dict(image=self.stream_image, event=self._idx[i], M=Mcan, **rows,
+        src = self._src[i]
+        if src is None:
+            image, event = self.stream_image, self._idx[i]
+        elif isinstance(src, (tuple, list)):
+            image, event = src[0], (src[1] if len(src) > 1 else None)
+        else:
+            image, event = src, None
+        rec = dict(image=image, event=event, M=Mcan, **rows,
                    clen_m=self.clen_m, det_shift_mm=(dx, dy), dclen_m=dclen,
                    geom_n_solves=n_solves, cell_id=cell_id, lock_generation=self.n_relock,
                    matched_frac=frac, low_confidence=low_conf, frame_no=fno,
@@ -2090,6 +2105,7 @@ class StreamDriver:
         self._idx = [0] * self.B
         self._pkq = [None] * self.B
         self._haspix = [True] * self.B
+        self._src = [None] * self.B
 
     def stats(self, thr=0.0):
         if self._blind:                                         # not yet locked -- warm-up in progress

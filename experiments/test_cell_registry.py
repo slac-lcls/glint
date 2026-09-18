@@ -405,6 +405,44 @@ def test_peaks_in_slots_feed_the_geometry_refiner():
             assert drv._grefiner is None and "geom_correction" not in drv.stats()
 
 
+def test_source_stamps_the_stream_chunk_and_blind_events_carry_q():
+    """push(frame, src=(file, event)) / push_peaks(..., src=) name the frame's origin on its .stream chunk --
+    `Image filename:` is the source, the Event line is written only when the source has an event (a
+    one-image-per-file source gets none, as CrystFEL writes it) -- instead of the stream_image placeholder
+    and the arrival index; and with events_keep_q the blind warm-up records carry q too."""
+    rng = np.random.default_rng(SEED + 2)
+    with tempfile.TemporaryDirectory() as td:
+        out = os.path.join(td, "s.stream")
+        drv, _ = _driver(Mc=A, oracle_default=A, B=2, events=True, dmin=DMIN, stream_out=out,
+                         pf_kw=dict(abs_thr=200.0, son_min=5.0, min_pix=2))
+        img, _ = _pixel_frame(drv, A, rng); drv.push(img, src=("run7/shot_0001.h5", None))
+        img, _ = _pixel_frame(drv, A, rng); drv.push(img, src=("stack.cxi", 12))
+        drv.close()
+        txt = open(out).read()
+        chunks = txt.split("----- Begin chunk -----")[1:]
+        assert len(chunks) == 2, len(chunks)
+        assert "Image filename: run7/shot_0001.h5\n" in chunks[0] and "Event:" not in chunks[0], chunks[0][:200]
+        assert "Image filename: stack.cxi\nEvent: //12\n" in chunks[1], chunks[1][:200]
+        assert "glint.cxi" not in txt
+    # default: the placeholder image and the arrival index, byte-for-byte as before
+    with tempfile.TemporaryDirectory() as td:
+        out = os.path.join(td, "s.stream")
+        drv, _ = _driver(Mc=A, oracle_default=A, B=1, dmin=DMIN, stream_out=out,
+                         pf_kw=dict(abs_thr=200.0, son_min=5.0, min_pix=2))
+        img, _ = _pixel_frame(drv, A, rng); drv.push(img); drv.close()
+        assert "Image filename: glint.cxi\nEvent: //0\n" in open(out).read()
+    # blind warm-up records: q rides along under the same opt-in
+    rng = np.random.default_rng(SEED + 3)
+    for keep in (False, True):
+        drv, oracle = _driver(Mc=None, B=4, events=True, dmin=DMIN, warmup_nbest=1, lock_support=2, lock_gap=1)
+        drv.events_keep_q = keep
+        for _ in range(3):
+            q = oracle.add(frame_on(A, rng), A); drv.push_q(q)
+        blind = [e for e in drv.events if e["outcome"] in ("warmup_vote", "warmup_lock")]
+        assert blind, [e["outcome"] for e in drv.events]
+        assert all(("q" in e) == keep for e in blind), (keep, [list(e) for e in blind])
+
+
 TESTS = [test_roster_names_primary_relock_and_fallback,
          test_registry_counts_and_recent_share_after_scripted_flush,
          test_event_sequence_two_cells_relock_and_rescued_relock,
@@ -413,7 +451,8 @@ TESTS = [test_roster_names_primary_relock_and_fallback,
          test_default_config_stats_key_set_unchanged,
          test_new_constructor_options_are_appended,
          test_pixel_path_emits_integrated_marker_with_slot_and_optional_q,
-         test_peaks_in_slots_feed_the_geometry_refiner]
+         test_peaks_in_slots_feed_the_geometry_refiner,
+         test_source_stamps_the_stream_chunk_and_blind_events_carry_q]
 
 if __name__ == "__main__":
     failed = 0

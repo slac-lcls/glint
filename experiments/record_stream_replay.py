@@ -183,6 +183,8 @@ def main(argv=None):
     ap.add_argument("--warmup-rescue", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--adaptive-relock", action=argparse.BooleanOptionalAction, default=True)
     ap.add_argument("--lock-probe", action="store_true"); ap.add_argument("--cell-window", type=int, default=200)
+    ap.add_argument("--rescue-buffer", type=int, default=0)
+    ap.add_argument("--retry-cascade", action=argparse.BooleanOptionalAction, default=False)
     ap.add_argument("--stream-out", default=None); ap.add_argument("--cupy", action="store_true", help="use_gpu=True")
     ap.add_argument("--out", default="replay.json")
     # regression gate

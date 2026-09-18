@@ -1,0 +1,15 @@
+{
+  "comment": "Two-species scripted mixture over REAL frames (cxidb-17 lysozyme q lists, cxidb-45 Proteinase K prok_q.npz): hold-and-blend scenes in the spirit of the v2 generator; frames are consumed in file order within each species and never reused. The planted species per frame is the ground truth the monitor draws as the schedule ribbon; the driver never sees it.",
+  "seed": 7,
+  "exhausted": "skip",
+  "scenes": [
+    {"name": "lyso_hold",  "length": 120, "weights": {"lyso": 1.0}},
+    {"name": "blend_1",    "length": 40,  "weights": {"lyso": 0.5, "prok": 0.5}, "hold": 2},
+    {"name": "prok_major", "length": 200, "weights": {"prok": 0.7, "lyso": 0.3}, "hold": 2},
+    {"name": "blend_2",    "length": 40,  "weights": {"lyso": 0.5, "prok": 0.5}, "hold": 2},
+    {"name": "lyso_major", "length": 200, "weights": {"lyso": 0.6, "prok": 0.4}, "hold": 2},
+    {"name": "blend_3",    "length": 40,  "weights": {"lyso": 0.5, "prok": 0.5}, "hold": 2},
+    {"name": "prok_hold",  "length": 160, "weights": {"prok": 1.0}},
+    {"name": "lyso_tail",  "length": 100, "weights": {"lyso": 1.0}}
+  ]
+}

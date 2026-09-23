@@ -1076,8 +1076,8 @@ class StreamDriver:
         #     the QC low-confidence flag, and both are reported (frame event, .stream chunk).
         # The search is a blind solve on the residual (~26 ms on an A100), so it runs only where the
         # score is marginal. A 1-in-16 azimuth-scramble null on the rescue path reports the rule's own
-        # false-accept floor live, as double_hit's does. Lattice 2 is scored, not integrated: its
-        # reflections do not enter the merge.
+        # false-accept floor live, as double_hit's does. Only the lattice the frame is kept under is
+        # integrated; the other is reported, never merged as a second crystal.
         self.per_lattice = bool(per_lattice)
         self.per_lattice_below = float(per_lattice_below)
         if not 0.0 <= self.per_lattice_below <= 1.0:

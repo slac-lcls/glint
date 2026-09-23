@@ -659,7 +659,9 @@ class StreamDriver:
                  # published behaviour) or "best" (a challenger takes it from the first-fit cell when it
                  # explains at least max(assign_margin, assign_margin_frac * n_peaks) more peaks) --
                  # see _index_best_fit
-                 assign="first", assign_margin=8, assign_margin_frac=0.05):
+                 assign="first", assign_margin=8, assign_margin_frac=0.05,
+                 # per-lattice scoring of double hits (off by default) -- see _per_lattice_rescue
+                 per_lattice=False, per_lattice_below=0.25):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -710,6 +712,9 @@ class StreamDriver:
         self._haspix = [True] * self.B                          # False = push_peaks/push_q slot: index-only, no pixels to integrate
         self._src = [None] * self.B                             # (image, event) the caller says this slot came from, for the .stream
         self._inl_alt = [None] * self.B                         # assign="best": inlier count under EVERY active cell, for the event
+        self._pl = [None] * self.B                              # per_lattice: the frame's second lattice, when one was found
+        self._pl_v = [None] * self.B                            # ... and the (verdict, residual) the rescue already computed
+        self._rej = {}                                          # per_lattice: best REJECTED registration per slot, this flush
         self._n = 0
         self._frame_no = 0
         self.stream_symmetry = dict(stream_symmetry or {})
@@ -1050,6 +1055,34 @@ class StreamDriver:
         self.assign_margin, self.assign_margin_frac = int(assign_margin), float(assign_margin_frac)
         if self.assign_margin < 0 or self.assign_margin_frac < 0:
             raise ValueError("assign_margin and assign_margin_frac must be >= 0")
+        # PER-LATTICE SCORING (opt-in). In a double hit -- two crystals of the same protein in one shot,
+        # which the gated rule finds in about a third of the frames that index on cxidb-17
+        # (experiments/joint_ceiling/RESULTS_second_lattice.md) -- the live gate's denominator counts the
+        # SECOND crystal's peaks against the first. A lattice that explains 13 % of all the peaks can
+        # explain 20 % of the peaks the other crystal does not claim. per_lattice=True scores a lattice
+        # against the peaks no other lattice in the frame claims:
+        #   * a frame that fails the live gate under every active cell is searched for a second lattice
+        #     in the peaks its best rejected registration leaves -- the shipped double-hit rule,
+        #     multilattice.second_lattice_verdict: same cell as lattice 1, >= 15 deg away. If one is
+        #     found and lattice 1 passes the live gate on the peaks lattice 2 does not claim, the frame
+        #     is accepted under lattice 1 (outcome "rescued_per_lattice");
+        #   * an accepted frame whose lattice-1 share is below per_lattice_below is searched the same
+        #     way; when a second lattice is found the per-lattice fraction replaces the whole-frame one in
+        #     the QC low-confidence flag, and both are reported (frame event, .stream chunk).
+        # The search is a blind solve on the residual (~26 ms on an A100), so it runs only where the
+        # score is marginal. A 1-in-16 azimuth-scramble null on the rescue path reports the rule's own
+        # false-accept floor live, as double_hit's does. Lattice 2 is scored, not integrated: its
+        # reflections do not enter the merge.
+        self.per_lattice = bool(per_lattice)
+        self.per_lattice_below = float(per_lattice_below)
+        if not 0.0 <= self.per_lattice_below <= 1.0:
+            raise ValueError(f"per_lattice_below must be in [0, 1], got {per_lattice_below!r}")
+        self.n_pl_searched = self.n_pl_found = self.n_pl_rescued = self.n_pl_swapped = 0
+        self.n_pl_null_tested = self.n_pl_null_found = self.n_pl_null_rescued = 0
+        self._pl_n = 0
+        self._pl_rng = np.random.default_rng(0x9E4C3)
+        if not self.double_hit:
+            self._dh_index = None                               # resolved on first use (keeps construction torch-free)
 
         # Blind warm-up: with Mc=None the driver has no cell yet, so it indexes the first frames
         # blind (~26 ms/frame) one at a time, accumulating cross-frame consensus; when the running
@@ -1278,6 +1311,9 @@ class StreamDriver:
         alt = getattr(self, "_inl_alt", None)
         if alt is not None and alt[i] is not None:
             rec["inl_by_cell"] = [int(v) for v in alt[i]]   # assign="best": what every active cell saw
+        pl = getattr(self, "_pl", None)
+        if pl is not None and pl[i] is not None:
+            rec["second_lattice"] = dict(pl[i])             # per_lattice: the frame's second lattice, both fractions
         if getattr(self, "events_keep_q", False) and q is not None:
             rec["q"] = np.asarray(q, float).tolist()        # opt-in (plain attribute): a recorder that never
         self._emit(rec)                                     # saw the pixels can still score the frame
@@ -1564,6 +1600,104 @@ class StreamDriver:
             return False
         return not self.min_inlier_frac or n >= self.min_inlier_frac * n_peaks
 
+
+    def _sl_index(self):
+        """The blind indexer the second-lattice search uses (index_blind_nbest), resolved lazily."""
+        if getattr(self, "_dh_index", None) is None:
+            from glint.glint_fast import index_blind_nbest
+            self._dh_index = index_blind_nbest
+        return self._dh_index
+
+    def _second_lattice(self, q, M1):
+        """The shipped gated double-hit search on the peaks M1 leaves: (verdict, residual), or
+        (None, residual) when the residual is too small to search (min_peaks)."""
+        from glint.multilattice import second_lattice_verdict
+        resid = deflate_peaks(q, M1)
+        if len(resid) < self.min_peaks:
+            return None, resid
+        return second_lattice_verdict(resid, M1, self._sl_index(), min_peaks=self.min_peaks), resid
+
+    def _pl_record(self, i, q, v, resid, kept):
+        """Per-lattice numbers for slot i from an ACCEPTED second-lattice verdict (frame event, chunk).
+
+        n1 is the deflation's own count of the peaks the FIRST registration claims; m2 the residual peaks
+        the second lattice indexes. Only the DOMINANT lattice -- the one claiming more peaks -- is scored
+        per lattice, against the peaks the other does not claim. The rule matters: when the first
+        registration is the weaker crystal (or a wrong orientation of the right cell, which explains
+        12-15 % of a dense frame by chance), the search finds the frame's real crystal in the residual,
+        and removing ITS peaks from the first registration's denominator would reward the weaker one.
+        On cxidb-17 the second lattice is the stronger in 5 of the 15 double hits among the frames no
+        arm indexes, and in none of the 134 among the frames that index.
+        `kept` says which lattice the frame was integrated under: "first", "second" or None."""
+        n1 = len(q) - len(resid)
+        m2 = self._inliers(resid, np.asarray(v["M2"], float))
+        dominant = "first" if n1 >= m2 else "second"
+        nd, no = (n1, m2) if dominant == "first" else (m2, n1)
+        rec = dict(n1=int(n1), m2=int(m2), n_peaks=int(len(q)), misorientation=round(float(v["misorientation"]), 2),
+                   dominant=dominant, kept=kept, frac_first=n1 / len(q),
+                   frac_per_lattice=nd / max(len(q) - no, 1),       # the dominant lattice, per lattice
+                   M2=np.asarray(v["M2"], float).tolist())
+        self._pl[i] = rec
+        return rec
+
+    def _qc_frac(self, i, frac):
+        """The fraction the QC low-confidence flag reads: the per-lattice fraction when a second lattice
+        was found under per_lattice AND the integrated lattice is the dominant one; the whole-frame
+        fraction otherwise (a weaker lattice is never upgraded by removing a stronger one's peaks)."""
+        pl = getattr(self, "_pl", None)
+        rec = pl[i] if pl is not None else None
+        if rec is not None and rec["kept"] is not None and rec["kept"] == rec["dominant"]:
+            return rec["frac_per_lattice"]
+        return frac
+
+    def _per_lattice_rescue(self, slots):
+        """per_lattice (see __init__): frames that failed the live gate under every active cell. Returns
+        the slots still missed, for the retry cascade / watchdog / gate_rejected exactly as before."""
+        from glint.multilattice import scramble_azimuth, second_lattice_verdict
+        still = []
+        for i in slots:
+            rej = self._rej.get(i)
+            if rej is None:                                 # nothing registered: no lattice 1 to score
+                still.append(i)
+                continue
+            M, k, _ = rej
+            q = self._q[i]
+            v, resid = self._second_lattice(q, M)
+            if v is None:
+                still.append(i)
+                continue
+            self.n_pl_searched += 1
+            self._pl_n += 1
+            n1 = len(q) - len(resid)
+            if self._pl_n % 16 == 1:                        # the rescue rule's own false-accept floor, live
+                rs = scramble_azimuth(resid, self._pl_rng)
+                vn = second_lattice_verdict(rs, M, self._sl_index(), min_peaks=self.min_peaks)
+                self.n_pl_null_tested += 1
+                if vn["accepted"]:
+                    self.n_pl_null_found += 1
+                    m2n = self._inliers(rs, np.asarray(vn["M2"], float))
+                    nd, no = (n1, m2n) if n1 >= m2n else (m2n, n1)
+                    self.n_pl_null_rescued += bool(self._gate_count(nd, len(q) - no))
+            if not v["accepted"]:
+                still.append(i)
+                continue
+            self.n_pl_found += 1
+            rec = self._pl_record(i, q, v, resid, kept=None)
+            nd, no = (rec["n1"], rec["m2"]) if rec["dominant"] == "first" else (rec["m2"], rec["n1"])
+            if not self._gate_count(nd, len(q) - no):
+                still.append(i)                             # a double hit, but the stronger lattice is too weak even alone
+                continue
+            rec["kept"] = rec["dominant"]
+            self._pl_v[i] = (v, resid)                      # _integrate_one must not search this frame again
+            self.n_pl_rescued += 1
+            grid, acc = self._cell_sink(k)
+            if rec["dominant"] == "first":                  # the registration in hand is the frame's crystal
+                self._integrate_one(i, M, grid, acc, cell_id=k, known_cell=True, outcome="rescued_per_lattice")
+            else:                                           # the residual held the stronger crystal: keep THAT one
+                self.n_pl_swapped += 1
+                self._integrate_one(i, np.asarray(v["M2"], float), grid, acc, cell_id=k, known_cell=False,
+                                    outcome="rescued_per_lattice")
+        return still
     def _integrate_one(self, i, M, grid, acc, cell_id=0, known_cell=False, outcome="indexed"):
         """Canonicalize + predict + integrate slot i under an ALREADY-ACCEPTED matrix M into acc.
         Split out of _index_integrate so _watchdog's individual rescue can integrate a validated
@@ -1592,11 +1726,21 @@ class StreamDriver:
         # behaviour only -- see glint#188.
         Mcan = self._standardize(M, ref=getattr(grid, "Mc_ref", None) if known_cell else None)
         self._attribute(cell_id, self._idx[i])              # registry: this cell took this frame
-        if self._events_on:
-            self._emit_frame(i, outcome, cell=cell_id, M=M)
-        if self.double_hit:                                 # deflate-and-reindex: a 2nd crystal in this shot?
-            resid = deflate_peaks(self._q[i], Mcan)
-            if len(resid) >= self.min_peaks:
+        pl_on = getattr(self, "per_lattice", False)
+        if self.double_hit or pl_on:                        # deflate-and-reindex: a 2nd crystal in this shot?
+            q = self._q[i]
+            cached = self._pl_v[i] if pl_on else None       # the per-lattice rescue already searched this frame
+            if pl_on and cached is None:
+                self._pl[i] = None                          # a record from another lattice 1 (a failed rescue) must not leak
+            if cached is not None:
+                v, resid = cached
+            elif self.double_hit or (len(q) and self._inliers(q, Mcan) / len(q) < self.per_lattice_below):
+                v, resid = self._second_lattice(q, Mcan)
+                if pl_on and v is not None:
+                    self.n_pl_searched += 1
+            else:
+                v = resid = None
+            if v is not None and self.double_hit:
                 # A 2nd crystal = the residual re-indexes to the SAME CELL as lattice 1 (SFX double
                 # hits are the same protein at a new orientation) at a genuinely different
                 # orientation. The earlier comment here claimed the residual-inlier test "already
@@ -1609,22 +1753,27 @@ class StreamDriver:
                 # 5-15 deg band, so the cut is not delicate). The periodic scramble null reports the
                 # gated rule's own false-accept floor on the run actually in front of it.
                 from glint.multilattice import scramble_azimuth, second_lattice_verdict
-                v = second_lattice_verdict(resid, Mcan, self._dh_index, min_peaks=self.min_peaks)
                 self.n_double_raw += bool(v["raw"])
                 self.n_double += bool(v["accepted"])
                 self._dh_n += 1
                 if self._dh_n % 16 == 1:
                     vn = second_lattice_verdict(scramble_azimuth(resid, self._dh_rng), Mcan,
-                                                self._dh_index, min_peaks=self.min_peaks)
+                                                self._sl_index(), min_peaks=self.min_peaks)
                     self.n_dh_null_tested += 1
                     self.n_dh_null_acc += bool(vn["accepted"])
+            if v is not None and pl_on and cached is None and v["accepted"]:
+                self.n_pl_found += 1
+                self._pl_record(i, q, v, resid, kept="first")   # accepted as registered; QC credits it only if dominant
+        if self._events_on:
+            self._emit_frame(i, outcome, cell=cell_id, M=M)
         if not self._haspix[i]:                             # peaks-in slot: registered + counted, nothing to integrate
             if self._grefiner is not None and self._pk[i] is not None:
                 self._grefiner.add_frame(recip_from_M(Mcan), self._pk[i], None)   # it predicts for itself
             if self._writer is not None:
                 q = self._q[i]
                 frac = self._inliers(q, M) / max(len(q), 1)
-                low_conf = (frac < self.qc_frac_threshold) if self.qc_frac_threshold is not None else None
+                qc = self._qc_frac(i, frac)                 # per-lattice when a second lattice was found
+                low_conf = (qc < self.qc_frac_threshold) if self.qc_frac_threshold is not None else None
                 self._writer.write(self._stream_record(i, Mcan, None, None, None, None, None, None,
                                                        cell_id, frac, low_conf))
             return
@@ -1648,10 +1797,11 @@ class StreamDriver:
                 frac = self._inliers(self._q[i], M) / len(self._q[i])   # the marker carries it too
             low_conf = None
             if self.qc_frac_threshold is not None:
-                low_conf = frac < self.qc_frac_threshold
+                qc = self._qc_frac(i, frac)                 # per-lattice when a second lattice was found
+                low_conf = qc < self.qc_frac_threshold
                 if low_conf:
                     self.n_low_confidence += 1
-                    self.low_conf_frames.append((self._frame_no, frac))
+                    self.low_conf_frames.append((self._frame_no, qc))
             acc.add_frame(hkl[keep], I[keep], sig[keep], self._frame_no)
             if self._writer is not None:
                 self._writer.write(self._stream_record(i, Mcan, pred, I, sig, pkI, bg, keep,
@@ -1661,6 +1811,9 @@ class StreamDriver:
                 rec = self._event_base(self._idx[i], "integrated", cell_id)      # `indexed` record precedes it
                 rec.update(slot=int(i), n_pred=int(len(pred)), n_refl=int(keep.sum()),
                            frame_no=self._frame_no - 1, frac=frac, low_conf=low_conf)
+                pl = getattr(self, "_pl", None)
+                if pl is not None and pl[i] is not None and pl[i]["kept"] == pl[i]["dominant"]:
+                    rec["frac_per_lattice"] = pl[i]["frac_per_lattice"]
                 self._emit(rec)
 
     def _stream_record(self, i, Mcan, pred, I, sig, pkI, bg, keep, cell_id, frac, low_conf):
@@ -1694,6 +1847,11 @@ class StreamDriver:
                    geom_n_solves=n_solves, cell_id=cell_id, lock_generation=self.n_relock,
                    matched_frac=frac, low_confidence=low_conf, frame_no=fno,
                    **self.stream_symmetry)
+        pl = getattr(self, "_pl", None)
+        if pl is not None and pl[i] is not None:            # per_lattice: the second lattice and its fraction
+            if pl[i]["kept"] is not None and pl[i]["kept"] == pl[i]["dominant"]:
+                rec["matched_frac_per_lattice"] = pl[i]["frac_per_lattice"]
+            rec["second_lattice_deg"] = pl[i]["misorientation"]
         # Observed peaks: always for "all", only for the flagged frames for "flagged". Paired with
         # |q| so the chunk carries a real (1/d); these are the rows a downstream re-index would use.
         if self.stream_peaks and self._pkq[i] is not None:
@@ -1743,6 +1901,10 @@ class StreamDriver:
         for i, M in zip(slots, Ms):
             M = np.asarray(M, float) if M is not None else None
             if M is None or abs(np.linalg.det(M)) < 1.0 or not self._fits(self._q[i], M):
+                if getattr(self, "per_lattice", False) and M is not None and abs(np.linalg.det(M)) >= 1.0:
+                    n = self._inliers(self._q[i], M)        # the best rejected registration, for the rescue
+                    if i not in self._rej or n > self._rej[i][2]:
+                        self._rej[i] = (M, cell_id, n)
                 if gate:
                     missed.append(i)                    # another cell / the watchdog may still take it
                 else:
@@ -1783,6 +1945,10 @@ class StreamDriver:
             counts = [fits[k][j][1] for k in range(len(cells))]
             k0 = next((k for k, n in enumerate(counts) if self._gate_count(n, npk)), None)
             if k0 is None:                                      # the gate is monotone in the count: no cell fits
+                if getattr(self, "per_lattice", False):
+                    kb = int(np.argmax(counts))
+                    if fits[kb][j][0] is not None:
+                        self._rej[i] = (fits[kb][j][0], kb, counts[kb])
                 missed.append(i)
                 continue
             kb = int(np.argmax(counts))                          # argmax takes the FIRST maximum: cell order on ties
@@ -2155,16 +2321,22 @@ class StreamDriver:
             # single-cell call verbatim (rejects counted and dropped inside _index_integrate). With
             # it ON the rejects are handed back so the cascade can retry them, and whatever it cannot
             # save is counted in n_gate_rejected here -- the same frames, the same counter.
+            pl = getattr(self, "per_lattice", False)
             missed = self._index_integrate(slots, self.Mc, self.grid, self.acc,
-                                           gate=self.retry_cascade)
+                                           gate=self.retry_cascade or pl)
+            if missed and pl:                               # per-lattice first: it scores the registration in hand
+                missed = self._per_lattice_rescue(missed)
             if missed:
-                still, _ = self._cascade_retry(missed)      # no watchdog here -> no cache to carry
+                # no watchdog here -> no cache to carry; without the cascade the misses are just counted
+                still, _ = self._cascade_retry(missed) if self.retry_cascade else (missed, None)
                 self.n_gate_rejected += len(still)
                 if self._events_on:
                     for i in still:
                         self._emit_frame(i, "gate_rejected")
         elif slots and self.assign == "best" and self.extra:
             remaining = self._index_best_fit(slots)            # every cell sees every frame; most inliers wins
+            if remaining and getattr(self, "per_lattice", False):
+                remaining = self._per_lattice_rescue(remaining)
             cached_nbest = None
             if remaining and self.retry_cascade:
                 remaining, cached_nbest = self._cascade_retry(remaining)
@@ -2179,6 +2351,8 @@ class StreamDriver:
                     break
                 remaining = self._index_integrate(remaining, e["Mc"], e["grid"], e["acc"], gate=True,
                                                   cell_id=k)
+            if remaining and getattr(self, "per_lattice", False):
+                remaining = self._per_lattice_rescue(remaining)
             cached_nbest = None
             if remaining and self.retry_cascade:                # retry BEFORE the miss buffer claims them
                 remaining, cached_nbest = self._cascade_retry(remaining)
@@ -2195,6 +2369,9 @@ class StreamDriver:
         self._haspix = [True] * self.B
         self._src = [None] * self.B
         self._inl_alt = [None] * self.B
+        self._pl = [None] * self.B
+        self._pl_v = [None] * self.B
+        self._rej = {}
 
     def stats(self, thr=0.0):
         if self._blind:                                         # not yet locked -- warm-up in progress
@@ -2279,6 +2456,16 @@ class StreamDriver:
             # a double_hit_rate is only meaningful read AGAINST this
             s["n_dh_null"] = self.n_dh_null_tested
             s["dh_null_rate"] = self.n_dh_null_acc / max(self.n_dh_null_tested, 1)
+        if getattr(self, "per_lattice", False):
+            s["n_per_lattice_searched"] = self.n_pl_searched
+            s["n_per_lattice_found"] = self.n_pl_found
+            s["n_per_lattice_rescued"] = self.n_pl_rescued
+            s["n_per_lattice_swapped"] = self.n_pl_swapped       # rescued under the stronger, second lattice
+            # the rescue rule's own false-accept floor on azimuth-scrambled residuals (1 search in 16):
+            # a second lattice found at all, and one that would also have rescued the frame
+            s["n_pl_null"] = self.n_pl_null_tested
+            s["pl_null_found_rate"] = self.n_pl_null_found / max(self.n_pl_null_tested, 1)
+            s["pl_null_rescued_rate"] = self.n_pl_null_rescued / max(self.n_pl_null_tested, 1)
         if self._grefiner is not None:
             s["geom_correction"] = self._grefiner.correction()
         return s

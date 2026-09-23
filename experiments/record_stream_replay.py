@@ -317,6 +317,15 @@ def git_head():
         return None
 
 
+def git_dirty():
+    """True when tracked files differ from HEAD -- the run is then NOT reproducible from the commit alone."""
+    try:
+        return bool(subprocess.check_output(["git", "-C", ROOT, "status", "--porcelain", "--untracked-files=no"],
+                                            text=True).strip())
+    except Exception:                                       # noqa: BLE001 -- provenance only
+        return None
+
+
 # ----------------------------------------------------------------------------- main -------------
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -370,6 +379,8 @@ def main(argv=None):
     ap.add_argument("--expect-mode", choices=("species", "drv"), default="species",
                     help="which strict count --expect gates: own-species reference (default) or the driver's primary")
     a = ap.parse_args(argv)
+    # provenance is read NOW, before any work: a commit made while a long replay runs must not relabel it
+    git0, dirty0 = git_head(), git_dirty()
 
     # ---- inputs, references, schedule
     pools, meta_in = {}, []
@@ -651,7 +662,7 @@ def main(argv=None):
                   geometry=geom_meta, geom_correction=st.get("geom_correction"), geom_trace=geom_trace or None,
                   ingest=("peaks_in" if a.peaks_in else ("pixels" if pixel_pools else "q")),
                   read_s=round(t_read, 1),
-                  provenance=dict(git=git_head(), host=socket.gethostname(), python=platform.python_version(),
+                  provenance=dict(git=git0, git_dirty=dirty0, host=socket.gethostname(), python=platform.python_version(),
                                   numpy=np.__version__, use_gpu=a.cupy, argv=sys.argv[1:],
                                   elapsed_s=round(time.time() - t0, 1), timestamp=time.strftime("%Y-%m-%dT%H:%M:%S%z")))
     try:

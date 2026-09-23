@@ -1059,13 +1059,18 @@ class StreamDriver:
         # which the gated rule finds in about a third of the frames that index on cxidb-17
         # (experiments/joint_ceiling/RESULTS_second_lattice.md) -- the live gate's denominator counts the
         # SECOND crystal's peaks against the first. A lattice that explains 13 % of all the peaks can
-        # explain 20 % of the peaks the other crystal does not claim. per_lattice=True scores a lattice
-        # against the peaks no other lattice in the frame claims:
+        # explain 20 % of the peaks the other crystal does not claim. per_lattice=True scores the
+        # STRONGER of the two lattices against the peaks the other does not claim (see _pl_record for
+        # why never the weaker):
         #   * a frame that fails the live gate under every active cell is searched for a second lattice
         #     in the peaks its best rejected registration leaves -- the shipped double-hit rule,
         #     multilattice.second_lattice_verdict: same cell as lattice 1, >= 15 deg away. If one is
-        #     found and lattice 1 passes the live gate on the peaks lattice 2 does not claim, the frame
-        #     is accepted under lattice 1 (outcome "rescued_per_lattice");
+        #     found and the stronger lattice passes the live gate on the peaks the other does not claim,
+        #     the frame is accepted under THAT lattice (outcome "rescued_per_lattice"). On the cxidb-17
+        #     480-frame replay every such rescue kept the residual's lattice, and the rejected
+        #     registration had explained 11-14 % of the peaks -- about what a wrong orientation of the
+        #     right cell explains by chance -- so this path mostly recovers frames the known-cell search
+        #     mis-registered, and the kept lattice usually passes the whole-frame gate as well;
         #   * an accepted frame whose lattice-1 share is below per_lattice_below is searched the same
         #     way; when a second lattice is found the per-lattice fraction replaces the whole-frame one in
         #     the QC low-confidence flag, and both are reported (frame event, .stream chunk).
@@ -1617,7 +1622,7 @@ class StreamDriver:
             return None, resid
         return second_lattice_verdict(resid, M1, self._sl_index(), min_peaks=self.min_peaks), resid
 
-    def _pl_record(self, i, q, v, resid, kept):
+    def _pl_record(self, i, q, v, resid, kept, M1):
         """Per-lattice numbers for slot i from an ACCEPTED second-lattice verdict (frame event, chunk).
 
         n1 is the deflation's own count of the peaks the FIRST registration claims; m2 the residual peaks
@@ -1628,7 +1633,9 @@ class StreamDriver:
         and removing ITS peaks from the first registration's denominator would reward the weaker one.
         On cxidb-17 the second lattice is the stronger in 5 of the 15 double hits among the frames no
         arm indexes, and in none of the 134 among the frames that index.
-        `kept` says which lattice the frame was integrated under: "first", "second" or None."""
+        `kept` says which lattice the frame was integrated under: "first", "second" or None. M1 is the
+        lattice-1 matrix the residual was deflated with; both matrices are recorded so a scorer can
+        rebuild each lattice's claim (lattice 1 first, as the deflation assigns them)."""
         n1 = len(q) - len(resid)
         m2 = self._inliers(resid, np.asarray(v["M2"], float))
         dominant = "first" if n1 >= m2 else "second"
@@ -1636,7 +1643,7 @@ class StreamDriver:
         rec = dict(n1=int(n1), m2=int(m2), n_peaks=int(len(q)), misorientation=round(float(v["misorientation"]), 2),
                    dominant=dominant, kept=kept, frac_first=n1 / len(q),
                    frac_per_lattice=nd / max(len(q) - no, 1),       # the dominant lattice, per lattice
-                   M2=np.asarray(v["M2"], float).tolist())
+                   M1=np.asarray(M1, float).tolist(), M2=np.asarray(v["M2"], float).tolist())
         self._pl[i] = rec
         return rec
 
@@ -1682,13 +1689,13 @@ class StreamDriver:
                 still.append(i)
                 continue
             self.n_pl_found += 1
-            rec = self._pl_record(i, q, v, resid, kept=None)
+            rec = self._pl_record(i, q, v, resid, kept=None, M1=M)
             nd, no = (rec["n1"], rec["m2"]) if rec["dominant"] == "first" else (rec["m2"], rec["n1"])
             if not self._gate_count(nd, len(q) - no):
                 still.append(i)                             # a double hit, but the stronger lattice is too weak even alone
                 continue
             rec["kept"] = rec["dominant"]
-            self._pl_v[i] = (v, resid)                      # _integrate_one must not search this frame again
+            self._pl_v[i] = (v, resid, M)                   # _integrate_one must not search this frame again
             self.n_pl_rescued += 1
             grid, acc = self._cell_sink(k)
             if rec["dominant"] == "first":                  # the registration in hand is the frame's crystal
@@ -1732,14 +1739,15 @@ class StreamDriver:
             cached = self._pl_v[i] if pl_on else None       # the per-lattice rescue already searched this frame
             if pl_on and cached is None:
                 self._pl[i] = None                          # a record from another lattice 1 (a failed rescue) must not leak
-            if cached is not None:
-                v, resid = cached
+            if cached is not None:                          # M1: the lattice the residual was deflated with --
+                v, resid, M1 = cached                       # NOT the kept one when the rescue swapped lattices
             elif self.double_hit or (len(q) and self._inliers(q, Mcan) / len(q) < self.per_lattice_below):
-                v, resid = self._second_lattice(q, Mcan)
+                M1 = Mcan
+                v, resid = self._second_lattice(q, M1)
                 if pl_on and v is not None:
                     self.n_pl_searched += 1
             else:
-                v = resid = None
+                v = resid = M1 = None
             if v is not None and self.double_hit:
                 # A 2nd crystal = the residual re-indexes to the SAME CELL as lattice 1 (SFX double
                 # hits are the same protein at a new orientation) at a genuinely different
@@ -1757,13 +1765,13 @@ class StreamDriver:
                 self.n_double += bool(v["accepted"])
                 self._dh_n += 1
                 if self._dh_n % 16 == 1:
-                    vn = second_lattice_verdict(scramble_azimuth(resid, self._dh_rng), Mcan,
+                    vn = second_lattice_verdict(scramble_azimuth(resid, self._dh_rng), M1,
                                                 self._sl_index(), min_peaks=self.min_peaks)
                     self.n_dh_null_tested += 1
                     self.n_dh_null_acc += bool(vn["accepted"])
             if v is not None and pl_on and cached is None and v["accepted"]:
                 self.n_pl_found += 1
-                self._pl_record(i, q, v, resid, kept="first")   # accepted as registered; QC credits it only if dominant
+                self._pl_record(i, q, v, resid, kept="first", M1=M1)   # accepted as registered; QC credits it only if dominant
         if self._events_on:
             self._emit_frame(i, outcome, cell=cell_id, M=M)
         if not self._haspix[i]:                             # peaks-in slot: registered + counted, nothing to integrate

@@ -4,10 +4,13 @@ WHAT IS PINNED. In a double hit -- two crystals of the same cell in one shot -- 
 denominator counts the second crystal's peaks against the first. With per_lattice=True the driver
 (a) searches a frame that fails the live gate under every active cell for a second lattice in the peaks
 its best rejected registration leaves (the shipped double-hit rule: same cell, >= 15 deg away), and
-accepts the frame under lattice 1 when lattice 1 passes the live gate on the peaks lattice 2 does not
-claim (outcome "rescued_per_lattice"); (b) searches an accepted frame whose lattice-1 share is below
-per_lattice_below and, when a second lattice is found, feeds the per-lattice fraction to the QC
-low-confidence flag and reports both fractions. Default off: nothing changes for existing callers.
+accepts the frame under the STRONGER of the two lattices when that one passes the live gate on the peaks
+the other does not claim (outcome "rescued_per_lattice"); (b) searches an accepted frame whose lattice-1
+share is below per_lattice_below and, when a second lattice is found, feeds the per-lattice fraction to
+the QC low-confidence flag -- only when the frame's lattice is the stronger one -- and reports both
+fractions. The recorder's per-lattice column (experiments/record_stream_replay.py) scores the kept
+lattice on the peaks the other lattice does not claim; its half here skips where torch is missing.
+Default off: nothing changes for existing callers.
 
 FIXTURE. q-vectors exactly on two orientations of one cell 40 deg apart, plus uniform noise. The fixture
 computes, with the driver's own deflation, how many peaks lattice 1 claims and how many of the rest
@@ -212,6 +215,8 @@ def test_stronger_second_lattice_is_the_one_kept():
     assert (sl["kept"], sl["dominant"]) == ("second", "second"), sl
     assert abs(sl["frac_per_lattice"] - fx.m2 / (fx.npk - fx.n1)) < 1e-12, sl
     assert _same_orientation(e["M"], fx.A2), "integrated under the stronger, second lattice"
+    assert _same_orientation(sl["M1"], A1) and _same_orientation(sl["M2"], fx.A2), "both lattices recorded"
+    assert drv._pl_v[0] is None, "the slot's cache is cleared by the flush"
     st = drv.stats()
     assert (st["n_per_lattice_rescued"], st["n_per_lattice_swapped"]) == (1, 1), st
 
@@ -306,6 +311,51 @@ def test_double_hit_and_per_lattice_share_one_search():
             assert st["n_per_lattice_searched"] == 1 and st["n_per_lattice_found"] == 1, st
 
 
+def _coincident(M1, M2, k=6, tol=0.1):
+    """k reciprocal points of M1 that M2 also explains (componentwise within tol), nearest the origin
+    first -- the peaks a double hit's two lattices can both claim."""
+    r = int(np.ceil(1.0 / DMIN * 79.02)) + 1
+    g = np.arange(-r, r + 1)
+    H = np.stack(np.meshgrid(g, g, np.arange(-20, 21), indexing="ij"), -1).reshape(-1, 3).astype(float)
+    Q = H @ np.linalg.inv(np.asarray(M1, float))
+    n = np.linalg.norm(Q, axis=1)
+    Q = Q[(n > 0) & (n <= 1.0 / DMIN)]
+    h2 = Q @ np.asarray(M2, float)
+    C = Q[np.abs(h2 - np.rint(h2)).max(1) < tol]
+    C = C[np.argsort(np.linalg.norm(C, axis=1), kind="stable")][:k]
+    assert len(C) == k, f"only {len(C)} coincident points"
+    return C
+
+
+def test_recorder_per_lattice_gate_scores_one_peak_set():
+    """The recorder's per-lattice column scores the kept lattice with the published gate on the frame's
+    peaks minus the OTHER lattice's claim, so its numerator never counts a peak its denominator dropped.
+    Peaks both lattices explain belong to lattice 1 (the deflation's order): kept under lattice 2 (a
+    swapped rescue) they are out of the score; kept under lattice 1 they stay in it."""
+    try:
+        import record_stream_replay as rsr                             # imports glint_fast, hence torch
+        from glint.glint_fast import matched_strict
+    except ImportError as exc:
+        print(f"  SKIP  recorder half: {exc}")
+        return
+    from glint.multilattice import claimed_mask
+    fx = _find(_is_swap_case, SEED + 17, n1=12, n2=40, noise=90)
+    C = _coincident(A1, fx.A2)
+    q = np.concatenate([fx.q, C])
+    c1 = claimed_mask(q, A1)
+    c2 = ~c1 & claimed_mask(q, fx.A2)
+    assert c1[-len(C):].all() and claimed_mask(C, fx.A2).all(), "the fixture's shared peaks"
+    # kept under lattice 2: scored on what lattice 1 leaves -- the shared peaks are lattice 1's
+    ok, m, frac, nsc = rsr.strict_gate_per_lattice(fx.A2, q, A1, dict(M1=A1, M2=fx.A2, dominant="second"))
+    assert nsc == int((~c1).sum()) == len(deflate_peaks(q, A1)), (nsc, int((~c1).sum()))
+    assert m == matched_strict(fx.A2, q[~c1]) and abs(frac - m / nsc) < 1e-12, (m, frac, nsc)
+    assert matched_strict(fx.A2, q) >= m + len(C), "the whole-frame count includes the shared peaks"
+    # kept under lattice 1: only lattice 2's share of the residual leaves the score
+    ok1, m1, frac1, n1s = rsr.strict_gate_per_lattice(A1, q, A1, dict(M1=A1, M2=fx.A2, dominant="first"))
+    assert n1s == len(q) - int(c2.sum()) and m1 == matched_strict(A1, q[~c2]), (n1s, m1)
+    assert matched_strict(A1, q[~c2]) == matched_strict(A1, q), "no lattice-1 peak leaves its own score"
+
+
 TESTS = [test_signature_defaults_and_validation,
          test_rescue_single_cell_path,
          test_rescue_first_fit_multicell_path_before_the_watchdog,
@@ -317,7 +367,8 @@ TESTS = [test_signature_defaults_and_validation,
          test_accepted_frame_qc_reads_the_per_lattice_fraction,
          test_qc_never_credits_the_weaker_lattice,
          test_accepted_frame_above_the_bar_is_not_searched,
-         test_double_hit_and_per_lattice_share_one_search]
+         test_double_hit_and_per_lattice_share_one_search,
+         test_recorder_per_lattice_gate_scores_one_peak_set]
 
 if __name__ == "__main__":
     failed = 0

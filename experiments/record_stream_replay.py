@@ -87,6 +87,7 @@ sys.path.insert(0, ROOT)
 from glint.glint_fast import GATE_FRAC, GATE_MIN, LYSO, load, matched_strict   # noqa: E402
 from glint.lattice import cell_params, cell_to_Ar                            # noqa: E402
 from glint.multishot import same_lattice                                    # noqa: E402
+from glint.multilattice import claimed_mask                                 # noqa: E402
 import glint.stream_driver as sd                                            # noqa: E402
 
 # The synthetic panel the original harness used (test_streamdriver_vs_offline.py). Irrelevant to
@@ -292,16 +293,21 @@ def strict_gate(M, q, ref):
     return ok, m, frac
 
 
-def strict_gate_per_lattice(M, q, ref, m2):
-    """The published gate scored PER LATTICE: lattice 1's matched peaks against the peaks a second
-    lattice in the frame does not claim (m2 of them). Same constants, same matcher as strict_gate; with
-    m2 = 0 it IS strict_gate. Reported beside the whole-frame gate, never instead of it."""
+def strict_gate_per_lattice(M, q, ref, sl):
+    """The published gate scored PER LATTICE: strict_gate on the frame's peaks minus the ones its OTHER
+    lattice claims, so numerator and denominator count the same peaks. `sl` is the driver's
+    second-lattice record (M1, M2, dominant): lattice 1 claims every peak within the deflation tolerance
+    of it, lattice 2 the remaining peaks within tolerance of it -- the driver's own assignment order. M is
+    the lattice the frame was kept under (the dominant one; the caller checks). Reported beside the
+    whole-frame gate, never instead of it. Returns (ok, matched, frac, n_scored)."""
     if M is None:
-        return False, 0, 0.0
-    M = np.asarray(M, float)
-    m = int(matched_strict(M, q)); frac = m / max(len(q) - int(m2), 1)
-    ok = bool(same_lattice(M, ref) and frac >= GATE_FRAC and m >= GATE_MIN)
-    return ok, m, frac
+        return False, 0, 0.0, 0
+    q = np.asarray(q, float)
+    claim1 = claimed_mask(q, sl["M1"])
+    claim2 = ~claim1 & claimed_mask(q, sl["M2"])
+    keep = ~claim2 if sl["dominant"] == "first" else ~claim1
+    ok, m, frac = strict_gate(M, q[keep], ref)
+    return ok, m, frac, int(keep.sum())
 
 
 def git_head():
@@ -539,7 +545,7 @@ def main(argv=None):
             if e.get("inl_by_cell") is not None:                 # assign="best": what every active cell saw
                 r["inl_by_cell"] = e["inl_by_cell"]
             if e.get("second_lattice") is not None:              # per_lattice: the frame's second lattice
-                r["second_lattice"] = {k: v for k, v in e["second_lattice"].items() if k != "M2"}
+                r["second_lattice"] = dict(e["second_lattice"])   # with M1/M2: the per-lattice score is recomputable
             r["wresc"] = int(oc == "rescued_watchdog")
         elif oc in RETRO:
             if e["ev"] is None:
@@ -552,7 +558,10 @@ def main(argv=None):
     # ---- score
     Mc_final = np.asarray(drv.Mc, float) if drv.Mc is not None else None
     tot = dict(n=n, strict_ok=0, strict_ok_drv=0, strict_ok_per_lattice=0, blank=0, indexed=0, miss=0,
-               gate_rejected=0, warmup=0, rescued_per_lattice=0, second_lattice_found=0)
+               gate_rejected=0, warmup=0, rescued_per_lattice=0, second_lattice_found=0,
+               # where the per-lattice numbers come from: rescues kept under the residual's lattice, rescues the
+               # whole-frame strict gate credits anyway, and frames ONLY the per-lattice score credits
+               rescued_per_lattice_swapped=0, rescued_per_lattice_strict=0, per_lattice_only=0)
     by_sp = {sp: dict(n=0, ok=0, ok_drv=0, indexed=0, miss=0, blank=0, warmup=0, rescued=0) for sp in pools}
     confusion = {}
     tot["integrated"] = 0
@@ -582,9 +591,14 @@ def main(argv=None):
             # the driver's rule: only the DOMINANT lattice, when it is the one the frame was kept under, is
             # scored against the peaks the other does not claim; a weaker lattice is never credited
             if sl2.get("kept") is not None and sl2["kept"] == sl2.get("dominant"):
-                other = sl2["m2"] if sl2["dominant"] == "first" else sl2["n1"]
-                okp = bool(strict_gate_per_lattice(M, q, ref, other)[0] or ok)
+                okl, _, fracl, nsc = strict_gate_per_lattice(M, q, ref, sl2)
+                r["frac_pl"] = round(fracl, 4); r["n_scored_pl"] = nsc
+                okp = bool(okl or ok)
         r["ok_pl"] = int(okp); tot["strict_ok_per_lattice"] += okp
+        tot["per_lattice_only"] += bool(okp and not ok)
+        if r["o"] == "rescued_per_lattice":
+            tot["rescued_per_lattice_swapped"] += (sl2 or {}).get("kept") == "second"
+            tot["rescued_per_lattice_strict"] += bool(ok)
         by_sp[sp]["ok"] += ok; by_sp[sp]["ok_drv"] += okd
         oc = r["o"]
         if oc in ACCEPTED:
@@ -653,8 +667,10 @@ def main(argv=None):
           f"relocks {counters['n_relock']} | relock rescues {counters['n_rescued']} | warm-up rescues {counters['n_warmup_rescued']} | "
           f"integrated {counters['integrated']}")
     if "n_per_lattice_searched" in counters or "n_double" in counters:
-        print(f"  per-lattice: strict {tot['strict_ok_per_lattice']}/{n} (whole-frame {tot['strict_ok']}) | rescued_per_lattice "
-              f"{tot['rescued_per_lattice']} | second lattice on {tot['second_lattice_found']} frames | "
+        print(f"  per-lattice: strict {tot['strict_ok_per_lattice']}/{n} (whole-frame {tot['strict_ok']}; per-lattice only "
+              f"{tot['per_lattice_only']}) | rescued_per_lattice {tot['rescued_per_lattice']} (kept the residual's lattice "
+              f"{tot['rescued_per_lattice_swapped']}, whole-frame strict {tot['rescued_per_lattice_strict']}) | "
+              f"second lattice on {tot['second_lattice_found']} frames | "
               + " ".join(f"{k}={counters[k]:.3g}" if isinstance(counters[k], float) else f"{k}={counters[k]}"
                          for k in ("n_per_lattice_searched", "n_per_lattice_found", "n_per_lattice_rescued", "n_pl_null",
                                    "pl_null_found_rate", "pl_null_rescued_rate", "n_double", "n_dh_null", "dh_null_rate")

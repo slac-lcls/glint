@@ -12,18 +12,28 @@ the driver exposes it in stats() as `double_hit_rate`.
 import numpy as np
 
 
+def claimed_mask(q, M, tol=0.15):
+    """Boolean mask of the peaks of `q` that cell `M` explains -- the assignment deflate_peaks removes.
+
+    M has reciprocal-basis rows, so hkl = q @ M; a peak is 'assigned' to M when every hkl component is
+    within `tol` of an integer. Pure numpy.
+    """
+    q = np.asarray(q, float)
+    if q.ndim != 2 or len(q) == 0:
+        return np.zeros(0, bool)
+    hf = q @ np.asarray(M, float)
+    return np.abs(hf - np.round(hf)).max(1) < tol
+
+
 def deflate_peaks(q, M, tol=0.15):
     """Reciprocal vectors of `q` NOT explained by cell `M` -- the residual for a second-lattice search.
 
-    M has reciprocal-basis rows, so hkl = q @ M; a peak is 'assigned' to M when every hkl component is
-    within `tol` of an integer. Returns the unassigned peaks (a copy). Pure numpy.
+    The peaks claimed_mask does not assign to M (a copy). Pure numpy.
     """
     q = np.asarray(q, float)
     if q.ndim != 2 or len(q) == 0:
         return q.reshape(0, 3)
-    hf = q @ np.asarray(M, float)
-    assigned = np.abs(hf - np.round(hf)).max(1) < tol
-    return q[~assigned]
+    return q[~claimed_mask(q, M, tol)]
 
 def scramble_azimuth(q, rng):
     """Each peak independently rotated by a random azimuth about the beam axis (z).

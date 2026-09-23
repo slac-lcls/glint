@@ -55,7 +55,7 @@ Events, verified against the trace (`python3 -c "import json; tr=json.load(open(
 
 | On-screen frame | Trace record (0-based) | What happens |
 |---|---|---|
-| 5 | 4 | `lock=0`, `sup=4`, `resc=5`, `resc_ok=3`: consensus locks; the 5 warm-up frames are re-indexed, 3 clear the strict bar. Strict count 3 / 480. |
+| 5 | 4 | `lock=0`, `sup=4`, `resc=5`, `resc_ok=3`: consensus locks; the 5 warm-up frames are re-indexed, 3 clear the strict bar. Strict count 3 / 480. In the composition chart the warm-up votes are grey until this frame; the lock re-colours them from each record's own `ok` — 3 solid, 2 faint — so the bars end at the driver's attribution (331 solid, 125 faint, 24 grey over the run). |
 | 170, 174, 183, 222, 236, 325 | 169, 173, 182, 221, 235, 324 | `wresc=1`: the six watchdog rescues — frames the batch pass missed, blind-solved one at a time and accepted after all. |
 | 365 | 364 | `relock=1` on a 20-frame flush: the adaptive re-lock **adds** a second cell to the active set. The trace header records this as `relock_frame: 364` — the 0-based record — so "near event 364" is the safe phrasing; the on-screen badge says "re-lock ×1 at frame 365" because the clock is 1-based. The badge holds amber for 2 s of playback (through frame 389). |
 | 480 | 479 | Last flush (15 frames). Strict count **331 / 480**, accepted 451, refused 24, ring 0. |
@@ -140,7 +140,7 @@ Capture recipe (macOS, Google Chrome 152 headless, Pillow 10.4; no ffmpeg):
    900 px wide (Lanczos) and write one GIF with a **single global 256-colour median-cut palette**
    built from a mosaic of 9 frames sampled evenly across the run, no dither, `optimize=True`,
    `disposal=1`, 83 ms per frame requested → 80 ms stored (GIF delays are centiseconds), `loop=0`.
-   481 frames play in 38.5 s. Sizes: dark 2.54 MB (900×385), light 2.32 MB (900×387).
+   481 frames play in 38.5 s. Sizes: dark 2.52 MB (900×385), light 2.30 MB (900×387).
 4. The stills below are the same page at `--force-device-scale-factor=2` (2640×1792 raw, same crop
    box doubled → 2616×1120 / 2616×1126), one Chrome launch each.
 
@@ -149,7 +149,7 @@ Capture recipe (macOS, Google Chrome 152 headless, Pillow 10.4; no ffmpeg):
 | Still | Frame | What it shows |
 |---|---|---|
 | ![frame 0](media/stills/dark_f0000.png) | 0 | Nothing pushed yet: "0 frames · 0.0 s", badge amber "Blind warm-up — no cell yet", cell card "Discovering…", consensus support 0/4, 0 / 480 pushed, indexed 0 / 480. |
-| ![frame 5](media/stills/dark_f0005.png) | 5 | The lock: "5 frames · 0.4 s", badge green "Locked + rescuing warm-up frames", "locked at frame 5", "↑5 rescued at lock", 0 accepted yet at the live gate, cell card LOCKED with the measured lysozyme cell; indexed 3 / 480 (the 3 rescued warm-up frames that clear the strict bar). |
+| ![frame 5](media/stills/dark_f0005.png) | 5 | The lock: "5 frames · 0.4 s", badge green "Locked + rescuing warm-up frames", "locked at frame 5", "↑5 rescued at lock", 0 accepted yet at the live gate, cell card LOCKED with the measured lysozyme cell; the first composition bar is 3 solid + 2 faint (the rescued votes, by their strict verdict); indexed 3 / 480 (the 3 rescued warm-up frames that clear the strict bar). |
 | ![frame 170](media/stills/dark_f0170.png) | 170 | Steady state with the first watchdog rescue: "170 frames · 14.2 s", badge green "Steady — locked, known-cell batch", ring 5, 155 accepted, "↑1 watchdog rescue" flashing on the missed → indexed edge, 10 of 480 missed; indexed 113 / 480 (66%). |
 | ![frame 365](media/stills/dark_f0365.png) | 365 | The re-lock, near event 364: "365 frames · 30.4 s", badge amber "Watchdog re-lock — second cell added", "re-lock ×1 at frame 365 · 2nd cell", consensus node highlighted with re-lock vote dots, 338 accepted, 22 of 480 missed; indexed 247 / 480 (68%). The re-lock itself adds nothing to the count. |
 | ![frame 370](media/stills/dark_f0370.png) | 370 | Five frames later the amber hold persists (it lasts through frame 389): "370 frames · 30.9 s", ring 5, 343 accepted, "↑6 watchdog rescues" now all in; indexed 250 / 480 (68%). |

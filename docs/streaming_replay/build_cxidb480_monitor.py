@@ -115,7 +115,7 @@ def engine(tr):
       ring:0, wbuf:0, locked:false, support:0, lead:0, lockFrame:0,
       idxR:0, okR:0, phase:'warmup', phaseHold:0, rescueFlash:0, flushFlash:0, batchFlash:0,
       wdog:0, relocks:0, relockFrame:0, wdogFlash:0, relockFlash:0,
-      bins:[], curBin:freshBin(), histIdx:[], histOk:[], histRing:[] }};
+      bins:[], binsDropped:0, curBin:freshBin(), histIdx:[], histOk:[], histRing:[] }};
   }}
   fresh();
   function resetForLoop(){{ const t=S.t; fresh(); S.t=t; }}
@@ -123,10 +123,18 @@ def engine(tr):
   // Composition bins. The categories are the driver's OWN three outcomes per pushed frame:
   //   idx  = cleared the strict research bar (>=25% of spots AND >=10 reflections, right cell)
   //   buf  = accepted at the driver's live gate but below that bar
-  //   gen  = refused at the live gate (min_inlier_frac 0.15) -- dropped, and counted
+  //   gen  = refused at the live gate (min_inlier_frac 0.15) -- dropped, and counted; also a
+  //          warm-up vote until the lock decides it (see amend below)
   function binAdd(cat){{ const b=S.curBin;
     if(cat==='gen')b.gen++; else if(cat==='idx')b.idx[0]++; else b.buf[0]++;
-    if(++b.total>=BIN){{ S.bins.push(b); if(S.bins.length>200)S.bins.shift(); S.curBin=freshBin(); }} }}
+    if(++b.total>=BIN){{ S.bins.push(b); if(S.bins.length>200){{S.bins.shift(); S.binsDropped++;}} S.curBin=freshBin(); }} }}
+  // The warm-up rescue is retroactive: at the lock the driver re-indexes the frames it spent on
+  // discovery, and each one is then attributed (strict or below the bar) exactly as a live frame
+  // would be. Move trace record j's unit from grey to the outcome the rescue gave it, in the bin it
+  // fell in (record j is one unit of bin floor(j/BIN): every record adds exactly one unit to one bin).
+  function amend(j,ok){{ const bi=Math.floor(j/BIN)-S.binsDropped; if(bi<0) return;
+    const b = bi===S.bins.length ? S.curBin : S.bins[bi]; if(!b||b.gen<=0) return;
+    b.gen--; if(ok) b.idx[0]++; else b.buf[0]++; }}
   function ema(k,x){{ const a=0.06; S[k]+=(x-S[k])*a; }}
 
   function playFrame(){{
@@ -136,7 +144,7 @@ def engine(tr):
       // Warm-up: the frame casts a blind consensus vote and is HELD. It is not indexed yet, so it
       // scores nothing yet -- the credit lands at the lock, when the rescue re-indexes it.
       S.warmup++; S.wbuf=r.buf; S.support=r.sup; S.lead=r.lead||0;
-      S.phase='warmup'; binAdd('buf');
+      S.phase='warmup'; binAdd('gen');            // grey until the lock's rescue decides it
       ema('idxR',0); ema('okR',0);
     }} else {{
       S.ring=r.buf;
@@ -147,6 +155,9 @@ def engine(tr):
     if(r.lock>=0){{
       S.locked=true; S.lockFrame=S.frames; S.support=r.sup;
       S.rescued+=r.resc; S.strict+=r.resc_ok; S.wbuf=0;
+      // every warm-up frame of this run was rescued (n_warmup_rescued == n_warmup, asserted at build
+      // time), so each warm-up record's own `ok` -- scored against the locked cell -- is its outcome
+      for(let j=0;j<S.tf;j++) if(TRACE[j].wu) amend(j, TRACE[j].ok);
       S.rescueFlash=1; S.phase='rescuing'; S.phaseHold=Math.round(PLAY_FPS*1.4);
     }}
     // The watchdog. Both of these are counters the 120-frame replay could not draw, because on
@@ -367,8 +378,9 @@ RENDER_CELLS = r"""  function renderCells(){
 DRAW_STREAM = r"""  function drawStream(){
     // One bar per BIN pushed frames, normalised to that bin's frame count. Bottom-up the stack is
     // the driver's own three outcomes: cleared the strict bar (solid), accepted at the live gate but
-    // below it (faint), refused at the live gate (grey). The two envelopes are the two rates those
-    // categories define, so the strict line always nests under the accept line by construction.
+    // below it (faint), refused at the live gate (grey; a warm-up vote is grey until the lock's
+    // rescue re-colours it). The two envelopes are the two rates those categories define, so the
+    // strict line always nests under the accept line by construction.
     const [w,h]=wf._d||fit(wf); wfx.clearRect(0,0,w,h);
     const arr = S.curBin.total>0 ? S.bins.concat([S.curBin]) : S.bins;
     const n=arr.length; if(!n) return;
@@ -398,7 +410,7 @@ BUILD_LEGEND = r"""  function buildLegend(){
     const add=html=>{const k=document.createElement('span');k.className='k';k.innerHTML=html;L.appendChild(k);};
     add(`<span class="sw" style="background:${col('--s1')}"></span>cleared the strict bar`);
     add(`<span class="sw" style="background:${col('--s1')};opacity:.4"></span>accepted, below it`);
-    add(`<span class="sw" style="background:${col('--muted')};opacity:.55"></span>refused at the live gate`);
+    add(`<span class="sw" style="background:${col('--muted')};opacity:.55"></span>refused at the live gate (warm-up votes until the lock)`);
     add(`<span class="swl" style="background:${col('--accent')}"></span>strict rate`);
     add(`<span class="swl" style="background:${col('--ink2')};opacity:.8"></span>live accept rate`);
     const note=document.createElement('span'); note.className='k'; note.style.opacity='.7';
@@ -590,6 +602,17 @@ def main(trace_path):
     if (tr["n_watchdog_rescued"], tr["n_relock"]) != (6, 1):
         raise SystemExit(f"refusing to build: watchdog fired {tr['n_watchdog_rescued']} rescues / "
                          f"{tr['n_relock']} re-locks, expected 6 / 1 (the paper's SI counts)")
+    # The player re-colours every warm-up record at the lock from its own `ok` (scored against the
+    # locked cell). That is only the driver's attribution if every warm-up frame was rescued, and the
+    # strict ones must add up to what the lock record carries.
+    wu = [r for r in tr["trace"] if r["wu"]]
+    lock = [r for r in tr["trace"] if r["lock"] >= 0]
+    if tr["n_warmup_rescued"] != tr["n_warmup"] or len(wu) != tr["n_warmup"]:
+        raise SystemExit(f"refusing to build: {tr['n_warmup_rescued']} of {tr['n_warmup']} warm-up frames rescued "
+                         f"({len(wu)} warm-up records) -- the player assumes every warm-up frame is rescued")
+    if len(lock) != 1 or lock[0]["resc"] != tr["n_warmup"] or lock[0]["resc_ok"] != sum(r["ok"] for r in wu) \
+            or tr["strict_warmup"] != lock[0]["resc_ok"]:
+        raise SystemExit("refusing to build: the lock record's rescue counts disagree with the warm-up records' ok flags")
 
     lines = open(TEMPLATE).read().split("\n")
     start = next(i for i, l in enumerate(lines) if l.strip().startswith("const SPECIES=["))

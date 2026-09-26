@@ -677,7 +677,11 @@ def main(argv=None):
           f"locked_after {counters['locked_after']} | watchdog rescues {counters['n_watchdog_rescued']} | "
           f"relocks {counters['n_relock']} | relock rescues {counters['n_rescued']} | warm-up rescues {counters['n_warmup_rescued']} | "
           f"integrated {counters['integrated']}")
-    if "n_per_lattice_searched" in counters or "n_double" in counters:
+    if "n_double" in counters and "n_per_lattice_searched" not in counters:
+        # --double-hit alone: frames carry no second_lattice record, so the per-lattice line would read 0
+        print("  double hits: " + " ".join(f"{k}={counters[k]:.3g}" if isinstance(counters[k], float) else f"{k}={counters[k]}"
+                                          for k in ("n_double", "n_dh_null", "dh_null_rate") if k in counters))
+    if "n_per_lattice_searched" in counters:
         print(f"  per-lattice: strict {tot['strict_ok_per_lattice']}/{n} (whole-frame {tot['strict_ok']}; per-lattice only "
               f"{tot['per_lattice_only']}) | rescued_per_lattice {tot['rescued_per_lattice']} (kept the residual's lattice "
               f"{tot['rescued_per_lattice_swapped']}, whole-frame strict {tot['rescued_per_lattice_strict']}) | "

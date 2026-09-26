@@ -60,6 +60,14 @@ def main(argv=None):
     rb = {r["i"]: r for r in B["records"]}
     rp = {r["i"]: r for r in P["records"]}
     n = len(rb)
+    # The digests say both runs read the same pools; they do not say both replayed the same frames in the same
+    # order -- a --schedule (or its seed) interleaves the pools, and it lives outside driver_kw. Records are
+    # aligned by i below, so the frame behind each i must match before any delta means anything.
+    assert hb.get("schedule") == hp.get("schedule"), "different schedules: records would pair different frames"
+    assert sorted(rb) == sorted(rp) == list(range(n)), "record indices differ or are not 0..n-1"
+    ident = lambda r: (r.get("truth"), r.get("src_index"), r.get("src"), r.get("src_event"))
+    bad = [i for i in range(n) if ident(rb[i]) != ident(rp[i])]
+    assert not bad, f"{len(bad)} frames differ in (truth, src_index, src, src_event), first at i={bad[0]}"
     rep = dict(inputs=hp["inputs"], driver_kw=hp["driver_kw"], git=dict(base=hb["provenance"]["git"], pl=hp["provenance"]["git"]),
                totals=dict(base=_totals(B), pl=_totals(P)))
 
@@ -92,8 +100,17 @@ def main(argv=None):
         from glint.lattice import cell_to_Ar
         from glint.multilattice import claimed_mask, scramble_azimuth
         from glint.stream_driver import HKL_TOL
+        from record_stream_replay import digest
+        # The null is attached to frame ids, so --input must BE the replayed stream, frame for frame: one q
+        # input read in file order (no schedule), whose digest is the one the recorder wrote.
+        if len(hp["inputs"]) != 1 or hp.get("schedule") is not None or hp["inputs"][0].get("kind") != "q":
+            raise SystemExit("--null needs a single q-list input replayed in file order; this run used "
+                             f"{len(hp['inputs'])} input(s), schedule={'yes' if hp.get('schedule') else 'no'}")
         frames = [np.asarray(q, float) for q in load(a.input)]
         assert len(frames) == n, (len(frames), n)
+        assert digest(frames) == hp["inputs"][0]["digest"], \
+            f"--input digest {digest(frames)} is not the replayed input's {hp['inputs'][0]['digest']}"
+        assert all(rp[i].get("src_index") == i for i in range(n)), "replay order is not file order"
         Mc = np.asarray(cell_to_Ar(*hp["primary_cell"]), float)
 
         def count(q, M):

@@ -332,12 +332,13 @@ def test_recorder_per_lattice_gate_scores_one_peak_set():
     peaks minus the OTHER lattice's claim, so its numerator never counts a peak its denominator dropped.
     Peaks both lattices explain belong to lattice 1 (the deflation's order): kept under lattice 2 (a
     swapped rescue) they are out of the score; kept under lattice 1 they stay in it."""
-    try:
-        import record_stream_replay as rsr                             # imports glint_fast, hence torch
-        from glint.glint_fast import matched_strict
+    try:                                           # the guard covers ONLY the optional dependency
+        import torch                               # noqa: F401  record_stream_replay imports glint_fast
     except ImportError as exc:
-        print(f"  SKIP  recorder half: {exc}")
+        print(f"  SKIP  recorder half: optional dependency missing ({exc})")
         return
+    import record_stream_replay as rsr             # NOT inside the guard: a regression must fail loudly
+    from glint.glint_fast import matched_strict
     from glint.multilattice import claimed_mask
     fx = _find(_is_swap_case, SEED + 17, n1=12, n2=40, noise=90)
     C = _coincident(A1, fx.A2)
@@ -356,6 +357,38 @@ def test_recorder_per_lattice_gate_scores_one_peak_set():
     assert matched_strict(A1, q[~c2]) == matched_strict(A1, q), "no lattice-1 peak leaves its own score"
 
 
+def test_report_refuses_replays_of_different_frames():
+    """per_lattice_report aligns the two runs' records by i, so it must refuse two runs whose i-th frames
+    differ -- same input digests, but another schedule or another frame order -- and accept identical ones."""
+    import json
+    import per_lattice_report as plr
+
+    def run(kw, recs, schedule=None):
+        h = dict(inputs=[dict(name="lyso", digest="bf3422", kind="q", n=len(recs))], driver_kw=kw,
+                 provenance=dict(git="x"), schedule=schedule, primary_cell=[79.02, 79.02, 37.98, 90, 90, 90],
+                 totals=dict(strict_ok=0, indexed=len(recs), miss=0), counters=dict(n_watchdog_rescued=0, n_relock=0))
+        return dict(header=h, records=recs)
+
+    def rec(i, j):
+        return dict(i=i, truth="lyso", src_index=j, o="indexed", ok=False, cell_name="lyso", npk=20, frac=0.1)
+
+    same = [rec(0, 0), rec(1, 1), rec(2, 2)]
+    swapped = [rec(0, 1), rec(1, 0), rec(2, 2)]
+    with tempfile.TemporaryDirectory() as d:
+        def write(name, obj):
+            path = os.path.join(d, name); json.dump(obj, open(path, "w")); return path
+        base = write("b.json", run(dict(B=20), same))
+        args = ["--base", base, "--input", "unused.txt", "--null", "0", "--out", os.path.join(d, "r.json")]
+        plr.main(args + ["--pl", write("p.json", run(dict(B=20, per_lattice=True), same))])     # accepted
+        for bad, why in ((run(dict(B=20, per_lattice=True), swapped), "frame order"),
+                         (run(dict(B=20, per_lattice=True), same, schedule=dict(seed=7)), "schedule")):
+            try:
+                plr.main(args + ["--pl", write("p.json", bad)])
+            except AssertionError:
+                continue
+            raise AssertionError(f"report accepted replays that differ in {why}")
+
+
 TESTS = [test_signature_defaults_and_validation,
          test_rescue_single_cell_path,
          test_rescue_first_fit_multicell_path_before_the_watchdog,
@@ -368,7 +401,8 @@ TESTS = [test_signature_defaults_and_validation,
          test_qc_never_credits_the_weaker_lattice,
          test_accepted_frame_above_the_bar_is_not_searched,
          test_double_hit_and_per_lattice_share_one_search,
-         test_recorder_per_lattice_gate_scores_one_peak_set]
+         test_recorder_per_lattice_gate_scores_one_peak_set,
+         test_report_refuses_replays_of_different_frames]
 
 if __name__ == "__main__":
     failed = 0

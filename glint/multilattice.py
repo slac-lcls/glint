@@ -52,6 +52,7 @@ def scramble_azimuth(q, rng):
     return out
 
 
+NEAR90_T90 = 0.15      # the class-free path's near-90-degree sign tolerance (see _metric_ops)
 _UNIMOD = None
 _I3 = np.eye(3, dtype=int)
 _R4_C = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], int)
@@ -143,7 +144,7 @@ def _canonical_basis(M):
     return B, T
 
 
-def _metric_ops(B1, B2, rtol=0.05, ctol=0.06):
+def _metric_ops(B1, B2, rtol=0.05, ctol=0.06, t90=0.0):
     """Integer basis changes U (entries in {-1, 0, 1}, det +1) under which B1 @ U has B2's metric.
 
     B1 and B2 are right-handed reduced bases. The set holds the lattice's own proper symmetry (the
@@ -153,13 +154,21 @@ def _metric_ops(B1, B2, rtol=0.05, ctol=0.06):
     ops have entries in {-1, 0, 1} for every Bravais class the test checks.
 
     rtol (relative, on lengths) and ctol (absolute, on SIGNED cosines) are same_lattice's values.
-    The comparison stays signed all the way through: treating every pair of near-90-degree angles as
-    interchangeable invents false 2-folds for low-symmetry cells. Callers that KNOW the lattice class
-    should supply that class to misorientation_deg instead of asking this metric-only fallback to infer
-    higher symmetry from a noisy near-right angle. If nothing matches, the tolerances are doubled up to
-    twice (looser can only admit MORE ops, so a SMALLER angle); if nothing matches even at 4x
-    (different cells), the single closest U is used so the angle is still defined, but it is not
-    meaningful."""
+
+    t90 (default 0, off): two angles BOTH within |cos| <= t90 of 90 degrees match whatever their signs.
+    misorientation_deg turns it on (0.15, ~8.6 degrees) only when the caller gives no Laue class, because
+    real refined cells need it: on the mfxl1038923 double-hit census a refined 90-degree angle came back
+    up to 7 degrees off (|cos| p99 0.086, max 0.127), at 92 in one cell and 88 in the other. A signed
+    comparison then dropped the orthorhombic 2-folds that flip that sign, and 42 pairs that are 2
+    degrees apart (both rotations checked: lattice 2 = R lattice 1 U with U integer, |det| 1) read as
+    178. The cost is the one Copilot pointed out (glint#207 review): a genuinely TRICLINIC cell with two
+    angles within 8.6 degrees of 90 gains a false 2-fold on this path. Callers that know the class pass
+    it to misorientation_deg (laue="-1" for triclinic), and then this metric-only inference is not used
+    for the symmetry at all.
+
+    If nothing matches, the tolerances are doubled up to twice (looser can only admit MORE ops, so a
+    SMALLER angle); if nothing matches even at 4x (different cells), the single closest U is used so
+    the angle is still defined, but it is not meaningful."""
     U = _unimodular()
     C = np.einsum("ij,njk->nik", B1, U)                          # candidate bases, columns
     G = np.einsum("nji,njk->nik", C, C)                          # their Gram matrices
@@ -170,6 +179,8 @@ def _metric_ops(B1, B2, rtol=0.05, ctol=0.06):
     cos = G[:, iu[0], iu[1]] / (L[:, iu[0]] * L[:, iu[1]])
     cos2 = G2[iu] / (L2[iu[0]] * L2[iu[1]])
     dc = np.abs(cos - cos2)
+    if t90 > 0:
+        dc = np.where((np.abs(cos) <= t90) & (np.abs(cos2) <= t90), 0.0, dc)   # near 90: sign is noise
     for f in (1.0, 2.0, 4.0):
         ok = (dl <= f * rtol).all(1) & (dc <= f * ctol).all(1)
         if ok.any():
@@ -177,29 +188,63 @@ def _metric_ops(B1, B2, rtol=0.05, ctol=0.06):
     return U[[np.argmin(dl.max(1) / rtol + dc.max(1) / ctol)]]
 
 
+def _is_metric_symmetry(B, S, rtol=0.05, ctol=0.06, t90=NEAR90_T90):
+    """True if the integer basis change S maps B's metric onto itself (lengths within rtol, signed
+    cosines within ctol, and an angle within t90 of 90 degrees matching its supplement)."""
+    C = B @ S
+    L, Lc = np.linalg.norm(B, axis=0), np.linalg.norm(C, axis=0)
+    if np.any(np.abs(L - Lc) > rtol * 0.5 * (L + Lc)):
+        return False
+    for i, j in ((0, 1), (0, 2), (1, 2)):
+        c = B[:, i] @ B[:, j] / (L[i] * L[j]); cc = C[:, i] @ C[:, j] / (Lc[i] * Lc[j])
+        if abs(c - cc) > ctol and not (abs(c) <= t90 and abs(cc) <= t90):
+            return False
+    return True
+
+
+_STANDARDIZED_LAUE = ("mmm", "4/m", "4/mmm", "-3", "-3m1", "-31m", "6/m", "6/mmm")
+
+
 def _symmetry_candidates(B1, B2, T1, T2, laue):
+    """Basis changes U to minimise over: B2 = R B1 U.
+
+    laue None: inferred from the metric (_metric_ops with the near-90-degree sign tolerance).
+    laue given: the class's fixed proper operators S, composed with the metric basis change V between
+    the two reductions (U = S V). The operators must be written in a basis where the class's
+    conventional setting holds:
+      * mmm, 4/m, 4/mmm and the hexagonal/trigonal classes: standardize_axes puts both bases in the
+        conventional setting, and the operators apply there DIRECTLY. The caller's own axis order is
+        irrelevant for these classes (and is often not conventional: the stream driver's lattice 1
+        can come with c first).
+      * the other classes (monoclinic with a named unique axis, rhombohedral, cubic, triclinic):
+        the caller's setting defines the operators, so they are conjugated from the caller's basis
+        through the reduction (T1).
+    Either way an operator that does not map lattice 1's metric onto itself is dropped: it is not a
+    symmetry of THIS cell (wrong setting, or the wrong class), and keeping it would understate a
+    genuine second crystal's angle (glint#207: two cxidb-17 pairs read 45 and 60 degrees instead of
+    97 and 91 before this check)."""
     if laue is None:
-        return B1, B2, _metric_ops(B1, B2)
+        return B1, B2, _metric_ops(B1, B2, t90=NEAR90_T90)
     from glint.lattice import standardize_axes
     key = _LAUE_ALIASES.get(str(laue).strip(), str(laue).strip())
-    if key in ("mmm", "4/m", "4/mmm", "-3", "-3m1", "-31m", "6/m", "6/mmm"):
-        B1n = standardize_axes(B1, laue=key)
-        B2n = standardize_axes(B2, laue=key)
-        T1 = T1 @ _basis_change(B1, B1n)
-        T2 = T2 @ _basis_change(B2, B2n)
-        B1, B2 = B1n, B2n
+    standardized = key in _STANDARDIZED_LAUE
+    if standardized:
+        B1 = standardize_axes(B1, laue=key)
+        B2 = standardize_axes(B2, laue=key)
     rel = _metric_ops(B1, B2)
     proper = _PROPER_LAUE_OPS.get(key)
-    if proper is not None:
-        ops = []
-        for S in (U for U in proper if int(round(np.linalg.det(U))) == 1):
-            S = _conjugate_op(T1, S)
-            for V in rel:
-                U = np.rint(S @ V).astype(int)
-                if not any(np.array_equal(U, W) for W in ops):
-                    ops.append(U)
-        return B1, B2, ops
-    return B1, B2, rel
+    if proper is None:
+        return B1, B2, rel
+    ops = []
+    for S in (U for U in proper if int(round(np.linalg.det(U))) == 1):
+        S = np.asarray(S, int) if standardized else _conjugate_op(T1, S)
+        if not _is_metric_symmetry(B1, S):
+            continue
+        for V in rel:
+            U = np.rint(S @ V).astype(int)
+            if not any(np.array_equal(U, W) for W in ops):
+                ops.append(U)
+    return B1, B2, ops or rel
 
 
 def misorientation_deg(M1, M2, laue=None):
@@ -230,8 +275,10 @@ def misorientation_deg(M1, M2, laue=None):
     Both matrices are first put in a right-handed Buerger-reduced basis (_canonical_basis), so the
     result does not depend on the basis either caller used. When the caller knows the Laue class,
     `laue=` supplies fixed proper operators for that class instead of asking a noisy metric to guess
-    them; otherwise B2 = R B1 U for some integer basis change U (_metric_ops: the lattice's own
-    symmetry, composed with any reshuffle between the two reductions). R is projected onto the nearest
+    them. Otherwise B2 = R B1 U for some integer basis change U inferred from the metric (_metric_ops,
+    with its near-90-degree sign tolerance: the lattice's own symmetry, composed with any reshuffle
+    between the two reductions). That inference can grant a near-orthogonal TRICLINIC cell a false
+    2-fold, so pass laue="-1" for triclinic samples. R is projected onto the nearest
     rotation because the two cells are refined independently and differ slightly (stable to a 1% cell
     mismatch)."""
     B1, T1 = _canonical_basis(M1)

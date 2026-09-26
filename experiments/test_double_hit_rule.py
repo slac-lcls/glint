@@ -282,10 +282,33 @@ for k, (M, _) in BRAVAIS.items():
                                - min(ang(R @ s) for s in S)))
 check(f"max deviation {worst:.1e} deg", worst < 1e-4, worst)
 
-print("\nmisorientation_deg: a near-orthogonal triclinic cell does not gain a false 2-fold")
+print("\nmisorientation_deg: a known class applies in its conventional setting, whatever the caller's axis order")
+# The stream driver's lattice 1 can arrive with c first. Conjugating the class operators from the
+# caller's order put the 4-fold about an a axis, and two real cxidb-17 pairs read 45 and 60 degrees
+# instead of 97 and 91 (glint#207). Expected values: the brute-force minimum over the fixed group.
+Lc = LYS[:, [2, 0, 1]]
+for deg, axis in ((62.3, [-0.54, -0.32, 0.41]), (84.7, [-0.13, 1.37, -0.67]), (118.1, [0.9, 0.09, -0.74])):
+    R = rot(axis, deg)
+    want = min(ang(R @ s) for s in independent_sym_ops("tP"))
+    g4, g0 = misorientation_deg(Lc, R @ LYS, laue="4/mmm"), misorientation_deg(Lc, R @ LYS)
+    check(f"c-first lattice 1, planted {deg:g} deg: 4/mmm {g4:.2f}, no class {g0:.2f}, expected {want:.2f}",
+          abs(g4 - want) < 1e-4 and abs(g0 - want) < 1e-4, (g4, g0, want))
+REAL2 = {   # cxidb-17 replay (per-lattice + double-hit arm): frame -> (M1, M2, independent near-isometry search)
+    169: ([[3.1648, 30.5757, 71.8533], [29.727, -45.5595, 13.5818], [22.8133, 57.9762, -27.6267]],
+          [[22.0375, -61.0171, -20.375], [20.5633, 47.3694, -46.2648], [-23.1346, -15.6583, -60.8078]], 91.03),
+    368: ([[-34.905, -18.8366, 23.8616], [2.5453, -69.2417, -36.8297], [13.0434, -33.6004, 63.9082]],
+          [[14.3348, -1.1264, -72.9918], [10.8812, 74.8481, 7.8677], [33.2345, -23.9301, 28.7678]], 97.10)}
+for fr, (A, Bm, want) in REAL2.items():
+    g4, g0 = misorientation_deg(A, Bm, laue="4/mmm"), misorientation_deg(A, Bm)
+    check(f"real frame {fr} (a genuine double hit): 4/mmm {g4:.2f}, no class {g0:.2f}, expected {want:.2f}",
+          abs(g4 - want) < 0.05 and abs(g0 - want) < 0.05, (g4, g0))
+
+print("\nmisorientation_deg: a near-orthogonal triclinic cell does not gain a false 2-fold when its class is given")
+# Without a class the near-90-degree sign tolerance (which real orthorhombic data need, below) would grant
+# this cell a 2-fold it does not have (glint#207 review). The documented remedy is laue="-1".
 T = cell(40, 50, 60, 88, 92, 97)
-g = misorientation_deg(T, rot(T[:, 2].copy(), 178.0) @ T)
-check(f"triclinic 178 deg about c stays 178, not a fake 2-fold -> {g:.2f}", abs(g - 178.0) < 1e-4, g)
+g = misorientation_deg(T, rot(T[:, 2].copy(), 178.0) @ T, laue="-1")
+check(f"triclinic, laue='-1': 178 deg about c stays 178, not a fake 2-fold -> {g:.2f}", abs(g - 178.0) < 1e-4, g)
 
 print("\nmisorientation_deg: a lattice refined to 93.6 deg still finds its symmetry (relaxed tolerance)")
 # same_lattice compares |cos|, so two refinements on opposite sides of 90 deg pass the cell gate while
@@ -300,8 +323,9 @@ print("\nmisorientation_deg: 90-degree angles refined to opposite sides of 90 ke
 # as the symmetry-equivalent 178 degrees -- 42 pairs of the mfxl census did this with the first version.
 O1, O2 = cell(43.6, 67.8, 89.1, 91.0, 89.5, 92.0), cell(43.9, 67.5, 89.4, 89.2, 90.6, 88.0)
 for name, T in [("same handedness", np.eye(3)), ("opposite handedness", np.diag([1.0, 1, -1]))]:
-    g = misorientation_deg(O1, rot([2.0, -1.0, 0.5], 2.0) @ O2 @ T, laue="mmm")
-    check(f"2 deg mosaic pair, {name} -> {g:.2f}", g < 5.0, g)
+    for laue in ("mmm", None):
+        g = misorientation_deg(O1, rot([2.0, -1.0, 0.5], 2.0) @ O2 @ T, laue=laue)
+        check(f"2 deg mosaic pair, {name}, laue={laue!r} -> {g:.2f}", g < 5.0, g)
 
 print("\nmisorientation_deg on two REAL replay pairs the old version read as ~90 deg")
 REAL = {   # frame: (M1, M2, what the old version recorded)
@@ -314,6 +338,8 @@ for fr, (A, Bm, was) in REAL.items():
     hand = "opposite" if np.linalg.det(A) * np.linalg.det(Bm) < 0 else "same"
     check(f"frame {fr} ({hand} handedness): recorded {was} deg, now {g:.2f} deg -> not a second crystal",
           g < 5.0, g)
+    g0 = misorientation_deg(A, Bm)
+    check(f"frame {fr}, no class given (the default path): {g0:.2f} deg", abs(g0 - g) < 1e-6, (g0, g))
     check(f"frame {fr}: second_lattice_verdict rejects it",
           not second_lattice_verdict(peaks_of(np.asarray(Bm), 20), A,
                                      lambda q, n, Bm=Bm: [(np.asarray(Bm), 1.0)],

@@ -56,6 +56,10 @@ def main(argv=None):
     kb = {k: v for k, v in hb["driver_kw"].items() if k not in ("per_lattice", "per_lattice_below")}
     kp = {k: v for k, v in hp["driver_kw"].items() if k not in ("per_lattice", "per_lattice_below")}
     assert kb == kp, f"different arms: {kb} vs {kp}"
+    # driver_kw leaves out the roster, and the scoring references, the gate, the ingest mode and the geometry
+    # live beside it; any of them differing would be misread below as an effect of per_lattice.
+    for key in ("refs", "roster", "gate", "ingest", "geometry"):
+        assert hb.get(key) == hp.get(key), f"different {key}: {hb.get(key)} vs {hp.get(key)}"
     assert not hb["driver_kw"].get("per_lattice") and hp["driver_kw"].get("per_lattice"), "base must be off, pl on"
     rb = {r["i"]: r for r in B["records"]}
     rp = {r["i"]: r for r in P["records"]}
@@ -68,7 +72,9 @@ def main(argv=None):
     ident = lambda r: (r.get("truth"), r.get("src_index"), r.get("src"), r.get("src_event"))
     bad = [i for i in range(n) if ident(rb[i]) != ident(rp[i])]
     assert not bad, f"{len(bad)} frames differ in (truth, src_index, src, src_event), first at i={bad[0]}"
-    rep = dict(inputs=hp["inputs"], driver_kw=hp["driver_kw"], git=dict(base=hb["provenance"]["git"], pl=hp["provenance"]["git"]),
+    rep = dict(inputs=hp["inputs"], driver_kw=hp["driver_kw"], git=dict(base=hb["provenance"]["git"], pl=hp["provenance"]["git"],
+                                                                base_dirty=hb["provenance"].get("git_dirty"),
+                                                                pl_dirty=hp["provenance"].get("git_dirty")),
                totals=dict(base=_totals(B), pl=_totals(P)))
 
     changed = []

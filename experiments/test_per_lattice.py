@@ -363,9 +363,11 @@ def test_report_refuses_replays_of_different_frames():
     import json
     import per_lattice_report as plr
 
-    def run(kw, recs, schedule=None):
+    def run(kw, recs, schedule=None, refs=None, dirty=False):
         h = dict(inputs=[dict(name="lyso", digest="bf3422", kind="q", n=len(recs))], driver_kw=kw,
-                 provenance=dict(git="x"), schedule=schedule, primary_cell=[79.02, 79.02, 37.98, 90, 90, 90],
+                 refs=refs or dict(lyso=[79.02, 79.02, 37.98, 90, 90, 90]), roster=[["lyso", [79.02, 79.02, 37.98, 90, 90, 90]]],
+                 gate=dict(frac=0.25, min_refl=10), ingest="q", geometry=None,
+                 provenance=dict(git="x", git_dirty=dirty), schedule=schedule, primary_cell=[79.02, 79.02, 37.98, 90, 90, 90],
                  totals=dict(strict_ok=0, indexed=len(recs), miss=0), counters=dict(n_watchdog_rescued=0, n_relock=0))
         return dict(header=h, records=recs)
 
@@ -379,9 +381,13 @@ def test_report_refuses_replays_of_different_frames():
             path = os.path.join(d, name); json.dump(obj, open(path, "w")); return path
         base = write("b.json", run(dict(B=20), same))
         args = ["--base", base, "--input", "unused.txt", "--null", "0", "--out", os.path.join(d, "r.json")]
-        plr.main(args + ["--pl", write("p.json", run(dict(B=20, per_lattice=True), same))])     # accepted
+        plr.main(args + ["--pl", write("p.json", run(dict(B=20, per_lattice=True), same, dirty=True))])   # accepted
+        rep = json.load(open(os.path.join(d, "r.json")))
+        assert rep["git"]["base_dirty"] is False and rep["git"]["pl_dirty"] is True, rep["git"]
         for bad, why in ((run(dict(B=20, per_lattice=True), swapped), "frame order"),
-                         (run(dict(B=20, per_lattice=True), same, schedule=dict(seed=7)), "schedule")):
+                         (run(dict(B=20, per_lattice=True), same, schedule=dict(seed=7)), "schedule"),
+                         (run(dict(B=20, per_lattice=True), same, refs=dict(lyso=[78.0, 78.0, 37.0, 90, 90, 90])),
+                          "reference cell")):
             try:
                 plr.main(args + ["--pl", write("p.json", bad)])
             except AssertionError:

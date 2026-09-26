@@ -58,7 +58,12 @@ _R4_C = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], int)
 _R2_A = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]], int)
 _R2_B = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, -1]], int)
 _R2_C = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], int)
+_R3_C_HEX = np.array([[0, 1, 0], [-1, -1, 0], [0, 0, 1]], int)
+_R6_C_HEX = np.array([[1, 1, 0], [-1, 0, 0], [0, 0, 1]], int)
+_R2_A_HEX = np.array([[1, 0, 0], [-1, -1, 0], [0, 0, -1]], int)
+_R2_AB_HEX = np.array([[0, -1, 0], [-1, 0, 0], [0, 0, -1]], int)
 _R3_111 = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]], int)
+_LAUE_ALIASES = {"2/m": "2/m_uab", "-3m": "-3m1"}
 
 
 def _close_group(gens):
@@ -72,6 +77,26 @@ def _close_group(gens):
                 if not any(np.array_equal(h, x) for x in G):
                     G.append(h); ch = True
     return G
+
+
+_PROPER_LAUE_OPS = {
+    "-1": _close_group(()),
+    "2/m_uaa": _close_group((_R2_A,)),
+    "2/m_uab": _close_group((_R2_B,)),
+    "2/m_uac": _close_group((_R2_C,)),
+    "mmm": _close_group((_R2_A, _R2_B)),
+    "4/m": _close_group((_R4_C,)),
+    "4/mmm": _close_group((_R4_C, _R2_A)),
+    "-3": _close_group((_R3_C_HEX,)),
+    "-3m1": _close_group((_R3_C_HEX, _R2_A_HEX)),
+    "-31m": _close_group((_R3_C_HEX, _R2_AB_HEX)),
+    "-3_R": _close_group((_R3_111,)),
+    "-3m_R": _close_group((_R3_111, _R2_AB_HEX)),
+    "6/m": _close_group((_R6_C_HEX,)),
+    "6/mmm": _close_group((_R6_C_HEX, _R2_A_HEX)),
+    "m-3": _close_group((_R3_111, _R2_C)),
+    "m-3m": _close_group((_R3_111, _R4_C)),
+}
 
 
 def _unimodular():
@@ -143,19 +168,12 @@ def _symmetry_candidates(B1, B2, laue):
     if laue is None:
         return B1, B2, _metric_ops(B1, B2)
     from glint.lattice import standardize_axes
-    key = str(laue).strip()
-    if key in ("mmm", "4/m", "4/mmm"):
+    key = _LAUE_ALIASES.get(str(laue).strip(), str(laue).strip())
+    if key in ("mmm", "4/m", "4/mmm", "-3", "-3m1", "-31m", "6/m", "6/mmm"):
         B1 = standardize_axes(B1, laue=key)
         B2 = standardize_axes(B2, laue=key)
     rel = _metric_ops(B1, B2)
-    proper = {
-        "-1": _close_group(()),
-        "mmm": _close_group((_R2_A, _R2_B)),
-        "4/m": _close_group((_R4_C,)),
-        "4/mmm": _close_group((_R4_C, _R2_A)),
-        "m-3": _close_group((_R3_111, _R2_C)),
-        "m-3m": _close_group((_R3_111, _R4_C)),
-    }.get(key)
+    proper = _PROPER_LAUE_OPS.get(key)
     if proper is not None:
         ops = []
         for S in (np.asarray(U, float) for U in proper if int(round(np.linalg.det(U))) == 1):

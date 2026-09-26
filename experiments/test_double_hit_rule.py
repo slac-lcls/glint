@@ -236,6 +236,14 @@ g = misorientation_deg(H, rot(H[:, 2].copy(), 60) @ H)    # copy: rot() normalis
 check("hexagonal: 60 deg about c is the lattice itself (a signed permutation cannot express it)",
       g < 1e-4, g)
 
+print("\nmisorientation_deg: known Laue classes supply the fixed proper group")
+check("monoclinic laue=2/m keeps 180 deg about b at 0",
+      misorientation_deg(MP, rot(MP[:, 1].copy(), 180) @ MP, laue="2/m") < 1e-4)
+check("hexagonal laue=6/mmm keeps 60 deg about c at 0",
+      misorientation_deg(H, rot(H[:, 2].copy(), 60) @ H, laue="6/mmm") < 1e-4)
+check("rhombohedral laue=-3m_R keeps 120 deg about the 3-fold axis at 0",
+      misorientation_deg(HR, rot((HR[:, 0] + HR[:, 1] + HR[:, 2]).copy(), 120) @ HR, laue="-3m_R") < 1e-4)
+
 print("\nmisorientation_deg: the same lysozyme lattice in another basis is 0 deg")
 for name, T in [("a <-> b swap (left-handed)", np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1.0]])),
                 ("one flipped axis (left-handed)", np.diag([-1.0, 1, 1])),

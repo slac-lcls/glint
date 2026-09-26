@@ -202,6 +202,22 @@ def _is_metric_symmetry(B, S, rtol=0.05, ctol=0.06, t90=NEAR90_T90):
     return True
 
 
+def _best_basis_change(B1, B2, rtol=0.05, ctol=0.06):
+    """The ONE integer basis change V (entries in {-1, 0, 1}, det +1) under which B1 @ V best matches B2's
+    metric (largest normalised length / signed-cosine mismatch, minimised). The known-class path expands
+    this single correspondence by the class's fixed group, so no tolerance-inferred pseudo-symmetry of a
+    noisy cell enters it (glint#207 review)."""
+    U = _unimodular()
+    C = np.einsum("ij,njk->nik", B1, U)
+    G = np.einsum("nji,njk->nik", C, C)
+    G2 = B2.T @ B2
+    L, L2 = np.sqrt(np.einsum("nii->ni", G)), np.sqrt(np.diag(G2))
+    dl = np.abs(L - L2) / (0.5 * (L + L2))
+    iu = ([0, 0, 1], [1, 2, 2])
+    dc = np.abs(G[:, iu[0], iu[1]] / (L[:, iu[0]] * L[:, iu[1]]) - G2[iu] / (L2[iu[0]] * L2[iu[1]]))
+    return U[int(np.argmin(np.maximum(dl.max(1) / rtol, dc.max(1) / ctol)))]
+
+
 _STANDARDIZED_LAUE = ("mmm", "4/m", "4/mmm", "-3", "-3m1", "-31m", "6/m", "6/mmm")
 
 
@@ -209,8 +225,13 @@ def _symmetry_candidates(B1, B2, T1, T2, laue):
     """Basis changes U to minimise over: B2 = R B1 U.
 
     laue None: inferred from the metric (_metric_ops with the near-90-degree sign tolerance).
-    laue given: the class's fixed proper operators S, composed with the metric basis change V between
-    the two reductions (U = S V). The operators must be written in a basis where the class's
+    laue="-1" (triclinic): the identity only -- the ONE best metric correspondence between the two
+    reductions (_best_basis_change), so no tolerance-inferred pseudo 2-fold can enter (glint#207 review).
+    Any other class: the class's fixed proper operators S composed with the metric correspondences V
+    between the two reductions (U = S V). The metric set is kept, not one V, because it is what carries
+    the symmetry of CENTERED lattices (the operators below are written for the conventional cell, not for
+    the primitive reduced basis) and of noisy refinements whose true operators miss the metric check
+    (a tetragonal cell refined with a and b 6 % apart). The operators must be written in a basis where the class's
     conventional setting holds:
       * mmm, 4/m, 4/mmm and the hexagonal/trigonal classes: standardize_axes puts both bases in the
         conventional setting, and the operators apply there DIRECTLY. The caller's own axis order is
@@ -219,6 +240,9 @@ def _symmetry_candidates(B1, B2, T1, T2, laue):
       * the other classes (monoclinic with a named unique axis, rhombohedral, cubic, triclinic):
         the caller's setting defines the operators, so they are conjugated from the caller's basis
         through the reduction (T1).
+    The table holds Miller-index operators (h' = S h); the real-space basis change is S transposed. For the
+    signed-permutation classes that is the same set, but for the hexagonal and trigonal ones it is not: used
+    untransposed, the 6-fold sends a to a - b (103.9 A on a 60 A, gamma = 120 cell) instead of a + b.
     Either way an operator that does not map lattice 1's metric onto itself is dropped: it is not a
     symmetry of THIS cell (wrong setting, or the wrong class), and keeping it would understate a
     genuine second crystal's angle (glint#207: two cxidb-17 pairs read 45 and 60 degrees instead of
@@ -231,13 +255,16 @@ def _symmetry_candidates(B1, B2, T1, T2, laue):
     if standardized:
         B1 = standardize_axes(B1, laue=key)
         B2 = standardize_axes(B2, laue=key)
-    rel = _metric_ops(B1, B2)
+    if key == "-1":                                # triclinic: the identity only, one correspondence
+        return B1, B2, [_best_basis_change(B1, B2)]
+    rel = _metric_ops(B1, B2, t90=NEAR90_T90)
     proper = _PROPER_LAUE_OPS.get(key)
     if proper is None:
         return B1, B2, rel
     ops = []
     for S in (U for U in proper if int(round(np.linalg.det(U))) == 1):
-        S = np.asarray(S, int) if standardized else _conjugate_op(T1, S)
+        S = np.asarray(S, int).T                   # hkl-space operator -> real-space basis change
+        S = S if standardized else _conjugate_op(T1, S)
         if not _is_metric_symmetry(B1, S):
             continue
         for V in rel:

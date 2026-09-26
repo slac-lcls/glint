@@ -282,6 +282,20 @@ for k, (M, _) in BRAVAIS.items():
                                - min(ang(R @ s) for s in S)))
 check(f"max deviation {worst:.1e} deg", worst < 1e-4, worst)
 
+print("\nclass operators are Miller-index operators: transposed, each one is a symmetry of the conventional cell")
+# Composition with the metric-inferred operators masks a wrong operator table in misorientation_deg itself,
+# so check the table directly: untransposed, the hexagonal 6-fold sends a to a - b (103.9 A on this cell).
+from glint.lattice import standardize_axes  # noqa: E402
+from glint.multilattice import _PROPER_LAUE_OPS, _canonical_basis, _is_metric_symmetry  # noqa: E402
+bad = {}
+for key, M in (("6/mmm", HP), ("6/m", HP), ("-3m1", HP), ("-31m", HP), ("-3", HP), ("4/mmm", LYS), ("mmm", OP)):
+    Bn = standardize_axes(_canonical_basis(M)[0], laue=key)
+    P = [np.asarray(S, int) for S in _PROPER_LAUE_OPS[key] if round(np.linalg.det(S)) == 1]
+    kept = sum(_is_metric_symmetry(Bn, S.T) for S in P)
+    if kept != len(P):
+        bad[key] = (kept, len(P))
+check("every transposed proper operator preserves the conventional metric (7 classes)", not bad, bad)
+
 print("\nmisorientation_deg: a known class applies in its conventional setting, whatever the caller's axis order")
 # The stream driver's lattice 1 can arrive with c first. Conjugating the class operators from the
 # caller's order put the 4-fold about an a axis, and two real cxidb-17 pairs read 45 and 60 degrees
@@ -309,6 +323,12 @@ print("\nmisorientation_deg: a near-orthogonal triclinic cell does not gain a fa
 T = cell(40, 50, 60, 88, 92, 97)
 g = misorientation_deg(T, rot(T[:, 2].copy(), 178.0) @ T, laue="-1")
 check(f"triclinic, laue='-1': 178 deg about c stays 178, not a fake 2-fold -> {g:.2f}", abs(g - 178.0) < 1e-4, g)
+# Two noisy refinements of it (angles 88/92 vs 88.6/91.4): a signed metric match finds a pseudo 2-fold between
+# them. The class path must use ONE basis correspondence expanded by the class's group, not every
+# tolerance-inferred operation (glint#207 review), so laue="-1" still reads ~178.
+T2n = cell(40.2, 49.8, 60.1, 88.6, 91.4, 97.3)
+g = misorientation_deg(T, rot(T[:, 2].copy(), 178.0) @ T2n, laue="-1")
+check(f"noisy triclinic pair, laue='-1': ~178 deg, no pseudo 2-fold -> {g:.2f}", abs(g - 178.0) < 1.0, g)
 
 print("\nmisorientation_deg: a lattice refined to 93.6 deg still finds its symmetry (relaxed tolerance)")
 # same_lattice compares |cos|, so two refinements on opposite sides of 90 deg pass the cell gate while

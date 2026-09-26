@@ -739,7 +739,9 @@ class StreamDriver:
             self.ops = [np.asarray(o, int) for o in ops]
             self.laue = laue_name(laue) if laue is not None else None
             self._ops_explicit = True
-            self._laue_known = self.laue is not None          # a label the caller gave (checked below)
+            # With explicit ops the label only REPORTS (see _standardize): letting it steer the double-hit
+            # gate would make an optional label change verdicts for the same operators (glint#207 review).
+            self._laue_known = False
             # A label that does not describe the operators would make stats()["laue"] misreport the
             # class the numbers were merged under (glint#186 review), so it has to agree with them.
             if self.laue is not None and _op_set(self.ops) != _op_set(laue_ops(self.laue)):

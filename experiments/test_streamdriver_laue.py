@@ -184,7 +184,8 @@ def test_stream_symmetry_derives_the_class_when_laue_is_unset():
 def test_double_hit_gate_gets_a_class_only_when_one_was_given():
     """The 4/mmm fallback is a merge default, not knowledge of the sample: handing it to
     misorientation_deg would impose tetragonal operators on, say, an orthorhombic run and can understate
-    a genuine second crystal's angle (glint#207). Given classes (caller or header) do reach the gate."""
+    a genuine second crystal's angle (glint#207). Given classes (caller or header) do reach the gate;
+    with explicit ops the label is only a report, so the gate infers the symmetry."""
     d = _driver(ORTHO)
     assert d.laue == "4/mmm" and d._sl_laue() is None             # fallback: the gate infers the class
     assert _driver(ORTHO, laue="mmm")._sl_laue() == "mmm"        # given by the caller
@@ -192,7 +193,7 @@ def test_double_hit_gate_gets_a_class_only_when_one_was_given():
     assert _driver(ORTHO, stream_symmetry=sym)._sl_laue() == "mmm"   # derived from the header
     assert _driver(TET, stream_symmetry=dict(centering="P", unique_axis="*"))._sl_laue() is None
     assert _driver(ORTHO, ops=laue_ops("mmm"))._sl_laue() is None     # explicit ops, no label
-    assert _driver(ORTHO, ops=laue_ops("mmm"), laue="mmm")._sl_laue() == "mmm"
+    assert _driver(ORTHO, ops=laue_ops("mmm"), laue="mmm")._sl_laue() is None  # a label only reports
 
 
 def test_explicit_laue_wins_over_stream_symmetry_with_a_warning():

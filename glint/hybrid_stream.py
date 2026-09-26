@@ -16,7 +16,7 @@ import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("STEPS", "8")
 import numpy as np
-from glint.glint_fast import index_blind_fast, index_blind_nbest, load
+from glint.glint_fast import GATE_FRAC, GATE_MIN, index_blind_fast, index_blind_nbest, load, matched_strict
 from glint.replica_gpu import index_known_gpu_cell
 from glint.multishot import consensus_cell, group_medoid, same_lattice
 # The pooled-vote acceptance gate (min_frac / min_lead, env-overridable) LIVES in glint.multishot
@@ -33,7 +33,7 @@ def _hkl(q, M):
 
 
 def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, cascade=None,
-                 alias_gate=None, triage_topk=None):
+                 alias_gate=None, triage_topk=None, escalate=None):
     """Fully-blind hybrid. (1) N-BEST blind-index every frame (top-`nbest` distinct cells, not just
     argmax). (2) consensus over the POOLED N-best hypotheses (aliases scatter, truth clusters ->
     sturdier cell). (3) per frame pick the highest-scored N-best cell consistent with the consensus
@@ -42,7 +42,15 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     external-indexer `cascade` (e.g. ffbidx) on whatever is still unindexed -- free insurance for the
     marginal regime, redundant when consensus is strong. Returns write_stream dicts + stats. nbest=1
     reduces to top-1 consensus. Pass Mc_known to skip consensus and rescue against a supplied cell.
-    `cascade` = callable(frames_subset, Mc) -> {local_index: M}. frames: list of (N,3) q (1/A)."""
+    `cascade` = callable(frames_subset, Mc) -> {local_index: M}. frames: list of (N,3) q (1/A).
+
+    (6) OPTIONAL escalation (`escalate`, off by default): every frame still failing the observable gate
+    (>= GATE_MIN matched and >= GATE_FRAC of its peaks) gets a DEEP known-cell search, accepted only if the
+    fit beats all of its own azimuth-scrambled copies (glint.retry_cascade.arm_known_deep). True for the
+    measured defaults, or a dict overriding topa / nc / k_null / seed. On the cxidb-17 480 set this took the
+    strict count from 366 to 387 (RESULTS_escalation_k32.md, job 39181473). An escalated frame is labelled
+    `escalated` with its null record. It is A lattice of the frame, not necessarily the one the shipped
+    search would have found: on a double hit it can be the other crystal."""
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
     if warmup and n:
@@ -161,6 +169,40 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
                     hkl, qin, _ = _hkl(results[i]["q"], Mx)
                     results[i].update({"M": Mx, "q": qin, "hkl": hkl})
                     n_idx += 1; n_casc += 1
+    esc_stats = None
+    if escalate and Mc is not None:                              # (6) optional escalation on the misses
+        from glint.retry_cascade import (DEEP_K_NULL, DEEP_NC, DEEP_SEED, DEEP_TOPA,
+                                         arm_known_deep)
+        cfg = dict(topa=DEEP_TOPA, nc=DEEP_NC, k_null=DEEP_K_NULL, seed=DEEP_SEED)
+        if isinstance(escalate, dict):
+            unknown = set(escalate) - set(cfg)
+            if unknown:
+                raise ValueError(f"hybrid_index(escalate=...): unknown keys {sorted(unknown)}")
+            cfg.update(escalate)
+
+        def _obs(M, q):
+            m = matched_strict(M, q)
+            return m >= GATE_MIN and m >= GATE_FRAC * len(q)
+
+        def _gate(M, q):
+            return _obs(M, q) and same_lattice(M, Mc)
+
+        misses = [i for i, q in enumerate(frames) if results[i]["M"] is None or not _obs(results[i]["M"], q)]
+        n_esc = searches = 0
+        for i in misses:
+            q = np.asarray(frames[i], float)
+            M, rec = arm_known_deep(q, Mc, index_known_gpu_cell, matched_strict, _gate,
+                                    seed=[int(cfg["seed"]), i], topa=cfg["topa"], nc=cfg["nc"],
+                                    k_null=cfg["k_null"])
+            searches += rec["searches"]
+            if M is not None:
+                hkl, qin, _ = _hkl(q, M)
+                if results[i]["M"] is None:
+                    n_idx += 1
+                results[i].update({"M": M, "q": qin, "hkl": hkl, "escalated": True, "escalation": rec})
+                n_esc += 1
+        esc_stats = dict(n_escalation_candidates=len(misses), n_escalated=n_esc,
+                         escalation_searches=searches, escalation=cfg)
     edges = np.round(np.sort(np.linalg.norm(Mc, axis=0)), 1) if Mc is not None else None
     stats = {"n": n, "n_blind": n_blind, "support": support, "edges": edges, "n_nbest": n_nb,
              "n_resc": n_resc, "n_casc": n_casc, "n_idx": n_idx, "Mc": Mc,
@@ -168,6 +210,8 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
              "n_voters": len(vote_idx) if Mc_known is None else 0, "triage_topk": triage_topk,
              "n_refine": n_refine,
              "consensus_refused": bool(Mc is None and n_pool)}
+    if esc_stats is not None:
+        stats.update(esc_stats)
     return results, stats
 
 
@@ -216,6 +260,10 @@ def _report(stats, out):
     print(f"  rescued failures   : {stats['n_resc']}")
     if stats.get("n_casc"):
         print(f"  cascade recovered  : {stats['n_casc']} (external fallback on still-unindexed)")
+    if "n_escalated" in stats:
+        c = stats["n_escalation_candidates"]
+        print(f"  escalated          : {stats['n_escalated']} of {c} gate-failing frames "
+              f"(deep search + scrambled null, {stats['escalation_searches'] / max(c, 1):.1f} searches each)")
     print(f"  FINAL indexed      : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
 
 

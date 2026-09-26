@@ -170,6 +170,13 @@ jobs:
       - name: experiments/test_retry_cascade.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_retry_cascade.py
+
+      # The opt-in escalation (retry_cascade.arm_known_deep, hybrid_index(escalate=...)): a deep known-cell
+      # fit is kept only if no azimuth-scrambled copy of the frame matches as many peaks; the null is
+      # sequential; escalate=None leaves hybrid_index untouched. Scripted indexers, torch modules stubbed.
+      - name: experiments/test_escalation.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_escalation.py
       - name: experiments/test_cell_registry.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cell_registry.py

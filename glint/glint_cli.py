@@ -101,6 +101,10 @@ def main():
     ap.add_argument("--cascade", metavar="DRIVER",
                     help="optional external cell-given indexer binary (e.g. ffbidx/xgandalf driver) to "
                          "fall back on for frames left unindexed; must use the FRAME-in / basis-out protocol")
+    ap.add_argument("--escalate", action="store_true",
+                    help="sparse mode: give frames that still fail the observable gate a deeper known-cell search, "
+                         "accepted only if the fit beats all 32 of its own azimuth-scrambled copies (sequential "
+                         "null, ~8 searches per missed frame). Off by default")
     ap.add_argument("--integrate", action="store_true",
                     help="native predict+integrate -> a stream with REAL I/sigma, self-contained (no CrystFEL). "
                          "With --images the frames are read straight from the stacked .cxi by event; with --peaks "
@@ -170,7 +174,8 @@ def main():
         if args.cascade:
             from glint.cascade import external_cascade
             casc = external_cascade(args.cascade)
-        results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest, cascade=casc)
+        results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest, cascade=casc,
+                                      escalate=args.escalate or None)
     if args.integrate:
         if not args.geom:
             ap.error("--integrate requires --geom (and --image-dir for the frame images)")

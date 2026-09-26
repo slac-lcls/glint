@@ -199,8 +199,12 @@ def _axes_from_cell(Mc):
     return L, c01, c02, c12, sgn
 
 
-def axis_candidates_t(Q, L0):
-    """c_candidates_t generalized to an arbitrary anchor length L0 (was hardcoded LC)."""
+def axis_candidates_t(Q, L0, nc=None):
+    """c_candidates_t generalized to an arbitrary anchor length L0 (was hardcoded LC).
+
+    nc: how many distinct anchor directions to keep (default: the module's NC, env-set at import). The
+    escalation arm (glint.retry_cascade.arm_known_deep) asks for more without re-importing the module."""
+    nc = NC if nc is None else int(nc)
     inl, sub = objective_t(L0 * DIRS, Q)
     idx = torch.argsort(inl.double() * 100.0 - sub, descending=True)[:120]
     ref = _resc_refine((L0 * DIRS)[idx], Q, steps=30)
@@ -212,7 +216,7 @@ def axis_candidates_t(Q, L0):
         d = refc[j] / L0
         if all(abs(d @ (o / L0)) < AXIS0_DEDUP_COS for o in out):
             out.append(refc[j])
-        if len(out) >= NC:
+        if len(out) >= nc:
             break
     return torch.as_tensor(np.array(out), dtype=torch.float64, device=DEV) if out else None
 
@@ -235,13 +239,16 @@ def _third_axis(a0, a1, L2, c02, c12, sgn):
     return torch.where(feas[:, None], a2, torch.zeros_like(a2))
 
 
-def index_known_gpu_cell(q, Mc, topa=8):
-    """GPU known-cell rescue against an ARBITRARY consensus cell Mc (3x3 real-space cols)."""
+def index_known_gpu_cell(q, Mc, topa=8, nc=None):
+    """GPU known-cell rescue against an ARBITRARY consensus cell Mc (3x3 real-space cols).
+
+    topa (azimuths kept per anchor) and nc (anchor directions, default NC) set the search depth. The
+    shipped rescue uses the defaults; the escalation arm runs topa=128, nc=32 (RESULTS_escalation.md's T2)."""
     L, c01, c02, c12, sgn = _axes_from_cell(Mc)
     Q = torch.as_tensor(np.asarray(q, float), dtype=torch.float64, device=DEV)
     if len(Q) < 6:
         return None
-    C = axis_candidates_t(Q, float(L[0]))                   # anchor = shortest axis
+    C = axis_candidates_t(Q, float(L[0]), nc=nc)            # anchor = shortest axis
     if C is None:
         return None
     cn = C / C.norm(dim=1, keepdim=True)

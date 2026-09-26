@@ -296,6 +296,25 @@ for key, M in (("6/mmm", HP), ("6/m", HP), ("-3m1", HP), ("-31m", HP), ("-3", HP
         bad[key] = (kept, len(P))
 check("every transposed proper operator preserves the conventional metric (7 classes)", not bad, bad)
 
+print("\nmisorientation_deg: Laue names go through the shared registry (aliases resolve, unknown names raise)")
+Rh = rot([0.4, -0.7, 1.0], 40.0)
+for alias, canon in (("m3m", "m-3m"), ("m3", "m-3"), ("-3_H", "-3"), ("-3m_H", "-3m1"), ("2/m", "2/m_uab")):
+    Mx = CP if canon.startswith("m") else (HP if "3" in canon else MP)
+    ga, gc = misorientation_deg(Mx, Rh @ Mx, laue=alias), misorientation_deg(Mx, Rh @ Mx, laue=canon)
+    check(f"laue={alias!r} == laue={canon!r} ({ga:.2f})", abs(ga - gc) < 1e-9, (ga, gc))
+try:
+    misorientation_deg(LYS, Rh @ LYS, laue="4/mmmm")
+    check("an unknown Laue name raises", False)
+except ValueError:
+    check("an unknown Laue name raises", True)
+
+print("\nmisorientation_deg is modulo the LATTICE symmetry: a lower declared class does not remove operators")
+# 180 deg about a is not an operation of 4/m but it is one of the tetragonal lattice: the two crystals'
+# lattice points coincide (a merohedral twin), so deflating lattice 1 removes the other's peaks and it can
+# never be the residual's second lattice. 0 deg is the answer the double-hit gate needs (glint#207 review).
+g = misorientation_deg(LYS, rot(LYS[:, 0].copy(), 180.0) @ LYS, laue="4/m")
+check(f"tetragonal, laue='4/m', 180 deg about a -> {g:.4f} (same lattice points)", g < 1e-4, g)
+
 print("\nmisorientation_deg: a known class applies in its conventional setting, whatever the caller's axis order")
 # The stream driver's lattice 1 can arrive with c first. Conjugating the class operators from the
 # caller's order put the 4-fold about an a axis, and two real cxidb-17 pairs read 45 and 60 degrees

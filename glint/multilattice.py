@@ -64,7 +64,6 @@ _R6_C_HEX = np.array([[1, 1, 0], [-1, 0, 0], [0, 0, 1]], int)
 _R2_A_HEX = np.array([[1, 0, 0], [-1, -1, 0], [0, 0, -1]], int)
 _R2_AB_HEX = np.array([[0, -1, 0], [-1, 0, 0], [0, 0, -1]], int)
 _R3_111 = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]], int)
-_LAUE_ALIASES = {"2/m": "2/m_uab", "-3m": "-3m1"}
 
 
 def _close_group(gens):
@@ -250,7 +249,8 @@ def _symmetry_candidates(B1, B2, T1, T2, laue):
     if laue is None:
         return B1, B2, _metric_ops(B1, B2, t90=NEAR90_T90)
     from glint.lattice import standardize_axes
-    key = _LAUE_ALIASES.get(str(laue).strip(), str(laue).strip())
+    from glint.stream_driver import laue_name       # the shared registry: every alias, ValueError if unknown
+    key = laue_name(laue)                              # (imported here: stream_driver imports this module)
     standardized = key in _STANDARDIZED_LAUE
     if standardized:
         B1 = standardize_axes(B1, laue=key)
@@ -276,6 +276,16 @@ def _symmetry_candidates(B1, B2, T1, T2, laue):
 
 def misorientation_deg(M1, M2, laue=None):
     """Smallest rotation angle carrying lattice 1 onto lattice 2, modulo lattice symmetry (degrees).
+
+    Modulo the LATTICE's symmetry (its holohedry), not the crystal's Laue class. A declared lower class
+    (4/m on a tetragonal lattice, -3 on a hexagonal one) does not remove operators: two crystals related by
+    an operation of the lattice but not of the crystal -- a merohedral twin, e.g. 180 degrees about a for
+    4/m -- put every lattice point in the same place, so lattice 1's deflation removes the other one's peaks
+    and it can never be the second lattice this gate is asked about; 0 degrees is the answer the gate needs.
+    `laue` names the class so its operators are supplied rather than inferred from a noisy metric, and
+    laue="-1" rules out every inferred operator. Known limitation: a cell within the metric tolerance of a
+    higher symmetry (say orthorhombic with a and b 4 % apart) still gains that pseudo-symmetry from the
+    inference; restricting to the declared class's own lattice operators is follow-up work (glint#207).
 
     THIS IS THE GATE THAT SEPARATES A SECOND CRYSTAL FROM A MOSAIC TAIL, and it does so on the
     physics rather than on a proxy. A mosaic tail is lattice 1 rotated by a FEW DEGREES -- that is

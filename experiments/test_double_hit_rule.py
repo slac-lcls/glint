@@ -142,5 +142,109 @@ for s in range(50):
 check("50/50 random-orientation doubles accepted", acc_true == 50, acc_true)
 check("50/50 mosaic tails rejected", clone_rej == 50, clone_rej)
 
+# ---------------------------------------------------------------------------------------------------
+# misorientation_deg compares LATTICES, not bases. Until this was fixed it compared bases: it tried
+# only signed axis permutations of the two incoming matrices, so the same lattice written in another
+# basis -- or in the same basis with the opposite handedness, which buerger_reduce returns about half
+# the time -- read tens of degrees away from itself. Every test above hands it matching bases, which
+# is why none of them could see that. The two real pairs below come from the 23 Sep cxidb-17 replay
+# (per-lattice + double-hit arm), where 22 of 178 recorded "second crystals" at >= 15 deg were
+# within 15 deg of lattice 1.
+from glint.multilattice import _canonical_basis, _metric_ops, misorientation_deg  # noqa: E402
+
+
+def cell(a, b, c, al, be, ga):
+    al, be, ga = np.radians([al, be, ga])
+    cx = c * np.cos(be); cy = c * (np.cos(al) - np.cos(be) * np.cos(ga)) / np.sin(ga)
+    return np.column_stack([[a, 0, 0], [b * np.cos(ga), b * np.sin(ga), 0],
+                            [cx, cy, np.sqrt(c * c - cx * cx - cy * cy)]])
+
+
+def random_basis(r):
+    while True:                                       # integer, |det| = 1, entries up to 2: skewed
+        T = r.integers(-2, 3, (3, 3)).astype(float)
+        if abs(abs(np.linalg.det(T)) - 1) < 0.5:
+            return T
+
+
+def ang(R):
+    return float(np.degrees(np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1))))
+
+
+F_ = np.array([[0, .5, .5], [.5, 0, .5], [.5, .5, 0]]).T
+I_ = np.array([[-.5, .5, .5], [.5, -.5, .5], [.5, .5, -.5]]).T
+C_ = np.array([[.5, .5, 0], [-.5, .5, 0], [0, 0, 1]]).T
+LYS = cell(79.02, 79.02, 37.98, 90, 90, 90)
+BRAVAIS = {                                           # name: (basis, proper holohedry order)
+    "aP": (cell(40, 50, 60, 80, 95, 105), 1), "mP": (cell(40, 50, 60, 90, 105, 90), 2),
+    "mC": (cell(40, 50, 60, 90, 105, 90) @ C_, 2), "oP": (cell(40, 50, 60, 90, 90, 90), 4),
+    "oC": (cell(40, 50, 60, 90, 90, 90) @ C_, 4), "oF": (cell(40, 50, 60, 90, 90, 90) @ F_, 4),
+    "oI": (cell(40, 50, 60, 90, 90, 90) @ I_, 4), "tP": (LYS, 8),
+    "tI": (cell(50, 50, 80, 90, 90, 90) @ I_, 8), "hP": (cell(60, 60, 90, 90, 90, 120), 12),
+    "hR": (cell(50, 50, 50, 70, 70, 70), 6), "cP": (cell(50, 50, 50, 90, 90, 90), 24),
+    "cF": (cell(50, 50, 50, 90, 90, 90) @ F_, 24), "cI": (cell(50, 50, 50, 90, 90, 90) @ I_, 24)}
+
+print("\nmisorientation_deg: the lattice's own proper symmetry is found for all 14 Bravais classes")
+bad = {k: len(_metric_ops(_canonical_basis(M), _canonical_basis(M))) for k, (M, n) in BRAVAIS.items()
+       if len(_metric_ops(_canonical_basis(M), _canonical_basis(M))) != n}
+check("op count = proper holohedry order (1, 2, 4, 6, 8, 12, 24)", not bad, bad)
+H = BRAVAIS["hP"][0]
+g = misorientation_deg(H, rot(H[:, 2].copy(), 60) @ H)    # copy: rot() normalises its axis in place
+check("hexagonal: 60 deg about c is the lattice itself (a signed permutation cannot express it)",
+      g < 1e-4, g)
+
+print("\nmisorientation_deg: the same lysozyme lattice in another basis is 0 deg")
+for name, T in [("a <-> b swap (left-handed)", np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1.0]])),
+                ("one flipped axis (left-handed)", np.diag([-1.0, 1, 1])),
+                ("a+b, b, c", np.array([[1, 1, 0], [0, 1, 0], [0, 0, 1.0]])),
+                ("c first (the order buerger_reduce emits)", np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0.0]]))]:
+    a = misorientation_deg(LYS, LYS @ T)
+    check(f"{name}: {a:.4f} deg", a < 1e-4, a)       # arccos near 1: ~1e-6 deg of float noise
+r = np.random.default_rng(11)
+worst = max(misorientation_deg(LYS, LYS @ random_basis(r)) for _ in range(50))
+check("50 random skewed bases: all 0 deg", worst < 1e-4, worst)
+
+print("\nmisorientation_deg: planted rotations recovered exactly in any basis, handedness, 1% cell drift")
+for deg in (3.0, 20.0, 35.0):              # below the smallest symmetry-equivalent for this axis
+    R = rot([1.0, 2.0, 3.0], deg)
+    got = [misorientation_deg(LYS, R @ LYS @ T) for T in
+           (np.eye(3), np.diag([-1.0, 1, 1]), np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1.0]]))]
+    check(f"{deg:g} deg in 3 bases -> {', '.join(f'{g:.3f}' for g in got)}",
+          max(abs(g - deg) for g in got) < 1e-4, got)
+g = misorientation_deg(LYS, rot([3.0, -1.0, 2.0], 25.0) @ (LYS * 1.01) @ np.diag([1.0, -1, 1]))
+check(f"25 deg, 1% larger cell, left-handed basis -> {g:.3f}", abs(g - 25.0) < 0.5, g)
+
+print("\nmisorientation_deg = brute-force minimum over the lattice's symmetry group (14 classes x 30)")
+r, worst = np.random.default_rng(5), 0.0
+for k, (M, _) in BRAVAIS.items():
+    B = _canonical_basis(M)
+    S = [B @ U @ np.linalg.inv(B) for U in _metric_ops(B, B)]    # Cartesian symmetry rotations
+    for _ in range(30):
+        R = rot(r.normal(size=3), r.uniform(0, 180))
+        worst = max(worst, abs(misorientation_deg(M, R @ M @ random_basis(r)) - min(ang(R @ s) for s in S)))
+check(f"max deviation {worst:.1e} deg", worst < 1e-4, worst)
+
+print("\nmisorientation_deg: a lattice refined to 93.6 deg still finds its symmetry (relaxed tolerance)")
+# same_lattice compares |cos|, so two refinements on opposite sides of 90 deg pass the cell gate while
+# failing a signed-cosine test at the first tolerance; one such pair occurred on the replay (frame 46).
+M1d, M2d = cell(76.55, 81.29, 37.0, 90, 90, 93.6), rot([1.0, 1.0, 0.0], 40.0) @ cell(78.6, 78.8, 37.7, 90, 90, 90)
+g = misorientation_deg(M1d, M2d)
+check(f"40 deg between distorted cells -> {g:.2f}", abs(g - 40.0) < 4.0, g)
+
+print("\nmisorientation_deg on two REAL replay pairs the old version read as ~90 deg")
+REAL = {   # frame: (M1, M2, what the old version recorded)
+    155: ([[19.941, 74.9458, -6.3703], [6.8435, 11.2947, 37.1143], [74.6988, -21.8871, -2.6321]],
+          [[-6.3436, 21.0358, -74.9919], [37.1065, 9.6343, -11.2021], [-2.8829, 75.48, 22.204]], 89.97),
+    320: ([[-25.3096, -73.3133, 6.8433], [56.6332, -9.3564, 25.7882], [-48.299, 27.5557, 26.8039]],
+          [[8.5174, 24.364, 72.9145], [25.0442, -58.4023, 7.0691], [27.1343, 46.5569, -29.3891]], 87.91)}
+for fr, (A, Bm, was) in REAL.items():
+    g = misorientation_deg(A, Bm)
+    hand = "opposite" if np.linalg.det(A) * np.linalg.det(Bm) < 0 else "same"
+    check(f"frame {fr} ({hand} handedness): recorded {was} deg, now {g:.2f} deg -> not a second crystal",
+          g < 5.0, g)
+    check(f"frame {fr}: second_lattice_verdict rejects it",
+          not second_lattice_verdict(peaks_of(np.asarray(Bm), 20), A,
+                                     lambda q, n, Bm=Bm: [(np.asarray(Bm), 1.0)])["accepted"])
+
 print(f"\nFAILURES: {len(FAILS)}" + ("" if not FAILS else "  " + ", ".join(FAILS)))
 sys.exit(1 if FAILS else 0)

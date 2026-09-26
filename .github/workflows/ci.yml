@@ -148,6 +148,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_multilattice.py
 
+      # The double-hit acceptance rule and misorientation_deg, which it gates on. The angle must be a
+      # property of the two LATTICES: same lattice in any basis or handedness -> 0 deg, planted
+      # rotations exact, symmetry found for all 14 Bravais classes, two real replay pairs.
+      - name: experiments/test_double_hit_rule.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_double_hit_rule.py
+
       - name: experiments/test_warmup_batch.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_warmup_batch.py

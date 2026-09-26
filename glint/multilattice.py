@@ -52,25 +52,71 @@ def scramble_azimuth(q, rng):
     return out
 
 
-def _lattice_ops(M, tol=0.10):
-    """The lattice's own proper symmetry, as signed axis permutations that preserve its axis lengths.
+_UNIMOD = None
 
-    Needed so a misorientation is measured modulo operations that map the lattice onto itself: for a
-    cell with distinct axes this is just the four 2-folds, but with two near-equal axes it grows, and
-    ignoring it would OVERSTATE the angle."""
-    from itertools import permutations, product
-    L = np.linalg.norm(np.asarray(M, float), axis=0)
-    ops = []
-    for perm in permutations(range(3)):
-        if np.any(np.abs(L[list(perm)] - L) / L > tol):
-            continue
-        for sg in product((1, -1), repeat=3):
-            P = np.zeros((3, 3))
-            for i, p in enumerate(perm):
-                P[p, i] = sg[i]
-            if np.linalg.det(P) > 0:
-                ops.append(P)
-    return ops or [np.eye(3)]
+
+def _unimodular():
+    """The 3480 integer 3x3 matrices with entries in {-1, 0, 1} and determinant +1 (built once)."""
+    global _UNIMOD
+    if _UNIMOD is None:
+        from itertools import product
+        U = np.array(list(product((-1, 0, 1), repeat=9)), float).reshape(-1, 3, 3)
+        _UNIMOD = U[np.abs(np.linalg.det(U) - 1.0) < 0.5]
+    return _UNIMOD
+
+
+def _canonical_basis(M):
+    """A Buerger-reduced, RIGHT-HANDED basis of the lattice M spans.
+
+    -I maps every lattice onto itself, so negating a left-handed basis changes the basis and not the
+    lattice. Both bases handed to _metric_ops must share handedness: otherwise no proper rotation
+    carries one onto the other, and the polar projection returns a large spurious angle.
+
+    buerger_reduce searches integer combinations up to +-3, which one pass does not always reach
+    from a strongly skewed basis (half of random entries-up-to-2 bases of the lysozyme cell), so it
+    is repeated until the lengths stop falling. Bases the indexers emit are already reduced; one pass."""
+    from glint.lattice import buerger_reduce
+    B = np.asarray(M, float)
+    for _ in range(10):
+        Bn = buerger_reduce(B)
+        done = np.linalg.norm(Bn, axis=0).sum() >= np.linalg.norm(B, axis=0).sum() * (1 - 1e-9)
+        B = Bn
+        if done:
+            break
+    return -B if np.linalg.det(B) < 0 else B
+
+
+def _metric_ops(B1, B2, rtol=0.05, ctol=0.06):
+    """Integer basis changes U (entries in {-1, 0, 1}, det +1) under which B1 @ U has B2's metric.
+
+    B1 and B2 are right-handed reduced bases. The set holds the lattice's own proper symmetry (the
+    identity alone for a generic triclinic cell; 4 ops orthorhombic, 8 tetragonal, 12 hexagonal, 24
+    cubic, pinned by experiments/test_double_hit_rule.py), composed with whatever basis change relates
+    the two reductions -- e.g. an axis swap when two lengths are near-equal. In a reduced basis these
+    ops have entries in {-1, 0, 1} for every Bravais class the test checks.
+
+    rtol (relative, on lengths) and ctol (absolute, on SIGNED cosines) start at same_lattice's values
+    and are doubled up to twice if nothing matches. same_lattice compares |cos|, so two refinements of
+    a 90-degree angle that land on opposite sides of 90 pass it while failing a signed test at the
+    first tolerance: measured on the 23 Sep cxidb-17 replay, one of 178 pairs (a lattice 1 refined to
+    93.6 degrees) needed the first doubling. Looser tolerance can only admit MORE ops and so a SMALLER
+    angle. If nothing matches even at 4x (different cells), the single closest U is used so the angle
+    is still defined, but it is not meaningful."""
+    U = _unimodular()
+    C = np.einsum("ij,njk->nik", B1, U)                          # candidate bases, columns
+    G = np.einsum("nji,njk->nik", C, C)                          # their Gram matrices
+    G2 = B2.T @ B2
+    L, L2 = np.sqrt(np.einsum("nii->ni", G)), np.sqrt(np.diag(G2))
+    dl = np.abs(L - L2) / (0.5 * (L + L2))
+    iu = ([0, 0, 1], [1, 2, 2])
+    cos = G[:, iu[0], iu[1]] / (L[:, iu[0]] * L[:, iu[1]])
+    cos2 = G2[iu] / (L2[iu[0]] * L2[iu[1]])
+    dc = np.abs(cos - cos2)
+    for f in (1.0, 2.0, 4.0):
+        ok = (dl <= f * rtol).all(1) & (dc <= f * ctol).all(1)
+        if ok.any():
+            return U[ok]
+    return U[[np.argmin(dl.max(1) / rtol + dc.max(1) / ctol)]]
 
 
 def misorientation_deg(M1, M2):
@@ -88,16 +134,25 @@ def misorientation_deg(M1, M2):
     mosaic/split domains, not independent crystals; and the near-empty 5-15 deg band is why the exact
     cut hardly matters.
 
-    M2 P = R M1 for some symmetry op P; R is projected onto the nearest rotation because the two
-    cells are refined independently and differ slightly (stable to a 1% cell mismatch)."""
-    M1 = np.asarray(M1, float); M2 = np.asarray(M2, float)
-    A = np.linalg.inv(M1)
+    ⚠ The numbers above (and the 8.7 % / 8.9 % in second_lattice_verdict) were measured with an
+    earlier version of this function that compared BASES, not lattices: it tried only signed axis
+    permutations of the incoming matrices. The same lattice in a different basis -- or in the same
+    basis with the opposite handedness, which is what buerger_reduce returns about half the time --
+    could read far from itself (on the lysozyme cell an a/b swap read 90 degrees, an a+b basis 27;
+    experiments/test_double_hit_rule.py). They are being re-measured.
+
+    Both matrices are first put in a right-handed Buerger-reduced basis (_canonical_basis), so the
+    result does not depend on the basis either caller used. Then B2 = R B1 U for some integer basis
+    change U (_metric_ops: the lattice's own symmetry, composed with any reshuffle between the two
+    reductions). R is projected onto the nearest rotation because the two cells are refined
+    independently and differ slightly (stable to a 1% cell mismatch)."""
+    B1, B2 = _canonical_basis(M1), _canonical_basis(M2)
     best = 180.0
-    for P in _lattice_ops(M1):
-        U, _, Vt = np.linalg.svd(M2 @ P @ A)
-        if np.linalg.det(U @ Vt) < 0:                            # keep it a proper rotation
-            U = U.copy(); U[:, -1] *= -1
-        R = U @ Vt
+    for U in _metric_ops(B1, B2):
+        W, _, Vt = np.linalg.svd(B2 @ np.linalg.inv(B1 @ U))
+        if np.linalg.det(W @ Vt) < 0:                            # keep it a proper rotation
+            W = W.copy(); W[:, -1] *= -1
+        R = W @ Vt
         best = min(best, float(np.degrees(np.arccos(np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)))))
     return best
 

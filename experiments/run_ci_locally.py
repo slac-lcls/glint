@@ -56,6 +56,7 @@ STEPS = [
     "experiments/test_watchdog_fanout_guard.py",
     "experiments/test_retry_cascade.py",
     "experiments/test_cell_registry.py",
+    "experiments/test_per_lattice.py",
     "experiments/test_geom_bridge.py",
     "experiments/test_cli_smoke.py",
     "experiments/test_geom_refine.py",

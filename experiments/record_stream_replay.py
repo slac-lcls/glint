@@ -87,6 +87,7 @@ sys.path.insert(0, ROOT)
 from glint.glint_fast import GATE_FRAC, GATE_MIN, LYSO, load, matched_strict   # noqa: E402
 from glint.lattice import cell_params, cell_to_Ar                            # noqa: E402
 from glint.multishot import same_lattice                                    # noqa: E402
+from glint.multilattice import claimed_mask                                 # noqa: E402
 import glint.stream_driver as sd                                            # noqa: E402
 
 # The synthetic panel the original harness used (test_streamdriver_vs_offline.py). Irrelevant to
@@ -98,7 +99,8 @@ PANELS = [dict(name="p0", fs=np.array([1.0, 0, 0]), ss=np.array([0, 1.0, 0]), re
 CLEN_M = DIST_MM / 1000.0
 
 TERMINAL = ("blank", "warmup_vote", "warmup_lock", "indexed", "rescued_watchdog", "rescued_cascade",
-            "miss", "gate_rejected")
+            "rescued_per_lattice", "miss", "gate_rejected")
+ACCEPTED = ("indexed", "rescued_watchdog", "rescued_cascade", "rescued_per_lattice")
 RETRO = ("rescued_warmup", "rescued_relock")
 MARKERS = ("relock", "integrated")                        # neither replaces a frame's terminal outcome
 
@@ -291,9 +293,35 @@ def strict_gate(M, q, ref):
     return ok, m, frac
 
 
+def strict_gate_per_lattice(M, q, ref, sl):
+    """The published gate scored PER LATTICE: strict_gate on the frame's peaks minus the ones its OTHER
+    lattice claims, so numerator and denominator count the same peaks. `sl` is the driver's
+    second-lattice record (M1, M2, dominant): lattice 1 claims every peak within the deflation tolerance
+    of it, lattice 2 the remaining peaks within tolerance of it -- the driver's own assignment order. M is
+    the lattice the frame was kept under (the dominant one; the caller checks). Reported beside the
+    whole-frame gate, never instead of it. Returns (ok, matched, frac, n_scored)."""
+    if M is None:
+        return False, 0, 0.0, 0
+    q = np.asarray(q, float)
+    claim1 = claimed_mask(q, sl["M1"])
+    claim2 = ~claim1 & claimed_mask(q, sl["M2"])
+    keep = ~claim2 if sl["dominant"] == "first" else ~claim1
+    ok, m, frac = strict_gate(M, q[keep], ref)
+    return ok, m, frac, int(keep.sum())
+
+
 def git_head():
     try:
         return subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
+    except Exception:                                       # noqa: BLE001 -- provenance only
+        return None
+
+
+def git_dirty():
+    """True when tracked files differ from HEAD -- the run is then NOT reproducible from the commit alone."""
+    try:
+        return bool(subprocess.check_output(["git", "-C", ROOT, "status", "--porcelain", "--untracked-files=no"],
+                                            text=True).strip())
     except Exception:                                       # noqa: BLE001 -- provenance only
         return None
 
@@ -319,6 +347,11 @@ def main(argv=None):
                          "(published) or a challenger that explains at least the margin more peaks")
     ap.add_argument("--assign-margin", type=int, default=8, help="assign=best: challenger must explain this many more peaks ...")
     ap.add_argument("--assign-margin-frac", type=float, default=0.05, help="... or this fraction of the frame's peaks, whichever is larger")
+    ap.add_argument("--per-lattice", action="store_true",
+                    help="score a lattice against the peaks a second lattice in the frame does not claim (rescue + QC)")
+    ap.add_argument("--per-lattice-below", type=float, default=0.25,
+                    help="per_lattice: search accepted frames whose lattice-1 share is below this")
+    ap.add_argument("--double-hit", action="store_true", help="the driver's gated double-hit detection on every accepted frame")
     ap.add_argument("--stream-out", default=None); ap.add_argument("--cupy", action="store_true", help="use_gpu=True")
     ap.add_argument("--stream-symmetry", default=None, metavar="lattice_type=..,centering=..,unique_axis=..",
                     help="CrystFEL symmetry record stamped on every .stream chunk; also fixes the driver's merge class "
@@ -346,6 +379,8 @@ def main(argv=None):
     ap.add_argument("--expect-mode", choices=("species", "drv"), default="species",
                     help="which strict count --expect gates: own-species reference (default) or the driver's primary")
     a = ap.parse_args(argv)
+    # provenance is read NOW, before any work: a commit made while a long replay runs must not relabel it
+    git0, dirty0 = git_head(), git_dirty()
 
     # ---- inputs, references, schedule
     pools, meta_in = {}, []
@@ -391,6 +426,10 @@ def main(argv=None):
               roster={k: cell_params(v) for k, v in refs.items() if k in pools}, events=True)
     if a.assign != "first":                                  # only when set, so the published runs' driver_kw is byte-identical
         kw.update(assign=a.assign, assign_margin=a.assign_margin, assign_margin_frac=a.assign_margin_frac)
+    if a.per_lattice:                                        # only when set: published driver_kw stay byte-identical
+        kw.update(per_lattice=True, per_lattice_below=a.per_lattice_below)
+    if a.double_hit:
+        kw["double_hit"] = True
     if a.stream_out:
         kw["stream_out"] = a.stream_out
     if a.geom_refine:
@@ -516,6 +555,8 @@ def main(argv=None):
             r["M"] = e["M"]; r["frac_live"] = e["frac"]; r["n_inl"] = e["n_inl"]
             if e.get("inl_by_cell") is not None:                 # assign="best": what every active cell saw
                 r["inl_by_cell"] = e["inl_by_cell"]
+            if e.get("second_lattice") is not None:              # per_lattice: the frame's second lattice
+                r["second_lattice"] = dict(e["second_lattice"])   # with M1/M2: the per-lattice score is recomputable
             r["wresc"] = int(oc == "rescued_watchdog")
         elif oc in RETRO:
             if e["ev"] is None:
@@ -527,7 +568,11 @@ def main(argv=None):
 
     # ---- score
     Mc_final = np.asarray(drv.Mc, float) if drv.Mc is not None else None
-    tot = dict(n=n, strict_ok=0, strict_ok_drv=0, blank=0, indexed=0, miss=0, gate_rejected=0, warmup=0)
+    tot = dict(n=n, strict_ok=0, strict_ok_drv=0, strict_ok_per_lattice=0, blank=0, indexed=0, miss=0,
+               gate_rejected=0, warmup=0, rescued_per_lattice=0, second_lattice_found=0,
+               # where the per-lattice numbers come from: rescues kept under the residual's lattice, rescues the
+               # whole-frame strict gate credits anyway, and frames ONLY the per-lattice score credits
+               rescued_per_lattice_swapped=0, rescued_per_lattice_strict=0, per_lattice_only=0)
     by_sp = {sp: dict(n=0, ok=0, ok_drv=0, indexed=0, miss=0, blank=0, warmup=0, rescued=0) for sp in pools}
     confusion = {}
     tot["integrated"] = 0
@@ -550,10 +595,26 @@ def main(argv=None):
             okd = strict_gate(Mr, q, Mc_final)[0]
         r["ok"] = int(ok); r["ok_drv"] = int(okd); r["m"] = m; r["frac"] = round(frac, 4)
         tot["strict_ok"] += ok; tot["strict_ok_drv"] += okd
+        sl2 = r.get("second_lattice")                        # per-lattice gate: only where a 2nd lattice was found
+        okp = ok
+        if sl2 is not None:
+            tot["second_lattice_found"] += 1
+            # the driver's rule: only the DOMINANT lattice, when it is the one the frame was kept under, is
+            # scored against the peaks the other does not claim; a weaker lattice is never credited
+            if sl2.get("kept") is not None and sl2["kept"] == sl2.get("dominant"):
+                okl, _, fracl, nsc = strict_gate_per_lattice(M, q, ref, sl2)
+                r["frac_pl"] = round(fracl, 4); r["n_scored_pl"] = nsc
+                okp = bool(okl or ok)
+        r["ok_pl"] = int(okp); tot["strict_ok_per_lattice"] += okp
+        tot["per_lattice_only"] += bool(okp and not ok)
+        if r["o"] == "rescued_per_lattice":
+            tot["rescued_per_lattice_swapped"] += (sl2 or {}).get("kept") == "second"
+            tot["rescued_per_lattice_strict"] += bool(ok)
         by_sp[sp]["ok"] += ok; by_sp[sp]["ok_drv"] += okd
         oc = r["o"]
-        if oc in ("indexed", "rescued_watchdog", "rescued_cascade"):
+        if oc in ACCEPTED:
             tot["indexed"] += 1; by_sp[sp]["indexed"] += 1
+            tot["rescued_per_lattice"] += oc == "rescued_per_lattice"
         elif oc == "miss":
             tot["miss"] += 1; by_sp[sp]["miss"] += 1
         elif oc == "blank":
@@ -573,6 +634,10 @@ def main(argv=None):
                     n_warmup_rescued=st.get("n_warmup_rescued", 0), n_cascade_rescued=st.get("n_cascade_rescued", 0),
                     indexed=st.get("indexed", 0), gate_rejected=st.get("gate_rejected", 0),
                     integrated=st.get("integrated", 0))
+    for key in ("n_per_lattice_searched", "n_per_lattice_found", "n_per_lattice_rescued", "n_per_lattice_swapped", "n_pl_null",
+                "pl_null_found_rate", "pl_null_rescued_rate", "n_double", "n_double_raw", "n_dh_null", "dh_null_rate"):
+        if key in st:                                        # opt-in counters, present only when the option is on
+            counters[key] = st[key]
     # self-checks: the event log must agree with the driver's own counters
     s_wresc = sum(r["wresc"] for r in recs); s_relock = sum(r.get("relock", 0) for r in recs)
     s_rl = sum(1 for r in recs if r.get("resc") == "rescued_relock")
@@ -597,7 +662,7 @@ def main(argv=None):
                   geometry=geom_meta, geom_correction=st.get("geom_correction"), geom_trace=geom_trace or None,
                   ingest=("peaks_in" if a.peaks_in else ("pixels" if pixel_pools else "q")),
                   read_s=round(t_read, 1),
-                  provenance=dict(git=git_head(), host=socket.gethostname(), python=platform.python_version(),
+                  provenance=dict(git=git0, git_dirty=dirty0, host=socket.gethostname(), python=platform.python_version(),
                                   numpy=np.__version__, use_gpu=a.cupy, argv=sys.argv[1:],
                                   elapsed_s=round(time.time() - t0, 1), timestamp=time.strftime("%Y-%m-%dT%H:%M:%S%z")))
     try:
@@ -612,6 +677,19 @@ def main(argv=None):
           f"locked_after {counters['locked_after']} | watchdog rescues {counters['n_watchdog_rescued']} | "
           f"relocks {counters['n_relock']} | relock rescues {counters['n_rescued']} | warm-up rescues {counters['n_warmup_rescued']} | "
           f"integrated {counters['integrated']}")
+    if "n_double" in counters and "n_per_lattice_searched" not in counters:
+        # --double-hit alone: frames carry no second_lattice record, so the per-lattice line would read 0
+        print("  double hits: " + " ".join(f"{k}={counters[k]:.3g}" if isinstance(counters[k], float) else f"{k}={counters[k]}"
+                                          for k in ("n_double", "n_dh_null", "dh_null_rate") if k in counters))
+    if "n_per_lattice_searched" in counters:
+        print(f"  per-lattice: strict {tot['strict_ok_per_lattice']}/{n} (whole-frame {tot['strict_ok']}; per-lattice only "
+              f"{tot['per_lattice_only']}) | rescued_per_lattice {tot['rescued_per_lattice']} (kept the residual's lattice "
+              f"{tot['rescued_per_lattice_swapped']}, whole-frame strict {tot['rescued_per_lattice_strict']}) | "
+              f"second lattice on {tot['second_lattice_found']} frames | "
+              + " ".join(f"{k}={counters[k]:.3g}" if isinstance(counters[k], float) else f"{k}={counters[k]}"
+                         for k in ("n_per_lattice_searched", "n_per_lattice_found", "n_per_lattice_rescued", "n_pl_null",
+                                   "pl_null_found_rate", "pl_null_rescued_rate", "n_double", "n_dh_null", "dh_null_rate")
+                         if k in counters))
     if geom_meta:
         print(f"  geometry {geom_meta['n_panels']} panels {geom_meta['shape']} clen {geom_meta['clen_m']} m  lambda {geom_meta['wavelength_A']} A  "
               f"masked {geom_meta['masked_frac']:.3%}  pf_kw {geom_meta['pf_kw']}  read {t_read:.0f}s")

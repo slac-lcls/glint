@@ -383,7 +383,7 @@ def _write_chunk(f, serial, r, panel_name="p0", photon_eV=9392.7, clen_m=0.15, p
         f.write("profile_radius = 0.00200 nm^-1\n")
         f.write(f"predict_refine/det_shift x = {float(dx):.3f} y = {float(dy):.3f} mm\n")
         for key in ("cell_id", "lock_generation", "matched_frac", "low_confidence",
-                    "dclen_m", "geom_n_solves", "frame_no"):
+                    "dclen_m", "geom_n_solves", "frame_no", "matched_frac_per_lattice", "second_lattice_deg"):
             if key in r and r[key] is not None:
                 f.write(f"glint/{key} = {_fmt_scalar(r[key])}\n")
         f.write(f"diffraction_resolution_limit = {10.0/dres:.2f} nm^-1 or {dres:.2f} A\n")

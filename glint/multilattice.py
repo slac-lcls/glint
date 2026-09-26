@@ -53,6 +53,25 @@ def scramble_azimuth(q, rng):
 
 
 _UNIMOD = None
+_I3 = np.eye(3, dtype=int)
+_R4_C = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], int)
+_R2_A = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]], int)
+_R2_B = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, -1]], int)
+_R2_C = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], int)
+_R3_111 = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]], int)
+
+
+def _close_group(gens):
+    G = [_I3.copy()]
+    ch = True
+    while ch:
+        ch = False
+        for g in list(G):
+            for s in gens:
+                h = (s @ g).astype(int)
+                if not any(np.array_equal(h, x) for x in G):
+                    G.append(h); ch = True
+    return G
 
 
 def _unimodular():
@@ -124,15 +143,22 @@ def _symmetry_candidates(B1, B2, laue):
     if laue is None:
         return B1, B2, _metric_ops(B1, B2)
     from glint.lattice import standardize_axes
-    from glint.stream_driver import laue_name, laue_ops
-    key = laue_name(laue)
+    key = str(laue).strip()
     if key in ("mmm", "4/m", "4/mmm"):
         B1 = standardize_axes(B1, laue=key)
         B2 = standardize_axes(B2, laue=key)
     rel = _metric_ops(B1, B2)
-    if key in ("-1", "mmm", "4/m", "4/mmm", "m-3", "m-3m"):
+    proper = {
+        "-1": _close_group(()),
+        "mmm": _close_group((_R2_A, _R2_B)),
+        "4/m": _close_group((_R4_C,)),
+        "4/mmm": _close_group((_R4_C, _R2_A)),
+        "m-3": _close_group((_R3_111, _R2_C)),
+        "m-3m": _close_group((_R3_111, _R4_C)),
+    }.get(key)
+    if proper is not None:
         ops = []
-        for S in (np.asarray(U, float) for U in laue_ops(key) if int(round(np.linalg.det(U))) == 1):
+        for S in (np.asarray(U, float) for U in proper if int(round(np.linalg.det(U))) == 1):
             for V in rel:
                 U = S @ V
                 if not any(np.array_equal(U, W) for W in ops):

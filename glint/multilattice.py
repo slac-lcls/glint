@@ -109,6 +109,14 @@ def _unimodular():
     return _UNIMOD
 
 
+def _basis_change(B1, B2):
+    return np.rint(np.linalg.solve(B1, B2)).astype(int)
+
+
+def _conjugate_op(T, U):
+    return np.rint(np.linalg.solve(T, np.asarray(U, int) @ T)).astype(int)
+
+
 def _canonical_basis(M):
     """A Buerger-reduced, RIGHT-HANDED basis of the lattice M spans.
 
@@ -121,13 +129,18 @@ def _canonical_basis(M):
     is repeated until the lengths stop falling. Bases the indexers emit are already reduced; one pass."""
     from glint.lattice import buerger_reduce
     B = np.asarray(M, float)
+    T = _I3.copy()
     for _ in range(10):
         Bn = buerger_reduce(B)
+        T = T @ _basis_change(B, Bn)
         done = np.linalg.norm(Bn, axis=0).sum() >= np.linalg.norm(B, axis=0).sum() * (1 - 1e-9)
         B = Bn
         if done:
             break
-    return -B if np.linalg.det(B) < 0 else B
+    if np.linalg.det(B) < 0:
+        B = -B
+        T = -T
+    return B, T
 
 
 def _metric_ops(B1, B2, rtol=0.05, ctol=0.06):
@@ -164,21 +177,25 @@ def _metric_ops(B1, B2, rtol=0.05, ctol=0.06):
     return U[[np.argmin(dl.max(1) / rtol + dc.max(1) / ctol)]]
 
 
-def _symmetry_candidates(B1, B2, laue):
+def _symmetry_candidates(B1, B2, T1, T2, laue):
     if laue is None:
         return B1, B2, _metric_ops(B1, B2)
     from glint.lattice import standardize_axes
     key = _LAUE_ALIASES.get(str(laue).strip(), str(laue).strip())
     if key in ("mmm", "4/m", "4/mmm", "-3", "-3m1", "-31m", "6/m", "6/mmm"):
-        B1 = standardize_axes(B1, laue=key)
-        B2 = standardize_axes(B2, laue=key)
+        B1n = standardize_axes(B1, laue=key)
+        B2n = standardize_axes(B2, laue=key)
+        T1 = T1 @ _basis_change(B1, B1n)
+        T2 = T2 @ _basis_change(B2, B2n)
+        B1, B2 = B1n, B2n
     rel = _metric_ops(B1, B2)
     proper = _PROPER_LAUE_OPS.get(key)
     if proper is not None:
         ops = []
-        for S in (np.asarray(U, float) for U in proper if int(round(np.linalg.det(U))) == 1):
+        for S in (U for U in proper if int(round(np.linalg.det(U))) == 1):
+            S = _conjugate_op(T1, S)
             for V in rel:
-                U = S @ V
+                U = np.rint(S @ V).astype(int)
                 if not any(np.array_equal(U, W) for W in ops):
                     ops.append(U)
         return B1, B2, ops
@@ -217,8 +234,9 @@ def misorientation_deg(M1, M2, laue=None):
     symmetry, composed with any reshuffle between the two reductions). R is projected onto the nearest
     rotation because the two cells are refined independently and differ slightly (stable to a 1% cell
     mismatch)."""
-    B1, B2 = _canonical_basis(M1), _canonical_basis(M2)
-    B1, B2, ops = _symmetry_candidates(B1, B2, laue)
+    B1, T1 = _canonical_basis(M1)
+    B2, T2 = _canonical_basis(M2)
+    B1, B2, ops = _symmetry_candidates(B1, B2, T1, T2, laue)
     best = 180.0
     for U in ops:
         W, _, Vt = np.linalg.svd(B2 @ np.linalg.inv(B1 @ U))

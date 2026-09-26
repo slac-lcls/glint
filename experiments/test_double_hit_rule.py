@@ -239,10 +239,17 @@ check("hexagonal: 60 deg about c is the lattice itself (a signed permutation can
 print("\nmisorientation_deg: known Laue classes supply the fixed proper group")
 check("monoclinic laue=2/m keeps 180 deg about b at 0",
       misorientation_deg(MP, rot(MP[:, 1].copy(), 180) @ MP, laue="2/m") < 1e-4)
+MC = cell(40, 55, 30, 90, 90, 105)
+check("monoclinic laue=2/m_uac keeps 180 deg about c at 0 after reduction reorders axes",
+      misorientation_deg(MC, rot(MC[:, 2].copy(), 180) @ MC, laue="2/m_uac") < 1e-4)
 check("hexagonal laue=6/mmm keeps 60 deg about c at 0",
       misorientation_deg(H, rot(H[:, 2].copy(), 60) @ H, laue="6/mmm") < 1e-4)
 check("rhombohedral laue=-3m_R keeps 120 deg about the 3-fold axis at 0",
       misorientation_deg(HR, rot((HR[:, 0] + HR[:, 1] + HR[:, 2]).copy(), 120) @ HR, laue="-3m_R") < 1e-4)
+known_worst = max(misorientation_deg(M, S @ M, laue=LAUE[k])
+                  for k, (M, _) in BRAVAIS.items() for S in independent_sym_ops(k))
+check(f"known-laue path keeps every independent proper operator at 0 (max {known_worst:.1e} deg)",
+      known_worst < 1e-4, known_worst)
 
 print("\nmisorientation_deg: the same lysozyme lattice in another basis is 0 deg")
 for name, T in [("a <-> b swap (left-handed)", np.array([[0, 1, 0], [1, 0, 0], [0, 0, 1.0]])),

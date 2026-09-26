@@ -231,6 +231,18 @@ M1d, M2d = cell(76.55, 81.29, 37.0, 90, 90, 93.6), rot([1.0, 1.0, 0.0], 40.0) @ 
 g = misorientation_deg(M1d, M2d)
 check(f"40 deg between distorted cells -> {g:.2f}", abs(g - 40.0) < 4.0, g)
 
+print("\nmisorientation_deg: 90-degree angles refined to opposite sides of 90 keep the full symmetry")
+# A refined 90-degree angle comes back at 92 in one cell and 88 in the other (mfxl1038923: up to ~7 degrees).
+# A signed-cosine match then dropped the 2-folds that flip that sign, and a 2-degree mosaic pair read
+# as the symmetry-equivalent 178 degrees -- 42 pairs of the mfxl census did this with the first version.
+O1, O2 = cell(43.6, 67.8, 89.1, 91.0, 89.5, 92.0), cell(43.9, 67.5, 89.4, 89.2, 90.6, 88.0)
+B1o, B2o = _canonical_basis(O1), _canonical_basis(O2)
+check("orthorhombic cell, angles on opposite sides of 90: 4 ops", len(_metric_ops(B1o, B2o)) == 4,
+      len(_metric_ops(B1o, B2o)))
+for name, T in [("same handedness", np.eye(3)), ("opposite handedness", np.diag([1.0, 1, -1]))]:
+    g = misorientation_deg(O1, rot([2.0, -1.0, 0.5], 2.0) @ O2 @ T)
+    check(f"2 deg mosaic pair, {name} -> {g:.2f}", g < 5.0, g)
+
 print("\nmisorientation_deg on two REAL replay pairs the old version read as ~90 deg")
 REAL = {   # frame: (M1, M2, what the old version recorded)
     155: ([[19.941, 74.9458, -6.3703], [6.8435, 11.2947, 37.1143], [74.6988, -21.8871, -2.6321]],

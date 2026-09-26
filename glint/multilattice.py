@@ -86,7 +86,7 @@ def _canonical_basis(M):
     return -B if np.linalg.det(B) < 0 else B
 
 
-def _metric_ops(B1, B2, rtol=0.05, ctol=0.06):
+def _metric_ops(B1, B2, rtol=0.05, ctol=0.06, t90=0.15):
     """Integer basis changes U (entries in {-1, 0, 1}, det +1) under which B1 @ U has B2's metric.
 
     B1 and B2 are right-handed reduced bases. The set holds the lattice's own proper symmetry (the
@@ -95,13 +95,17 @@ def _metric_ops(B1, B2, rtol=0.05, ctol=0.06):
     the two reductions -- e.g. an axis swap when two lengths are near-equal. In a reduced basis these
     ops have entries in {-1, 0, 1} for every Bravais class the test checks.
 
-    rtol (relative, on lengths) and ctol (absolute, on SIGNED cosines) start at same_lattice's values
-    and are doubled up to twice if nothing matches. same_lattice compares |cos|, so two refinements of
-    a 90-degree angle that land on opposite sides of 90 pass it while failing a signed test at the
-    first tolerance: measured on the 23 Sep cxidb-17 replay, one of 178 pairs (a lattice 1 refined to
-    93.6 degrees) needed the first doubling. Looser tolerance can only admit MORE ops and so a SMALLER
-    angle. If nothing matches even at 4x (different cells), the single closest U is used so the angle
-    is still defined, but it is not meaningful."""
+    rtol (relative, on lengths) and ctol (absolute, on SIGNED cosines) are same_lattice's values. An
+    angle near 90 degrees has no reliable sign: a refined 90-degree angle comes back at 92 in one cell
+    and 88 in the other (measured on the mfxl1038923 double-hit census, 491 pairs: |cos| p99 0.086,
+    max 0.127, i.e. up to 7 degrees off). A signed comparison then drops genuine symmetry ops -- the
+    2-folds that flip that sign -- and the minimum lands on a symmetry-equivalent 178 degrees instead
+    of 2 (seen on 42 of those pairs with the first version of this function). So two angles BOTH
+    within t90 of 90 degrees (|cos| <= 0.15, ~8.6 degrees) match whatever their signs; every other
+    angle keeps the signed test, so a generic triclinic or monoclinic angle cannot buy false symmetry.
+    If nothing matches, the tolerances are doubled up to twice (looser can only admit MORE ops, so a
+    SMALLER angle); if nothing matches even at 4x (different cells), the single closest U is used so
+    the angle is still defined, but it is not meaningful."""
     U = _unimodular()
     C = np.einsum("ij,njk->nik", B1, U)                          # candidate bases, columns
     G = np.einsum("nji,njk->nik", C, C)                          # their Gram matrices
@@ -112,6 +116,7 @@ def _metric_ops(B1, B2, rtol=0.05, ctol=0.06):
     cos = G[:, iu[0], iu[1]] / (L[:, iu[0]] * L[:, iu[1]])
     cos2 = G2[iu] / (L2[iu[0]] * L2[iu[1]])
     dc = np.abs(cos - cos2)
+    dc = np.where((np.abs(cos) <= t90) & (np.abs(cos2) <= t90), 0.0, dc)   # near 90: sign is noise
     for f in (1.0, 2.0, 4.0):
         ok = (dl <= f * rtol).all(1) & (dc <= f * ctol).all(1)
         if ok.any():
@@ -128,18 +133,21 @@ def misorientation_deg(M1, M2):
     genuine second crystal lands at a generic angle, and small angles are intrinsically rare there:
     for Haar-random orientations modulo a 222 lattice symmetry, P(angle < 5 deg) = 6.5e-5.
 
-    Measured on mfxl1038923 (jobs 34464312, 34468402) the distribution is sharply bimodal in both
-    runs -- r0278: 72 second lattices below 5 deg, 5 in 5-15 deg, 135 above; r0058: 74 / 9 / 196.
-    Against 6.5e-5 the sub-5-degree population is ~5000x over the random expectation, so it is
-    mosaic/split domains, not independent crystals; and the near-empty 5-15 deg band is why the exact
-    cut hardly matters.
+    Measured on mfxl1038923 the distribution is sharply bimodal in both runs -- r0278: 145 second
+    lattices below 5 deg, 11 in 5-15 deg, 56 above; r0058: 152 / 20 / 107 (job 39151575, which
+    re-ran jobs 34464312/34468402 exactly and kept the matrices). Against 6.5e-5 the sub-5-degree
+    population is four orders of magnitude over the random expectation, so it is mosaic/split
+    domains, not independent crystals; and the near-empty 5-15 deg band is why the exact cut hardly
+    matters.
 
-    ⚠ The numbers above (and the 8.7 % / 8.9 % in second_lattice_verdict) were measured with an
-    earlier version of this function that compared BASES, not lattices: it tried only signed axis
-    permutations of the incoming matrices. The same lattice in a different basis -- or in the same
-    basis with the opposite handedness, which is what buerger_reduce returns about half the time --
-    could read far from itself (on the lysozyme cell an a/b swap read 90 degrees, an a+b basis 27;
-    experiments/test_double_hit_rule.py). They are being re-measured.
+    ⚠ Before this function compared lattices it compared BASES: it tried only signed axis
+    permutations of the incoming matrices, so the same lattice in a different basis -- or in the same
+    basis with the opposite handedness, which buerger_reduce returns about half the time -- could read
+    far from itself (on the lysozyme cell an a/b swap read 90 degrees, an a+b basis 27;
+    experiments/test_double_hit_rule.py). On mfxl1038923 it read EVERY opposite-handed pair at >= 15
+    degrees (108 and 143 of them); the numbers it gave were 72 / 5 / 135 and 74 / 9 / 196. After the
+    fix the sub-5-degree share is the same for same- and opposite-handed pairs (69 % vs 68 % on r0278,
+    54 % vs 55 % on r0058), as it must be for a label that carries no physics.
 
     Both matrices are first put in a right-handed Buerger-reduced basis (_canonical_basis), so the
     result does not depend on the basis either caller used. Then B2 = R B1 U for some integer basis
@@ -205,8 +213,11 @@ def second_lattice_verdict(resid, M1, index_fn, min_peaks=6, tol=0.15, loose=0.3
                 to exactly 0 (0/1449 and 0/2123 scrambled residuals) while 212 and 279 real ones
                 pass it, and the misorientation distribution is bimodal with a near-empty 5-15
                 degree band, so the cut is insensitive -- at the shipped 15 deg the gated rates are
-                8.7% and 8.9% of scoreable frames on r0278/r0058, and moving the cut all the way
-                down to 5 deg only takes them to 9.0% and 9.3%. Two independent runs agreeing.
+                3.6% and 4.8% of scoreable frames on r0278/r0058, and moving the cut all the way
+                down to 5 deg only takes them to 4.3% and 5.7%. Two independent runs agreeing.
+                (Measured with the basis-independent misorientation_deg, job 39151575. The basis-
+                dependent version it replaced gave 8.7% and 8.9%: it counted opposite-handed
+                mosaic pairs as second crystals.)
 
     The clone_fraction is still reported (see orientation_clone_fraction) but no longer gates: it
     was the gate until real data showed it keeps three quarters of the clones and kills a tenth of

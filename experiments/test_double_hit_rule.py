@@ -150,7 +150,7 @@ check("50/50 mosaic tails rejected", clone_rej == 50, clone_rej)
 # is why none of them could see that. The two real pairs below come from the 23 Sep cxidb-17 replay
 # (per-lattice + double-hit arm), where 22 of 178 recorded "second crystals" at >= 15 deg were
 # within 15 deg of lattice 1.
-from glint.multilattice import _canonical_basis, _metric_ops, misorientation_deg  # noqa: E402
+from glint.multilattice import misorientation_deg  # noqa: E402
 
 
 def cell(a, b, c, al, be, ga):
@@ -175,19 +175,62 @@ F_ = np.array([[0, .5, .5], [.5, 0, .5], [.5, .5, 0]]).T
 I_ = np.array([[-.5, .5, .5], [.5, -.5, .5], [.5, .5, -.5]]).T
 C_ = np.array([[.5, .5, 0], [-.5, .5, 0], [0, 0, 1]]).T
 LYS = cell(79.02, 79.02, 37.98, 90, 90, 90)
+AP = cell(40, 50, 60, 80, 95, 105)
+MP = cell(40, 50, 60, 90, 105, 90)
+OP = cell(40, 50, 60, 90, 90, 90)
+TI = cell(50, 50, 80, 90, 90, 90)
+HP = cell(60, 60, 90, 90, 90, 120)
+HR = cell(50, 50, 50, 70, 70, 70)
+CP = cell(50, 50, 50, 90, 90, 90)
 BRAVAIS = {                                           # name: (basis, proper holohedry order)
-    "aP": (cell(40, 50, 60, 80, 95, 105), 1), "mP": (cell(40, 50, 60, 90, 105, 90), 2),
-    "mC": (cell(40, 50, 60, 90, 105, 90) @ C_, 2), "oP": (cell(40, 50, 60, 90, 90, 90), 4),
-    "oC": (cell(40, 50, 60, 90, 90, 90) @ C_, 4), "oF": (cell(40, 50, 60, 90, 90, 90) @ F_, 4),
-    "oI": (cell(40, 50, 60, 90, 90, 90) @ I_, 4), "tP": (LYS, 8),
-    "tI": (cell(50, 50, 80, 90, 90, 90) @ I_, 8), "hP": (cell(60, 60, 90, 90, 90, 120), 12),
-    "hR": (cell(50, 50, 50, 70, 70, 70), 6), "cP": (cell(50, 50, 50, 90, 90, 90), 24),
-    "cF": (cell(50, 50, 50, 90, 90, 90) @ F_, 24), "cI": (cell(50, 50, 50, 90, 90, 90) @ I_, 24)}
+    "aP": (AP, 1), "mP": (MP, 2), "mC": (MP @ C_, 2), "oP": (OP, 4), "oC": (OP @ C_, 4),
+    "oF": (OP @ F_, 4), "oI": (OP @ I_, 4), "tP": (LYS, 8), "tI": (TI @ I_, 8), "hP": (HP, 12),
+    "hR": (HR, 6), "cP": (CP, 24), "cF": (CP @ F_, 24), "cI": (CP @ I_, 24)}
+LAUE = {"aP": "-1", "mP": "2/m", "mC": "2/m", "oP": "mmm", "oC": "mmm", "oF": "mmm", "oI": "mmm",
+        "tP": "4/mmm", "tI": "4/mmm", "hP": "6/mmm", "hR": "-3m_R", "cP": "m-3m", "cF": "m-3m",
+        "cI": "m-3m"}
+CONV = {"aP": AP, "mP": MP, "mC": MP, "oP": OP, "oC": OP, "oF": OP, "oI": OP, "tP": LYS, "tI": TI,
+        "hP": HP, "hR": HR, "cP": CP, "cF": CP, "cI": CP}
+
+
+def close_group(gens):
+    G = [np.eye(3)]
+    ch = True
+    while ch:
+        ch = False
+        for g in list(G):
+            for s in gens:
+                h = s @ g
+                if not any(np.allclose(h, x, atol=1e-10) for x in G):
+                    G.append(h); ch = True
+    return G
+
+
+def independent_sym_ops(name):
+    C = CONV[name]
+    a, b, c = (C[:, i].copy() for i in range(3))
+    laue = LAUE[name]
+    if laue == "-1":
+        gens = []
+    elif laue == "2/m":
+        gens = [rot(b, 180)]
+    elif laue == "mmm":
+        gens = [rot(a, 180), rot(b, 180)]
+    elif laue == "4/mmm":
+        gens = [rot(c, 90), rot(a, 180)]
+    elif laue == "6/mmm":
+        gens = [rot(c, 60), rot(a, 180)]
+    elif laue == "-3m_R":
+        gens = [rot((a + b + c).copy(), 120), rot((a - b).copy(), 180)]
+    elif laue == "m-3m":
+        gens = [rot((a + b + c).copy(), 120), rot(c, 90)]
+    else:
+        raise ValueError(laue)
+    return close_group(gens)
 
 print("\nmisorientation_deg: the lattice's own proper symmetry is found for all 14 Bravais classes")
-bad = {k: len(_metric_ops(_canonical_basis(M), _canonical_basis(M))) for k, (M, n) in BRAVAIS.items()
-       if len(_metric_ops(_canonical_basis(M), _canonical_basis(M))) != n}
-check("op count = proper holohedry order (1, 2, 4, 6, 8, 12, 24)", not bad, bad)
+bad = {k: len(independent_sym_ops(k)) for k, (_, n) in BRAVAIS.items() if len(independent_sym_ops(k)) != n}
+check("independent proper holohedry order (1, 2, 4, 6, 8, 12, 24)", not bad, bad)
 H = BRAVAIS["hP"][0]
 g = misorientation_deg(H, rot(H[:, 2].copy(), 60) @ H)    # copy: rot() normalises its axis in place
 check("hexagonal: 60 deg about c is the lattice itself (a signed permutation cannot express it)",
@@ -217,18 +260,23 @@ check(f"25 deg, 1% larger cell, left-handed basis -> {g:.3f}", abs(g - 25.0) < 0
 print("\nmisorientation_deg = brute-force minimum over the lattice's symmetry group (14 classes x 30)")
 r, worst = np.random.default_rng(5), 0.0
 for k, (M, _) in BRAVAIS.items():
-    B = _canonical_basis(M)
-    S = [B @ U @ np.linalg.inv(B) for U in _metric_ops(B, B)]    # Cartesian symmetry rotations
+    S = independent_sym_ops(k)
     for _ in range(30):
         R = rot(r.normal(size=3), r.uniform(0, 180))
-        worst = max(worst, abs(misorientation_deg(M, R @ M @ random_basis(r)) - min(ang(R @ s) for s in S)))
+        worst = max(worst, abs(misorientation_deg(M, R @ M @ random_basis(r))
+                               - min(ang(R @ s) for s in S)))
 check(f"max deviation {worst:.1e} deg", worst < 1e-4, worst)
+
+print("\nmisorientation_deg: a near-orthogonal triclinic cell does not gain a false 2-fold")
+T = cell(40, 50, 60, 88, 92, 97)
+g = misorientation_deg(T, rot(T[:, 2].copy(), 178.0) @ T)
+check(f"triclinic 178 deg about c stays 178, not a fake 2-fold -> {g:.2f}", abs(g - 178.0) < 1e-4, g)
 
 print("\nmisorientation_deg: a lattice refined to 93.6 deg still finds its symmetry (relaxed tolerance)")
 # same_lattice compares |cos|, so two refinements on opposite sides of 90 deg pass the cell gate while
 # failing a signed-cosine test at the first tolerance; one such pair occurred on the replay (frame 46).
 M1d, M2d = cell(76.55, 81.29, 37.0, 90, 90, 93.6), rot([1.0, 1.0, 0.0], 40.0) @ cell(78.6, 78.8, 37.7, 90, 90, 90)
-g = misorientation_deg(M1d, M2d)
+g = misorientation_deg(M1d, M2d, laue="4/mmm")
 check(f"40 deg between distorted cells -> {g:.2f}", abs(g - 40.0) < 4.0, g)
 
 print("\nmisorientation_deg: 90-degree angles refined to opposite sides of 90 keep the full symmetry")
@@ -236,11 +284,8 @@ print("\nmisorientation_deg: 90-degree angles refined to opposite sides of 90 ke
 # A signed-cosine match then dropped the 2-folds that flip that sign, and a 2-degree mosaic pair read
 # as the symmetry-equivalent 178 degrees -- 42 pairs of the mfxl census did this with the first version.
 O1, O2 = cell(43.6, 67.8, 89.1, 91.0, 89.5, 92.0), cell(43.9, 67.5, 89.4, 89.2, 90.6, 88.0)
-B1o, B2o = _canonical_basis(O1), _canonical_basis(O2)
-check("orthorhombic cell, angles on opposite sides of 90: 4 ops", len(_metric_ops(B1o, B2o)) == 4,
-      len(_metric_ops(B1o, B2o)))
 for name, T in [("same handedness", np.eye(3)), ("opposite handedness", np.diag([1.0, 1, -1]))]:
-    g = misorientation_deg(O1, rot([2.0, -1.0, 0.5], 2.0) @ O2 @ T)
+    g = misorientation_deg(O1, rot([2.0, -1.0, 0.5], 2.0) @ O2 @ T, laue="mmm")
     check(f"2 deg mosaic pair, {name} -> {g:.2f}", g < 5.0, g)
 
 print("\nmisorientation_deg on two REAL replay pairs the old version read as ~90 deg")
@@ -250,13 +295,14 @@ REAL = {   # frame: (M1, M2, what the old version recorded)
     320: ([[-25.3096, -73.3133, 6.8433], [56.6332, -9.3564, 25.7882], [-48.299, 27.5557, 26.8039]],
           [[8.5174, 24.364, 72.9145], [25.0442, -58.4023, 7.0691], [27.1343, 46.5569, -29.3891]], 87.91)}
 for fr, (A, Bm, was) in REAL.items():
-    g = misorientation_deg(A, Bm)
+    g = misorientation_deg(A, Bm, laue="4/mmm")
     hand = "opposite" if np.linalg.det(A) * np.linalg.det(Bm) < 0 else "same"
     check(f"frame {fr} ({hand} handedness): recorded {was} deg, now {g:.2f} deg -> not a second crystal",
           g < 5.0, g)
     check(f"frame {fr}: second_lattice_verdict rejects it",
           not second_lattice_verdict(peaks_of(np.asarray(Bm), 20), A,
-                                     lambda q, n, Bm=Bm: [(np.asarray(Bm), 1.0)])["accepted"])
+                                     lambda q, n, Bm=Bm: [(np.asarray(Bm), 1.0)],
+                                     laue="4/mmm")["accepted"])
 
 print(f"\nFAILURES: {len(FAILS)}" + ("" if not FAILS else "  " + ", ".join(FAILS)))
 sys.exit(1 if FAILS else 0)

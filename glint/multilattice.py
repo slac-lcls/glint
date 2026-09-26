@@ -86,7 +86,7 @@ def _canonical_basis(M):
     return -B if np.linalg.det(B) < 0 else B
 
 
-def _metric_ops(B1, B2, rtol=0.05, ctol=0.06, t90=0.15):
+def _metric_ops(B1, B2, rtol=0.05, ctol=0.06):
     """Integer basis changes U (entries in {-1, 0, 1}, det +1) under which B1 @ U has B2's metric.
 
     B1 and B2 are right-handed reduced bases. The set holds the lattice's own proper symmetry (the
@@ -95,17 +95,14 @@ def _metric_ops(B1, B2, rtol=0.05, ctol=0.06, t90=0.15):
     the two reductions -- e.g. an axis swap when two lengths are near-equal. In a reduced basis these
     ops have entries in {-1, 0, 1} for every Bravais class the test checks.
 
-    rtol (relative, on lengths) and ctol (absolute, on SIGNED cosines) are same_lattice's values. An
-    angle near 90 degrees has no reliable sign: a refined 90-degree angle comes back at 92 in one cell
-    and 88 in the other (measured on the mfxl1038923 double-hit census, 491 pairs: |cos| p99 0.086,
-    max 0.127, i.e. up to 7 degrees off). A signed comparison then drops genuine symmetry ops -- the
-    2-folds that flip that sign -- and the minimum lands on a symmetry-equivalent 178 degrees instead
-    of 2 (seen on 42 of those pairs with the first version of this function). So two angles BOTH
-    within t90 of 90 degrees (|cos| <= 0.15, ~8.6 degrees) match whatever their signs; every other
-    angle keeps the signed test, so a generic triclinic or monoclinic angle cannot buy false symmetry.
-    If nothing matches, the tolerances are doubled up to twice (looser can only admit MORE ops, so a
-    SMALLER angle); if nothing matches even at 4x (different cells), the single closest U is used so
-    the angle is still defined, but it is not meaningful."""
+    rtol (relative, on lengths) and ctol (absolute, on SIGNED cosines) are same_lattice's values.
+    The comparison stays signed all the way through: treating every pair of near-90-degree angles as
+    interchangeable invents false 2-folds for low-symmetry cells. Callers that KNOW the lattice class
+    should supply that class to misorientation_deg instead of asking this metric-only fallback to infer
+    higher symmetry from a noisy near-right angle. If nothing matches, the tolerances are doubled up to
+    twice (looser can only admit MORE ops, so a SMALLER angle); if nothing matches even at 4x
+    (different cells), the single closest U is used so the angle is still defined, but it is not
+    meaningful."""
     U = _unimodular()
     C = np.einsum("ij,njk->nik", B1, U)                          # candidate bases, columns
     G = np.einsum("nji,njk->nik", C, C)                          # their Gram matrices
@@ -116,7 +113,6 @@ def _metric_ops(B1, B2, rtol=0.05, ctol=0.06, t90=0.15):
     cos = G[:, iu[0], iu[1]] / (L[:, iu[0]] * L[:, iu[1]])
     cos2 = G2[iu] / (L2[iu[0]] * L2[iu[1]])
     dc = np.abs(cos - cos2)
-    dc = np.where((np.abs(cos) <= t90) & (np.abs(cos2) <= t90), 0.0, dc)   # near 90: sign is noise
     for f in (1.0, 2.0, 4.0):
         ok = (dl <= f * rtol).all(1) & (dc <= f * ctol).all(1)
         if ok.any():
@@ -124,7 +120,28 @@ def _metric_ops(B1, B2, rtol=0.05, ctol=0.06, t90=0.15):
     return U[[np.argmin(dl.max(1) / rtol + dc.max(1) / ctol)]]
 
 
-def misorientation_deg(M1, M2):
+def _symmetry_candidates(B1, B2, laue):
+    if laue is None:
+        return B1, B2, _metric_ops(B1, B2)
+    from glint.lattice import standardize_axes
+    from glint.stream_driver import laue_name, laue_ops
+    key = laue_name(laue)
+    if key in ("mmm", "4/m", "4/mmm"):
+        B1 = standardize_axes(B1, laue=key)
+        B2 = standardize_axes(B2, laue=key)
+    rel = _metric_ops(B1, B2)
+    if key in ("-1", "mmm", "4/m", "4/mmm", "m-3", "m-3m"):
+        ops = []
+        for S in (np.asarray(U, float) for U in laue_ops(key) if int(round(np.linalg.det(U))) == 1):
+            for V in rel:
+                U = S @ V
+                if not any(np.array_equal(U, W) for W in ops):
+                    ops.append(U)
+        return B1, B2, ops
+    return B1, B2, rel
+
+
+def misorientation_deg(M1, M2, laue=None):
     """Smallest rotation angle carrying lattice 1 onto lattice 2, modulo lattice symmetry (degrees).
 
     THIS IS THE GATE THAT SEPARATES A SECOND CRYSTAL FROM A MOSAIC TAIL, and it does so on the
@@ -150,13 +167,16 @@ def misorientation_deg(M1, M2):
     54 % vs 55 % on r0058), as it must be for a label that carries no physics.
 
     Both matrices are first put in a right-handed Buerger-reduced basis (_canonical_basis), so the
-    result does not depend on the basis either caller used. Then B2 = R B1 U for some integer basis
-    change U (_metric_ops: the lattice's own symmetry, composed with any reshuffle between the two
-    reductions). R is projected onto the nearest rotation because the two cells are refined
-    independently and differ slightly (stable to a 1% cell mismatch)."""
+    result does not depend on the basis either caller used. When the caller knows the Laue class,
+    `laue=` supplies fixed proper operators for that class instead of asking a noisy metric to guess
+    them; otherwise B2 = R B1 U for some integer basis change U (_metric_ops: the lattice's own
+    symmetry, composed with any reshuffle between the two reductions). R is projected onto the nearest
+    rotation because the two cells are refined independently and differ slightly (stable to a 1% cell
+    mismatch)."""
     B1, B2 = _canonical_basis(M1), _canonical_basis(M2)
+    B1, B2, ops = _symmetry_candidates(B1, B2, laue)
     best = 180.0
-    for U in _metric_ops(B1, B2):
+    for U in ops:
         W, _, Vt = np.linalg.svd(B2 @ np.linalg.inv(B1 @ U))
         if np.linalg.det(W @ Vt) < 0:                            # keep it a proper rotation
             W = W.copy(); W[:, -1] *= -1
@@ -194,7 +214,8 @@ def orientation_clone_fraction(resid, M2, M1, tol=0.15, loose=0.35):
     return float(near1.mean())
 
 
-def second_lattice_verdict(resid, M1, index_fn, min_peaks=6, tol=0.15, loose=0.35, min_misorient=15.0):
+def second_lattice_verdict(resid, M1, index_fn, min_peaks=6, tol=0.15, loose=0.35, min_misorient=15.0,
+                           laue=None):
     """The double-hit acceptance rule, gated so it counts crystals rather than peaks.
 
     resid: peaks left after deflating lattice 1 (M1, real-space columns, hkl = q @ M1).
@@ -242,6 +263,6 @@ def second_lattice_verdict(resid, M1, index_fn, min_peaks=6, tol=0.15, loose=0.3
     out["cell_match"] = bool(same_lattice(M2, np.asarray(M1, float)))
     out["clone_fraction"] = orientation_clone_fraction(resid, M2, M1, tol=tol, loose=loose)
     if out["cell_match"]:                           # an angle between different cells is meaningless
-        out["misorientation"] = misorientation_deg(M1, M2)
+        out["misorientation"] = misorientation_deg(M1, M2, laue=laue)
     out["accepted"] = out["raw"] and out["cell_match"] and out["misorientation"] >= min_misorient
     return out

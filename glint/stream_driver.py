@@ -1620,7 +1620,8 @@ class StreamDriver:
         resid = deflate_peaks(q, M1)
         if len(resid) < self.min_peaks:
             return None, resid
-        return second_lattice_verdict(resid, M1, self._sl_index(), min_peaks=self.min_peaks), resid
+        return second_lattice_verdict(resid, M1, self._sl_index(), min_peaks=self.min_peaks,
+                                      laue=self.laue), resid
 
     def _pl_record(self, i, q, v, resid, kept, M1):
         """Per-lattice numbers for slot i from an ACCEPTED second-lattice verdict (frame event, chunk).
@@ -1678,7 +1679,8 @@ class StreamDriver:
             n1 = len(q) - len(resid)
             if self._pl_n % 16 == 1:                        # the rescue rule's own false-accept floor, live
                 rs = scramble_azimuth(resid, self._pl_rng)
-                vn = second_lattice_verdict(rs, M, self._sl_index(), min_peaks=self.min_peaks)
+                vn = second_lattice_verdict(rs, M, self._sl_index(), min_peaks=self.min_peaks,
+                                            laue=self.laue)
                 self.n_pl_null_tested += 1
                 if vn["accepted"]:
                     self.n_pl_null_found += 1
@@ -1766,7 +1768,8 @@ class StreamDriver:
                 self._dh_n += 1
                 if self._dh_n % 16 == 1:
                     vn = second_lattice_verdict(scramble_azimuth(resid, self._dh_rng), M1,
-                                                self._sl_index(), min_peaks=self.min_peaks)
+                                                self._sl_index(), min_peaks=self.min_peaks,
+                                                laue=self.laue)
                     self.n_dh_null_tested += 1
                     self.n_dh_null_acc += bool(vn["accepted"])
             if v is not None and pl_on and cached is None and v["accepted"]:

@@ -101,8 +101,15 @@ FACTS: dict[str, float | str] = {
     # gives 80/115 too. Which commit moved it was not bisected -- several accuracy-affecting changes
     # have landed since #16 recorded this (dedup radius, binarisation, the alias gate). Recorded as
     # measured rather than left contradicting the bench; if the old pair is wanted for a historical
-    # comparison, take it from #16, not from here. Not a published number (it appears in no .tex).
+    # comparison, take it from #16, not from here. Its strict half is the fused row of Table 2 in the R1 revision
+    # (67%, 80/120; the submitted manuscript still carries 91/120 there) -- see fused_strict_of120.
     "indexing_rate":       "80/115",
+    # The STANDALONE fused engine's strict yield (index_fused, textbook cell, B=120) -- the row that carries
+    # fused_b120_ms. The SUBMITTED Table 2 pairs this timing with 91/120 (corrected in the R1 revision), which is the GLINT-(1) known-cell
+    # PIPELINE (offline_rate_of120, the 32 ms/frame row), implying 91/120 at 0.17 ms. Re-measured 80/120 at every
+    # batch size, both precisions, on four exclusive A100 nodes (jobs 39211371, 39212408, 39218788/39218965/
+    # 39219158; glint exp/batched-escalation RESULTS_fused_known.md); 308/480 on the 480. Rule fused-row-91.
+    "fused_strict_of120":  80,
     # The strict gate every "indexed" count in the paper is defined by: same_lattice(M, truth) AND
     # matched frac >= gate_frac AND matched >= gate_min, with matched counting peaks at
     # |q @ M - round| < gate_tol per component. Canonical home: glint/glint_fast.py GATE_TOL /
@@ -884,6 +891,16 @@ class Rule:
 
 # ---- 1. retired values -----------------------------------------------------------------------
 RETIRED = [
+    # The fused ENGINE's speed with the known-cell PIPELINE's yield (the submitted Table 2: "GLINT-(1) (batched)
+    # 76% (91/120) ... 0.17 ... 5900"), which reads as 91/120 at 0.17 ms and so as beating ffbidx (90/120 at
+    # 4.4 ms) on both axes. Two shapes: the batched/fused label ahead of 91/120 on one line (the table row), and
+    # 91/120 followed by the 0.17 timing on one line (prose or a slide).
+    Rule("fused-row-91", r"(?:batched|fused)[^\n]{0,80}?\b91\s*/\s*120|\b91\s*/\s*120[^\n]{0,120}?(?<![\d.])0\.17\b",
+         "91/120 is the GLINT-(1) known-cell PIPELINE (the 32 ms/frame row, offline_rate_of120); the standalone "
+         f"fused engine that runs at {FACTS['fused_b120_ms']} ms/frame (B=120) indexes "
+         f"{FACTS['fused_strict_of120']}/120",
+         f"{FACTS['fused_strict_of120']}/120 for the fused engine at {FACTS['fused_b120_ms']} ms, or 91/120 for the "
+         "pipeline at 32 ms"),
     Rule("blind-15ms", r"(?<![\d.])15\s*ms\b",
          "blind pipeline is 26 ms/frame (re-measured 2026-07-23); 15 ms is a stale pre-fusion value", "26 ms"),
     Rule("blind-21ms", r"(?<![\d.])21(?:\.3)?\s*ms\b",

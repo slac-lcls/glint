@@ -78,6 +78,23 @@ def test_bare_86_of_120_needs_to_say_whose_it_is():
         assert not fires(no), no
 
 
+def test_fused_row_91_pairs_the_pipeline_yield_with_the_engine_speed():
+    """The submitted Table 2 carries 'GLINT-(1) (batched) 76% (91/120) ... 0.17 ... 5900' (fixed in R1): the known-cell
+    PIPELINE's yield (91/120, the 32 ms row) on the fused ENGINE's timing (whose yield is 80/120). The rule must
+    fire on that row and on prose pairing 91/120 with 0.17, and stay silent on the corrected row, on the
+    pipeline's own 32 ms row, and on 91/120 in prose that carries no fused timing."""
+    fires = lambda t: _fires(t, "fused-row-91")
+    assert fires("GLINT-\\textcircled{1} (batched)$^{\\ddagger}$ & known-cell & $76\\%$ (91/120) & --- & "
+                 "\\textbf{0.17} & \\textbf{5900} \\\\")
+    assert fires("the known-cell engine indexes 91/120 frames at 0.17 ms per frame")
+    for ok in ("\\rev{GLINT (fused known-cell)}$^{\\ddagger}$ & known-cell & \\rev{$67\\%$ (80/120)} & --- & "
+               "\\textbf{0.17} & \\textbf{5900} \\\\",
+               "GLINT-\\textcircled{1} & known-cell & $76\\%$ (91/120) & --- & 32 & 31 \\\\",
+               "supplying the reference cell directly to the same registration path gives 91/120 frames",
+               "a value of 91/120 and a batch of 0.175 ms"):
+        assert not fires(ok), ok
+
+
 def test_closed_form_mle_matches_brute_force():
     for (n01, n10), d in ((( 10, 29), -0.04), ((29, 54), -0.05), ((32, 21), 0.02), ((29, 27), 0.0)):
         got, want = p10_mle(n01, n10, N, d), _brute_p10(n01, n10, N, d)
@@ -1425,6 +1442,7 @@ if __name__ == "__main__":
              test_negatives_required_passes_and_fires,
              test_new_required_rules_stay_silent_without_their_trigger,
              test_bare_86_of_120_needs_to_say_whose_it_is,
+             test_fused_row_91_pairs_the_pipeline_yield_with_the_engine_speed,
 )
     ok = 0
     for t in tests:

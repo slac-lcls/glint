@@ -21,6 +21,7 @@ SKIPS, exit 0, without torch or below pyproject's torch floor (>= 1.12), like te
 """
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -32,7 +33,11 @@ try:
 except ImportError:
     print(f"SKIP {os.path.basename(__file__)} -- no torch: glint.replica_gpu_batch cannot import here")
     sys.exit(0)
-_ver = tuple(int(x) for x in torch.__version__.split("+")[0].split(".")[:2])
+_m = re.match(r"(\d+)\.(\d+)", torch.__version__)
+if _m is None:
+    print(f"SKIP {os.path.basename(__file__)} -- unparseable torch version: {torch.__version__}")
+    sys.exit(0)
+_ver = tuple(int(x) for x in _m.groups())
 if _ver < (1, 12):
     print(f"SKIP {os.path.basename(__file__)} -- torch {torch.__version__} is below pyproject's floor (>= 1.12)")
     sys.exit(0)
@@ -62,9 +67,11 @@ def probe(env_extra, frames=False):
     if frames:
         env["FRAMES"] = os.path.join(HERE, "frames_cxidb_clean.txt")
     r = subprocess.run([sys.executable, "-c", PROBE], capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        raise RuntimeError(f"probe failed ({env_extra}) rc={r.returncode}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}")
     line = next((l for l in r.stdout.splitlines() if l.startswith("RESULT ")), None)
     if line is None:
-        raise RuntimeError(f"probe failed ({env_extra}): {r.stderr.strip().splitlines()[-1:]}")
+        raise RuntimeError(f"probe failed ({env_extra}) missing RESULT line\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}")
     return json.loads(line[len("RESULT "):])
 
 

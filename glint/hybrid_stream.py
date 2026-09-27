@@ -179,6 +179,10 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
             if unknown:
                 raise ValueError(f"hybrid_index(escalate=...): unknown keys {sorted(unknown)}")
             cfg.update(escalate)
+            k_null = cfg["k_null"]
+            if isinstance(k_null, bool) or not isinstance(k_null, (int, np.integer)) or k_null < 1:
+                raise ValueError("hybrid_index(escalate=...): k_null must be a positive integer")
+            cfg["k_null"] = int(k_null)
 
         def _obs(M, q):
             m = matched_strict(M, q)

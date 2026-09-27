@@ -141,7 +141,7 @@ def arm_known_deep(q, Mc, index_known_gpu_cell, count, gate, seed, topa=DEEP_TOP
         try:
             Ms = index_known_gpu_cell(qs, Mc, topa=topa, nc=nc)
         except Exception:
-            Ms = None
+            return None, rec
         ms = int(count(np.asarray(Ms, float), qs)) if Ms is not None else 0
         rec["null_m"].append(ms)
         if ms >= m:

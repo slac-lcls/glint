@@ -28,9 +28,11 @@ WHAT IS CHECKED, on rendered pixel frames through the real peak finder and integ
   * rescue_pixels is validated, and the defaults build no store and add no stats keys.
 
 No GPU, no torch: the known-cell and blind indexers are a fit oracle injected through the seams
-test_cell_registry.py uses.
+test_cell_registry.py uses. GLINT_TEST_GPU=1 runs the same tests on the device path instead (cupy ring,
+peak finder, fused integrator and pixel store; needs cupy and a GPU).
 
   PYTHONPATH=. python experiments/test_stream_hit_ring.py
+  GLINT_TEST_GPU=1 PYTHONPATH=. python experiments/test_stream_hit_ring.py      # on a GPU node
 """
 import os
 import sys
@@ -48,6 +50,7 @@ from test_cell_registry import (A, B, CLEN, DMIN, NPX, PANELS, SEED, WAVE,   # n
                                 _driver, _pixel_frame, _terminal)
 
 PF = dict(abs_thr=200.0, son_min=5.0, min_pix=2)
+GPU = os.environ.get("GLINT_TEST_GPU") == "1"
 GRID = {k: sd.HKLGrid(M, DMIN, gpu=False, panels=PANELS, clen_m=CLEN, wavelength_A=WAVE)
         for k, M in (("A", A), ("B", B))}
 
@@ -105,6 +108,7 @@ def _same(s1, s2):
 def _drv(Mc=A, oracle=None, **kw):
     oracle = oracle or _FitOracle()
     kw.setdefault("pf_kw", PF)
+    kw.setdefault("use_gpu", GPU)
     return _driver(Mc=Mc, oracle=oracle, **kw)
 
 
@@ -324,5 +328,5 @@ if __name__ == "__main__":
         except Exception as exc:                                        # noqa: BLE001
             failed += 1
             print(f"  FAIL  {t.__name__}: {type(exc).__name__}({exc})")
-    print(f"{len(TESTS) - failed}/{len(TESTS)} passed")
+    print(f"{len(TESTS) - failed}/{len(TESTS)} passed  ({'device path, cupy' if GPU else 'numpy path'})")
     sys.exit(1 if failed else 0)

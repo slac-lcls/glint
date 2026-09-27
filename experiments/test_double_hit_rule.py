@@ -284,17 +284,31 @@ check(f"max deviation {worst:.1e} deg", worst < 1e-4, worst)
 
 print("\nclass operators are Miller-index operators: transposed, each one is a symmetry of the conventional cell")
 # Composition with the metric-inferred operators masks a wrong operator table in misorientation_deg itself,
-# so check the table directly: untransposed, the hexagonal 6-fold sends a to a - b (103.9 A on this cell).
+# so check the operators directly: untransposed, the hexagonal 6-fold sends a to a - b (103.9 A on this cell).
 from glint.lattice import standardize_axes  # noqa: E402
-from glint.multilattice import _PROPER_LAUE_OPS, _canonical_basis, _is_metric_symmetry  # noqa: E402
+from glint.multilattice import _canonical_basis, _is_metric_symmetry, _proper_laue_ops  # noqa: E402
+from glint.stream_driver import laue_ops  # noqa: E402
 bad = {}
 for key, M in (("6/mmm", HP), ("6/m", HP), ("-3m1", HP), ("-31m", HP), ("-3", HP), ("4/mmm", LYS), ("mmm", OP)):
     Bn = standardize_axes(_canonical_basis(M)[0], laue=key)
-    P = [np.asarray(S, int) for S in _PROPER_LAUE_OPS[key] if round(np.linalg.det(S)) == 1]
+    P = list(_proper_laue_ops(key))
     kept = sum(_is_metric_symmetry(Bn, S.T) for S in P)
     if kept != len(P):
         bad[key] = (kept, len(P))
 check("every transposed proper operator preserves the conventional metric (7 classes)", not bad, bad)
+
+print("\nmisorientation_deg reads its class operators from the merge's registry (one table, glint#207 review)")
+# The proper rotations of every registry class are exactly the det +1 half of laue_ops (what MergeAccumulator
+# merges under), so a fix or a new class in stream_driver reaches misorientation_deg with no second table.
+import glint.stream_driver as _sd  # noqa: E402
+diff = [k for k in _sd._LAUE_GENERATORS
+        if {tuple(S.ravel()) for S in _proper_laue_ops(k)}
+        != {tuple(np.asarray(S, int).ravel()) for S in laue_ops(k) if round(np.linalg.det(S)) == 1}]
+check("proper operators == det +1 part of laue_ops, all 16 registry keys", not diff, diff)
+import glint.multilattice as _ml  # noqa: E402
+check("no second operator table or group closure in multilattice",
+      not any(hasattr(_ml, n) for n in ("_PROPER_LAUE_OPS", "_close_group", "_R4_C")),
+      [n for n in ("_PROPER_LAUE_OPS", "_close_group", "_R4_C") if hasattr(_ml, n)])
 
 print("\nmisorientation_deg: Laue names go through the shared registry (aliases resolve, unknown names raise)")
 Rh = rot([0.4, -0.7, 1.0], 40.0)

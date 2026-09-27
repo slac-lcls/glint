@@ -185,7 +185,9 @@ def test_double_hit_gate_gets_a_class_only_when_one_was_given():
     """The 4/mmm fallback is a merge default, not knowledge of the sample: handing it to
     misorientation_deg would impose tetragonal operators on, say, an orthorhombic run and can understate
     a genuine second crystal's angle (glint#207). Given classes (caller or header) do reach the gate;
-    with explicit ops the label is only a report, so the gate infers the symmetry."""
+    with explicit ops the label is only a report, so the gate infers the symmetry. That each of the three
+    second_lattice_verdict call sites forwards this value is pinned through the driver in
+    test_per_lattice.py (test_every_verdict_call_site_gets_the_drivers_class)."""
     d = _driver(ORTHO)
     assert d.laue == "4/mmm" and d._sl_laue() is None             # fallback: the gate infers the class
     assert _driver(ORTHO, laue="mmm")._sl_laue() == "mmm"        # given by the caller

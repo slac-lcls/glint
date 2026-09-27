@@ -9,6 +9,8 @@ double-hit path (StreamDriver(double_hit=True)).
 A rising double-hit RATE is a useful live beamline signal (sample too concentrated / jet issues), so
 the driver exposes it in stats() as `double_hit_rate`.
 """
+import functools
+
 import numpy as np
 
 
@@ -55,48 +57,19 @@ def scramble_azimuth(q, rng):
 NEAR90_T90 = 0.15      # the class-free path's near-90-degree sign tolerance (see _metric_ops)
 _UNIMOD = None
 _I3 = np.eye(3, dtype=int)
-_R4_C = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], int)
-_R2_A = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]], int)
-_R2_B = np.array([[-1, 0, 0], [0, 1, 0], [0, 0, -1]], int)
-_R2_C = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]], int)
-_R3_C_HEX = np.array([[0, 1, 0], [-1, -1, 0], [0, 0, 1]], int)
-_R6_C_HEX = np.array([[1, 1, 0], [-1, 0, 0], [0, 0, 1]], int)
-_R2_A_HEX = np.array([[1, 0, 0], [-1, -1, 0], [0, 0, -1]], int)
-_R2_AB_HEX = np.array([[0, -1, 0], [-1, 0, 0], [0, 0, -1]], int)
-_R3_111 = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]], int)
 
 
-def _close_group(gens):
-    G = [_I3.copy()]
-    ch = True
-    while ch:
-        ch = False
-        for g in list(G):
-            for s in gens:
-                h = (s @ g).astype(int)
-                if not any(np.array_equal(h, x) for x in G):
-                    G.append(h); ch = True
-    return G
-
-
-_PROPER_LAUE_OPS = {
-    "-1": _close_group(()),
-    "2/m_uaa": _close_group((_R2_A,)),
-    "2/m_uab": _close_group((_R2_B,)),
-    "2/m_uac": _close_group((_R2_C,)),
-    "mmm": _close_group((_R2_A, _R2_B)),
-    "4/m": _close_group((_R4_C,)),
-    "4/mmm": _close_group((_R4_C, _R2_A)),
-    "-3": _close_group((_R3_C_HEX,)),
-    "-3m1": _close_group((_R3_C_HEX, _R2_A_HEX)),
-    "-31m": _close_group((_R3_C_HEX, _R2_AB_HEX)),
-    "-3_R": _close_group((_R3_111,)),
-    "-3m_R": _close_group((_R3_111, _R2_AB_HEX)),
-    "6/m": _close_group((_R6_C_HEX,)),
-    "6/mmm": _close_group((_R6_C_HEX, _R2_A_HEX)),
-    "m-3": _close_group((_R3_111, _R2_C)),
-    "m-3m": _close_group((_R3_111, _R4_C)),
-}
+@functools.lru_cache(maxsize=None)
+def _proper_laue_ops(key):
+    """The proper rotations (det +1) of a Laue class, as Miller-index operators, taken from the ONE
+    registry the merge also uses (stream_driver.laue_ops), so merging and misorientation cannot drift
+    apart (glint#207 review). `key` is a canonical registry key (stream_driver.laue_name). Imported at
+    call time because stream_driver imports this module; cached per class, read-only."""
+    from glint.stream_driver import laue_ops
+    ops = tuple(np.asarray(S, int) for S in laue_ops(key) if int(round(np.linalg.det(S))) == 1)
+    for S in ops:
+        S.flags.writeable = False
+    return ops
 
 
 def _unimodular():
@@ -239,7 +212,7 @@ def _symmetry_candidates(B1, B2, T1, T2, laue):
       * the other classes (monoclinic with a named unique axis, rhombohedral, cubic, triclinic):
         the caller's setting defines the operators, so they are conjugated from the caller's basis
         through the reduction (T1).
-    The table holds Miller-index operators (h' = S h); the real-space basis change is S transposed. For the
+    The registry holds Miller-index operators (h' = S h); the real-space basis change is S transposed. For the
     signed-permutation classes that is the same set, but for the hexagonal and trigonal ones it is not: used
     untransposed, the 6-fold sends a to a - b (103.9 A on a 60 A, gamma = 120 cell) instead of a + b.
     Either way an operator that does not map lattice 1's metric onto itself is dropped: it is not a
@@ -258,12 +231,9 @@ def _symmetry_candidates(B1, B2, T1, T2, laue):
     if key == "-1":                                # triclinic: the identity only, one correspondence
         return B1, B2, [_best_basis_change(B1, B2)]
     rel = _metric_ops(B1, B2, t90=NEAR90_T90)
-    proper = _PROPER_LAUE_OPS.get(key)
-    if proper is None:
-        return B1, B2, rel
     ops = []
-    for S in (U for U in proper if int(round(np.linalg.det(U))) == 1):
-        S = np.asarray(S, int).T                   # hkl-space operator -> real-space basis change
+    for S in _proper_laue_ops(key):
+        S = S.T                                    # hkl-space operator -> real-space basis change
         S = S if standardized else _conjugate_op(T1, S)
         if not _is_metric_symmetry(B1, S):
             continue

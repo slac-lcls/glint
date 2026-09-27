@@ -18,7 +18,7 @@ LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 frames = [q for q in load(os.path.join(HERE, "frames_cxidb_clean.txt")) if len(q) >= 6]
 n = len(frames)
 B = int(os.environ.get("B", "64"))
-FP = os.environ.get("KC_FP", "64")
+FP = "32" if rgb.FP == torch.float32 else "64"                     # what the module actually runs at
 
 def gpass(M, q):
     if M is None: return 0.0, 0

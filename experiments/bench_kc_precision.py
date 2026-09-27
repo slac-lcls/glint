@@ -1,4 +1,4 @@
-"""Validate the KC_FP / KC_SOLVE_FP precision knob on real cxidb: fp64 (default) / fp32 / mixed
+"""Validate the KC_FP / KC_SOLVE_FP precision knob on real cxidb: mixed fp32/solve64 (default) / fp64 / fp32
 must give the same known-cell rate AND the same lattice per frame. fp32 unlocks fp32-strong GPUs
 (e.g. RTX Blackwell, ~2x fp32 / half the price) at no accuracy cost -- measured rate/lattice-
 identical to fp64 across all lattice systems + sparse frames (see mp_xcell). GPU node.
@@ -37,7 +37,7 @@ def run():
 
 base = None
 print(f"host {os.uname().nodename}  n={n}   (frac/loose; (d)=per-frame lattice-diff vs fp64)", flush=True)
-for name, w, s in [("fp64 (default)", 64, 64), ("fp32", 32, 32), ("mixed fp32/solve64", 32, 64)]:
+for name, w, s in [("mixed fp32/solve64 (default)", 32, 64), ("fp64", 64, 64), ("fp32", 32, 32)]:
     cfg(w, s); Ms = run(); torch.cuda.synchronize()
     g = np.array([gpass(M, q) for M, q in zip(Ms, frames)])
     if base is None:

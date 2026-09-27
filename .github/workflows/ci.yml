@@ -396,6 +396,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_nbest_prefix.py
 
+      # The known-cell engine's precision defaults (fp32 working precision since 26 Sep 2026, fp64 3x3 solve on
+      # the torch path, KC_FP=64 restoring fp64), and the same strict decisions in both on 30 real frames (CPU).
+      - name: experiments/test_kc_precision_default.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_kc_precision_default.py
+
       # The known-cell search depth (replica_gpu: topa, nc) is CHECKED, not coerced: nc=0 used to keep one
       # anchor direction and a float was truncated (Copilot review of #208). Argument checks plus a real-frame
       # nc=1 / nc=3 run on CPU torch; self-skips without torch or below the 1.12 floor.

@@ -29,7 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 
 # The `experiments/` steps of the CPU job, plus the experiments/ steps of the torch-CPU job
-# (test_nbest_prefix.py, test_known_depth_args.py, which self-skip here because torch is blocked --
+# (test_nbest_prefix.py, test_kc_precision_default.py, test_known_depth_args.py, which self-skip here because torch is blocked --
 # the skip path is what this harness covers). The xtc_bridge ones run from their own directory and are left to CI; lute/
 # needs pytest+pydantic and is likewise CI's business.
 STEPS = [
@@ -78,6 +78,7 @@ STEPS = [
     "experiments/bench_integrate_fused.py",
     # torch-CPU job: runs for real there (CPU torch), SKIPs here with torch blocked.
     "experiments/test_nbest_prefix.py",
+    "experiments/test_kc_precision_default.py",
     "experiments/test_known_depth_args.py",
 ]
 

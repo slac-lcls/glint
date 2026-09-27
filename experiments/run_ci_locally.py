@@ -59,6 +59,7 @@ STEPS = [
     "experiments/test_escalation.py",
     "experiments/test_cell_registry.py",
     "experiments/test_per_lattice.py",
+    "experiments/test_stream_hit_ring.py",
     "experiments/test_geom_bridge.py",
     "experiments/test_cli_smoke.py",
     "experiments/test_geom_refine.py",

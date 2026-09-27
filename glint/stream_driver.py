@@ -34,7 +34,7 @@ dropped as it cancels); this affects nothing that is reported, all of which are 
 """
 import os
 import warnings
-from collections import Counter, deque
+from collections import Counter, OrderedDict, deque
 import numpy as np
 
 try:
@@ -619,6 +619,48 @@ def _conventional_tetragonal(M):
     return standardize_axes(M, laue="4/mmm")
 
 
+class _PixelStore:
+    """Detector frames kept past their batch for a LATER rescue (StreamDriver's rescue_pixels): the
+    warm-up frames until the cell locks, the buffered misses until a relock. Keyed by arrival index.
+
+    `cap` frames are preallocated, like the ring, so the memory is reserved when the driver is built
+    and nothing is allocated per frame. When the store is full the OLDEST frame is evicted; its rescue
+    then stays index-only, as it is without the store."""
+
+    def __init__(self, cap, shape, dtype, xp):
+        self.xp = xp
+        self._buf = [xp.zeros(shape, dtype) for _ in range(int(cap))]
+        self._free = list(range(len(self._buf)))
+        self._at = OrderedDict()                      # ev -> (buffer index, src, pkq), oldest first
+        self.n_evicted = 0
+
+    def __len__(self):
+        return len(self._at)
+
+    def put(self, ev, frame, src=None, pkq=None):
+        """Copy `frame` in (device to device for a ring slot, one upload for a host array)."""
+        if ev in self._at:
+            self.release([ev])
+        if not self._free:
+            _, (b, _, _) = self._at.popitem(last=False)
+            self._free.append(b)
+            self.n_evicted += 1
+        b = self._free.pop()
+        self._buf[b][...] = self.xp.asarray(frame)
+        self._at[ev] = (b, src, pkq)
+
+    def get(self, ev):
+        """(frame, src, pkq) for arrival index `ev`, or None if it was never kept or was evicted."""
+        e = self._at.get(ev)
+        return None if e is None else (self._buf[e[0]], e[1], e[2])
+
+    def release(self, evs):
+        for ev in evs:
+            e = self._at.pop(ev, None)
+            if e is not None:
+                self._free.append(e[0])
+
+
 class StreamDriver:
     """Streaming index+integrate with the frame resident on the device.
 
@@ -626,6 +668,12 @@ class StreamDriver:
     peak-finds it ON DEVICE, and queues the reciprocal vectors. When B frames are queued it indexes
     them as one batch and integrates each against its still-resident pixels, then folds the
     intensities into the running merge. Call flush() at the end of a run, then stats().
+
+    Ring slots: by default every pushed frame takes one, including a frame whose peak list is too
+    short to index, so at a 10 % hit rate a B=120 ring holds about 12 frames worth indexing and the
+    batch runs at small-batch speed. hits_only=True gives such a frame's slot straight back (it has
+    nothing to integrate; its `blank` record is emitted as before), so B counts hits: the ring's
+    memory goes to frames that need it, and the batch is the size the engine was timed at.
 
     Merge symmetry: `laue` names the Laue class the running merge (completeness, CC*, Rsplit and
     the theoretical-unique denominator) is accumulated under -- one of LAUE_CLASSES or a setting such
@@ -661,7 +709,10 @@ class StreamDriver:
                  # see _index_best_fit
                  assign="first", assign_margin=8, assign_margin_frac=0.05,
                  # per-lattice scoring of double hits (off by default) -- see _per_lattice_rescue
-                 per_lattice=False, per_lattice_below=0.25):
+                 per_lattice=False, per_lattice_below=0.25,
+                 # ring slots for hits only, and pixels kept for the retroactive rescues (both off by
+                 # default) -- see the class docstring and the warm-up rescue block below
+                 hits_only=False, rescue_pixels=0):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -934,8 +985,9 @@ class StreamDriver:
         # "rose/unindexed" bars during a sample change; today they are dropped once the batch flushes.
         # With rescue_buffer>0 (needs adaptive_relock) their q-vectors are buffered, and when the
         # watchdog LOCKS a new cell they are re-indexed against it -- recovering the INDEXING rate of
-        # the pre-lock misses. q-only => tiny (no raw-pixel ring); integrate/merge rescue is a deferred
-        # later layer. `fanout` batches the watchdog's blind indexing across workers (default = serial
+        # the pre-lock misses. q-only => tiny (no raw-pixel ring). With rescue_pixels (below) their
+        # pixels are kept as well and a rescued frame is integrated into the new cell's merge.
+        # `fanout` batches the watchdog's blind indexing across workers (default = serial
         # single-GPU loop, BIT-IDENTICAL to today); opt-in glint.warmup_batch.mpi_fanout cuts the
         # detection latency roughly in proportion to the workers, down to a floor of about five
         # blind-frame-times set by the host-side consensus vote -- NOT the "~one blind-frame-time"
@@ -976,12 +1028,30 @@ class StreamDriver:
         # locks, re-indexed against it via the same q-only known-cell path _missbuf uses -- recovering
         # the handful of frames (median ~6, per the paper) otherwise permanently sacrificed to
         # discovery. No pixels were ever kept for these frames (slot 0 is overwritten every warm-up
-        # push), so this is index-only like _missbuf's rescue, not a full integration. Default off
-        # keeps warm-up bit-identical to before.
+        # push), so this is index-only like _missbuf's rescue, not a full integration -- unless
+        # rescue_pixels keeps them (below). Default off keeps warm-up bit-identical to before.
         self.warmup_rescue = bool(warmup_rescue)
         self._warmup_buf = [] if self.warmup_rescue else None
         self._warmup_ev = [] if self.warmup_rescue else None    # arrival index per _warmup_buf entry (rescued_warmup events)
         self.n_warmup_rescued = 0
+        # Pixels for the retroactive rescues (opt-in). Both rescues above re-index a frame LONG after
+        # its batch left the ring, so they can only count it: the pixels are gone and the frame never
+        # reaches the merge, which is what index-before-compress needs it for. rescue_pixels=N keeps up
+        # to N such frames on the device (preallocated; oldest evicted first): each voting warm-up
+        # frame until the lock, each buffered miss until a relock. A frame the rescue then accepts is
+        # integrated like any other (counted in n_warmup_integrated / n_rescued_integrated; its
+        # `integrated` record follows the rescued_* one). Only frames pushed with pixels can be kept;
+        # push_q/push_peaks frames stay index-only. Memory: N frames of `shape` x `dtype`.
+        if (isinstance(rescue_pixels, (bool, np.bool_)) or not isinstance(rescue_pixels, (int, np.integer))
+                or rescue_pixels < 0):
+            raise ValueError(f"rescue_pixels must be an integer >= 0, got {rescue_pixels!r}")
+        if rescue_pixels and not (self.warmup_rescue or self._missbuf is not None):
+            raise ValueError("rescue_pixels keeps frames for the warm-up rescue (warmup_rescue=True) or the "
+                             "relock rescue (adaptive_relock=True with rescue_buffer > 0); with neither "
+                             "on, nothing would ever read them")
+        self._pix = _PixelStore(rescue_pixels, self.shape, self.dtype, xp) if rescue_pixels else None
+        self.n_warmup_integrated = self.n_rescued_integrated = 0
+        self.hits_only = bool(hits_only)
         # Per-frame confidence flag (opt-in, DIAGNOSTIC-only -- never affects what gets integrated).
         # The live accept gate above (_fits) is deliberately looser than the
         # matched_frac>=25% bar used for the paper's offline comparison numbers: on a DRP time/
@@ -1195,6 +1265,7 @@ class StreamDriver:
                 self._warmup_ev = []
             evs += [None] * (len(qs) - len(evs))                # harnesses that fill _warmup_buf directly carry no ev
             Ms = self._known_index(qs, self.Mc, B=max(len(qs), 1))
+            pix = getattr(self, "_pix", None)
             for q, M, ev in zip(qs, Ms, evs):                   # same count as the old sum(...)
                 if M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0 \
                         and self._fits(q, np.asarray(M, float)):
@@ -1202,6 +1273,11 @@ class StreamDriver:
                     self._attribute(0, ev)
                     if self._events_on:
                         self._emit_retro(ev, q, M, "rescued_warmup", 0)
+                    if pix is not None and self._integrate_stored(ev, q, np.asarray(M, float), self.grid,
+                                                                  self.acc, 0, "rescued_warmup"):
+                        self.n_warmup_integrated += 1
+            if pix is not None:
+                pix.release(evs)                                # a warm-up frame has no later rescue
 
     def _gate_lock(self, Mc, support):
         """Alias-gate a BLIND consensus lock. Returns the cell to lock (possibly a tighter derivative
@@ -1374,6 +1450,9 @@ class StreamDriver:
         if fs.size >= self.min_peaks:
             qq = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
             qq = qq[np.isfinite(qq).all(1)]
+        if (getattr(self, "_pix", None) is not None and self._warmup_buf is not None
+                and qq is not None and len(qq) >= self.min_peaks):
+            self._pix.put(self.n_pushed - 1, self._ring[0], src=src)   # a voting frame: kept for the warm-up rescue
         self._ingest_blind_q(qq, n_peaks=int(fs.size))
 
     def _ingest_blind_q(self, qq, n_peaks=None):
@@ -1451,7 +1530,7 @@ class StreamDriver:
                 q = q if len(q) >= self.min_peaks else None
             counts.append(len(q) if q is not None else 0)
             qmap.append(q)
-        return self._warmup_from_qmap(qmap, fanout)
+        return self._warmup_from_qmap(qmap, fanout, frames=frames)
 
     def warmup_batch_q(self, qs, fanout=None):
         """warmup_batch for a startup stack that arrives as q-vectors (n_i, 3) per frame instead of
@@ -1466,8 +1545,9 @@ class StreamDriver:
             qmap.append(q if q is not None and len(q) >= self.min_peaks else None)
         return self._warmup_from_qmap(qmap, fanout)
 
-    def _warmup_from_qmap(self, qmap, fanout):
-        """Shared tail of warmup_batch / warmup_batch_q: triage by peak count, pooled consensus, lock."""
+    def _warmup_from_qmap(self, qmap, fanout, frames=None):
+        """Shared tail of warmup_batch / warmup_batch_q: triage by peak count, pooled consensus, lock.
+        `frames` (warmup_batch only): the pixels, kept for the picks when rescue_pixels is on."""
         from glint.warmup_batch import triage_order, warmup_consensus
         counts = [len(q) if q is not None else 0 for q in qmap]
         picks = triage_order(counts, self.warm_topk, self.warm_floor)   # rank by peak count; skip low-signal
@@ -1479,6 +1559,9 @@ class StreamDriver:
             self._warmup_buf.extend(qs)                          # retained for post-lock rescue (see __init__)
             if self._warmup_ev is not None:
                 self._warmup_ev.extend(ev0 + k for k in sel)
+            if getattr(self, "_pix", None) is not None and frames is not None:
+                for k in sel:
+                    self._pix.put(ev0 + k, frames[k])            # kept for the warm-up rescue
         Mc, sup = warmup_consensus(qs, self._blind_index, self._rc, self.warmup_nbest, fanout,
                                    sink=self._gate_buf)         # per-frame evidence for the lock-time gate
         if Mc is not None:
@@ -1534,6 +1617,9 @@ class StreamDriver:
         self._haspix[slot] = True
         if q is None and self._events_on:
             self._emit_blank(self.n_pushed, int(fs.size))
+        if q is None and getattr(self, "hits_only", False):
+            self.n_pushed += 1                               # the next push reuses this slot: B counts hits
+            return
         if self.geom_refine:
             self._pk[slot] = np.stack([fs, ss], 1) if fs.size else None
         self._n += 1
@@ -1586,6 +1672,9 @@ class StreamDriver:
             self._pk[slot] = np.asarray(pkq[:, :2], float)   # ...but observed peaks still refine the geometry
         if q is None and self._events_on:
             self._emit_blank(self.n_pushed, n_peaks)
+        if q is None and getattr(self, "hits_only", False):
+            self.n_pushed += 1                               # the next push reuses this slot: B counts hits
+            return
         self._n += 1
         self.n_pushed += 1
         if self._n == self.B:
@@ -1720,7 +1809,7 @@ class StreamDriver:
                 self._integrate_one(i, np.asarray(v["M2"], float), grid, acc, cell_id=k, known_cell=False,
                                     outcome="rescued_per_lattice")
         return still
-    def _integrate_one(self, i, M, grid, acc, cell_id=0, known_cell=False, outcome="indexed"):
+    def _integrate_one(self, i, M, grid, acc, cell_id=0, known_cell=False, outcome="indexed", retro=False):
         """Canonicalize + predict + integrate slot i under an ALREADY-ACCEPTED matrix M into acc.
         Split out of _index_integrate so _watchdog's individual rescue can integrate a validated
         blind candidate directly, without re-registering it through known-cell (which could just
@@ -1728,8 +1817,14 @@ class StreamDriver:
 
         cell_id identifies WHICH active cell accepted this frame (0 = the primary self.Mc, 1..n = the
         adaptive-relock extras) -- recorded per chunk so an offline merger can separate the sub-runs
-        instead of silently co-merging two different crystals."""
-        self.n_indexed += 1
+        instead of silently co-merging two different crystals.
+
+        retro=True: a retroactive rescue integrated from the pixel store (_integrate_stored). The caller
+        has already counted it (n_warmup_rescued / n_rescued), attributed it to its cell and emitted its
+        rescued_* record, so it is only integrated here: no n_indexed, no registry count, no second
+        record, and no second-lattice search (that runs on the live batch)."""
+        if not retro:
+            self.n_indexed += 1
         # ONE setting for the reference and every frame (glint#186 review). This used to be
         # _canonical_axes(M) -- an unconditional (long, long, short) sort -- while HKLGrid was built
         # from the reference cell as _standardize left it. The two disagree for any class whose
@@ -1747,9 +1842,10 @@ class StreamDriver:
         # undoing a sort would be a guess (glint#186 review). Those paths keep the canonical-setting
         # behaviour only -- see glint#188.
         Mcan = self._standardize(M, ref=getattr(grid, "Mc_ref", None) if known_cell else None)
-        self._attribute(cell_id, self._idx[i])              # registry: this cell took this frame
+        if not retro:
+            self._attribute(cell_id, self._idx[i])          # registry: this cell took this frame
         pl_on = getattr(self, "per_lattice", False)
-        if self.double_hit or pl_on:                        # deflate-and-reindex: a 2nd crystal in this shot?
+        if (self.double_hit or pl_on) and not retro:        # deflate-and-reindex: a 2nd crystal in this shot?
             q = self._q[i]
             cached = self._pl_v[i] if pl_on else None       # the per-lattice rescue already searched this frame
             if pl_on and cached is None:
@@ -1788,7 +1884,7 @@ class StreamDriver:
             if v is not None and pl_on and cached is None and v["accepted"]:
                 self.n_pl_found += 1
                 self._pl_record(i, q, v, resid, kept="first", M1=M1)   # accepted as registered; QC credits it only if dominant
-        if self._events_on:
+        if self._events_on and not retro:
             self._emit_frame(i, outcome, cell=cell_id, M=M)
         if not self._haspix[i]:                             # peaks-in slot: registered + counted, nothing to integrate
             if self._grefiner is not None and self._pk[i] is not None:
@@ -1833,12 +1929,52 @@ class StreamDriver:
             self.n_integrated += 1; self._frame_no += 1
             if self._events_on:                             # marker, not a terminal outcome: the frame's
                 rec = self._event_base(self._idx[i], "integrated", cell_id)      # `indexed` record precedes it
-                rec.update(slot=int(i), n_pred=int(len(pred)), n_refl=int(keep.sum()),
+                rec.update(slot=(None if retro else int(i)), n_pred=int(len(pred)), n_refl=int(keep.sum()),
                            frame_no=self._frame_no - 1, frac=frac, low_conf=low_conf)
                 pl = getattr(self, "_pl", None)
                 if pl is not None and pl[i] is not None and pl[i]["kept"] == pl[i]["dominant"]:
                     rec["frac_per_lattice"] = pl[i]["frac_per_lattice"]
                 self._emit(rec)
+
+    def _integrate_stored(self, ev, q, M, grid, acc, cell_id, outcome):
+        """Integrate a frame the pixel store kept (rescue_pixels) under the rescue's matrix M, through the
+        ordinary _integrate_one on a scratch slot one past the ring that exists only for this call.
+        Releases the frame. Returns True if it was integrated -- False when no pixels were kept for it
+        (evicted, or pushed without pixels) or no reflection landed on the detector."""
+        pix = getattr(self, "_pix", None)
+        kept = pix.get(ev) if pix is not None and ev is not None else None
+        if kept is None:
+            return False
+        frame, src, pkq = kept
+        slot_lists = (self._ring, self._q, self._pk, self._idx, self._pkq, self._haspix, self._src,
+                      self._inl_alt, self._pl, self._pl_v)
+        S = self.B
+        for L, v in zip(slot_lists, (frame, q, None, ev, pkq, True, src, None, None, None)):
+            L.append(v)
+        n0 = self.n_integrated
+        try:
+            self._integrate_one(S, M, grid, acc, cell_id=cell_id, known_cell=True, outcome=outcome, retro=True)
+        finally:
+            for L in slot_lists:
+                del L[S:]
+            pix.release([ev])
+        return self.n_integrated > n0
+
+    def _buffer_misses(self, slots):
+        """Hand frames that fit no active cell to the miss buffer as (arrival index, q), for the relock
+        rescue -- and, with rescue_pixels, their pixels to the pixel store, so a frame that rescue
+        accepts is integrated. Only a pixel slot has pixels to keep. The deque drops its oldest
+        entries when full, and their pixels are released with them."""
+        mb = self._missbuf
+        pix = getattr(self, "_pix", None)
+        if pix is not None:
+            drop = len(mb) + min(len(slots), mb.maxlen) - mb.maxlen
+            if drop > 0:
+                pix.release([ev for ev, _ in list(mb)[:drop]])
+            for i in slots[-mb.maxlen:]:
+                if self._haspix[i]:
+                    pix.put(self._idx[i], self._ring[i], src=self._src[i], pkq=self._pkq[i])
+        mb.extend((self._idx[i], self._q[i].copy()) for i in slots)   # (arrival index, q)
 
     def _stream_record(self, i, Mcan, pred, I, sig, pkI, bg, keep, cell_id, frac, low_conf):
         """One .stream chunk's worth of this frame, stamped with the state IN EFFECT FOR IT.
@@ -2228,6 +2364,8 @@ class StreamDriver:
                         grid, acc = self._cell_sink(k)
                         self._integrate_one(i, c, grid, acc, cell_id=k, outcome="rescued_watchdog")
                         self.n_watchdog_rescued += 1
+                        if getattr(self, "_pix", None) is not None:
+                            self._pix.release([self._idx[i]])   # integrated now: a relock must not do it again
                         rescued = True
                         break
                 if rescued:
@@ -2322,16 +2460,23 @@ class StreamDriver:
             # Re-index the buffered pre-lock misses against the newly locked cell Mn with the same
             # q-only fast-path indexer the batch uses (rgb.index_fused: q in, [M or None] out, no
             # pixels). Selection-misses (the recurring new cell) pass the same _inliers gate; blank/
-            # spurious "generation" misses are correctly refused. No pixels, no integrate -- that is
-            # the deferred merge-rescue layer.
+            # spurious "generation" misses are correctly refused. Index-only, unless rescue_pixels kept
+            # the frame's pixels: then it is integrated into the new cell's merge as well.
             evs = [e for e, _ in self._missbuf]; qs = [q for _, q in self._missbuf]
             Ms = self._known_index(qs, Mn, B=max(len(qs), 1))
+            pix = getattr(self, "_pix", None)
             for ev, q, M in zip(evs, qs, Ms):                   # same count as the old sum(...)
                 if M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0 and self._fits(q, M):
                     self.n_rescued += 1
                     self._attribute(k_new, ev)
                     if self._events_on:
                         self._emit_retro(ev, q, M, "rescued_relock", k_new)
+                    if pix is not None:
+                        grid, acc = self._cell_sink(k_new)
+                        if self._integrate_stored(ev, q, np.asarray(M, float), grid, acc, k_new, "rescued_relock"):
+                            self.n_rescued_integrated += 1
+            if pix is not None:
+                pix.release(evs)
             self._missbuf.clear()
         self._watch = RunningConsensus(min_support=3, gap=2, adaptive=False)    # reset for the next change
 
@@ -2366,7 +2511,7 @@ class StreamDriver:
                 remaining, cached_nbest = self._cascade_retry(remaining)
             if remaining:
                 if self._missbuf is not None:
-                    self._missbuf.extend((self._idx[i], self._q[i].copy()) for i in remaining)
+                    self._buffer_misses(remaining)
                 self._watchdog(remaining, cached_nbest)
         elif slots:
             remaining = self._index_integrate(slots, self.Mc, self.grid, self.acc, gate=True)
@@ -2381,8 +2526,8 @@ class StreamDriver:
             if remaining and self.retry_cascade:                # retry BEFORE the miss buffer claims them
                 remaining, cached_nbest = self._cascade_retry(remaining)
             if remaining:                                       # fit no active cell -> blind watchdog
-                if self._missbuf is not None:                   # buffer q-only for retroactive rescue on lock
-                    self._missbuf.extend((self._idx[i], self._q[i].copy()) for i in remaining)   # (arrival index, q)
+                if self._missbuf is not None:                   # buffer for retroactive rescue on lock
+                    self._buffer_misses(remaining)
                 # hand over the cascade's blind solves so these frames are not indexed a second time
                 self._watchdog(remaining, cached_nbest)
         self._n = 0
@@ -2448,6 +2593,11 @@ class StreamDriver:
                  n_fanout_missed=self.n_fanout_missed)
         if self.warmup_rescue:
             s["n_warmup_rescued"] = self.n_warmup_rescued         # warm-up frames recovered the instant the cell locked
+        if getattr(self, "_pix", None) is not None:                # rescue_pixels: the rescues that reached the merge
+            s["n_warmup_integrated"] = self.n_warmup_integrated
+            s["n_rescued_integrated"] = self.n_rescued_integrated
+            s["pixels_held"] = len(self._pix)                      # frames the store holds right now
+            s["pixels_evicted"] = self._pix.n_evicted              # kept frames pushed out before any rescue
         if self.retry_cascade:                                   # glint#75, opt-in
             s["n_cascade_retried"] = self.n_cascade_retried      # gate failures the cascade was run on
             s["n_cascade_rescued"] = self.n_cascade_rescued      # ...INTEGRATED after a retry (not misses)

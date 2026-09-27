@@ -117,9 +117,15 @@ def arm_known_deep(q, Mc, index_known_gpu_cell, count, gate, seed, topa=DEEP_TOP
     index]. Copy k is scrambled with np.random.default_rng([*seed, k]), which is the seeding of the
     experiment, so its accepts reproduce.
 
+    A copy whose search raises rejects the fit (fail closed; the record gets null_error): a control that
+    was never evaluated is not evidence, and scoring it as zero would let a transient indexer failure help
+    the fit through. k_null must be an integer >= 1 -- without a null there is no acceptance rule.
+
     Returns (M or None, record); the record holds m, n, searches, the null matched counts computed, and
     p = 1/(k_null + 1) when accepted.
     """
+    if isinstance(k_null, (bool, np.bool_)) or not isinstance(k_null, (int, np.integer)) or k_null < 1:
+        raise ValueError(f"arm_known_deep: k_null must be an integer >= 1, got {k_null!r}")
     if scramble is None:
         from glint.multilattice import scramble_azimuth as scramble
     q = np.asarray(q, float)
@@ -141,7 +147,8 @@ def arm_known_deep(q, Mc, index_known_gpu_cell, count, gate, seed, topa=DEEP_TOP
         try:
             Ms = index_known_gpu_cell(qs, Mc, topa=topa, nc=nc)
         except Exception:
-            return None, rec
+            rec["null_error"] = True
+            return None, rec                         # fail closed: an unevaluated control is not evidence
         ms = int(count(np.asarray(Ms, float), qs)) if Ms is not None else 0
         rec["null_m"].append(ms)
         if ms >= m:

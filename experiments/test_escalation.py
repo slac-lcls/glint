@@ -4,7 +4,8 @@ What is under test is the ACCEPTANCE LOGIC, not the GPU search: a deep known-cel
 no azimuth-scrambled copy of the same frame matches as many peaks, the null stops at the first copy
 that does, a fit that fails the gate costs one search, copy k is seeded [*seed, k] (the seeding of the
 experiment that measured it, so its accepts reproduce), and with escalate=None hybrid_index is
-untouched. The indexers are scripted fakes; glint.glint_fast and glint.replica_gpu (torch at import)
+untouched; a bad escalate setting raises before any search, and a control search that raises rejects the
+fit; escalated frames are marked in both stream writers. The indexers are scripted fakes; glint.glint_fast and glint.replica_gpu (torch at import)
 are stubbed for the hybrid_index half, the same way experiments/test_lock_gate_wiring.py does it.
 
 Convention: a cell matrix M has COLUMNS = real-space axes in Angstrom and q @ M = hkl.
@@ -97,6 +98,34 @@ s = Scripted([30] + [5] * 8)
 M, rec = arm_known_deep(q0, np.eye(3), s.index, s.count, yes, seed=[DEEP_SEED, 0], k_null=8, topa=32, nc=16)
 check("k_null / topa / nc overrides", M is not None and rec["p"] == 1 / 9 and rec["searches"] == 9
       and s.calls[0]["topa"] == 32 and s.calls[0]["nc"] == 16, rec)
+
+print("\narm_known_deep: a control that cannot be evaluated rejects the fit (fail closed)")
+
+
+class Flaky(Scripted):
+    """The real search succeeds; the scrambled copy number `bad` raises (a transient GPU/indexer failure)."""
+    def __init__(self, counts, bad):
+        super().__init__(counts); self.bad = bad
+
+    def index(self, q, Mc, topa=None, nc=None):
+        if len(self.calls) == 1 + self.bad:
+            self.calls.append(dict(topa=topa, nc=nc, n=len(q)))
+            raise RuntimeError("CUDA out of memory")
+        return super().index(q, Mc, topa, nc)
+
+
+s = Flaky([30] + [5] * 32, bad=3)
+M, rec = arm_known_deep(q0, np.eye(3), s.index, s.count, yes, seed=[DEEP_SEED, 0])
+check("a copy whose search raises rejects the fit (not scored as 0 matched)",
+      M is None and not rec["accepted"] and rec.get("null_error") is True, rec)
+check("  and stops there: 5 searches, 3 copies scored", rec["searches"] == 5 and rec["null_m"] == [5, 5, 5], rec)
+for bad in (0, -1, True, 2.0, None):
+    try:
+        arm_known_deep(q0, np.eye(3), Scripted([30] + [5] * 32).index, lambda M, q: 30, yes,
+                       seed=[DEEP_SEED, 0], k_null=bad)
+        check(f"k_null={bad!r} raises (no null = no acceptance rule)", False)
+    except ValueError:
+        check(f"k_null={bad!r} raises (no null = no acceptance rule)", True)
 
 print("\narm_known_deep: copy k is scrambled with default_rng([*seed, k]) -- the experiment's seeding")
 seen = []
@@ -229,8 +258,66 @@ try:
         check("unknown escalate key raises", False)
     except ValueError:
         check("unknown escalate key raises", True)
+
+    def run(escalate):
+        w = World(); hs.index_blind_nbest = w.nbest; hs.index_known_gpu_cell = w.known; hs.matched_strict = w.matched
+        res, st = hs.hybrid_index(FRAMES, warmup=False, escalate=escalate)
+        return w, sorted(i for i, r in enumerate(res) if r.get("escalated")), st
+
+    w3, esc3, st3 = run(dict(topa=16, nc=4))
+    check("escalate=dict(topa=16, nc=4): the overrides reach the deep search",
+          {(t, nc) for _, t, nc in w3.calls if t != 8} == {(16, 4)} and st3["escalation"]["topa"] == 16,
+          sorted({(t, nc) for _, t, nc in w3.calls}))
+    _, esc4, st4 = run(dict(k_null=np.int64(8)))
+    check("numpy integers are accepted and stored as int", st4["escalation"]["k_null"] == 8
+          and type(st4["escalation"]["k_null"]) is int and st4["escalation_searches"] == 3 * 9 + 2, st4["escalation"])
+    for form in ({}, np.True_):
+        _, e, st = run(form)
+        check(f"escalate={form!r} ({type(form).__name__}) runs with the defaults, like True", e == esc and st["escalation_searches"] ==
+              st1["escalation_searches"] and st["escalation"] == st1["escalation"], (e, st.get("escalation")))
+    _, e, st = run(False)
+    check("escalate=False is off, like None", e == [] and "n_escalated" not in st)
+    for bad, exc in (("yes", TypeError), (1, TypeError), ([("k_null", 8)], TypeError),
+                     (dict(topa=1.5), ValueError), (dict(nc=0), ValueError), (dict(k_null=0), ValueError),
+                     (dict(k_null=True), ValueError), (dict(seed=-1), ValueError), (dict(topa="128"), ValueError)):
+        w = World(); hs.index_blind_nbest = w.nbest; hs.index_known_gpu_cell = w.known; hs.matched_strict = w.matched
+        try:
+            hs.hybrid_index(FRAMES, warmup=False, escalate=bad)
+            check(f"escalate={bad!r} raises {exc.__name__} before any search", False)
+        except exc:
+            check(f"escalate={bad!r} raises {exc.__name__} before any search", w.calls == [], w.calls[:3])
 finally:
     restore()
+
+# ------------------------------------------------------------------------------------------------
+# Part 3: the label reaches the stream (both writers the CLI uses)
+# ------------------------------------------------------------------------------------------------
+print("\nstream writers: escalated frames carry glint/escalated and the null's numbers; no other frame does")
+import re                                                                # noqa: E402
+import tempfile                                                          # noqa: E402
+
+from glint.predict import write_stream_integrated                        # noqa: E402
+from glint.stream import escalation_lines, write_stream                  # noqa: E402
+
+with tempfile.TemporaryDirectory() as tmp:
+    for name, writer in (("stream.write_stream", write_stream),
+                         ("predict.write_stream_integrated", write_stream_integrated)):
+        path = os.path.join(tmp, name + ".stream")
+        writer(res1, path)
+        chunks = open(path).read().split("----- Begin chunk -----")[1:]
+        flagged = sorted(int(re.search(r"Image serial number: (\d+)", c).group(1)) - 1
+                         for c in chunks if "glint/escalated = 1" in c)
+        check(f"{name}: exactly the escalated frames are flagged", flagged == esc, (flagged, esc))
+        c8 = chunks[esc[0]]
+        rec8 = res1[esc[0]]["escalation"]
+        want = {"glint/escalation_p": f"{1 / 33:.6g}", "glint/escalation_matched": str(rec8["m"]),
+                "glint/escalation_null_max": str(max(rec8["null_m"]))}
+        got = {k: re.search(re.escape(k) + r" = (\S+)", c8).group(1) for k in want if (k + " = ") in c8}
+        check(f"{name}: p, matched and best-copy counts written", got == want, (got, want))
+        body = c8.split("--- Begin crystal")[1].split("Reflections measured after indexing")[0]
+        check(f"{name}: inside the crystal block", "glint/escalated = 1" in body)
+check("escalation_lines is empty for a frame without the label", escalation_lines(res0[0]) == []
+      and escalation_lines({"escalated": False, "escalation": {"p": 0.5, "m": 3, "null_m": [1]}}) == [])
 
 print(f"\nFAILURES: {len(FAILS)}" + ("" if not FAILS else "  " + ", ".join(FAILS)))
 sys.exit(1 if FAILS else 0)

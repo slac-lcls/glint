@@ -170,7 +170,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
                     results[i].update({"M": Mx, "q": qin, "hkl": hkl})
                     n_idx += 1; n_casc += 1
     esc_stats = None
-    if escalate and Mc is not None:                              # (6) optional escalation on the misses
+    if (escalate is True or isinstance(escalate, dict)) and Mc is not None:  # (6) optional escalation on the misses
         from glint.retry_cascade import (DEEP_K_NULL, DEEP_NC, DEEP_SEED, DEEP_TOPA,
                                          arm_known_deep)
         cfg = dict(topa=DEEP_TOPA, nc=DEEP_NC, k_null=DEEP_K_NULL, seed=DEEP_SEED)

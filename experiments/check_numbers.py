@@ -895,7 +895,7 @@ RETIRED = [
     # 76% (91/120) ... 0.17 ... 5900"), which reads as 91/120 at 0.17 ms and so as beating ffbidx (90/120 at
     # 4.4 ms) on both axes. Two shapes: the batched/fused label ahead of 91/120 on one line (the table row), and
     # 91/120 followed by the 0.17 timing on one line (prose or a slide).
-    Rule("fused-row-91", r"(?:batched|fused)[^\n]{0,80}?\b91\s*/\s*120|\b91\s*/\s*120[^\n]{0,120}?(?<![\d.])0\.17\b",
+    Rule("fused-row-91", r"(?:batched|fused)[^\n]{0,80}?(?<![\d.])91\s*/\s*120(?!\d|\.\d)|(?<![\d.])91\s*/\s*120(?!\d|\.\d)[^\n]{0,120}?(?<![\d.])0\.17\b",
          "91/120 is the GLINT-(1) known-cell PIPELINE (the 32 ms/frame row, offline_rate_of120); the standalone "
          f"fused engine that runs at {FACTS['fused_b120_ms']} ms/frame (B=120) indexes "
          f"{FACTS['fused_strict_of120']}/120",

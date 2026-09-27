@@ -87,11 +87,14 @@ def test_fused_row_91_pairs_the_pipeline_yield_with_the_engine_speed():
     assert fires("GLINT-\\textcircled{1} (batched)$^{\\ddagger}$ & known-cell & $76\\%$ (91/120) & --- & "
                  "\\textbf{0.17} & \\textbf{5900} \\\\")
     assert fires("the known-cell engine indexes 91/120 frames at 0.17 ms per frame")
+    assert fires("91/120 at $0.17$~ms per frame")
     for ok in ("\\rev{GLINT (fused known-cell)}$^{\\ddagger}$ & known-cell & \\rev{$67\\%$ (80/120)} & --- & "
                "\\textbf{0.17} & \\textbf{5900} \\\\",
                "GLINT-\\textcircled{1} & known-cell & $76\\%$ (91/120) & --- & 32 & 31 \\\\",
                "supplying the reference cell directly to the same registration path gives 91/120 frames",
-               "a value of 91/120 and a batch of 0.175 ms"):
+               "a value of 91/120 and a batch of 0.175 ms",
+               "The pipeline indexes 91/120 frames; its comparison has p=0.17",   # a non-timing 0.17
+               "91/1200 frames at 0.17 ms"):                                      # not 91/120
         assert not fires(ok), ok
 
 
@@ -604,6 +607,8 @@ def _arith(**overrides):
 # (what a careless edit does, the substring the guard must answer with)
 ARITHMETIC_PERTURBATIONS = [
     ({"jungfrau_final_of1563": 1520},                 "must nest"),
+    ({"fused_strict_of120": 81},                      "fused_strict_of120"),
+    ({"indexing_rate": "79/115"},                     "fused_strict_of120"),
     ({"jungfrau_blind_of1563": 1400},                 "jungfrau_blind_rate_pct"),
     ({"jungfrau_final_rate_pct": 90},                 "jungfrau_final_rate_pct"),
     ({"jungfrau_frames_total": 1600},                 "jungfrau_blind_rate_pct"),

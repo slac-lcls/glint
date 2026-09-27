@@ -894,8 +894,9 @@ RETIRED = [
     # The fused ENGINE's speed with the known-cell PIPELINE's yield (the submitted Table 2: "GLINT-(1) (batched)
     # 76% (91/120) ... 0.17 ... 5900"), which reads as 91/120 at 0.17 ms and so as beating ffbidx (90/120 at
     # 4.4 ms) on both axes. Two shapes: the batched/fused label ahead of 91/120 on one line (the table row), and
-    # 91/120 followed by the 0.17 timing on one line (prose or a slide).
-    Rule("fused-row-91", r"(?:batched|fused)[^\n]{0,80}?(?<![\d.])91\s*/\s*120(?!\d|\.\d)|(?<![\d.])91\s*/\s*120(?!\d|\.\d)[^\n]{0,120}?(?<![\d.])0\.17\b",
+    # 91/120 followed by the 0.17 timing, with its ms unit, on one line (prose or a slide); the unit keeps an
+    # unrelated 0.17 (a p-value, a fraction) from tripping it.
+    Rule("fused-row-91", r"(?:batched|fused)[^\n]{0,80}?(?<![\d.])91\s*/\s*120(?!\d|\.\d)|(?<![\d.])91\s*/\s*120(?!\d|\.\d)[^\n]{0,120}?(?<![\d.])0\.17(?!\d)\$?(?:\s|~|\\,|\;)*ms\b",
          "91/120 is the GLINT-(1) known-cell PIPELINE (the 32 ms/frame row, offline_rate_of120); the standalone "
          f"fused engine that runs at {FACTS['fused_b120_ms']} ms/frame (B=120) indexes "
          f"{FACTS['fused_strict_of120']}/120",
@@ -2108,6 +2109,11 @@ def check_arithmetic() -> list[str]:
 
     close("blind_fps = 1000/blind_ms", float(F["blind_fps"]), 1000.0 / float(F["blind_ms"]))
     close("fused_fps = 1000/fused_b120_ms", float(F["fused_fps"]), 1000.0 / float(F["fused_b120_ms"]))
+    # fused_strict_of120 and indexing_rate's strict half are ONE measurement under two keys (the fused engine's
+    # strict count on the 120); a re-measurement that updates one must update the other.
+    if int(F["fused_strict_of120"]) != int(str(F["indexing_rate"]).split("/")[0]):
+        bad.append(f"  FACTS: fused_strict_of120 ({F['fused_strict_of120']}) must equal the strict half of "
+                   f"indexing_rate ({F['indexing_rate']}) -- one measurement, two keys")
     close("stream_fps = 1000/stream_ms", float(F["stream_fps"]), 1000.0 / float(F["stream_ms"]))
     close("integ_speedup = before/after", float(F["integ_speedup"]),
           float(F["integ_before_ms"]) / float(F["integ_after_ms"]))

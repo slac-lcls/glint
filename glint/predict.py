@@ -386,6 +386,8 @@ def _write_chunk(f, serial, r, panel_name="p0", photon_eV=9392.7, clen_m=0.15, p
                     "dclen_m", "geom_n_solves", "frame_no", "matched_frac_per_lattice", "second_lattice_deg"):
             if key in r and r[key] is not None:
                 f.write(f"glint/{key} = {_fmt_scalar(r[key])}\n")
+        from glint.stream import escalation_lines
+        f.writelines(line + "\n" for line in escalation_lines(r))   # hybrid_index(escalate=...) accepts
         f.write(f"diffraction_resolution_limit = {10.0/dres:.2f} nm^-1 or {dres:.2f} A\n")
         f.write(f"num_reflections = {nref}\n")
         f.write("num_saturated_reflections = 0\nnum_implausible_reflections = 0\n")

@@ -102,6 +102,22 @@ def _cell_block(M):
     return "\n".join(out)
 
 
+def escalation_lines(r):
+    """`glint/` provenance lines for a frame hybrid_index(escalate=...) accepted through the deep search and
+    its scrambled null (retry_cascade.arm_known_deep), so a merger reading the stream can tell escalated
+    orientations apart: the flag, the null's p = 1/(k_null + 1), the fit's matched peaks and the best
+    scrambled copy's. Empty for every other frame. Both stream writers call it inside the crystal block;
+    CrystFEL skips unrecognised `key = value` lines (see predict._write_chunk)."""
+    rec = r.get("escalation")
+    if not r.get("escalated") or not rec:
+        return []
+    null = rec.get("null_m") or [0]
+    return ["glint/escalated = 1",
+            f"glint/escalation_p = {float(rec['p']):.6g}",
+            f"glint/escalation_matched = {int(rec['m'])}",
+            f"glint/escalation_null_max = {int(max(null))}"]
+
+
 def write_stream(results, path, geom_text=None, panel=None, photon_eV=9392.7, clen_m=0.15):
     """results: list of dicts {image, event, M (3x3 or None), q (N,3), hkl (N,3 int) or None}.
 
@@ -133,6 +149,7 @@ def write_stream(results, path, geom_text=None, panel=None, photon_eV=9392.7, cl
             if valid:
                 n_idx += 1
                 f.write(_cell_block(M) + "\n")
+                f.writelines(line + "\n" for line in escalation_lines(r))
                 f.write("Reflections measured after indexing\n")
                 f.write(_RCOL)
                 hkl = r.get("hkl")

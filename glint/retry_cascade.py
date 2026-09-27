@@ -88,6 +88,75 @@ def arm_known_perframe(q, Mc, gate, index_known_gpu_cell):
     return M if gate(M) else None
 
 
+# The escalation arm's defaults: T2 of the escalation experiment and its k = 32 null (exp/joint-ceiling,
+# RESULTS_escalation.md and RESULTS_escalation_k32.md).
+DEEP_TOPA = 128
+DEEP_NC = 32
+DEEP_K_NULL = 32
+DEEP_SEED = 20260926
+
+
+def arm_known_deep(q, Mc, index_known_gpu_cell, count, gate, seed, topa=DEEP_TOPA, nc=DEEP_NC,
+                   k_null=DEEP_K_NULL, scramble=None):
+    """Deep known-cell registration, accepted only if it beats every one of its own scrambled copies.
+
+    A deeper search registers more of the frames the shipped search misses, but about half of what it
+    adds is chance: on lattice-free (azimuth-scrambled) peak lists the observable gate passes 14 % of
+    the time at this depth. So each fit is judged against its own frame. The frame's peaks are
+    scrambled in azimuth k_null times (|q| and q_z, hence each peak's excitation error, kept exactly;
+    lattice coherence destroyed); each copy is searched the same way. The fit is accepted only if no
+    copy matches as many peaks, i.e. at p = 1/(k_null + 1).
+
+    The null is SEQUENTIAL: it stops at the first copy that ties or beats the fit, and a fit that fails
+    the gate costs one search and no null. On the 480-frame cxidb-17 set (job 39181473) this cost 7.6
+    searches per missed frame instead of 33; it kept 21 of the 23 frames the k = 8 filter kept, and
+    about 0.9 of those 21 are expected from chance.
+
+    count(M, q) -> matched peaks (the strict matcher); gate(M, q) -> bool, the acceptance gate the caller
+    uses (count and fraction, plus same lattice as Mc). seed: an entropy list, e.g. [DEEP_SEED, frame
+    index]. Copy k is scrambled with np.random.default_rng([*seed, k]), which is the seeding of the
+    experiment, so its accepts reproduce.
+
+    A copy whose search raises rejects the fit (fail closed; the record gets null_error): a control that
+    was never evaluated is not evidence, and scoring it as zero would let a transient indexer failure help
+    the fit through. k_null must be an integer >= 1 -- without a null there is no acceptance rule.
+
+    Returns (M or None, record); the record holds m, n, searches, the null matched counts computed, and
+    p = 1/(k_null + 1) when accepted.
+    """
+    if isinstance(k_null, (bool, np.bool_)) or not isinstance(k_null, (int, np.integer)) or k_null < 1:
+        raise ValueError(f"arm_known_deep: k_null must be an integer >= 1, got {k_null!r}")
+    if scramble is None:
+        from glint.multilattice import scramble_azimuth as scramble
+    q = np.asarray(q, float)
+    rec = dict(m=0, n=int(len(q)), searches=1, null_m=[], p=None, accepted=False)
+    try:
+        M = index_known_gpu_cell(q, Mc, topa=topa, nc=nc)
+    except Exception:
+        return None, rec
+    if M is None:
+        return None, rec
+    M = np.asarray(M, float)
+    m = int(count(M, q))
+    rec["m"] = m
+    if not gate(M, q):
+        return None, rec
+    for k in range(int(k_null)):
+        qs = scramble(q, np.random.default_rng([*seed, k]))
+        rec["searches"] += 1
+        try:
+            Ms = index_known_gpu_cell(qs, Mc, topa=topa, nc=nc)
+        except Exception:
+            rec["null_error"] = True
+            return None, rec                         # fail closed: an unevaluated control is not evidence
+        ms = int(count(np.asarray(Ms, float), qs)) if Ms is not None else 0
+        rec["null_m"].append(ms)
+        if ms >= m:
+            return None, rec                         # a lattice-free copy does as well: not evidence
+    rec.update(accepted=True, p=1.0 / (int(k_null) + 1))
+    return M, rec
+
+
 # There is deliberately no `cascade(...)` convenience wrapper here composing the two arms. The
 # ORDER is the finding (blind N-best k=10, then per-frame known-cell), but the composition is not
 # reusable: StreamDriver has to try each candidate against every ACTIVE cell and remember which one

@@ -178,11 +178,16 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
             unknown = set(escalate) - set(cfg)
             if unknown:
                 raise ValueError(f"hybrid_index(escalate=...): unknown keys {sorted(unknown)}")
-            cfg.update(escalate)
-            k_null = cfg["k_null"]
-            if isinstance(k_null, bool) or not isinstance(k_null, (int, np.integer)) or k_null < 1:
-                raise ValueError("hybrid_index(escalate=...): k_null must be a positive integer")
-            cfg["k_null"] = int(k_null)
+            for key in ("topa", "nc", "k_null", "seed"):
+                value = cfg[key]
+                if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+                    raise ValueError(f"hybrid_index(escalate=...): {key} must be an integer")
+                cfg[key] = int(value)
+            for key in ("topa", "nc", "k_null"):
+                if cfg[key] < 1:
+                    raise ValueError(f"hybrid_index(escalate=...): {key} must be positive")
+            if cfg["seed"] < 0:
+                raise ValueError("hybrid_index(escalate=...): seed must be non-negative")
 
         def _obs(M, q):
             m = matched_strict(M, q)

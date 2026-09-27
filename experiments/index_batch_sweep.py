@@ -5,7 +5,7 @@ blocks since #165), so B still sets occupancy. Two knobs are therefore available
 currently at their slow setting in the measured configuration:
   * B = 40 rather than 120 (B=64 is the driver default but is NOT a knee -- B=120 measures 26%
     faster, 0.214 -> 0.170 ms/frame fp64, so sweep to the full batch rather than stopping at 64)
-  * KC_FP = 64 (the default at replica_gpu_batch.py:25), not the shipped-but-off fp32 path
+  * KC_FP as set in the environment (fp32 is the default since 26 Sep 2026; KC_FP=64 for the fp64 path)
 
 Sweep both, and verify fp32 is rate- AND lattice-identical to fp64 rather than trusting the claim.
 KC_FP is read at module IMPORT, so this must be one process per value -- an in-process loop would
@@ -29,7 +29,7 @@ import glint.replica_gpu_batch as rgb
 LYSO = gf.LYSO
 FRAMES = WT + "/experiments/frames_cxidb_clean.txt"
 BS = [8, 20, 32, 40, 64, 120]
-KC = os.environ.get("KC_FP", "64")
+KC = os.environ.get("KC_FP", "32")
 assert (rgb.FP == torch.float32) == (KC == "32"), \
     f"KC_FP={KC} but rgb.FP={rgb.FP} -- module was imported before the env was set"
 

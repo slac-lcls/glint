@@ -39,7 +39,7 @@ import glint.replica_gpu_batch as rgb                     # NOT inside the guard
 import glint.fused_kernels as fk
 from glint_fast import LYSO
 
-KC = os.environ.get("KC_FP", "64")
+KC = os.environ.get("KC_FP", "32")
 d = cp.cuda.Device()
 default_cap = d.attributes["MaxSharedMemoryPerBlock"]
 optin_cap = d.attributes.get("MaxSharedMemoryPerBlockOptin", 0)

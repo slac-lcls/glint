@@ -18,11 +18,17 @@ from glint.multishot import same_lattice
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 PI = np.pi
-# Working precision (KC_FP: "64" default | "32") and 3x3-solve precision (KC_SOLVE_FP: defaults to
-# KC_FP). fp32 is measured rate/lattice-IDENTICAL to fp64 across all lattice systems + sparse frames
-# (2026-07-18), so KC_FP=32 unlocks fp32-strong GPUs (e.g. RTX Blackwell, ~2x fp32 / half price) at no
-# accuracy cost; KC_SOLVE_FP=64 keeps just the tiny 3x3 solve in fp64 as a hedge. Default stays fp64.
-_W = os.environ.get("KC_FP", "64"); _S = os.environ.get("KC_SOLVE_FP", _W)
+# Working precision (KC_FP: "32" default | "64") and the torch path's 3x3-solve precision (KC_SOLVE_FP: "64"
+# default | "32"). fp32 is measured rate/lattice-IDENTICAL to fp64: across all lattice systems + sparse frames
+# (2026-07-18), and on the cxidb-17 120 and 480 on exclusive A100s (26 Sep 2026, jobs 39211371, 39212408 and
+# 39218788/39218965/39219158 on three nodes: 80/120 and 308/480 strict in both precisions at every batch size; the
+# published streaming replay, 333/480 with 10 watchdog rescues and 1 relock, is decision-identical in both, job
+# 39218734), at 12-19 % less time at B=120 on a warm A100 (3-10 % at B=32-64) and far less on fp32-strong GPUs (RTX Blackwell, L40S: fp64 at 1/32-1/64 of the fp32 rate). The default is fp32 since
+# 26 Sep 2026; KC_FP=64 restores the fp64 path the published timings (0.17 ms/frame at B=120) were measured on.
+# KC_SOLVE_FP=64 keeps the tiny 3x3 normal-equation solve in fp64 as a hedge for ill-conditioned (near-coplanar,
+# sparse) frames on the TORCH path (index_known_gpu_cell_batch, index_all_graph, the CPU and no-cupy fallbacks).
+# The fused kernels (index_fused) solve inside their anneal kernel at the working precision: KC_FP=64 is theirs.
+_W = os.environ.get("KC_FP", "32"); _S = os.environ.get("KC_SOLVE_FP", "64")
 FP = torch.float32 if _W == "32" else torch.float64
 _SOLVE_FP = torch.float32 if _S == "32" else torch.float64
 _DIRS = DIRS.to(FP)          # azimuth grid is per-cell now: _cell_params -> _azimuth_grid(c01)
@@ -36,7 +42,7 @@ _ANALYTIC = os.environ.get("KC_ANALYTIC", "1") != "0"
 
 def solve3x3(A, rhs):
     """Solve A X = rhs for A:(...,3,3), rhs:(...,3,k) via closed-form inverse (adjugate/det). The
-    linear algebra runs at _SOLVE_FP (default = working precision); result cast back to A's dtype.
+    linear algebra runs at _SOLVE_FP (default fp64); result cast back to A's dtype.
     A fp64 solve under fp32 working precision (KC_SOLVE_FP=64) is the 'mixed' hedge for ill-conditioned
     (near-coplanar / sparse) frames."""
     wdt = A.dtype

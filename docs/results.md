@@ -96,7 +96,9 @@ until issue #5 closed via PRs #14 / #15 / #16:
 | \+ full batch B=120 (not a saturation point: 26% faster than B=64) | 0.17 |
 
 Against pipelined ffbidx (3.1 ms) that is ~**18× faster**, not 4× slower. `KC_FP=32` (#15) gives
-0.14 ms at B=120, rate-neutral.
+0.14 ms at B=120, rate-neutral. The table's rows are fp64 (`KC_FP=64`); fp32 has been the default since
+26 Sep 2026 (re-measured rate-identical on the 120 and the 480 on exclusive A100s), so set `KC_FP=64` to
+reproduce them.
 
 The last two rows moved on 2026-08-27 (#165): `obj_fused` runs at K=4096/5760 against a 128-thread
 block, so one block per frame made each thread walk 32-45 candidates serially. Splitting the

@@ -8,11 +8,15 @@ cannot police it -- but it sits a FEW DEGREES from lattice 1, while a second cry
 angle).
 
 The orientation gate is `misorientation_deg`, NOT the clone fraction that first filled that slot.
-Both pass the synthetic tests below; on real data (job 34468402) the clone fraction was scored
-against the angle and let 55 of 72 mosaic clones through while killing 19 of 135 genuine doubles, so
-it was demoted to a diagnostic. The lesson is in this file deliberately: a gate that separates
-cleanly on planted clones can still fail on real ones, and only an INDEPENDENT discriminator shows
-it. These tests therefore check the angle gate and keep the clone fraction as a recorded value.
+Both pass the synthetic tests below; on real data the clone fraction, scored against the angle, let
+109 of 145 mosaic clones through on mfxl1038923 r0278 (117 of 152 on r0058), so it was demoted to a
+diagnostic. Those are job 39151575's stored pairs with the angle as corrected in glint#207; the first
+scoring (job 34468402), with the basis-dependent angle, read 55 of 72 clones through and 19 of 135
+"doubles" rejected, but the corrected angle shows it rejects no genuine double -- what disqualifies
+it is the clones it misses (see orientation_clone_fraction). The lesson is in this file deliberately:
+a gate that separates cleanly on planted clones can still fail on real ones, and only an INDEPENDENT
+discriminator shows it. These tests therefore check the angle gate and keep the clone fraction as a
+recorded value.
 
 CPU-only: the indexer is faked per case, so what is under test is exactly the gating logic.
 Convention throughout: M columns are real-space cell vectors, hkl = q @ M, q = hkl @ inv(M).

@@ -308,12 +308,15 @@ def orientation_clone_fraction(resid, M2, M1, tol=0.15, loose=0.35):
     DIAGNOSTIC ONLY -- this was the clone gate until real data retired it; use misorientation_deg.
     The idea was sound (a clone re-indexes lattice-1 points sitting just outside the deflation
     tolerance, while a second crystal's peaks are generic under M1) and it separates cleanly on
-    SYNTHETIC clones, which is exactly why it needed a real test. On mfxl1038923 (job 34468402),
-    scored against the misorientation angle, it barely separates the two populations: the median
-    fraction is 0.58 for sub-5-degree clones vs 0.39 for genuine doubles on r0278 (0.56 vs 0.40 on
-    r0058), correlation only -0.28, and the distributions overlap. At the shipped cut it let 55 of
-    72 clones through while killing 19 of 135 real doubles -- a marginal enrichment bought with real
-    signal. Kept because the fraction is still informative in aggregate, but it no longer gates.
+    SYNTHETIC clones, which is exactly why it needed a real test. On mfxl1038923, scored against the
+    misorientation angle, it separates the two populations only partly: the median fraction is 0.55
+    for sub-5-degree clones vs 0.33 for genuine doubles on r0278 (0.53 vs 0.35 on r0058), correlation
+    -0.47 (-0.50), and the distributions overlap. At the shipped cut it let 109 of 145 clones through
+    (117 of 152) while rejecting none of the 56 (107) genuine doubles: as a gate it mostly fails to
+    gate. These are job 39151575's stored pairs with the angle as corrected in glint#207. The first
+    scoring (job 34468402) used the basis-dependent angle, which read many same-crystal pairs as
+    doubles, and so reported 55 of 72 clones through, 19 of 135 "doubles" rejected, correlation -0.28.
+    Kept because the fraction is still informative in aggregate, but it no longer gates.
 
     Returns 0.0 when M2 indexes nothing. The raw fraction has a RANDOM BASELINE of (2*loose)^3
     (a generic point lands within loose of integer per axis with probability 2*loose) -- 0.34 at the

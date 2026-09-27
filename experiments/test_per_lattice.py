@@ -311,6 +311,60 @@ def test_double_hit_and_per_lattice_share_one_search():
             assert st["n_per_lattice_searched"] == 1 and st["n_per_lattice_found"] == 1, st
 
 
+
+# The class the double-hit gate is handed, per driver configuration (StreamDriver._sl_laue): a class
+# the caller or the stream header GAVE reaches the gate, canonicalised; the 4/mmm merge fallback and a
+# label attached to explicit ops do not (the gate then infers the symmetry itself).
+_LAUE_CASES = [(dict(), None),
+               (dict(laue="4/m"), "4/m"),
+               (dict(stream_symmetry=dict(lattice_type="tetragonal", centering="P", unique_axis="c")), "4/mmm"),
+               (dict(ops=sd.laue_ops("4/m"), laue="4/m"), None)]
+
+
+def _verdict_spy():
+    """Wrap multilattice.second_lattice_verdict (the driver imports it at call time) and record, per
+    call, the calling driver method and the `laue` it passed ("MISSING" if the keyword was dropped)."""
+    import glint.multilattice as ml
+    real, seen = ml.second_lattice_verdict, []
+
+    def spy(*a, **kw):
+        seen.append((sys._getframe(1).f_code.co_name, kw.get("laue", "MISSING")))
+        return real(*a, **kw)
+    return ml, real, spy, seen
+
+
+def test_every_verdict_call_site_gets_the_drivers_class():
+    """All three second_lattice_verdict call sites -- the search itself (_second_lattice), the double-hit
+    null (_integrate_one) and the per-lattice rescue's null (_per_lattice_rescue) -- forward the class
+    _sl_laue() returns. Checking _sl_laue() alone would pass with a call site that stopped forwarding it
+    (glint#207 review): here each site is reached through the driver and its argument is read."""
+    dh = _find(lambda f: f.misorientation >= 15 and _live(f.n1, f.npk) and f.n1 / f.npk < 0.25 and f.m2 >= 10,
+               SEED + 20, n1=24, n2=40, noise=60)
+    rescue = _rescue_case()
+    for kw, want in _LAUE_CASES:
+        ml, real, spy, seen = _verdict_spy()
+        ml.second_lattice_verdict = spy
+        try:
+            oracle = _MixedOracle([A1, dh.A2]); oracle.add_mixed(dh.q)          # double_hit: search + its null
+            sd.rgb = oracle
+            with _no_torch_needed():
+                drv = StreamDriver(A, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                                   use_gpu=False, double_hit=True, min_inliers=10, min_inlier_frac=0.15, **kw)
+            drv._known_index = oracle.index_fused
+            drv._dh_index = dh.blind
+            drv.push_q(dh.q); drv.flush()
+            assert drv.stats()["n_dh_null"] == 1, drv.stats()
+            sites_dh = sorted({c for c, _ in seen})
+            n_dh = len(seen)
+            _run_one(rescue, pl=True, **kw)                                      # per_lattice: rescue + its null
+            sites_pl = sorted({c for c, _ in seen[n_dh:]})
+        finally:
+            ml.second_lattice_verdict = real
+        assert sites_dh == ["_integrate_one", "_second_lattice"], (kw, seen)
+        assert sites_pl == ["_per_lattice_rescue", "_second_lattice"], (kw, seen)
+        got = {laue for _, laue in seen}
+        assert got == {want}, f"{kw}: call sites passed {sorted(map(str, got))}, expected {want!r} ({seen})"
+
 def _coincident(M1, M2, k=6, tol=0.1):
     """k reciprocal points of M1 that M2 also explains (componentwise within tol), nearest the origin
     first -- the peaks a double hit's two lattices can both claim."""
@@ -407,6 +461,7 @@ TESTS = [test_signature_defaults_and_validation,
          test_qc_never_credits_the_weaker_lattice,
          test_accepted_frame_above_the_bar_is_not_searched,
          test_double_hit_and_per_lattice_share_one_search,
+         test_every_verdict_call_site_gets_the_drivers_class,
          test_recorder_per_lattice_gate_scores_one_peak_set,
          test_report_refuses_replays_of_different_frames]
 

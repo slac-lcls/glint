@@ -686,7 +686,8 @@ class StreamDriver:
             # peak-rich frames -- 95% real vs 93% azimuth-scrambled on mfxl1038923 r0278, and 96% vs
             # 96% on r0058 (jobs 34409542, 34468402) -- so n_double counts the GATED rule instead
             # (same cell AND >= 15 deg from lattice 1; multilattice.second_lattice_verdict), which
-            # measured 8.7% and 8.9% on those two runs against a 0% scrambled floor. n_double_raw
+            # measured 3.6% and 4.8% on those two runs against a 0% scrambled floor (job 39151575; the
+            # basis-dependent angle before glint#207 read 8.7% and 8.9%). n_double_raw
             # keeps the old count for comparison, and a 1-in-16 azimuth-scramble null measures the
             # gated rule's own false-accept floor live, on the run in front of it.
             self.n_double_raw = 0
@@ -739,6 +740,9 @@ class StreamDriver:
             self.ops = [np.asarray(o, int) for o in ops]
             self.laue = laue_name(laue) if laue is not None else None
             self._ops_explicit = True
+            # With explicit ops the label only REPORTS (see _standardize): letting it steer the double-hit
+            # gate would make an optional label change verdicts for the same operators (glint#207 review).
+            self._laue_known = False
             # A label that does not describe the operators would make stats()["laue"] misreport the
             # class the numbers were merged under (glint#186 review), so it has to agree with them.
             if self.laue is not None and _op_set(self.ops) != _op_set(laue_ops(self.laue)):
@@ -752,6 +756,10 @@ class StreamDriver:
             self.laue = laue_name(laue if laue is not None else (derived or "4/mmm"))
             self.ops = laue_ops(self.laue)
             self._ops_explicit = False
+            # The 4/mmm fallback is a merge default, not knowledge of this sample's class: the double-hit
+            # gate (misorientation_deg) gets a Laue class only when the caller or the stream header gave
+            # one, and infers the symmetry from the cells otherwise (glint#207).
+            self._laue_known = laue is not None or derived is not None
             # A LOWER class on the same lattice is legitimate and is the reason `laue=` exists: the
             # header names the lattice, not the point group, so 4/m on tetragonal, -3/-3m on
             # hexagonal P and m-3 on cubic are all valid and must not be reported as contradictions
@@ -1606,6 +1614,11 @@ class StreamDriver:
         return not self.min_inlier_frac or n >= self.min_inlier_frac * n_peaks
 
 
+    def _sl_laue(self):
+        """The Laue class for the double-hit gate: this driver's class if it was GIVEN (caller or stream
+        header), None if it is only the 4/mmm merge fallback -- then misorientation_deg infers it."""
+        return self.laue if getattr(self, "_laue_known", False) else None
+
     def _sl_index(self):
         """The blind indexer the second-lattice search uses (index_blind_nbest), resolved lazily."""
         if getattr(self, "_dh_index", None) is None:
@@ -1620,7 +1633,8 @@ class StreamDriver:
         resid = deflate_peaks(q, M1)
         if len(resid) < self.min_peaks:
             return None, resid
-        return second_lattice_verdict(resid, M1, self._sl_index(), min_peaks=self.min_peaks), resid
+        return second_lattice_verdict(resid, M1, self._sl_index(), min_peaks=self.min_peaks,
+                                      laue=self._sl_laue()), resid
 
     def _pl_record(self, i, q, v, resid, kept, M1):
         """Per-lattice numbers for slot i from an ACCEPTED second-lattice verdict (frame event, chunk).
@@ -1678,7 +1692,8 @@ class StreamDriver:
             n1 = len(q) - len(resid)
             if self._pl_n % 16 == 1:                        # the rescue rule's own false-accept floor, live
                 rs = scramble_azimuth(resid, self._pl_rng)
-                vn = second_lattice_verdict(rs, M, self._sl_index(), min_peaks=self.min_peaks)
+                vn = second_lattice_verdict(rs, M, self._sl_index(), min_peaks=self.min_peaks,
+                                            laue=self._sl_laue())
                 self.n_pl_null_tested += 1
                 if vn["accepted"]:
                     self.n_pl_null_found += 1
@@ -1766,7 +1781,8 @@ class StreamDriver:
                 self._dh_n += 1
                 if self._dh_n % 16 == 1:
                     vn = second_lattice_verdict(scramble_azimuth(resid, self._dh_rng), M1,
-                                                self._sl_index(), min_peaks=self.min_peaks)
+                                                self._sl_index(), min_peaks=self.min_peaks,
+                                                laue=self._sl_laue())
                     self.n_dh_null_tested += 1
                     self.n_dh_null_acc += bool(vn["accepted"])
             if v is not None and pl_on and cached is None and v["accepted"]:

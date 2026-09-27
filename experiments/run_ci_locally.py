@@ -51,6 +51,7 @@ STEPS = [
     "experiments/test_laue_ops.py",
     "experiments/test_streamdriver_laue.py",
     "experiments/test_multilattice.py",
+    "experiments/test_double_hit_rule.py",
     "experiments/test_warmup_batch.py",
     "experiments/test_missbuf_rescue.py",
     "experiments/test_watchdog_fanout_guard.py",

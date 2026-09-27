@@ -181,6 +181,23 @@ def test_stream_symmetry_derives_the_class_when_laue_is_unset():
     assert _driver(TET, stream_symmetry=dict(centering="P", unique_axis="*")).laue == "4/mmm"
 
 
+def test_double_hit_gate_gets_a_class_only_when_one_was_given():
+    """The 4/mmm fallback is a merge default, not knowledge of the sample: handing it to
+    misorientation_deg would impose tetragonal operators on, say, an orthorhombic run and can understate
+    a genuine second crystal's angle (glint#207). Given classes (caller or header) do reach the gate;
+    with explicit ops the label is only a report, so the gate infers the symmetry. That each of the three
+    second_lattice_verdict call sites forwards this value is pinned through the driver in
+    test_per_lattice.py (test_every_verdict_call_site_gets_the_drivers_class)."""
+    d = _driver(ORTHO)
+    assert d.laue == "4/mmm" and d._sl_laue() is None             # fallback: the gate infers the class
+    assert _driver(ORTHO, laue="mmm")._sl_laue() == "mmm"        # given by the caller
+    sym = dict(lattice_type="orthorhombic", centering="P", unique_axis="*")
+    assert _driver(ORTHO, stream_symmetry=sym)._sl_laue() == "mmm"   # derived from the header
+    assert _driver(TET, stream_symmetry=dict(centering="P", unique_axis="*"))._sl_laue() is None
+    assert _driver(ORTHO, ops=laue_ops("mmm"))._sl_laue() is None     # explicit ops, no label
+    assert _driver(ORTHO, ops=laue_ops("mmm"), laue="mmm")._sl_laue() is None  # a label only reports
+
+
 def test_explicit_laue_wins_over_stream_symmetry_with_a_warning():
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
@@ -460,6 +477,7 @@ if __name__ == "__main__":
     tests = (test_orthorhombic_set_merges_differently_under_mmm_and_the_default,
              test_default_path_is_bit_identical_to_a_direct_4mmm_accumulator,
              test_stream_symmetry_derives_the_class_when_laue_is_unset,
+             test_double_hit_gate_gets_a_class_only_when_one_was_given,
              test_explicit_laue_wins_over_stream_symmetry_with_a_warning,
              test_explicit_ops_are_used_verbatim,
              test_lock_standardizes_the_setting_under_the_driver_class,

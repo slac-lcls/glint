@@ -17,7 +17,10 @@ does a bad budget; a chunk whose search raises comes back as misses flagged in `
 interpreter at KC_FP=64, the precision the per-frame search always runs at -- index_known_deep_batch on
 the full grid gives the same matched count as the per-frame index_known_gpu_cell on 12 real frames at
 nc=1 AND at nc=16, while nc=1 and nc=16 differ on some of them (so a depth that failed to reach the
-batched search would show).
+batched search would show). nc is capped at the 120-direction anchor pool (ANCHOR_POOL): above it the
+batched dedup loop only refilled copies of the first anchor while its tensors kept growing with nc
+(Copilot review of #211). The cap is checked directly, and the equivalence also runs at nc=500, past both
+the pool and the distinct directions that survive the dedup, so the copies must not change the answer.
 
 SKIPS, exit 0, without torch (replica_gpu imports it unconditionally; the CPU CI job installs none) or
 below pyproject's torch floor (>= 1.12), like test_nbest_prefix.py.
@@ -84,7 +87,7 @@ from glint.glint_fast import LYSO, load, matched_strict
 fr = [q for q in load(os.environ["FRAMES"]) if len(q) >= 6][:12]
 cnt = lambda M, q: -1 if M is None else int(matched_strict(np.asarray(M, float), q))
 out = dict(fp=str(rgb.FP))
-for nc in (1, 16):
+for nc in (1, 16, 500):
     out[f"pf{nc}"] = [cnt(rg.index_known_gpu_cell(q, LYSO, topa=2, nc=nc), q) for q in fr]
     out[f"b{nc}"] = [cnt(M, q) for M, q in zip(rgb.index_known_deep_batch(fr, LYSO, topa=2, nc=nc), fr)]
 print("RESULT " + json.dumps(out))
@@ -121,6 +124,9 @@ def main():
     for bad in (0, -5, 2.5, True):
         check(f"index_known_deep_batch(budget={bad!r}) raises ValueError",
               raises(lambda: rgb.index_known_deep_batch([q], CELL, 2, 1, budget=bad)))
+    for asked, kept in ((7, 7), (rgb.ANCHOR_POOL, rgb.ANCHOR_POOL), (500, rgb.ANCHOR_POOL), (None, min(rgb.NC, rgb.ANCHOR_POOL))):
+        got = rgb._cell_params(CELL, 2, asked)[-1]
+        check(f"batched nc={asked!r} keeps {kept} anchor slots (capped at the pool)", got == kept, got)
     res, err = rgb.index_known_deep_batch([few, few], CELL, 2, 1, return_errors=True)
     check("index_known_deep_batch: frames with < 6 peaks are misses, not errors", res == [None, None] and err == [False, False])
     real = rgb.index_known_gpu_cell_batch
@@ -145,7 +151,7 @@ def main():
     else:
         d = json.loads(line[len("RESULT "):])
         check("probe runs at fp64", d["fp"] == "torch.float64", d["fp"])
-        for nc in (1, 16):
+        for nc in (1, 16, 500):
             check(f"index_known_deep_batch == per-frame index_known_gpu_cell, 12 real frames, nc={nc}",
                   d[f"b{nc}"] == d[f"pf{nc}"], (d[f"b{nc}"], d[f"pf{nc}"]))
         diff = sum(a != b for a, b in zip(d["pf1"], d["pf16"]))

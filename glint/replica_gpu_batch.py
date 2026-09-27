@@ -18,6 +18,9 @@ from glint.multishot import same_lattice
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 PI = np.pi
+# The anchor pool: the best 120 grid directions, refined, then deduplicated down to nc (replica_gpu.
+# axis_candidates_t, the per-frame search, keeps at most the distinct survivors of the same 120).
+ANCHOR_POOL = 120
 # Working precision (KC_FP: "32" default | "64") and the torch path's 3x3-solve precision (KC_SOLVE_FP: "64"
 # default | "32"). fp32 is measured rate/lattice-IDENTICAL to fp64: across all lattice systems + sparse frames
 # (2026-07-18), and on the cxidb-17 120 and 480 on exclusive A100s (26 Sep 2026, jobs 39211371, 39212408 and
@@ -151,7 +154,10 @@ def _cell_params(Mc, topa=8, nc=None, full_grid=False):
     per-frame search uses (the escalation's deep search needs it: the adaptive grid changes which misses
     it recovers, exp/batched-escalation RESULTS_batched_deep.md)."""
     topa = _depth("topa", topa)
-    nc = NC if nc is None else _depth("nc", nc)
+    # nc is capped at the pool: the per-frame search cannot keep more anchors than the pool has, and past it
+    # the dedup loop below would only fill copies of the first anchor (argmax of an all-false row is 0)
+    # while every tensor still grew with nc (Copilot review of #211).
+    nc = min(NC if nc is None else _depth("nc", nc), ANCHOR_POOL)
     L, c01, c02, c12, sgn = _axes_from_cell(Mc)
     ca, sa = _azimuth_grid(c01)                     # half turn iff perpendicular (see replica_gpu)
     return (float(L[0]), float(L[1]), float(L[2]), c01, c02, c12, sgn,
@@ -166,12 +172,12 @@ def _stage_compute(Q, m, P):
     F = Q.shape[0]
     # --- anchor search (shortest axis) + greedy dedup to nc ---
     V0 = (L0 * dirs)[None].expand(F, -1, -1)
-    inl, sub = obj_b(V0, Q, m); top = (inl.double() * 100 - sub).topk(120, 1).indices
+    inl, sub = obj_b(V0, Q, m); top = (inl.double() * 100 - sub).topk(ANCHOR_POOL, 1).indices
     Vsel = torch.gather(V0, 1, top[:, :, None].expand(-1, -1, 3))
     Vref = refine_b(Vsel, Q, m, 30); Vref = Vref / Vref.norm(dim=2, keepdim=True) * L0
     inl2, sub2 = obj_b(Vref, Q, m); order = (inl2.double() * 100 - sub2).argsort(1, descending=True)
     Vs = torch.gather(Vref, 1, order[:, :, None].expand(-1, -1, 3)); dirs2 = Vs / L0
-    alive = torch.ones(F, 120, dtype=torch.bool, device=DEV)
+    alive = torch.ones(F, ANCHOR_POOL, dtype=torch.bool, device=DEV)
     chosen = torch.zeros(F, nc, 3, dtype=FP, device=DEV)
     ar = _arange(F)
     for k in range(nc):

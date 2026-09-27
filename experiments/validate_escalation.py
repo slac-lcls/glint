@@ -9,7 +9,12 @@ with the strict gate, and, given the experiment's tier file, checks that the esc
 frames the experiment accepted (same seeding [20260926, frame, copy], so they must be).
 
   PYTHONPATH=. python experiments/validate_escalation.py --frames ~/q480_fix.txt \\
-      [--expect-total 387] [--expect-tier .../k32/tier_480_T2_k32.json] [--out validate_480.json]
+      [--expect-total 387] [--expect-tier .../k32/tier_480_T2_k32.json] [--out validate_480.json] \\
+      [--escalate '{"batch": false}']      # any hybrid_index(escalate=...) dict, as JSON; default True
+
+--escalate picks the mode: the default is the batched escalation (escalate_batch over index_known_deep_batch);
+{"batch": false} is the per-frame arm. The batched search runs at the engine's working precision (KC_FP), the
+per-frame one always in fp64, so KC_FP=64 is the configuration in which both must reproduce the experiment.
 
 GPU (torch). Exit 1 on any mismatch with an --expect-* value.
 """
@@ -41,7 +46,9 @@ def main():
     ap.add_argument("--expect-total", type=int)
     ap.add_argument("--expect-tier", help="the experiment's tier_<tag>_T2_k32.json: escalated frames must match")
     ap.add_argument("--out")
+    ap.add_argument("--escalate", default="true", help="JSON for hybrid_index(escalate=...): true or a dict")
     a = ap.parse_args()
+    esc_arg = json.loads(a.escalate)
     frames = [np.asarray(q, float) for q in load(a.frames) if len(q) >= 6]     # escalate.py's frame list
     try:
         import torch
@@ -51,12 +58,18 @@ def main():
         dev, sync = "cpu", (lambda: None)
 
     t = time.time(); r0, s0 = hybrid_index(frames); sync(); t_base = time.time() - t
-    t = time.time(); r1, s1 = hybrid_index(frames, escalate=True); sync(); t_esc = time.time() - t
+    t = time.time(); r1, s1 = hybrid_index(frames, escalate=esc_arg); sync(); t_esc = time.time() - t
     ok0 = [strict(r["M"], q) for r, q in zip(r0, frames)]
     ok1 = [strict(r["M"], q) for r, q in zip(r1, frames)]
     esc = sorted(i for i, r in enumerate(r1) if r.get("escalated"))
     lost = [i for i in range(len(frames)) if ok0[i] and not ok1[i]]
-    out = dict(frames=os.path.abspath(a.frames), n=len(frames), device=dev,
+    try:
+        import glint.replica_gpu_batch as _rgb
+        prec = str(_rgb.FP)
+    except Exception:                                                          # noqa: BLE001
+        prec = None
+    out = dict(frames=os.path.abspath(a.frames), n=len(frames), device=dev, escalate=s1.get("escalation"),
+               batch_precision=prec,
                git=subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
                                   cwd=os.path.dirname(os.path.abspath(__file__))).stdout.strip(),
                strict_base=int(sum(ok0)), strict_escalated=int(sum(ok1)), escalated=esc,
@@ -64,7 +77,7 @@ def main():
                candidates=s1.get("n_escalation_candidates"), searches=s1.get("escalation_searches"),
                t_base_s=round(t_base, 1), t_escalate_total_s=round(t_esc, 1),
                t_escalation_stage_s=round(t_esc - t_base, 1))
-    print(f"{os.path.basename(a.frames)} on {dev}: strict {out['strict_base']} -> {out['strict_escalated']} / {len(frames)}"
+    print(f"{os.path.basename(a.frames)} on {dev} (escalate {out['escalate']}, engine {prec}): strict {out['strict_base']} -> {out['strict_escalated']} / {len(frames)}"
           f" | escalated {len(esc)} ({out['escalated_strict']} strict) of {out['candidates']} candidates, "
           f"{out['searches']} searches | lost {lost} | escalation stage ~{out['t_escalation_stage_s']} s")
     bad = []

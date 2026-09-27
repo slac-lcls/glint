@@ -13,7 +13,7 @@ import os, sys, warnings
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("CDIRS", "16384")
 import numpy as np, torch
 from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, AXIS0_DEDUP_COS, _axes_from_cell,
-                               _third_axis, _fib_halfsphere, _azimuth_grid)
+                               _third_axis, _fib_halfsphere, _azimuth_grid, _depth)
 from glint.multishot import same_lattice
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
@@ -143,22 +143,28 @@ def anneal_b(M0, Q, m, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02):
     return M
 
 
-def _cell_params(Mc, topa=8):
-    """Host-side cell geometry (numpy) + the adaptive orientation grid, hoisted out of the compute
-    so _stage_compute is pure-torch (and CUDA-graph capturable for a fixed cell)."""
+def _cell_params(Mc, topa=8, nc=None, full_grid=False):
+    """Host-side cell geometry (numpy) + the orientation grid, hoisted out of the compute so _stage_compute
+    is pure-torch (and CUDA-graph capturable for a fixed cell). The search depth rides along in P: topa
+    (azimuths kept per anchor), nc (anchor directions kept; default the module's NC) and the grid -- the
+    adaptive one (4096 directions for orthogonal cells) unless full_grid, which is the CDIRS grid the
+    per-frame search uses (the escalation's deep search needs it: the adaptive grid changes which misses
+    it recovers, exp/batched-escalation RESULTS_batched_deep.md)."""
+    topa = _depth("topa", topa)
+    nc = NC if nc is None else _depth("nc", nc)
     L, c01, c02, c12, sgn = _axes_from_cell(Mc)
     ca, sa = _azimuth_grid(c01)                     # half turn iff perpendicular (see replica_gpu)
-    return (float(L[0]), float(L[1]), float(L[2]), c01, c02, c12, sgn, _adaptive_dirs(Mc), topa,
-            ca.to(FP), sa.to(FP))
+    return (float(L[0]), float(L[1]), float(L[2]), c01, c02, c12, sgn,
+            _DIRS if full_grid else _adaptive_dirs(Mc), topa, ca.to(FP), sa.to(FP), nc)
 
 
 def _stage_compute(Q, m, P):
     """Pure-torch known-cell compute on padded (F,Pmax,3) Q + (F,Pmax) m; returns GPU tensors
     (best, pol, mp, mainb). No cuSOLVER (analytic solve/det) and static-shape => CUDA-graph
     capturable, which collapses the ~thousands of host kernel dispatches (the dominant cost)."""
-    L0, L1, L2, c01, c02, c12, sgn, dirs, topa, _ca, _sa = P
+    L0, L1, L2, c01, c02, c12, sgn, dirs, topa, _ca, _sa, nc = P
     F = Q.shape[0]
-    # --- anchor search (shortest axis) + greedy dedup to NC ---
+    # --- anchor search (shortest axis) + greedy dedup to nc ---
     V0 = (L0 * dirs)[None].expand(F, -1, -1)
     inl, sub = obj_b(V0, Q, m); top = (inl.double() * 100 - sub).topk(120, 1).indices
     Vsel = torch.gather(V0, 1, top[:, :, None].expand(-1, -1, 3))
@@ -166,9 +172,9 @@ def _stage_compute(Q, m, P):
     inl2, sub2 = obj_b(Vref, Q, m); order = (inl2.double() * 100 - sub2).argsort(1, descending=True)
     Vs = torch.gather(Vref, 1, order[:, :, None].expand(-1, -1, 3)); dirs2 = Vs / L0
     alive = torch.ones(F, 120, dtype=torch.bool, device=DEV)
-    chosen = torch.zeros(F, NC, 3, dtype=FP, device=DEV)
+    chosen = torch.zeros(F, nc, 3, dtype=FP, device=DEV)
     ar = _arange(F)
-    for k in range(NC):
+    for k in range(nc):
         idx = alive.int().argmax(1)
         chosen[:, k, :] = Vs[ar, idx]
         dk = dirs2[ar, idx]                                # dedup radius: see AXIS0_DEDUP_COS (replica_gpu.py)
@@ -181,11 +187,11 @@ def _stage_compute(Q, m, P):
     a1 = L1 * (c01 * cn[:, :, None, :] +
                s01 * (_ca[None, None, :, None] * u[:, :, None, :] + _sa[None, None, :, None] * v[:, :, None, :]))
     a0 = C[:, :, None, :].expand(-1, -1, NANG, -1)
-    inl1, _ = obj_b(a1.reshape(F, NC * NANG, 3), Q, m); inl1 = inl1.reshape(F, NC, NANG)
+    inl1, _ = obj_b(a1.reshape(F, nc * NANG, 3), Q, m); inl1 = inl1.reshape(F, nc, NANG)
     ta = min(topa, NANG); topi = inl1.topk(ta, 2).indices
-    a0s = torch.gather(a0, 2, topi[..., None].expand(-1, -1, -1, 3)).reshape(F, NC * ta, 3)
-    a1s = torch.gather(a1, 2, topi[..., None].expand(-1, -1, -1, 3)).reshape(F, NC * ta, 3)
-    a2s = _third_axis(a0s.reshape(-1, 3), a1s.reshape(-1, 3), L2, c02, c12, sgn).reshape(F, NC * ta, 3)
+    a0s = torch.gather(a0, 2, topi[..., None].expand(-1, -1, -1, 3)).reshape(F, nc * ta, 3)
+    a1s = torch.gather(a1, 2, topi[..., None].expand(-1, -1, -1, 3)).reshape(F, nc * ta, 3)
+    a2s = _third_axis(a0s.reshape(-1, 3), a1s.reshape(-1, 3), L2, c02, c12, sgn).reshape(F, nc * ta, 3)
     M0 = torch.stack([a0s, a1s, a2s], dim=3)
     det = torch.abs(det3(M0) if _ANALYTIC else torch.linalg.det(M0)); validM = det >= 1e3
     M0 = torch.where(validM[..., None, None], M0, _EYE3[None, None])
@@ -201,11 +207,12 @@ def _stage_compute(Q, m, P):
     return best, pol, mp, mainb
 
 
-def _gpu_stage(frames, Mc, topa=8):
+def _gpu_stage(frames, Mc, topa=8, nc=None, full_grid=False):
     """Eager wrapper: pad this batch then run the pure-torch stage compute."""
+    P = _cell_params(Mc, topa, nc, full_grid)        # validates the depth before any GPU work
     Pmax = max(len(f) for f in frames)
     Q, m = pad(frames, Pmax)
-    return _stage_compute(Q, m, _cell_params(Mc, topa))
+    return _stage_compute(Q, m, P)
 
 
 def _cpu_stage(best, pol, mp, mainb, Mc):
@@ -221,9 +228,75 @@ def _cpu_stage(best, pol, mp, mainb, Mc):
     return out
 
 
-def index_known_gpu_cell_batch(frames, Mc, topa=8):
-    """Returns list of M (3x3 np) or None, one per frame -- single batched pass over all F."""
-    return _cpu_stage(*_gpu_stage(frames, Mc, topa), Mc)
+def index_known_gpu_cell_batch(frames, Mc, topa=8, nc=None, full_grid=False):
+    """Returns list of M (3x3 np) or None, one per frame -- single batched pass over all F.
+    topa / nc / full_grid set the search depth (see _cell_params); the defaults are the shipped search."""
+    return _cpu_stage(*_gpu_stage(frames, Mc, topa, nc, full_grid), Mc)
+
+
+def index_known_deep_batch(frames, Mc, topa, nc, full_grid=True, budget=12000, return_errors=False):
+    """The escalation's deep known-cell search, batched: frames sorted by peak count and chunked so that
+    frames x Pmax <= budget, each chunk one index_known_gpu_cell_batch call at the given depth, on the full
+    CDIRS grid by default. On a GPU with cupy the fused kernels are patched in, as index_fused does; frames
+    too large for the fused kernels' shared memory go through the stock path one at a time. Elsewhere it is
+    the torch path. A frame whose search raises comes back as a miss (None), as in index_fused; with
+    return_errors=True the call returns (results, errors), errors[j] True where frame j's search raised,
+    because a caller running a NULL must not read an unevaluated control as a copy that matched nothing
+    (glint.retry_cascade.escalate_batch fails those frames closed).
+
+    Equivalence (exp/batched-escalation RESULTS_batched_deep.md, S3DF job 39203178, fp64): at topa 128,
+    nc 32 on the full grid, every one of 4,653 searches (141 real frames, 4,512 scrambled copies) gave the
+    same matched count as the per-frame replica_gpu.index_known_gpu_cell, fused 0.9-1.8 ms per search
+    against about 20 ms per frame. The per-frame search is always fp64; this one runs at the module's
+    working precision (KC_FP), so KC_FP=64 is the configuration that equivalence was measured in."""
+    topa = _depth("topa", topa); nc = _depth("nc", nc)
+    if isinstance(budget, (bool, np.bool_)) or not isinstance(budget, (int, np.integer)) or budget < 1:
+        raise ValueError(f"budget must be an integer >= 1, got {budget!r}")
+    frames = [np.asarray(f, float) for f in frames]
+    out = [None] * len(frames)
+    err = [False] * len(frames)
+    live = [j for j in range(len(frames)) if len(frames[j]) >= 6]
+    fk = None
+    if DEV == "cuda":
+        try:
+            from glint import fused_kernels as fk
+        except Exception:                          # noqa: BLE001 -- no cupy: the torch path
+            fk = None
+    cap = fk.max_peaks() if fk is not None else None
+    order = sorted(live, key=lambda j: len(frames[j]))
+    fits = [j for j in order if cap is None or len(frames[j]) <= cap]
+    over = [j for j in order if cap is not None and len(frames[j]) > cap]
+    if fk is not None:
+        fk.patch(anneal=True, obj=True, refine=True, cpu=True)
+    try:
+        s = 0
+        while s < len(fits):
+            e = s + 1
+            while e < len(fits) and (e + 1 - s) * len(frames[fits[e]]) <= budget:
+                e += 1
+            chunk = fits[s:e]
+            try:
+                res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc, topa, nc, full_grid)
+            except Exception as ex:                # noqa: BLE001 -- a miss, not a death
+                warnings.warn(f"index_known_deep_batch: a chunk of {len(chunk)} frames failed "
+                              f"({type(ex).__name__}: {ex}); returning them as misses", RuntimeWarning)
+                res = [None] * len(chunk)
+                for j in chunk:
+                    err[j] = True
+            for j, r in zip(chunk, res):
+                out[j] = r
+            s = e
+    finally:
+        if fk is not None:
+            fk.unpatch()
+    for j in over:                                 # the stock ops, one frame at a time (as index_fused)
+        try:
+            out[j] = index_known_gpu_cell_batch([frames[j]], Mc, topa, nc, full_grid)[0]
+        except Exception as ex:                    # noqa: BLE001
+            err[j] = True
+            warnings.warn(f"index_known_deep_batch: frame with {len(frames[j])} peaks failed on the "
+                          f"non-fused path ({type(ex).__name__}: {ex}); returning it as a miss", RuntimeWarning)
+    return (out, err) if return_errors else out
 
 
 def _pad_fixed(frames, F, Pmax):

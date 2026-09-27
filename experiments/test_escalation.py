@@ -22,7 +22,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from glint.lattice import cell_to_Ar                                    # noqa: E402
-from glint.retry_cascade import DEEP_K_NULL, DEEP_NC, DEEP_SEED, DEEP_TOPA, arm_known_deep  # noqa: E402
+from glint.retry_cascade import (DEEP_K_NULL, DEEP_NC, DEEP_ROUND_COPIES, DEEP_SEED, DEEP_TOPA,  # noqa: E402
+                                 arm_known_deep, escalate_batch)
 
 FAILS = []
 
@@ -151,6 +152,120 @@ for _ in range(500):
 check("500/500 agree with 'm > max of all 32' (escalate.py's rule)", agree == 500, agree)
 
 # ------------------------------------------------------------------------------------------------
+# Part 1b: escalate_batch -- the same rule, batched in rounds of copies (scripted engine)
+# ------------------------------------------------------------------------------------------------
+class BatchWorld:
+    """Real frame i is q with q[0] = (i, 0, 0); its fit matches m[i] peaks (None if i in nofit) and passes the
+    gate iff gate[i]; copy k of frame i matches null[i][k]. The scramble tags copies (i, k, 1) in row 0 and
+    checks it was handed default_rng([*seeds[i], k]). err: (i, k) copies whose search errors; raise_call: the
+    search call (1-based) that raises outright."""
+
+    def __init__(self, m, null, gate, seeds, nofit=(), err=(), raise_call=None):
+        self.m, self.null, self.g, self.seeds = m, null, gate, seeds
+        self.nofit, self.err, self.raise_call = set(nofit), set(err), raise_call
+        self.calls = 0; self.k = {}; self.rng_ok = True; self.batch_sizes = []
+
+    def frames(self):
+        return [np.vstack([[i, 0.0, 0.0], q0[:5]]) for i in range(len(self.m))]
+
+    def scramble(self, q, rng):
+        i = int(q[0, 0]); k = self.k.get(i, 0); self.k[i] = k + 1
+        want = np.random.default_rng([*self.seeds[i], k]).integers(1 << 62)
+        self.rng_ok &= bool(rng.integers(1 << 62) == want)
+        return np.vstack([[i, k, 1.0], q[1:]])
+
+    def search(self, qs, Mc):
+        self.calls += 1; self.batch_sizes.append(len(qs))
+        if self.raise_call == self.calls:
+            raise RuntimeError("scripted batch failure")
+        res, err = [], []
+        for q in qs:
+            i, k, cp = int(q[0, 0]), int(q[0, 1]), q[0, 2] == 1.0
+            res.append(None if (not cp and i in self.nofit) else np.eye(3))
+            err.append(cp and (i, k) in self.err)
+        return res, err
+
+    def count(self, M, q):
+        i, k, cp = int(q[0, 0]), int(q[0, 1]), q[0, 2] == 1.0
+        return self.null[i][k] if cp else self.m[i]
+
+    def gate(self, M, q):
+        return bool(self.g[int(q[0, 0])])
+
+
+def run_batch(w, k_null=DEEP_K_NULL, rc=DEEP_ROUND_COPIES):
+    return escalate_batch(w.frames(), np.eye(3), w.search, w.count, w.gate, w.seeds, k_null=k_null,
+                          round_copies=rc, scramble=w.scramble)
+
+
+print("\nescalate_batch: the accept set equals the rule and the sequential arm (400 random multi-frame scripts)")
+r = np.random.default_rng(5); agree = seq_agree = prefix_ok = cost_ok = rng_ok = 0; N = 400
+for t in range(N):
+    n = int(r.integers(1, 7)); rc = int(r.choice([1, 2, 3, 8, 32, 40]))
+    m = [int(x) for x in r.integers(5, 40, n)]
+    null = [[int(x) for x in r.integers(0, 45, 32)] for _ in range(n)]
+    gate = [bool(x) for x in r.random(n) < 0.8]
+    nofit = {i for i in range(n) if r.random() < 0.1}
+    seeds = [[DEEP_SEED, int(i)] for i in r.permutation(1000)[:n]]
+    w = BatchWorld(m, null, gate, seeds, nofit=nofit)
+    Ms, recs = run_batch(w, rc=rc)
+    want = [i not in nofit and gate[i] and m[i] > max(null[i]) for i in range(n)]
+    agree += [M is not None for M in Ms] == want
+    ok_seq = ok_pre = ok_cost = True
+    for i in range(n):                                        # the per-frame arm on the same script
+        sq = Scripted(([m[i]] + null[i]) if i not in nofit else [], fit=i not in nofit)
+        Mi, ri = arm_known_deep(q0, np.eye(3), sq.index, sq.count, lambda M, q, g=gate[i]: g,
+                                seed=seeds[i], scramble=lambda q, rng: q)
+        ok_seq &= (Mi is not None) == (Ms[i] is not None)
+        ok_pre &= recs[i]["null_m"][:len(ri["null_m"])] == ri["null_m"]
+        extra = recs[i]["searches"] - ri["searches"]
+        ok_cost &= extra == 0 if (Ms[i] is not None or not ri["null_m"]) else 0 <= extra <= rc - 1
+    seq_agree += ok_seq; prefix_ok += ok_pre; cost_ok += ok_cost; rng_ok += w.rng_ok
+check(f"{N}/{N} accept sets equal 'gate and m > max of all 32' (rounds of 1..40 copies)", agree == N, agree)
+check(f"{N}/{N} equal arm_known_deep's per-frame decisions", seq_agree == N, seq_agree)
+check(f"{N}/{N}: each frame's null_m starts with the sequential null's counts", prefix_ok == N, prefix_ok)
+check(f"{N}/{N}: extra searches only on null-rejected frames, at most round_copies - 1", cost_ok == N, cost_ok)
+check(f"{N}/{N}: copy k of frame i scrambled with default_rng([*seeds[i], k])", rng_ok == N, rng_ok)
+
+print("\nescalate_batch: rounds, cost and fail-closed controls")
+w = BatchWorld([30, 30, 30], [[5] * 32, [5] * 32, [5] * 3 + [30] + [5] * 28], [True] * 3, [[1], [2], [3]])
+Ms, recs = run_batch(w)
+check("32 copies in rounds of 8: 1 real batch + 4 copy batches", w.calls == 5 and w.batch_sizes[:2] == [3, 24],
+      (w.calls, w.batch_sizes))
+check("frame 2 (copy 3 ties) rejected after its first round, others accepted",
+      [M is not None for M in Ms] == [True, True, False] and recs[2]["searches"] == 9, [r["searches"] for r in recs])
+check("accepted records carry p = 1/33 and all 32 null counts",
+      all(abs(recs[i]["p"] - 1 / 33) < 1e-12 and len(recs[i]["null_m"]) == 32 for i in (0, 1)))
+w = BatchWorld([30, 30], [[5] * 32, [5] * 32], [True, True], [[1], [2]], err={(0, 5)})
+Ms, recs = run_batch(w)
+check("a copy whose search errors rejects that frame only (null_error), fail closed",
+      Ms[0] is None and recs[0].get("null_error") and Ms[1] is not None and "null_error" not in recs[1],
+      [(M is not None, r.get("null_error")) for M, r in zip(Ms, recs)])
+w = BatchWorld([30, 30], [[5] * 32, [5] * 32], [True, True], [[1], [2]], raise_call=2)
+Ms, recs = run_batch(w)
+check("a copy batch that raises rejects every frame in it (null_error)",
+      Ms == [None, None] and all(r.get("null_error") for r in recs), [r.get("null_error") for r in recs])
+w = BatchWorld([30, 30], [[5] * 32, [5] * 32], [True, True], [[1], [2]], raise_call=1)
+Ms, recs = run_batch(w)
+check("a real-search batch that raises: every frame a miss, no null run",
+      Ms == [None, None] and all(r["searches"] == 1 and not r["null_m"] for r in recs))
+w = BatchWorld([30], [[5] * 32], [False], [[1]])
+Ms, recs = run_batch(w)
+check("a fit failing the gate costs one search and no null", Ms == [None] and recs[0]["searches"] == 1 and w.calls == 1)
+check("no frames: no search", escalate_batch([], np.eye(3), w.search, w.count, w.gate, []) == ([], []))
+for kw in (dict(k_null=0), dict(k_null=True), dict(round_copies=0), dict(round_copies=2.5)):
+    try:
+        escalate_batch(w.frames(), np.eye(3), w.search, w.count, w.gate, w.seeds, **kw)
+        check(f"escalate_batch({kw}) raises ValueError", False)
+    except ValueError:
+        check(f"escalate_batch({kw}) raises ValueError", True)
+try:
+    escalate_batch(w.frames(), np.eye(3), w.search, w.count, w.gate, [])
+    check("seeds must match the frames", False)
+except ValueError:
+    check("seeds must match the frames", True)
+
+# ------------------------------------------------------------------------------------------------
 # Part 2: hybrid_index(escalate=...), with glint_fast / replica_gpu stubbed
 # ------------------------------------------------------------------------------------------------
 print("\nhybrid_index: escalation runs only when asked, only on gate-failing frames, and labels what it adds")
@@ -193,8 +308,12 @@ class World:
             if deep and i in DEEP | TIED | POOR:
                 return TRUE[i]
             return None
-        # a scrambled copy of self.current
-        return TIE if self.current in TIED else JUNK
+        # a scrambled copy: find its frame by |q| (the scramble keeps every |q|), so copies searched in a
+        # batch, after all the real frames, are still told apart
+        nq = np.sort(np.linalg.norm(q, axis=1))
+        src = next((j for j, f in enumerate(FRAMES) if len(f) == len(q) and
+                    np.allclose(np.sort(np.linalg.norm(f, axis=1)), nq)), self.current)
+        return TIE if src in TIED else JUNK
 
     def matched(self, M, q):
         return 10 ** 6 if np.array_equal(np.asarray(M), TIE) else count_strict(M, q)
@@ -202,7 +321,8 @@ class World:
 
 def load_hybrid(world):
     """Import glint.hybrid_stream against stub glint_fast / replica_gpu; return (module, restore)."""
-    saved = {k: sys.modules.get(k) for k in ("glint.glint_fast", "glint.replica_gpu", "glint.hybrid_stream")}
+    saved = {k: sys.modules.get(k) for k in ("glint.glint_fast", "glint.replica_gpu", "glint.replica_gpu_batch",
+                                              "glint.hybrid_stream")}
     gf = types.ModuleType("glint.glint_fast")
     gf.GATE_FRAC, gf.GATE_MIN = 0.25, 10
     gf.index_blind_fast = lambda q: None
@@ -211,7 +331,15 @@ def load_hybrid(world):
     gf.matched_strict = world.matched
     rg = types.ModuleType("glint.replica_gpu")
     rg.index_known_gpu_cell = world.known
+    rgb = types.ModuleType("glint.replica_gpu_batch")          # the batched deep search, on the active world
+    rgb.world = world
+
+    def index_known_deep_batch(qs, Mc, topa, nc, full_grid=True, budget=12000, return_errors=False):
+        res = [rgb.world.known(q, Mc, topa=topa, nc=nc) for q in qs]
+        return (res, [False] * len(res)) if return_errors else res
+    rgb.index_known_deep_batch = index_known_deep_batch
     sys.modules["glint.glint_fast"] = gf; sys.modules["glint.replica_gpu"] = rg
+    sys.modules["glint.replica_gpu_batch"] = rgb
     sys.modules.pop("glint.hybrid_stream", None)
     hs = importlib.import_module("glint.hybrid_stream")
 
@@ -224,8 +352,25 @@ def load_hybrid(world):
     return hs, restore
 
 
-w0 = World(); hs, restore = load_hybrid(w0)
-try:
+def suite(mode):
+    """Part 2 in one mode: mode = {} (the default, batched) or dict(batch=False) (the per-frame arm)."""
+    batched = mode.get("batch", True)
+
+    def E(escalate):                   # the mode rides along in every dict form of `escalate`
+        if isinstance(escalate, dict):
+            return {**mode, **escalate} if escalate or mode else escalate
+        if escalate is True or isinstance(escalate, np.bool_) and escalate:
+            return dict(mode) if mode else escalate
+        return escalate
+
+    def TIE_COST(k_null):              # searches spent on the tied frame: its first copy ties
+        return 1 + min(DEEP_ROUND_COPIES, k_null) if batched else 2
+
+    def use(w):
+        hs.index_blind_nbest = w.nbest; hs.index_known_gpu_cell = w.known; hs.matched_strict = w.matched
+        sys.modules["glint.replica_gpu_batch"].world = w
+
+    w0 = World(); use(w0)
     res0, st0 = hs.hybrid_index(FRAMES, warmup=False)
     check("escalate=None: no escalation stats", not any(k.startswith(("n_escalat", "escalation")) for k in st0), st0.keys())
     check("escalate=None: no frame labelled", not any("escalated" in r for r in res0))
@@ -233,13 +378,13 @@ try:
           all(t == 8 and nc is None for _, t, nc in w0.calls), set((t, nc) for _, t, nc in w0.calls))
     base_idx = st0["n_idx"]
 
-    w1 = World(); hs.index_blind_nbest = w1.nbest; hs.index_known_gpu_cell = w1.known; hs.matched_strict = w1.matched
-    res1, st1 = hs.hybrid_index(FRAMES, warmup=False, escalate=True)
+    w1 = World(); use(w1)
+    res1, st1 = hs.hybrid_index(FRAMES, warmup=False, escalate=E(True))
     esc = sorted(i for i, r in enumerate(res1) if r.get("escalated"))
     check("escalated: the deep-found frames and the poor-fit frame, not the tied one", esc == [8, 9, 11], esc)
     check("stats: 4 candidates (8, 9, 10, 11), 3 escalated", st1["n_escalation_candidates"] == 4
           and st1["n_escalated"] == 3, {k: st1[k] for k in st1 if "escalat" in k})
-    check("searches: 3 x 33 accepted + 2 for the tied frame", st1["escalation_searches"] == 3 * 33 + 2,
+    check(f"searches: 3 x 33 accepted + {TIE_COST(32)} for the tied frame", st1["escalation_searches"] == 3 * 33 + TIE_COST(32),
           st1["escalation_searches"])
     check("n_idx counts newly indexed frames once (the poor-fit frame was already counted)",
           st1["n_idx"] == base_idx + 2, (base_idx, st1["n_idx"]))
@@ -249,19 +394,19 @@ try:
           all(np.array_equal(res0[i]["M"], res1[i]["M"]) if res0[i]["M"] is not None else res1[i]["M"] is None
               for i in range(len(FRAMES)) if i not in esc))
 
-    w2 = World(); hs.index_blind_nbest = w2.nbest; hs.index_known_gpu_cell = w2.known; hs.matched_strict = w2.matched
-    res2, st2 = hs.hybrid_index(FRAMES, warmup=False, escalate=dict(k_null=8))
-    check("escalate=dict(k_null=8): 9 searches per accepted frame", st2["escalation_searches"] == 3 * 9 + 2,
+    w2 = World(); use(w2)
+    res2, st2 = hs.hybrid_index(FRAMES, warmup=False, escalate=E(dict(k_null=8)))
+    check("escalate=dict(k_null=8): 9 searches per accepted frame", st2["escalation_searches"] == 3 * 9 + TIE_COST(8),
           st2["escalation_searches"])
     try:
-        hs.hybrid_index(FRAMES, warmup=False, escalate=dict(kk=1))
+        hs.hybrid_index(FRAMES, warmup=False, escalate=E(dict(kk=1)))
         check("unknown escalate key raises", False)
     except ValueError:
         check("unknown escalate key raises", True)
 
     def run(escalate):
-        w = World(); hs.index_blind_nbest = w.nbest; hs.index_known_gpu_cell = w.known; hs.matched_strict = w.matched
-        res, st = hs.hybrid_index(FRAMES, warmup=False, escalate=escalate)
+        w = World(); use(w)
+        res, st = hs.hybrid_index(FRAMES, warmup=False, escalate=E(escalate))
         return w, sorted(i for i, r in enumerate(res) if r.get("escalated")), st
 
     w3, esc3, st3 = run(dict(topa=16, nc=4))
@@ -270,7 +415,7 @@ try:
           sorted({(t, nc) for _, t, nc in w3.calls}))
     _, esc4, st4 = run(dict(k_null=np.int64(8)))
     check("numpy integers are accepted and stored as int", st4["escalation"]["k_null"] == 8
-          and type(st4["escalation"]["k_null"]) is int and st4["escalation_searches"] == 3 * 9 + 2, st4["escalation"])
+          and type(st4["escalation"]["k_null"]) is int and st4["escalation_searches"] == 3 * 9 + TIE_COST(8), st4["escalation"])
     for form in ({}, np.True_):
         _, e, st = run(form)
         check(f"escalate={form!r} ({type(form).__name__}) runs with the defaults, like True", e == esc and st["escalation_searches"] ==
@@ -278,14 +423,31 @@ try:
     _, e, st = run(False)
     check("escalate=False is off, like None", e == [] and "n_escalated" not in st)
     for bad, exc in (("yes", TypeError), (1, TypeError), ([("k_null", 8)], TypeError),
+                     (dict(batch="yes"), ValueError), (dict(round_copies=0), ValueError),
                      (dict(topa=1.5), ValueError), (dict(nc=0), ValueError), (dict(k_null=0), ValueError),
                      (dict(k_null=True), ValueError), (dict(seed=-1), ValueError), (dict(topa="128"), ValueError)):
-        w = World(); hs.index_blind_nbest = w.nbest; hs.index_known_gpu_cell = w.known; hs.matched_strict = w.matched
+        w = World(); use(w)
         try:
-            hs.hybrid_index(FRAMES, warmup=False, escalate=bad)
+            hs.hybrid_index(FRAMES, warmup=False, escalate=E(bad))
             check(f"escalate={bad!r} raises {exc.__name__} before any search", False)
         except exc:
             check(f"escalate={bad!r} raises {exc.__name__} before any search", w.calls == [], w.calls[:3])
+    return res0, res1, esc
+
+
+w0 = World(); hs, restore = load_hybrid(w0)
+try:
+    out = {}
+    for label, mode in (("batched (default)", {}), ("per-frame (batch=False)", dict(batch=False))):
+        print(f"\n  -- mode: {label}")
+        out[label] = suite(mode)
+    a, b = out["batched (default)"][1], out["per-frame (batch=False)"][1]
+    check("batched and per-frame runs give identical results (escalated set, M and null counts)",
+          [bool(r.get("escalated")) for r in a] == [bool(r.get("escalated")) for r in b]
+          and all((x["M"] is None and y["M"] is None) or (x["M"] is not None and y["M"] is not None
+                  and np.array_equal(x["M"], y["M"])) for x, y in zip(a, b))
+          and all(x["escalation"]["null_m"] == y["escalation"]["null_m"] for x, y in zip(a, b) if x.get("escalated")))
+    res0, res1, esc = out["batched (default)"]
 finally:
     restore()
 

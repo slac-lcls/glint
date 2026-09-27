@@ -157,6 +157,93 @@ def arm_known_deep(q, Mc, index_known_gpu_cell, count, gate, seed, topa=DEEP_TOP
     return M, rec
 
 
+DEEP_ROUND_COPIES = 8
+
+
+def escalate_batch(qs, Mc, search_batch, count, gate, seeds, k_null=DEEP_K_NULL, round_copies=DEEP_ROUND_COPIES,
+                   scramble=None):
+    """arm_known_deep for many frames at once: the same acceptance rule, with the searches batched.
+
+    All frames' real searches go in one batch. Every fit that passes the gate is then tested against its
+    scrambled copies in ROUNDS: each round searches the next round_copies copies of every frame still
+    undecided, in one batch, and a frame is rejected as soon as a copy matches at least as many peaks as its
+    fit. A frame is accepted iff its fit passes the gate and all k_null copies match fewer peaks -- the rule
+    arm_known_deep applies, so the accept set is the same whenever the searches return the same fits (the
+    batched and per-frame deep searches gave identical matched counts on all 4,653 searches measured,
+    exp/batched-escalation RESULTS_batched_deep.md). Copy k of frame i is scrambled with
+    np.random.default_rng([*seeds[i], k]), as in arm_known_deep. What differs is the work: a round finishes
+    for every frame in it, so a rejected frame may have had up to round_copies - 1 more copies searched than
+    the sequential null would; on the 480-frame cxidb-17 set that was 945 searches in 5 rounds against 867
+    in 33, and 0.93 s against about 18 s for the stage.
+
+    search_batch(list_of_q, Mc) -> (list of M or None, list of bool errors), one entry per q
+    (replica_gpu_batch.index_known_deep_batch with return_errors=True). count and gate as arm_known_deep.
+    Fail closed, per frame: a real search that raised is a miss; a copy whose search raised rejects that
+    frame's fit (record null_error), because a control that was never evaluated is not evidence; if the whole
+    batch call raises, every frame in it is treated that way.
+
+    Returns (list of M or None, list of records); each record as arm_known_deep's: m, n, searches (those
+    actually run for the frame), null_m (every copy count computed, in copy order), p = 1/(k_null + 1) when
+    accepted, and null_error when a control failed.
+    """
+    for name, v in (("k_null", k_null), ("round_copies", round_copies)):
+        if isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, np.integer)) or v < 1:
+            raise ValueError(f"escalate_batch: {name} must be an integer >= 1, got {v!r}")
+    k_null, round_copies = int(k_null), int(round_copies)
+    if scramble is None:
+        from glint.multilattice import scramble_azimuth as scramble
+    qs = [np.asarray(q, float) for q in qs]
+    if len(seeds) != len(qs):
+        raise ValueError(f"escalate_batch: {len(qs)} frames but {len(seeds)} seeds")
+    recs = [dict(m=0, n=int(len(q)), searches=1, null_m=[], p=None, accepted=False) for q in qs]
+    fits = [None] * len(qs)
+    if not qs:
+        return [], []
+    try:
+        res, err = search_batch(qs, Mc)
+    except Exception:                                  # noqa: BLE001 -- every real search is a miss
+        return [None] * len(qs), recs
+    alive = {}                                         # frame -> its fit's matched count
+    for i, (M, e) in enumerate(zip(res, err)):
+        if e or M is None:
+            continue
+        M = np.asarray(M, float)
+        m = int(count(M, qs[i]))
+        recs[i]["m"] = m
+        if gate(M, qs[i]):
+            fits[i], alive[i] = M, m
+    k0 = 0
+    while alive and k0 < k_null:
+        keys = [(i, k) for i in sorted(alive) for k in range(k0, min(k_null, k0 + round_copies))]
+        cps = [scramble(qs[i], np.random.default_rng([*seeds[i], k])) for i, k in keys]
+        try:
+            res, err = search_batch(cps, Mc)
+        except Exception:                              # noqa: BLE001 -- no control evaluated: fail closed
+            res, err = [None] * len(keys), [True] * len(keys)
+        dead = set()
+        for (i, k), qc, M, e in zip(keys, cps, res, err):
+            recs[i]["searches"] += 1
+            if e:
+                recs[i]["null_error"] = True
+                dead.add(i)
+                continue
+            ms = int(count(np.asarray(M, float), qc)) if M is not None else 0
+            recs[i]["null_m"].append(ms)
+            if ms >= alive[i]:
+                dead.add(i)                            # a lattice-free copy does as well: not evidence
+        for i in dead:
+            del alive[i]
+        k0 += round_copies
+    out = []
+    for i in range(len(qs)):
+        if i in alive:
+            recs[i].update(accepted=True, p=1.0 / (k_null + 1))
+            out.append(fits[i])
+        else:
+            out.append(None)
+    return out, recs
+
+
 # There is deliberately no `cascade(...)` convenience wrapper here composing the two arms. The
 # ORDER is the finding (blind N-best k=10, then per-frame known-cell), but the composition is not
 # reusable: StreamDriver has to try each candidate against every ACTIVE cell and remember which one

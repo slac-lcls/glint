@@ -10,8 +10,12 @@ path's solve runs in fp64 under the fp32 default (the hedge) and returns the wor
 
 WHAT IT CHECKS (each configuration in a fresh interpreter, since the module reads the environment at import):
   * unset -> FP float32, _SOLVE_FP float64;  KC_FP=64 -> float64 / float64;  KC_FP=32 KC_SOLVE_FP=32 -> both float32;
-  * solve3x3 under the default: float32 in, float32 out, and -- on an ill-conditioned regression family --
-    measurably different from a separate KC_SOLVE_FP=32 probe;
+  * solve3x3 under the default: float32 in, float32 out; and the hedge itself, on ill-conditioned 3x3 systems whose
+    entries are EXACT in float32 (so both paths see the same numbers; cond ~1.3e4 and ~2.6e4): the default's
+    result is within 1e-6 (relative) of a float64 reference, while a KC_SOLVE_FP=32 probe is off by more than 1e-3
+    (measured: ~1e-8 against ~6e-2). The second half is what shows the first can fail: remove the fp64 cast and the
+    default becomes the fp32 probe. (A matrix with entries like 1.0000001 does not work -- float32 rounds them to
+    1.0, the system becomes singular in both paths and the comparison is NaN.)
   * index_known_gpu_cell_batch (the torch path; CPU here) on the first 30 cxidb-17 benchmark frames with the textbook
     cell: the same strict pass/fail per frame under the default and under KC_FP=64.
 
@@ -50,11 +54,14 @@ import glint.replica_gpu_batch as rgb
 from glint.glint_fast import LYSO, gpass, load
 out = dict(fp=str(rgb.FP), solve=str(rgb._SOLVE_FP))
 rhs = torch.tensor([[1.0, 0.0, 2.0], [0.5, 1.0, 0.0], [0.0, 3.0, 1.0]], dtype=rgb.FP)[None]
-cases = [[[1.0, 1.0, 1.0], [1.0, 1.0000001, 1.0], [1.0, 1.0, 1.0000002]],
-         [[1.0, 1.0, 1.0], [1.0, 1.0000002, 1.0], [1.0, 1.0, 1.0000004]],
-         [[1.0, 1.0, 1.0], [1.0, 1.0000005, 1.0], [1.0, 1.0, 1.0000010]]]
-X = [rgb.solve3x3(torch.tensor(A, dtype=rgb.FP)[None], rhs) for A in cases]
-out["solve_dtype"] = str(X[0].dtype); out["solve_case"] = [x.cpu().tolist()[0] for x in X]
+errs = []
+for k in (11, 12):                                  # float32-exact entries (dyadic), ill-conditioned
+    e = 2.0 ** -k
+    A = torch.tensor([[1.0, 1.0, 1.0], [1.0, 1.0 + e, 1.0 + 0.5 * e], [1.0 + 0.25 * e, 1.0, 1.0 + 2 * e]], dtype=rgb.FP)[None]
+    X = rgb.solve3x3(A, rhs)
+    ref = np.linalg.solve(A[0].double().numpy(), rhs[0].double().numpy())
+    errs.append(float(np.abs(X[0].double().numpy() - ref).max() / np.abs(ref).max()))
+out["solve_dtype"] = str(X.dtype); out["solve_rel_err"] = errs
 if os.environ.get("FRAMES"):
     fr = [q for q in load(os.environ["FRAMES"]) if len(q) >= 6][:30]
     Ms = rgb.index_known_gpu_cell_batch(fr, LYSO)
@@ -96,16 +103,10 @@ def main():
     check("KC_FP=64: solve float64", e["solve"] == "torch.float64", e["solve"])
     f = probe({"KC_FP": "32", "KC_SOLVE_FP": "32"})
     check("KC_FP=32 KC_SOLVE_FP=32: both float32", f["fp"] == f["solve"] == "torch.float32", (f["fp"], f["solve"]))
-    solve_probe_gap = max(abs(a - b)
-                          for case_a, case_b in zip(d["solve_case"], f["solve_case"])
-                          for row_a, row_b in zip(case_a, case_b)
-                          for a, b in zip(row_a, row_b))
-    solve_probe_cases = sum(any(abs(a - b) > 0.0
-                                for row_a, row_b in zip(case_a, case_b)
-                                for a, b in zip(row_a, row_b))
-                            for case_a, case_b in zip(d["solve_case"], f["solve_case"]))
-    check("default: solve3x3 differs from a KC_SOLVE_FP=32 probe on the ill-conditioned regression family",
-          solve_probe_cases > 0, f"{solve_probe_cases}/{len(d['solve_case'])} cases differ; max gap {solve_probe_gap:.2e}")
+    check("default: the fp64 hedge solves ill-conditioned fp32-exact systems to <= 1e-6",
+          max(d["solve_rel_err"]) <= 1e-6, [f"{x:.1e}" for x in d["solve_rel_err"]])
+    check("KC_SOLVE_FP=32: the same systems are off by > 1e-3 (so the check above can fail)",
+          min(f["solve_rel_err"]) > 1e-3, [f"{x:.1e}" for x in f["solve_rel_err"]])
     check("real frames: the same strict decision per frame in fp32 (default) and fp64",
           d["strict"] == e["strict"] and len(d["strict"]) == 30, (d["strict"], e["strict"]))
     check("real frames: the check is not vacuous (some pass, some fail)",

@@ -1444,22 +1444,18 @@ class StreamDriver:
         self.n_pushed += 1
         self._ring[0][...] = xp.asarray(frame)
         pk = self.finder.find(self._ring[0]); fs = pk["x"]; ss = pk["y"]
-        pi = pk.get("intensity") if self.stream_peaks else None
+        pi = pk["intensity"] if self.stream_peaks else None
         if self.gpu:
             fs = cp.asnumpy(fs); ss = cp.asnumpy(ss)
             if pi is not None:
                 pi = cp.asnumpy(pi)
-        if pi is not None:
-            pi = np.asarray(pi).ravel()
-            if pi.size != fs.size:
-                pi = None
         qq = None
         pkq = None
         if fs.size >= self.min_peaks:
             qq = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
             ok = np.isfinite(qq).all(1)
             qq = qq[ok]
-            if pi is not None and len(qq) >= self.min_peaks:
+            if self.stream_peaks and len(qq) >= self.min_peaks:
                 pkq = np.stack([fs[ok], ss[ok], pi[ok]], 1)
         if (getattr(self, "_pix", None) is not None and self._warmup_buf is not None
                 and qq is not None and len(qq) >= self.min_peaks):
@@ -1533,22 +1529,18 @@ class StreamDriver:
         pkqmap = [] if self.stream_peaks else None
         for fr in frames:                                        # cheap peak-find every frame
             pk = self.finder.find(xp.asarray(fr)); fs, ss = pk["x"], pk["y"]
-            pi = pk.get("intensity") if self.stream_peaks else None
+            pi = pk["intensity"] if self.stream_peaks else None
             if self.gpu:
                 fs, ss = cp.asnumpy(fs), cp.asnumpy(ss)
                 if pi is not None:
                     pi = cp.asnumpy(pi)
-            if pi is not None:
-                pi = np.asarray(pi).ravel()
-                if pi.size != fs.size:
-                    pi = None
             q = None
             pkq = None
             if fs.size >= self.min_peaks:
                 q = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
                 ok = np.isfinite(q).all(1)
                 q = q[ok]
-                if pi is not None and len(q) >= self.min_peaks:
+                if self.stream_peaks and len(q) >= self.min_peaks:
                     pkq = np.stack([fs[ok], ss[ok], pi[ok]], 1)
                 q = q if len(q) >= self.min_peaks else None
             counts.append(len(q) if q is not None else 0)

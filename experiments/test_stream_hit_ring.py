@@ -36,6 +36,7 @@ peak finder, fused integrator and pixel store; needs cupy and a GPU).
 """
 import os
 import sys
+import tempfile
 import types
 
 import numpy as np
@@ -45,6 +46,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 
 import glint.stream_driver as sd                                             # noqa: E402
+from glint.geom import read_crystfel_peaks                                   # noqa: E402
 from glint.multishot import same_lattice                                      # noqa: E402
 from test_cell_registry import (A, B, CLEN, DMIN, NPX, PANELS, SEED, WAVE,   # noqa: E402
                                 _driver, _pixel_frame, _terminal)
@@ -270,6 +272,23 @@ def test_warmup_rescue_integrates_the_kept_frames():
     assert len(_terminal(with_px.events)) == 6
 
 
+def test_warmup_rescue_keeps_stream_peaks_and_blind_stats_show_the_store():
+    rng = np.random.default_rng(SEED + 40)
+    with tempfile.TemporaryDirectory() as td:
+        out = os.path.join(td, "warm.stream")
+        drv, _ = _drv(Mc=None, warmup_rescue=True, rescue_pixels=8, stream_out=out, stream_peaks="all",
+                      events=True, B=4, warmup_nbest=1, lock_support=2, lock_gap=1)
+        drv.push(_frame("A", rng))
+        s = drv.stats()
+        assert s["locked"] is False and s["pixels_held"] == 1 and s["pixels_evicted"] == 0, s
+        for _ in range(5):
+            drv.push(_frame("A", rng))
+        drv.close()
+        chunks = {c["event"]: c for c in read_crystfel_peaks(out)}
+        for k in range(drv.n_warmup):
+            assert len(chunks[k]["peaks"]) > 0, (k, chunks[k])
+
+
 def test_warmup_batch_keeps_the_picks_pixels():
     rng = np.random.default_rng(SEED + 5)
     stack = np.stack([_frame("A", rng) for _ in range(5)])
@@ -284,6 +303,20 @@ def test_warmup_batch_keeps_the_picks_pixels():
     d = out[8]
     assert d.n_warmup_rescued == d.n_warmup == 5 and d.stats()["n_warmup_integrated"] == 5, d.stats()
     assert d.n_integrated == 5 and out[0].n_integrated == 0, (d.n_integrated, out[0].n_integrated)
+
+
+def test_warmup_batch_keeps_stream_peaks_for_rescued_picks():
+    rng = np.random.default_rng(SEED + 41)
+    stack = np.stack([_frame("A", rng) for _ in range(5)])
+    with tempfile.TemporaryDirectory() as td:
+        out = os.path.join(td, "warm_batch.stream")
+        drv, _ = _drv(Mc=None, warmup_rescue=True, rescue_pixels=8, stream_out=out, stream_peaks="all",
+                      B=4, warmup_nbest=1, lock_support=2, lock_gap=1)
+        assert drv.warmup_batch(stack) is True
+        drv.close()
+        chunks = {c["event"]: c for c in read_crystfel_peaks(out)}
+        for k in range(drv.n_warmup):
+            assert len(chunks[k]["peaks"]) > 0, (k, chunks[k])
 
 
 # ------------------------------------------------------------------ options -------------------------
@@ -316,7 +349,9 @@ TESTS = [test_hits_only_batches_count_hits_and_nothing_else_changes,
          test_a_small_store_evicts_the_oldest_and_those_stay_index_only,
          test_a_watchdog_rescue_releases_the_kept_pixels,
          test_warmup_rescue_integrates_the_kept_frames,
+         test_warmup_rescue_keeps_stream_peaks_and_blind_stats_show_the_store,
          test_warmup_batch_keeps_the_picks_pixels,
+         test_warmup_batch_keeps_stream_peaks_for_rescued_picks,
          test_options_are_validated_and_off_by_default]
 
 if __name__ == "__main__":

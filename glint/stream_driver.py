@@ -1444,15 +1444,22 @@ class StreamDriver:
         self.n_pushed += 1
         self._ring[0][...] = xp.asarray(frame)
         pk = self.finder.find(self._ring[0]); fs = pk["x"]; ss = pk["y"]
+        pi = pk["intensity"] if self.stream_peaks else None
         if self.gpu:
             fs = cp.asnumpy(fs); ss = cp.asnumpy(ss)
+            if pi is not None:
+                pi = cp.asnumpy(pi)
         qq = None
+        pkq = None
         if fs.size >= self.min_peaks:
             qq = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
-            qq = qq[np.isfinite(qq).all(1)]
+            ok = np.isfinite(qq).all(1)
+            qq = qq[ok]
+            if self.stream_peaks and len(qq) >= self.min_peaks:
+                pkq = np.stack([fs[ok], ss[ok], pi[ok]], 1)
         if (getattr(self, "_pix", None) is not None and self._warmup_buf is not None
                 and qq is not None and len(qq) >= self.min_peaks):
-            self._pix.put(self.n_pushed - 1, self._ring[0], src=src)   # a voting frame: kept for the warm-up rescue
+            self._pix.put(self.n_pushed - 1, self._ring[0], src=src, pkq=pkq)   # a voting frame: kept for the warm-up rescue
         self._ingest_blind_q(qq, n_peaks=int(fs.size))
 
     def _ingest_blind_q(self, qq, n_peaks=None):
@@ -1519,18 +1526,28 @@ class StreamDriver:
             return True                                          # already locked -- nothing to warm up
         xp = cp if self.gpu else np
         counts, qmap = [], []
+        pkqmap = [] if self.stream_peaks else None
         for fr in frames:                                        # cheap peak-find every frame
             pk = self.finder.find(xp.asarray(fr)); fs, ss = pk["x"], pk["y"]
+            pi = pk["intensity"] if self.stream_peaks else None
             if self.gpu:
                 fs, ss = cp.asnumpy(fs), cp.asnumpy(ss)
+                if pi is not None:
+                    pi = cp.asnumpy(pi)
             q = None
+            pkq = None
             if fs.size >= self.min_peaks:
                 q = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
-                q = q[np.isfinite(q).all(1)]
+                ok = np.isfinite(q).all(1)
+                q = q[ok]
+                if self.stream_peaks and len(q) >= self.min_peaks:
+                    pkq = np.stack([fs[ok], ss[ok], pi[ok]], 1)
                 q = q if len(q) >= self.min_peaks else None
             counts.append(len(q) if q is not None else 0)
             qmap.append(q)
-        return self._warmup_from_qmap(qmap, fanout, frames=frames)
+            if pkqmap is not None:
+                pkqmap.append(pkq)
+        return self._warmup_from_qmap(qmap, fanout, frames=frames, pkqmap=pkqmap)
 
     def warmup_batch_q(self, qs, fanout=None):
         """warmup_batch for a startup stack that arrives as q-vectors (n_i, 3) per frame instead of
@@ -1545,7 +1562,7 @@ class StreamDriver:
             qmap.append(q if q is not None and len(q) >= self.min_peaks else None)
         return self._warmup_from_qmap(qmap, fanout)
 
-    def _warmup_from_qmap(self, qmap, fanout, frames=None):
+    def _warmup_from_qmap(self, qmap, fanout, frames=None, pkqmap=None):
         """Shared tail of warmup_batch / warmup_batch_q: triage by peak count, pooled consensus, lock.
         `frames` (warmup_batch only): the pixels, kept for the picks when rescue_pixels is on."""
         from glint.warmup_batch import triage_order, warmup_consensus
@@ -1561,7 +1578,7 @@ class StreamDriver:
                 self._warmup_ev.extend(ev0 + k for k in sel)
             if getattr(self, "_pix", None) is not None and frames is not None:
                 for k in sel:
-                    self._pix.put(ev0 + k, frames[k])            # kept for the warm-up rescue
+                    self._pix.put(ev0 + k, frames[k], pkq=None if pkqmap is None else pkqmap[k])  # kept for the warm-up rescue
         Mc, sup = warmup_consensus(qs, self._blind_index, self._rc, self.warmup_nbest, fanout,
                                    sink=self._gate_buf)         # per-frame evidence for the lock-time gate
         if Mc is not None:
@@ -2551,10 +2568,14 @@ class StreamDriver:
             # looking at is the moment the locked branch below never runs. Reporting it only after
             # a successful lock would have hidden it at the one time it answers the question
             # "there is support but no cell -- why?" (Copilot review of glint#164).
-            return dict(locked=False, pushed=self.n_pushed, warmup_indexed=self.n_warmup,
-                        consensus_support=sup, consensus_lead=lead,
-                        consensus_members=self._rc.leader_counts()[1],   # folded >= support (glint#182)
-                        gate_refused=self.n_gate_refused)
+            s = dict(locked=False, pushed=self.n_pushed, warmup_indexed=self.n_warmup,
+                     consensus_support=sup, consensus_lead=lead,
+                     consensus_members=self._rc.leader_counts()[1],   # folded >= support (glint#182)
+                     gate_refused=self.n_gate_refused)
+            if getattr(self, "_pix", None) is not None:
+                s["pixels_held"] = len(self._pix)
+                s["pixels_evicted"] = self._pix.n_evicted
+            return s
         s = self.acc.stats(thr=thr, n_theoretical=self.n_theoretical)
         s.update(locked=True, locked_after=self.locked_after, consensus_support=self.consensus_support,
                  consensus_members=self.consensus_members,      # folded >= support (glint#182)

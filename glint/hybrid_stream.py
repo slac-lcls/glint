@@ -37,23 +37,30 @@ def _escalation_config(escalate):
     """hybrid_index's `escalate` -> the deep arm's settings, or None when it is off.
 
     None or False: off. True: the measured defaults. A dict, even an empty one: the defaults with its keys
-    overridden. Anything else raises, as do unknown keys and values the arm cannot run with (topa, nc and
-    k_null integers >= 1, seed an integer >= 0), before any frame is searched. A bad setting has to fail
+    overridden. Anything else raises, as do unknown keys and values the arm cannot run with (topa, nc,
+    k_null and round_copies integers >= 1, seed an integer >= 0, batch a bool), before any frame is searched.
+    batch (default True) runs the deep searches batched (glint.retry_cascade.escalate_batch over
+    replica_gpu_batch.index_known_deep_batch), copies round_copies at a time; batch=False is the per-frame
+    arm (arm_known_deep), same rule. A bad setting has to fail
     here: inside the arm an indexer exception reads as a frame the deep search missed, so a value like
     topa=1.5 would otherwise switch the escalation off without a word."""
-    from glint.retry_cascade import DEEP_K_NULL, DEEP_NC, DEEP_SEED, DEEP_TOPA
+    from glint.retry_cascade import DEEP_K_NULL, DEEP_NC, DEEP_ROUND_COPIES, DEEP_SEED, DEEP_TOPA
     if escalate is None or isinstance(escalate, (bool, np.bool_)):
         if not escalate:
             return None
         escalate = {}
     if not isinstance(escalate, dict):
         raise TypeError(f"hybrid_index(escalate=...): None, True/False or a dict, got {type(escalate).__name__}")
-    cfg = dict(topa=DEEP_TOPA, nc=DEEP_NC, k_null=DEEP_K_NULL, seed=DEEP_SEED)
+    cfg = dict(topa=DEEP_TOPA, nc=DEEP_NC, k_null=DEEP_K_NULL, seed=DEEP_SEED, batch=True,
+               round_copies=DEEP_ROUND_COPIES)
     unknown = set(escalate) - set(cfg)
     if unknown:
         raise ValueError(f"hybrid_index(escalate=...): unknown keys {sorted(unknown)}")
     cfg.update(escalate)
-    for key, lo in (("topa", 1), ("nc", 1), ("k_null", 1), ("seed", 0)):
+    if not isinstance(cfg["batch"], (bool, np.bool_)):
+        raise ValueError(f"hybrid_index(escalate=...): batch must be True or False, got {cfg['batch']!r}")
+    cfg["batch"] = bool(cfg["batch"])
+    for key, lo in (("topa", 1), ("nc", 1), ("k_null", 1), ("seed", 0), ("round_copies", 1)):
         v = cfg[key]
         if isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, np.integer)) or v < lo:
             raise ValueError(f"hybrid_index(escalate=...): {key} must be an integer >= {lo}, got {v!r}")
@@ -74,10 +81,14 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
 
     (6) OPTIONAL escalation (`escalate`, off by default): every frame still failing the observable gate
     (>= GATE_MIN matched and >= GATE_FRAC of its peaks) gets a DEEP known-cell search, accepted only if the
-    fit beats all of its own azimuth-scrambled copies (glint.retry_cascade.arm_known_deep). True for the
-    measured defaults, or a dict overriding topa / nc / k_null / seed (checked before any search, see
-    _escalation_config). On the cxidb-17 480 set this took the strict count from 366 to 387
-    (RESULTS_escalation_k32.md, job 39181473). An escalated frame is labelled `escalated` with its null
+    fit beats all of its own azimuth-scrambled copies (glint.retry_cascade.arm_known_deep's rule). True for
+    the measured defaults, or a dict overriding topa / nc / k_null / seed / batch / round_copies (checked
+    before any search, see _escalation_config). By default the searches are batched
+    (glint.retry_cascade.escalate_batch over replica_gpu_batch.index_known_deep_batch: all misses in one
+    pass, then the scrambled copies 8 at a time for the frames still undecided) -- on the 480 set the stage
+    went from about 18 s per-frame to 0.93 s with the same accepts (exp/batched-escalation
+    RESULTS_batched_deep.md); batch=False runs the per-frame arm. On the cxidb-17 480 set the escalation took
+    the strict count from 366 to 387 (RESULTS_escalation_k32.md, job 39181473). An escalated frame is labelled `escalated` with its null
     record, and both stream writers carry that into the chunk as glint/escalated and the null's numbers
     (glint.stream.escalation_lines). It is A lattice of the frame, not necessarily the one the shipped
     search would have found: on a double hit it can be the other crystal."""
@@ -213,11 +224,24 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
 
         misses = [i for i, q in enumerate(frames) if results[i]["M"] is None or not _obs(results[i]["M"], q)]
         n_esc = searches = 0
-        for i in misses:
-            q = np.asarray(frames[i], float)
-            M, rec = arm_known_deep(q, Mc, index_known_gpu_cell, matched_strict, _gate,
-                                    seed=[esc_cfg["seed"], i], topa=esc_cfg["topa"], nc=esc_cfg["nc"],
-                                    k_null=esc_cfg["k_null"])
+        qm = [np.asarray(frames[i], float) for i in misses]
+        if esc_cfg["batch"]:
+            from glint.replica_gpu_batch import index_known_deep_batch
+            from glint.retry_cascade import escalate_batch
+
+            def _search(qs, Mcell):
+                return index_known_deep_batch(qs, Mcell, esc_cfg["topa"], esc_cfg["nc"], return_errors=True)
+            Ms, recs = escalate_batch(qm, Mc, _search, matched_strict, _gate,
+                                      seeds=[[esc_cfg["seed"], i] for i in misses], k_null=esc_cfg["k_null"],
+                                      round_copies=esc_cfg["round_copies"])
+        else:
+            Ms, recs = [], []
+            for i, q in zip(misses, qm):
+                M, rec = arm_known_deep(q, Mc, index_known_gpu_cell, matched_strict, _gate,
+                                        seed=[esc_cfg["seed"], i], topa=esc_cfg["topa"], nc=esc_cfg["nc"],
+                                        k_null=esc_cfg["k_null"])
+                Ms.append(M); recs.append(rec)
+        for i, q, M, rec in zip(misses, qm, Ms, recs):
             searches += rec["searches"]
             if M is not None:
                 hkl, qin, _ = _hkl(q, M)

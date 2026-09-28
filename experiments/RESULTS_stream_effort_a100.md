@@ -46,9 +46,11 @@ species `scr`, scored against the lysozyme cell. The scrambled frames have the r
 | `rate_hz=120, n_gpu=2` | 3 | 241 (50.2 %) | 46 (9.6 %) | 0 |
 
 - The live gate (`min_inliers=10`, `min_inlier_frac=0.15`) accepts about half of the lattice-free frames at every
-  depth, the shipped one included. That is the count bar being at chance on dense frames (the 16 Sep calibration on
-  cxidb-17's 816 hits: real 764 vs null 738 under a ≥ 10 bar; floor 0.057·n + 9.3 at 1 % null), a property of the
-  gate, not of this branch. Depth adds 1 to 2 points (232 → 235 → 241).
+  depth, the shipped one included: a property of the gate, not of this branch. Depth adds 1 to 2 points
+  (232 → 235 → 241). Which frames: the SPARSE ones. glint#214 measured the same null on the CPU (211 accepts, per-frame
+  counts within ±2 of this job's) and by peak count: 96 % of the lattice-free copies below 60 peaks pass, 94 % at
+  60–90, 42 % at 90–130, 2.5 % at 130–200, none above 200 — the ≥ 10 count bar is easy at low n, and the 0.15
+  fraction only bites above ~130 peaks. Its opt-in per-peak-count floor (a·n + b + c·√n) brings the null to 0.4 %.
 - Under the paper's strict gate the chance rate rises 5.4 → 7.9 → 9.6 % with depth: the depth sweep's 5 → 8.5 %.
 - In the default-path null arm, 22 of the 232 accepts went to the spurious relock cell; at tiers 2 and 3 there is no
   such cell and all accepts go to lysozyme.
@@ -78,9 +80,10 @@ frames the shipped depth leaves un-indexed behaved like lattice-free frames: the
 points with depth; an upper estimate, since most of those frames hold real crystals, and the 480 has no per-frame
 reference orientation to settle it directly), decisions are logged at flush boundaries, and the deep
 search's accounting is visible. What the null arm adds is a caution that does not belong to this branch but must
-travel with it: the live gate's chance-accept rate on lattice-free dense frames is ~48 % at any depth, so yields
-quoted from the driver's `indexed` are live-gate yields and the strict column is the one to compare; the fix is the
-calibrated per-peak-count floor in `_fits`, a follow-up. The shipped `k_null` default was changed to 32
+travel with it: the live gate's chance-accept rate on lattice-free frames is ~48 % at any depth, concentrated in
+the sparse frames, so yields quoted from the driver's `indexed` are live-gate yields and the strict column is the one
+to compare; the fix is the per-peak-count floor on the live gate, glint#214 (`null_floor=`), which lands after this
+PR with a trivial rebase. The shipped `k_null` default was changed to 32
 (glint#211's measured setting) after this run, on the maintainer's decision; the job ran at the then-default 8, so a
 rerun of the 2 kHz arm as recorded passes `"k_null": 8` (at 32 the deep search needs miss ≤ 0.3 % at a 0.5 ms budget
 and would have stayed off).

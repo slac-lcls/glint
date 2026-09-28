@@ -56,8 +56,8 @@ species `scr`, scored against the lysozyme cell. The scrambled frames have the r
   became frequent, and at 120 Hz the top tier is chosen, where there is no deep search by rule. Under the default
   tiers it is a rare-miss feature (miss ≤ (budget − tier cost) / ((1 + k_null) · 0.94 ms)). Its acceptance is
   null-controlled per frame by construction: a lattice-free frame beats all k_null exchangeable copies with
-  probability ≤ 1/(k_null + 1) — 1/9 at the default k_null=8, before the live gate; glint#211 measured 0 accepts on
-  scrambled copies at k_null=32.
+  probability ≤ 1/(k_null + 1) — 1/9 at the k_null=8 this job ran with, before the live gate; glint#211 measured 0
+  accepts on scrambled copies at k_null=32, now the default.
 
 ## Reading
 
@@ -66,5 +66,7 @@ buy 27 and 43 more strict indexings on the 480 at B=20, decisions are logged at 
 search's accounting is visible. What the null arm adds is a caution that does not belong to this branch but must
 travel with it: the live gate's chance-accept rate on lattice-free dense frames is ~48 % at any depth, so yields
 quoted from the driver's `indexed` are live-gate yields and the strict column is the one to compare; the fix is the
-calibrated per-peak-count floor in `_fits`, a follow-up. Whether the shipped `k_null` should be 8 (the demo's cost
-choice) or 32 (glint#211's measured setting) is a defaults decision for the maintainer.
+calibrated per-peak-count floor in `_fits`, a follow-up. The shipped `k_null` default was changed to 32
+(glint#211's measured setting) after this run, on the maintainer's decision; the job ran at the then-default 8, so a
+rerun of the 2 kHz arm as recorded passes `"k_null": 8` (at 32 the deep search needs miss ≤ 0.3 % at a 0.5 ms budget
+and would have stayed off).

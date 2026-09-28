@@ -676,7 +676,10 @@ class _EffortPolicy:
       2. if what is left also covers the misses' deep searches -- the miss fraction of the recent flushes times
          (1 + k_null) searches at the top tier -- the misses of a flush get the top-tier search with the
          azimuth-scrambled null of glint.retry_cascade.escalate_batch (glint#211). Only below the top tier: at the
-         top the deep search would repeat the fast path's own search, and the null can only reject.
+         top the deep search would repeat the fast path's own search, and the null can only reject. k_null
+         defaults to 32, the setting glint#211 measured 0 null accepts at (a lattice-free frame beats all k_null
+         exchangeable copies with probability <= 1/(k_null + 1)); at 32 copies the deep search is affordable only
+         while misses are rare, which is the point.
     The hit rate is estimated from the last `hit_window` frames pushed while locked (a frame with too few peaks to
     index is a blank), the miss fraction from the last `miss_window` flushes. Before any history the estimates are
     the conservative ones (`hit_prior` hits per frame, every frame a miss), so a fresh driver starts cheap.
@@ -700,7 +703,7 @@ class _EffortPolicy:
             raise ValueError("effort needs rate_hz (frames per second the driver has to keep up with)")
         self.rate_hz = self._pos("rate_hz", cfg["rate_hz"])
         self.n_gpu = self._pos("n_gpu", cfg.get("n_gpu", 1.0))
-        self.k_null = self._int("k_null", cfg.get("k_null", 8))
+        self.k_null = self._int("k_null", cfg.get("k_null", 32))     # glint#211's measured setting (0 null accepts)
         self.round_copies = self._int("round_copies", cfg.get("round_copies", 8))
         self.every = self._int("every", cfg.get("every", 1))
         self.hit_window = self._int("hit_window", cfg.get("hit_window", 256))

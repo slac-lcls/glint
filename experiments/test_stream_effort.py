@@ -138,7 +138,7 @@ def test_off_by_default_and_options_validated():
     d, _ = _drv(effort=dict(rate_hz=2000))
     e = d._eff
     assert (e.rate_hz, e.n_gpu, e.k_null, e.round_copies, e.every, e.hit_window, e.miss_window, e.hit_prior,
-            e.overhead_ms) == (2000.0, 1.0, 8, 8, 1, 256, 4, 1.0, 0.0)
+            e.overhead_ms) == (2000.0, 1.0, 32, 8, 1, 256, 4, 1.0, 0.0)
     assert e.tiers == EFFORT_TIERS and e.tier is None and e.deep is False   # nothing decided before the first flush
     assert d.stats()["effort"]["tier"] is None
 

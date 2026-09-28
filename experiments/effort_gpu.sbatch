@@ -10,7 +10,8 @@
 #SBATCH --time=01:30:00
 #SBATCH --output=%x_%j.out
 # feat/adaptive-effort (StreamDriver effort=: the known-cell depth follows the hit rate, deep search on the misses).
-# Results of job 39344280 (28 Sep 2026, sdfampere013): experiments/RESULTS_stream_effort_a100.md. Submit from the directory the
+# Results of job 39344280 (28 Sep 2026, sdfampere013): experiments/RESULTS_stream_effort_a100.md. That job ran at the then-default
+# k_null=8; the default is 32 since 47aeb3b+1, so add "k_null": 8 to the --effort JSON to reproduce its deep-search counts. Submit from the directory the
 # .out should land in; needs ~/q480_fix.txt (the published 480 q list) and a checkout of the branch at $GLINT_WT.
 # 1) the new suite and the hit-ring suite (device path: the fast-path signature changed) on the node;
 # 2) the published 480 streaming arm, effort OFF, gated 333/480, 10 watchdog rescues, 1 relock (default path unchanged);

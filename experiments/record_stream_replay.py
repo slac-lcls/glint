@@ -98,11 +98,11 @@ PANELS = [dict(name="p0", fs=np.array([1.0, 0, 0]), ss=np.array([0, 1.0, 0]), re
                min_fs=0, max_fs=N_PX - 1, min_ss=0, max_ss=N_PX - 1)]
 CLEN_M = DIST_MM / 1000.0
 
-TERMINAL = ("blank", "warmup_vote", "warmup_lock", "indexed", "rescued_watchdog", "rescued_cascade",
+TERMINAL = ("blank", "warmup_vote", "warmup_lock", "indexed", "escalated", "rescued_watchdog", "rescued_cascade",
             "rescued_per_lattice", "miss", "gate_rejected")
-ACCEPTED = ("indexed", "rescued_watchdog", "rescued_cascade", "rescued_per_lattice")
+ACCEPTED = ("indexed", "escalated", "rescued_watchdog", "rescued_cascade", "rescued_per_lattice")
 RETRO = ("rescued_warmup", "rescued_relock")
-MARKERS = ("relock", "integrated")                        # neither replaces a frame's terminal outcome
+MARKERS = ("relock", "integrated", "effort")              # none replaces a frame's terminal outcome
 
 
 # ----------------------------------------------------------------------------- inputs -----------
@@ -539,6 +539,11 @@ def main(argv=None):
             by_ev[k].setdefault("relock", 0); by_ev[k]["relock"] += 1
             by_ev[k]["relock_cell"] = e["cell_name"]
             continue
+        if oc == "effort":                                   # effort=: the policy changed tier / deep search, at n_pushed
+            k = min(e["ev"], n - 1)
+            by_ev[k]["effort"] = dict(tier=e["tier"], deep=e["deep"], budget_ms=e["budget_ms"],
+                                      hit_est=e["hit_est"], miss_frac=e["miss_frac"])
+            continue
         if oc == "integrated":
             r = by_ev[e["ev"]]
             r["n_pred"] = e["n_pred"]; r["n_refl"] = e["n_refl"]; r["frame_no"] = e["frame_no"]
@@ -577,7 +582,7 @@ def main(argv=None):
                # where the per-lattice numbers come from: rescues kept under the residual's lattice, rescues the
                # whole-frame strict gate credits anyway, and frames ONLY the per-lattice score credits
                rescued_per_lattice_swapped=0, rescued_per_lattice_strict=0, per_lattice_only=0)
-    by_sp = {sp: dict(n=0, ok=0, ok_drv=0, indexed=0, miss=0, blank=0, warmup=0, rescued=0) for sp in pools}
+    by_sp = {sp: dict(n=0, ok=0, ok_drv=0, indexed=0, escalated=0, miss=0, blank=0, warmup=0, rescued=0) for sp in pools}
     confusion = {}
     tot["integrated"] = 0
     for r in recs:
@@ -619,6 +624,7 @@ def main(argv=None):
         if oc in ACCEPTED:
             tot["indexed"] += 1; by_sp[sp]["indexed"] += 1
             tot["rescued_per_lattice"] += oc == "rescued_per_lattice"
+            by_sp[sp]["escalated"] += oc == "escalated"       # effort=: taken by the deep search on the misses
         elif oc == "miss":
             tot["miss"] += 1; by_sp[sp]["miss"] += 1
         elif oc == "blank":

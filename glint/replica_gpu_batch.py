@@ -384,7 +384,7 @@ def _unfused(frames, Mc, B, topa, nc, full_grid):
     """index_fused without the fused kernels (CPU, or no cupy): the CUDA-graph path at the shipped depth, as
     before; at any other depth the graph is not built for it, so the torch batch path runs in B-sized chunks
     (sorted by peak count, as the fused path pads) at the depth asked for -- slower, same answer."""
-    if topa == 8 and nc is None and not full_grid:
+    if topa == 8 and (nc is None or int(nc) == NC) and not full_grid:   # the shipped depth, written out or not
         return index_all_graph(frames, Mc, B)
     order = sorted(range(len(frames)), key=lambda i: len(frames[i]))
     out = [None] * len(frames)

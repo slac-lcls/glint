@@ -153,9 +153,9 @@ def test_depth_follows_the_hit_rate_and_changes_are_logged():
     eff = d.stats()["effort"]
     log = eff["log"]
     # first decision, before any history: the conservative prior -> the shipped depth, no deep search
-    assert log[0] == dict(at=4, tier=0, deep=False, budget_ms=0.25, hit_est=1.0, miss_frac=1.0), log[0]
+    assert log[0] == dict(at=0, tier=0, deep=False, budget_ms=0.25, hit_est=1.0, miss_frac=1.0, n_cells=1), log[0]
     # one flush later the miss fraction is known (0): the budget also covers deep searches at tier 0
-    assert log[1]["at"] == 8 and (log[1]["tier"], log[1]["deep"]) == (0, True), log[1]
+    assert log[1]["at"] == 4 and (log[1]["tier"], log[1]["deep"]) == (0, True), log[1]
     tiers = [e["tier"] for e in log]
     assert tiers == sorted(tiers), tiers                       # the hit rate only falls: the depth only climbs
     assert {1, 2, 3} <= set(tiers), tiers                      # every tier is visited on the way up
@@ -172,9 +172,10 @@ def test_depth_follows_the_hit_rate_and_changes_are_logged():
     # each change is one "effort" event with the same numbers, at the flush that made it
     ev = _effort_events(d)
     assert len(ev) == len(log) == eff["n_changes"]
-    for e, l in zip(ev, log):
-        assert e["ev"] == e["at"] == l["at"] and (e["tier"], e["deep"], e["budget_ms"], e["hit_est"], e["miss_frac"]) == \
-            (l["tier"], l["deep"], l["budget_ms"], l["hit_est"], l["miss_frac"])
+    for e, l in zip(ev, log):                                # ev = the first frame the decision applied to;
+        assert e["ev"] == l["at"] <= e["at"]                 # at = n_pushed when it was emitted, as for every event
+        assert (e["tier"], e["deep"], e["budget_ms"], e["hit_est"], e["miss_frac"], e["n_cells"]) == \
+            (l["tier"], l["deep"], l["budget_ms"], l["hit_est"], l["miss_frac"], l["n_cells"])
     assert d.n_indexed == 48 and d.n_gate_rejected == 0
     # the blanks were counted (48 hits of 112 pushes), the terminal outcomes are one per frame
     term = _terminal(d.events)
@@ -193,7 +194,7 @@ def test_deep_search_recovers_a_refused_frame_and_logs_its_searches():
     d, _ = _drv(oracle=o, effort=DEEP)
     _run(d, "H" * 16, np.random.default_rng(SEED))
     eff = d.stats()["effort"]
-    assert [(e["at"], e["tier"], e["deep"]) for e in eff["log"]] == [(4, 1, False), (8, 1, True)], eff["log"]
+    assert [(e["at"], e["tier"], e["deep"]) for e in eff["log"]] == [(0, 1, False), (4, 1, True)], eff["log"]
     term = _terminal(d.events)
     assert term[6]["outcome"] == "escalated" and term[6]["cell"] == 0 and term[6]["n_inl"] == 40, term[6]
     assert sum(t["outcome"] == "indexed" for t in term.values()) == 15 and d.n_indexed == 16 and d.n_gate_rejected == 0
@@ -256,12 +257,41 @@ def test_overhead_ms_is_taken_off_the_budget_before_the_tier_is_chosen():
     assert eff["deep"] is False and d.n_indexed == 8
 
 
+# --------------------------------------------------------------- cold start and active cells ------
+def test_first_decision_uses_the_prior_then_the_window():
+    # a stream that opens at 25 % hits under a 4 kHz budget: the window alone would buy tier 3 (1.0 ms per hit) for
+    # the very first known-cell call; the first decision uses hit_prior=1 instead (0.25 ms -> tier 0) and the second
+    # decision reads the window (hit 0.25 -> tier 3)
+    d, o = _drv(effort=dict(rate_hz=4000, hit_window=16))
+    _run(d, "Hbbb" * 8, np.random.default_rng(SEED))         # 8 hits: two flushes of 4
+    log = d.stats()["effort"]["log"]
+    assert [(e["at"], e["tier"], e["hit_est"]) for e in log] == [(0, 0, 1.0), (16, 3, 0.25)], log
+    assert [kw["topa"] for _, kw in o.calls] == [8, 128]     # first flush at the shipped depth, second at the top tier
+    # with a prior that says 10 % hits the first flush already goes deep
+    d, o = _drv(effort=dict(rate_hz=4000, hit_window=16, hit_prior=0.1))
+    _run(d, "Hbbb" * 8, np.random.default_rng(SEED))
+    assert d.stats()["effort"]["log"][0]["tier"] == 3 and o.calls[0][1]["topa"] == 128
+
+
+def test_active_cells_multiply_the_cost_before_the_budget_test():
+    pol = sd._EffortPolicy(dict(rate_hz=2000))               # 0.5 ms per hit at 100 % hits
+    pol.n_flush = 2; pol.hits.extend([1] * 8); pol.flushes.append((8, 0))
+    assert pol.decide(0, n_cells=1) and (pol.tier, pol.deep) == (2, True)      # 0.40 <= 0.5, deep with no misses
+    assert pol.decide(8, n_cells=2) and (pol.tier, pol.deep) == (0, True)      # 2 x 0.27 > 0.5, 2 x 0.15 fits
+    assert pol.decide(16, n_cells=4) and (pol.tier, pol.deep) == (0, False)    # 4 x 0.15 = 0.6 > 0.5: tier 0 anyway, no deep
+    assert [e["n_cells"] for e in pol.log] == [1, 2, 4]
+    # the driver passes its active-cell count: one cell in single-cell mode
+    d, _ = _drv(effort=dict(rate_hz=2000, hit_window=16))
+    _run(d, "H" * 8, np.random.default_rng(SEED))
+    assert all(e["n_cells"] == 1 for e in d.stats()["effort"]["log"])
+
+
 # --------------------------------------------------------------- decision spacing ------------------
 def test_every_spaces_the_decisions_in_flushes():
     d, o = _drv(effort=dict(rate_hz=4000, hit_window=16, every=2))
     _run(d, "H" * 24, np.random.default_rng(SEED))            # 6 flushes: decisions at flushes 1, 3, 5
     log = d.stats()["effort"]["log"]
-    assert [(e["at"], e["tier"], e["deep"]) for e in log] == [(4, 0, False), (12, 0, True)], log
+    assert [(e["at"], e["tier"], e["deep"]) for e in log] == [(0, 0, False), (8, 0, True)], log
     assert len(_effort_events(d)) == 2 and len(o.calls) == 6
 
 
@@ -271,6 +301,8 @@ TESTS = [test_off_by_default_and_options_validated,
          test_deep_search_fails_closed_when_it_finds_nothing,
          test_deep_search_runs_before_the_miss_buffer_and_the_watchdog,
          test_overhead_ms_is_taken_off_the_budget_before_the_tier_is_chosen,
+         test_first_decision_uses_the_prior_then_the_window,
+         test_active_cells_multiply_the_cost_before_the_budget_test,
          test_every_spaces_the_decisions_in_flushes]
 
 if __name__ == "__main__":

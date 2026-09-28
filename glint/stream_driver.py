@@ -681,8 +681,14 @@ class _EffortPolicy:
          exchangeable copies with probability <= 1/(k_null + 1)); at 32 copies the deep search is affordable only
          while misses are rare, which is the point.
     The hit rate is estimated from the last `hit_window` frames pushed while locked (a frame with too few peaks to
-    index is a blank), the miss fraction from the last `miss_window` flushes. Before any history the estimates are
-    the conservative ones (`hit_prior` hits per frame, every frame a miss), so a fresh driver starts cheap.
+    index is a blank), the miss fraction from the last `miss_window` flushes. The FIRST decision ignores the window
+    and uses the conservative estimates (`hit_prior` hits per frame, every frame a miss), so a fresh driver's first
+    flush runs at the depth the prior affords (tier 0 with the default prior of 1); later decisions use the window.
+    With more than one active cell (adaptive relock) every search may be repeated per cell -- best-fit assignment
+    searches every frame against every cell, first-fit tries the remaining frames on each further cell, and the
+    deep search runs per cell -- so the per-frame costs are multiplied by the number of active cells before they
+    are compared with the budget. A log entry's `at` is the arrival index of the first frame the decision applied
+    to (the first frame of the flush it was taken for); it stays in force until the next entry.
     `overhead_ms` is the per-hit GPU time that is not search -- integration when the driver integrates (about
     0.33 ms per frame on the fused integrator, see the class docstring), nothing for an index-only stream -- and is
     taken off the budget before the tier is chosen; `n_gpu` is the share of a GPU left to the indexer after peak
@@ -752,24 +758,27 @@ class _EffortPolicy:
         self.flushes.append((int(n), int(n_miss)))
         self.fast_by_tier[self.tier] += int(n)
 
-    def decide(self, at):
+    def decide(self, at, n_cells=1):
         """Re-choose (tier, deep) from the recent history; True when either changed. Called at a flush boundary,
-        before that flush's fast path, every `every` flushes."""
-        self.hit_est = max(float(np.mean(self.hits)), 0.02) if self.hits else self.hit_prior
+        before that flush's fast path, every `every` flushes. `at` = arrival index of the first frame in that flush;
+        `n_cells` = active cells the searches are repeated for (see the class docstring)."""
+        first = self.n_flush <= 1                            # the first decision: the conservative prior, not the window
+        self.hit_est = self.hit_prior if first or not self.hits else max(float(np.mean(self.hits)), 0.02)
         nf = sum(n for n, _ in self.flushes)
-        self.miss_frac = (sum(m for _, m in self.flushes) / nf) if nf else 1.0
+        self.miss_frac = 1.0 if first or not nf else sum(m for _, m in self.flushes) / nf
         self.budget = 1000.0 * self.n_gpu / (self.rate_hz * self.hit_est) - self.overhead_ms   # what the SEARCH may spend
+        n_cells = max(int(n_cells), 1)
         tier = 0
         for i, t in enumerate(self.tiers):
-            if t[3] <= self.budget:
+            if t[3] * n_cells <= self.budget:
                 tier = i
         top = len(self.tiers) - 1
-        deep = tier < top and self.tiers[tier][3] + self.miss_frac * (1 + self.k_null) * self.tiers[top][3] <= self.budget
+        deep = tier < top and (self.tiers[tier][3] + self.miss_frac * (1 + self.k_null) * self.tiers[top][3]) * n_cells <= self.budget
         changed = (tier, deep) != (self.tier, self.deep)
         self.tier, self.deep = tier, deep
         if changed:
             self.log.append(dict(at=int(at), tier=tier, deep=bool(deep), budget_ms=round(self.budget, 4),
-                                 hit_est=round(self.hit_est, 4), miss_frac=round(self.miss_frac, 4)))
+                                 hit_est=round(self.hit_est, 4), miss_frac=round(self.miss_frac, 4), n_cells=n_cells))
         return changed
 
     def depth_kw(self):
@@ -2280,10 +2289,11 @@ class StreamDriver:
 
     def _emit_effort(self):
         """The effort policy changed its mind (tier or deep search): one marker record, like "relock", so a
-        recorded stream shows which depth every later frame was searched at."""
+        recorded stream shows which depth every frame from `ev` on was searched at."""
         e = self._eff.log[-1]
-        rec = self._event_base(self.n_pushed, "effort", None)
-        rec.update(tier=e["tier"], deep=e["deep"], budget_ms=e["budget_ms"], hit_est=e["hit_est"], miss_frac=e["miss_frac"])
+        rec = self._event_base(e["at"], "effort", None)      # ev = the first frame the decision applies to
+        rec.update(tier=e["tier"], deep=e["deep"], budget_ms=e["budget_ms"], hit_est=e["hit_est"], miss_frac=e["miss_frac"],
+                   n_cells=e["n_cells"])
         self._emit(rec)
 
     def _index_best_fit(self, slots):
@@ -2699,8 +2709,10 @@ class StreamDriver:
         eff = self._eff
         if eff is not None:                                     # adaptive effort: (tier, deep) for THIS flush
             eff.n_flush += 1
-            if (eff.n_flush - 1) % eff.every == 0 and eff.decide(self.n_pushed) and self._events_on:
-                self._emit_effort()
+            if (eff.n_flush - 1) % eff.every == 0:
+                at = int(self._idx[0]) if self._n else self.n_pushed          # the first frame this decision applies to
+                if eff.decide(at, n_cells=1 + len(self.extra)) and self._events_on:
+                    self._emit_effort()
         if slots and not self.adaptive_relock:
             # gate=self.retry_cascade, not gate=False: with the cascade OFF this is the historical
             # single-cell call verbatim (rejects counted and dropped inside _index_integrate). With

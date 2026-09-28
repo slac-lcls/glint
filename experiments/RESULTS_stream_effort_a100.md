@@ -59,6 +59,17 @@ species `scr`, scored against the lysozyme cell. The scrambled frames have the r
   probability ≤ 1/(k_null + 1) — 1/9 at the k_null=8 this job ran with, before the live gate; glint#211 measured 0
   accepts on scrambled copies at k_null=32, now the default.
 
+## Changed after this run (Copilot review of #213)
+
+Four corrections landed after job 39344280, so a rerun of these arms differs in detail from the log above:
+(1) the first decision now uses `hit_prior` and an all-miss prior instead of the observed window, so the first flush
+of each effort arm (frames 5-24 here) runs at tier 0 rather than at the window's tier; (2) a log entry's `at` is now
+the arrival index of the first frame the decision applied to (the first frame of that flush), 20 frames earlier than
+the flush boundary `n_pushed` the log above records; (3) the per-frame tier costs are multiplied by the number of
+active cells before the budget test (one cell throughout these arms, so no change here); (4) on the no-CuPy fallback
+an explicit `nc=16` now takes the CUDA-graph path like the shipped call (no effect on the A100, where the fused
+kernels ran). The k_null default is 32 (this job ran at 8).
+
 ## Reading
 
 The policy does what it says: the tier follows the budget, tier 0 is bit-for-bit the shipped path, deeper tiers

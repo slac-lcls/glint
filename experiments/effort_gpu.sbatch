@@ -16,12 +16,12 @@
 # 1) the new suite and the hit-ring suite (device path: the fast-path signature changed) on the node;
 # 2) the published 480 streaming arm, effort OFF, gated 333/480, 10 watchdog rescues, 1 relock (default path unchanged);
 # 3) effort ON at three budgets: rate_hz 35000 (0.03 ms/hit -> tier 0, explicit shipped depth: expected identical),
-#    2000 (0.5 ms/hit -> tier 2), 120 (8.3 ms/hit -> tier 3 + deep search on misses). Reported, not gated. The replay runs
+#    2000 (0.5 ms/hit -> tier 2), 120 (8.3 ms/hit -> tier 3, the top tier, where the deep search is off by rule). Reported, not gated. The replay runs
 #    at B=20, so these check the MECHANISM (tier choice, logging, escalation accounting), not the B=120 cost table.
 # 4) the scrambled-null arms: the real 480 first (the driver locks on them), then the same 480 with every peak rotated by a
 #    random azimuth (glint.multilattice.scramble_azimuth, seeded per frame) as a second species "scr". Its `indexed` count is
 #    the fast path's chance-accept rate under the live gate at that tier, its `escalated` count the deep search's. OFF,
-#    35000, 2000, and 120 with n_gpu=2 (so the deep search stays on through the all-miss tail: budget 16.7 ms).
+#    35000, 2000, and 120 with n_gpu=2 (tier 3 at 16.7 ms: the fast path's chance rate at the deepest tier; no deep search at the top tier).
 # Rerun note: job 39344280 generated q480_scrambled.txt inline (same code and seed); from the next commit the arm calls the
 # committed experiments/scramble_qlist.py, so the whole job reruns from the repository.
 # Exclusive: job 39294566 on shared sdfampere003 got cudaErrorDevicesUnavailable on every GPU step.

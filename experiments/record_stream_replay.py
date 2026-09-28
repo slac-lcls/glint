@@ -539,10 +539,10 @@ def main(argv=None):
             by_ev[k].setdefault("relock", 0); by_ev[k]["relock"] += 1
             by_ev[k]["relock_cell"] = e["cell_name"]
             continue
-        if oc == "effort":                                   # effort=: the policy changed tier / deep search, at n_pushed
-            k = min(e["ev"], n - 1)
+        if oc == "effort":                                   # effort=: the policy changed tier / deep search; ev = the
+            k = min(e["ev"], n - 1)                          # first frame the new setting applied to (in force until the next)
             by_ev[k]["effort"] = dict(tier=e["tier"], deep=e["deep"], budget_ms=e["budget_ms"],
-                                      hit_est=e["hit_est"], miss_frac=e["miss_frac"])
+                                      hit_est=e["hit_est"], miss_frac=e["miss_frac"], n_cells=e.get("n_cells", 1))
             continue
         if oc == "integrated":
             r = by_ev[e["ev"]]

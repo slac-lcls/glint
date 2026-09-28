@@ -368,6 +368,8 @@ def main(argv=None):
     ap.add_argument("--edge-mask", type=int, default=0, help="mask this many pixels along every panel border")
     ap.add_argument("--mask", default=None, help=".npy bool array (True = good pixel), ANDed with the edge mask")
     ap.add_argument("--geom-refine", action="store_true", help="run the diagnostic geometry refiner (pixel or peaks input)")
+    ap.add_argument("--effort", default=None, metavar="JSON",
+                    help="StreamDriver effort= settings, e.g. '{\"rate_hz\": 2000, \"n_gpu\": 1}' (adaptive depth; off when unset)")
     ap.add_argument("--peaks-in", action="store_true",
                     help="for .stream inputs: push the stream's own peak lists through push_peaks() -- no pixels are read; "
                          "the control that separates the finder from the rest of the pixel path")
@@ -444,6 +446,8 @@ def main(argv=None):
         kw["stream_symmetry"] = sym
     if a.laue:
         kw["laue"] = a.laue
+    if a.effort:                                             # only when set: published driver_kw stay byte-identical
+        kw["effort"] = json.loads(a.effort)
     geom_meta = None
     if pixel_pools or a.geom:
         if not a.geom:
@@ -635,7 +639,8 @@ def main(argv=None):
                     indexed=st.get("indexed", 0), gate_rejected=st.get("gate_rejected", 0),
                     integrated=st.get("integrated", 0))
     for key in ("n_per_lattice_searched", "n_per_lattice_found", "n_per_lattice_rescued", "n_per_lattice_swapped", "n_pl_null",
-                "pl_null_found_rate", "pl_null_rescued_rate", "n_double", "n_double_raw", "n_dh_null", "dh_null_rate"):
+                "pl_null_found_rate", "pl_null_rescued_rate", "n_double", "n_double_raw", "n_dh_null", "dh_null_rate",
+                "effort"):                                   # effort=: tier / deep / budget now, the change log, deep-search counts
         if key in st:                                        # opt-in counters, present only when the option is on
             counters[key] = st[key]
     # self-checks: the event log must agree with the driver's own counters

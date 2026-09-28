@@ -192,6 +192,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_per_lattice.py
 
+      # StreamDriver hits_only (a frame with no usable peak list gives its ring slot back, so B counts hits)
+      # and rescue_pixels (the warm-up and relock rescues integrate the frames they recover). Rendered
+      # pixel frames through the real peak finder and integrator; fit-oracle indexers, numpy only.
+      - name: experiments/test_stream_hit_ring.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_stream_hit_ring.py
+
       - name: experiments/test_geom_bridge.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_geom_bridge.py

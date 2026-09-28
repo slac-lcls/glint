@@ -110,7 +110,8 @@ def test_new_options_stay_at_the_end_of_the_signature():
               "bg_mode", "laue", "ops",
               "roster", "events", "on_event", "cell_window",          # glint#199 (cell registry), appended
               "assign", "assign_margin", "assign_margin_frac",       # best-fit cell assignment, appended
-              "per_lattice", "per_lattice_below"]                    # per-lattice scoring, appended
+              "per_lattice", "per_lattice_below",                    # per-lattice scoring, appended
+              "hits_only", "rescue_pixels"]                          # hit-only ring + rescue pixels, appended
     assert params == expect, (params, expect)
 
 

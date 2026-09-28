@@ -62,7 +62,10 @@ species `scr`, scored against the lysozyme cell. The scrambled frames have the r
 ## Reading
 
 The policy does what it says: the tier follows the budget, tier 0 is bit-for-bit the shipped path, deeper tiers
-buy 27 and 43 more strict indexings on the 480 at B=20, decisions are logged at flush boundaries, and the deep
+buy 27 and 43 more strict indexings on the 480 at B=20 (of which about 4 and 6 would be the chance share if the 147
+frames the shipped depth leaves un-indexed behaved like lattice-free frames: the strict chance rate rises 2.5 and 4.2
+points with depth; an upper estimate, since most of those frames hold real crystals, and the 480 has no per-frame
+reference orientation to settle it directly), decisions are logged at flush boundaries, and the deep
 search's accounting is visible. What the null arm adds is a caution that does not belong to this branch but must
 travel with it: the live gate's chance-accept rate on lattice-free dense frames is ~48 % at any depth, so yields
 quoted from the driver's `indexed` are live-gate yields and the strict column is the one to compare; the fix is the

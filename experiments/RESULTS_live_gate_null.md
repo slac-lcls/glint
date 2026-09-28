@@ -130,9 +130,37 @@ was not measured here. On the full 816-frame pf8 set, CrystFEL's indexamajig wit
 305/816 (`xg_full.stream`), and CrystFEL refinement accepts 746/816 of GLINT's solutions (`glint_full_ref.stream`,
 `--indexing=file`).
 
+## A100 (S3DF job 39358491, sdfampere034, exclusive, cupy 12.3 / torch 2.1, branch 9d4fa71)
+
+`experiments/live_gate_gpu.sbatch`, the fused kernels, the same inputs (md5-checked).
+
+- **On the node:** `test_live_gate_floor.py` 6/6 (its real-frame half on the GPU: live gate 50.6% of scrambled
+  copies, floor 0.42%, 77 of 80 strict frames kept), plus the three pins' suites.
+- **Default path unchanged:** the published 480 arm gated 333/480, 10 watchdog rescues, 1 relock (at 405).
+- **The measurement on the fused path** (8 fit copies): per-frame counts are identical to the committed CPU ones
+  on 463/480 real and 426/480 held-out null frames, and within ±2 on 475 and 460. The live gate accepts 210
+  null frames. The committed floor accepts 2/480 of them and 0.47% of the fit copies. Refitting on the GPU counts
+  gives 0.0262 n + 5.74 + 1.117 √n, which is within the fit's own spread.
+
+| arm (A100) | scrambled accepted | lysozyme strict | lysozyme accepted | xgandalf-confirmed accepted | frames to the watchdog | relock at |
+|---|---|---|---|---|---|---|
+| published 480, default gate | – | 333 | 453 | 296 | 32 | 405 |
+| published 480, `--null-floor cxidb17` | – | **334** | 379 | **315** | 127 | 365 |
+| + scrambled 480, default gate | 232 (210 lyso, 22 cell1) | 333 | 453 | 296 | 280 | 405 |
+| + scrambled 480, `--null-floor cxidb17` | **6** (2, 4) | **334** | 379 | **315** | 601 | 365 |
+
+The default scrambled arm reproduces job 39344280 exactly (232 / 26 strict). With the floor, the 22 lysozyme
+frames that gain strict all arrive as watchdog rescues. Of the 21 that xgandalf also solves, 19 were accepted by
+the default gate in a wrong orientation, and all 21 come back within 2° of xgandalf. None of the 21 strict frames
+lost is xgandalf-confirmed; 5 have an xgandalf lysozyme solution, all elsewhere. Four of the 6 scrambled frames
+the floor admits go into the relock cell. That is the larger cell's higher null (1.2% above), so with two active
+cells the stream's chance rate is about the sum of the two. The floor moves the spurious relock earlier (365 instead
+of 405), because more misses reach the watchdog. It admits 15 lysozyme frames into that cell against 3.
+
 ## Caveats
 
-- CPU eager engine, fp32. The GPU fused path agrees closely (above) but was not re-run with the floor.
+- Fitted on the CPU eager engine (fp32). The A100 fused path (next section) gives the same null and the same
+  end-to-end effect with these constants.
 - One run, one protein family. The floor is opt-in and its constants are documented as dataset-specific.
 - The floor is applied wherever the live gate is (`_gate_count`). The watchdog's candidate check and the
   per-frame cascade arm search harder than the batched pass, so their own null is higher than this floor was

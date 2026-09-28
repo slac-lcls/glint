@@ -57,3 +57,10 @@ frames change pick.
 * P2, P3 or P4 fails → reported as failed in RESULTS.md and in the PR text. The PR stays opt-in (`select="first"`
   default) whatever happens; making `matched` the default is a separate decision for S.M., not this PR.
 * Nothing here enters the paper, R1 or a talk without S.M.
+
+## Amendment, 28 Sep 2026, before any measurement
+
+`KC_FP` does not reach this path: `hybrid_index` calls `glint.replica_gpu.index_known_gpu_cell`, which computes in
+float64 throughout; `KC_FP` (#209) sets the precision of `glint.replica_gpu_batch` only. Arm 1 therefore runs once
+(default environment), P1 and P4 are both judged on that run, and "fp32" in arms 2 and 3 means only "the default
+environment". The predictions and thresholds are unchanged.

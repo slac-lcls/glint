@@ -380,7 +380,23 @@ def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS):
 index_batch = index_known_gpu_cell_batch   # alias
 
 
-def index_fused(frames, Mc, B=32):
+def _unfused(frames, Mc, B, topa, nc, full_grid):
+    """index_fused without the fused kernels (CPU, or no cupy): the CUDA-graph path at the shipped depth, as
+    before; at any other depth the graph is not built for it, so the torch batch path runs in B-sized chunks
+    (sorted by peak count, as the fused path pads) at the depth asked for -- slower, same answer."""
+    if topa == 8 and nc is None and not full_grid:
+        return index_all_graph(frames, Mc, B)
+    order = sorted(range(len(frames)), key=lambda i: len(frames[i]))
+    out = [None] * len(frames)
+    for s in range(0, len(order), B):
+        chunk = order[s:s + B]
+        res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc, topa, nc, full_grid)
+        for j, r in zip(chunk, res):
+            out[j] = r
+    return out
+
+
+def index_fused(frames, Mc, B=32, topa=8, nc=None, full_grid=False):
     """Fully-fused known-cell indexer: custom fused CUDA kernels (cupy RawKernel, nvrtc-JIT) for the
     anneal/obj/refine per-candidate hot loops + an on-device cpu_stage (batched buerger same_lattice),
     replacing the many small per-stage torch kernels AND the host tail. At B=32 on one A100: 0.31
@@ -409,13 +425,19 @@ def index_fused(frames, Mc, B=32):
     cannot use the fused kernels. Such frames are split out and run ONE AT A TIME through the stock
     torch path instead, which has no shared-memory limit -- same answer, just slower. Nothing about
     an oversized frame raises: an indexer that dies on a dense frame takes StreamDriver.flush() with
-    it, so a frame that cannot be indexed is returned as a miss (None)."""
+    it, so a frame that cannot be indexed is returned as a miss (None).
+
+    topa / nc / full_grid set the search depth as in index_known_gpu_cell_batch. The defaults are the shipped
+    search, and with them every call is the call it was. Deeper tiers (StreamDriver's effort policy): the
+    depth sweep on the cxidb-17 480 gave 308 / 341 / 365 / 379 frames at 0.15 / 0.27 / 0.40 / 0.94 ms per
+    frame for (topa, nc) = (8, 16), (32, 16), (32, 32) and (128, 32) on the full grid, B=120, one A100
+    (branch exp/batched-escalation)."""
     if DEV != "cuda":
-        return index_all_graph(frames, Mc, B)
+        return _unfused(frames, Mc, B, topa, nc, full_grid)
     try:
         from glint import fused_kernels as _fk
     except Exception:
-        return index_all_graph(frames, Mc, B)
+        return _unfused(frames, Mc, B, topa, nc, full_grid)
     cap = _fk.max_peaks()
     order = sorted(range(len(frames)), key=lambda i: len(frames[i]))   # tight per-batch Pmax
     fits = [j for j in order if len(frames[j]) <= cap]
@@ -425,14 +447,14 @@ def index_fused(frames, Mc, B=32):
     try:
         for s in range(0, len(fits), B):
             chunk = fits[s:s + B]
-            res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc)
+            res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc, topa, nc, full_grid)
             for j, r in zip(chunk, res):
                 out[j] = r
     finally:
         _fk.unpatch()
     for j in over:                     # unpatched: the stock ops, one frame at a time. The stock
         try:                           # path materialises (F, NC*NANG, Pmax) tensors, so at these
-            out[j] = index_known_gpu_cell_batch([frames[j]], Mc)[0]   # peak counts F must stay 1.
+            out[j] = index_known_gpu_cell_batch([frames[j]], Mc, topa, nc, full_grid)[0]   # peak counts F must stay 1.
         except Exception as e:                                        # OOM, etc: a miss, not a death
             warnings.warn(f"index_fused: frame with {len(frames[j])} peaks failed on the non-fused "
                           f"fallback ({type(e).__name__}: {e}); returning it as a miss", RuntimeWarning)

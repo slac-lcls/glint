@@ -122,6 +122,7 @@ def test_off_by_default_and_options_validated():
            (dict(rate_hz=1e3, k_null=True), "k_null"), (dict(rate_hz=1e3, k_null=1.5), "k_null"),
            (dict(rate_hz=1e3, every=0), "every"), (dict(rate_hz=1e3, hit_window="8"), "hit_window"),
            (dict(rate_hz=1e3, hit_prior=0), "hit_prior"), (dict(rate_hz=1e3, hit_prior=1.5), "hit_prior"),
+           (dict(rate_hz=1e3, overhead_ms=-0.1), "overhead_ms"), (dict(rate_hz=1e3, overhead_ms="0.3"), "overhead_ms"),
            (dict(rate_hz=1e3, bogus=1), "unknown"),
            (dict(rate_hz=1e3, tiers=()), "tiers"),
            (dict(rate_hz=1e3, tiers=((8, 16, False, 0.3), (32, 32, False, 0.2))), "increasing"),
@@ -136,8 +137,8 @@ def test_off_by_default_and_options_validated():
             raise AssertionError(f"effort={cfg!r} accepted")
     d, _ = _drv(effort=dict(rate_hz=2000))
     e = d._eff
-    assert (e.rate_hz, e.n_gpu, e.k_null, e.round_copies, e.every, e.hit_window, e.miss_window, e.hit_prior) == \
-        (2000.0, 1.0, 8, 8, 1, 256, 4, 1.0)
+    assert (e.rate_hz, e.n_gpu, e.k_null, e.round_copies, e.every, e.hit_window, e.miss_window, e.hit_prior,
+            e.overhead_ms) == (2000.0, 1.0, 8, 8, 1, 256, 4, 1.0, 0.0)
     assert e.tiers == EFFORT_TIERS and e.tier is None and e.deep is False   # nothing decided before the first flush
     assert d.stats()["effort"]["tier"] is None
 
@@ -240,6 +241,21 @@ def test_deep_search_runs_before_the_miss_buffer_and_the_watchdog():
     assert c.stats()["n_watchdog_rescued"] == 1 and off.deep_calls == [] and "effort" not in c.stats()
 
 
+# --------------------------------------------------------------- the overhead comes off the budget --
+def test_overhead_ms_is_taken_off_the_budget_before_the_tier_is_chosen():
+    # 2 kHz, all hits: 0.5 ms per hit buys tier 2 (0.40) when the hit is search only; with 0.2 ms of integration per
+    # hit the search has 0.3 ms, which buys tier 1 (0.27); with 0.5 ms of overhead nothing is left and the policy
+    # falls back to tier 0 with the deep search off.
+    for oh, tier, budget in ((0.0, 2, 0.5), (0.2, 1, 0.3), (0.5, 0, 0.0)):
+        d, o = _drv(effort=dict(rate_hz=2000, hit_window=16, overhead_ms=oh))
+        _run(d, "H" * 8, np.random.default_rng(SEED))
+        eff = d.stats()["effort"]
+        assert eff["tier"] == tier and abs(eff["budget_ms"] - budget) < 1e-9, (oh, eff["tier"], eff["budget_ms"])
+        assert eff["log"][0]["budget_ms"] == round(budget, 4)
+        assert all(kw["topa"] == EFFORT_TIERS[tier][0] and kw["nc"] == EFFORT_TIERS[tier][1] for _, kw in o.calls)
+    assert eff["deep"] is False and d.n_indexed == 8
+
+
 # --------------------------------------------------------------- decision spacing ------------------
 def test_every_spaces_the_decisions_in_flushes():
     d, o = _drv(effort=dict(rate_hz=4000, hit_window=16, every=2))
@@ -254,6 +270,7 @@ TESTS = [test_off_by_default_and_options_validated,
          test_deep_search_recovers_a_refused_frame_and_logs_its_searches,
          test_deep_search_fails_closed_when_it_finds_nothing,
          test_deep_search_runs_before_the_miss_buffer_and_the_watchdog,
+         test_overhead_ms_is_taken_off_the_budget_before_the_tier_is_chosen,
          test_every_spaces_the_decisions_in_flushes]
 
 if __name__ == "__main__":

@@ -679,10 +679,16 @@ class _EffortPolicy:
          top the deep search would repeat the fast path's own search, and the null can only reject.
     The hit rate is estimated from the last `hit_window` frames pushed while locked (a frame with too few peaks to
     index is a blank), the miss fraction from the last `miss_window` flushes. Before any history the estimates are
-    the conservative ones (`hit_prior` hits per frame, every frame a miss), so a fresh driver starts cheap."""
+    the conservative ones (`hit_prior` hits per frame, every frame a miss), so a fresh driver starts cheap.
+    `overhead_ms` is the per-hit GPU time that is not search -- integration when the driver integrates (about
+    0.33 ms per frame on the fused integrator, see the class docstring), nothing for an index-only stream -- and is
+    taken off the budget before the tier is chosen; `n_gpu` is the share of a GPU left to the indexer after peak
+    finding. The tier costs are per-frame costs AT THE BATCH SIZE THEY WERE MEASURED (the defaults: B=120 on an
+    A100); at a smaller B the same search costs more per frame (index_fused: B=16 is 0.58 ms against B=120's 0.17
+    at tier 0), so give `tiers=` measured at the B you run."""
 
     KEYS = ("rate_hz", "n_gpu", "k_null", "round_copies", "every", "hit_window", "miss_window", "hit_prior",
-            "tiers", "seed", "deep_budget")
+            "tiers", "seed", "deep_budget", "overhead_ms")
 
     def __init__(self, cfg):
         if not isinstance(cfg, dict):
@@ -705,6 +711,10 @@ class _EffortPolicy:
         self.hit_prior = float(hp)
         self.seed = self._int("seed", cfg.get("seed", 20260926))
         self.deep_budget = self._int("deep_budget", cfg.get("deep_budget", 12000))
+        oh = cfg.get("overhead_ms", 0.0)
+        if isinstance(oh, bool) or not isinstance(oh, (int, float, np.integer, np.floating)) or not oh >= 0:
+            raise ValueError(f"effort: overhead_ms must be a number >= 0, got {oh!r}")
+        self.overhead_ms = float(oh)
         try:
             tiers = [(self._int("topa", t[0]), self._int("nc", t[1]), bool(t[2]), float(t[3]))
                      for t in cfg.get("tiers", EFFORT_TIERS)]
@@ -745,7 +755,7 @@ class _EffortPolicy:
         self.hit_est = max(float(np.mean(self.hits)), 0.02) if self.hits else self.hit_prior
         nf = sum(n for n, _ in self.flushes)
         self.miss_frac = (sum(m for _, m in self.flushes) / nf) if nf else 1.0
-        self.budget = 1000.0 * self.n_gpu / (self.rate_hz * self.hit_est)
+        self.budget = 1000.0 * self.n_gpu / (self.rate_hz * self.hit_est) - self.overhead_ms   # what the SEARCH may spend
         tier = 0
         for i, t in enumerate(self.tiers):
             if t[3] <= self.budget:

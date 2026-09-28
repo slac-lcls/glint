@@ -192,6 +192,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_per_lattice.py
 
+      # StreamDriver(null_floor=...): the live gate's opt-in chance floor n_inl >= a*n + b + c*sqrt(n). Default
+      # = the historical two-bar rule on a grid of counts; through flush() a sparse frame at the measured chance
+      # level is refused while a sparse and a dense control are kept; the floor reaches the rescue and best-fit
+      # sites. Fit-oracle indexers, numpy only here; its real-frame half runs in the CPU-torch job.
+      - name: experiments/test_live_gate_floor.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_live_gate_floor.py
+
       # StreamDriver hits_only (a frame with no usable peak list gives its ring slot back, so B counts hits)
       # and rescue_pixels (the warm-up and relock rescues integrate the frames they recover). Rendered
       # pixel frames through the real peak finder and integrator; fit-oracle indexers, numpy only.
@@ -415,3 +423,10 @@ jobs:
       - name: experiments/test_known_depth_args.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_known_depth_args.py
+
+      # The live gate's chance floor on REAL frames: the committed 120 cxidb-17 frames and four azimuth-scrambled
+      # copies each, searched with the lysozyme cell by index_fused on CPU torch. The live gate accepts about half
+      # of the copies, the floor under 2.5%, and it keeps >= 90% of the strict-gate frames. Self-skips below 1.12.
+      - name: experiments/test_live_gate_floor.py (real frames, CPU torch)
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_live_gate_floor.py

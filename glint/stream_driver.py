@@ -1918,7 +1918,7 @@ class StreamDriver:
         must not count again). The one place the gate's arithmetic lives."""
         if n < self.min_inliers:
             return False
-        if self.min_inlier_frac and n < self.min_inlier_frac * n_peaks:
+        if self.min_inlier_frac and not (n >= self.min_inlier_frac * n_peaks):
             return False
         nf = getattr(self, "null_floor", None)
         if nf is None or n >= nf[0] * n_peaks + nf[1] + nf[2] * np.sqrt(n_peaks):

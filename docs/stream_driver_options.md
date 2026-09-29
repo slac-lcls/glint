@@ -99,10 +99,11 @@ per-peak-count floor is glint#214 (`null_floor=`, open).
 | `min_inlier_frac` | `0.15` | minimum inlier fraction of the frame's peaks; 0.15 is the smallest value that refused every wrong-cell frame in the calibration (n=16, synthetic), costing 4 of 115 real frames | commit 907c057; #170 pins it | `--min-inlier-frac` |
 | `tol` | `0.002` | excitation-error window of the prediction (1/Å): which reflections count as on the Ewald sphere for integration | #19 | `--tol` |
 
-### Recovering the misses
+### Recovery and multi-lattice processing
 
-Once locked the driver runs known-cell only; a frame that fits no active cell is a miss. Each mechanism below
-recovers a class of misses, in cost order, and each is off by default so the base path stays byte-identical.
+Once locked, the base path runs known-cell indexing. Optional miss recovery runs `per_lattice`, the `effort`
+deep search, `retry_cascade`, and finally the adaptive-relock watchdog, in that order; warm-up rescue, pixel
+retention, and accepted-frame double-hit processing are described here as related mechanisms.
 
 | option | default | what it does | measured / introduced | recorder |
 |---|---|---|---|---|

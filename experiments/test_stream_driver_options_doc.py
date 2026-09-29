@@ -4,9 +4,9 @@
 The page is the option reference a new collaborator reads instead of the constructor. docs/onboarding.md
 drifted for a month while the constructor grew from the Laue merge to the effort policy, so this pins the
 page to the signature: every keyword of StreamDriver.__init__ and every setting of _EffortPolicy.KEYS is the
-first cell of exactly one table row, no table row names an option that does not exist, and every recorder
-flag the tables cite is one experiments/record_stream_replay.py defines. Text against the signature; nothing
-is constructed, so it runs on the CPU job.
+first cell of exactly one table row, no table row names an option that does not exist, displayed defaults
+match the code, and every recorder flag the tables cite is one experiments/record_stream_replay.py defines.
+Text against the signature; nothing is constructed, so it runs on the CPU job.
 
     PYTHONPATH=. python experiments/test_stream_driver_options_doc.py
 """
@@ -19,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-from glint.stream_driver import StreamDriver, _EffortPolicy      # noqa: E402
+from glint.stream_driver import DEFAULT_NBEST, StreamDriver, _EffortPolicy  # noqa: E402
 
 DOC = os.path.join(ROOT, "docs", "stream_driver_options.md")
 RECORDER = os.path.join(HERE, "record_stream_replay.py")
@@ -30,6 +30,39 @@ FLAG = re.compile(r"`(--[A-Za-z][A-Za-z0-9-]*)")                     # a cited c
 def _rows():
     with open(DOC, encoding="utf-8") as fh:
         return [l for l in fh.read().splitlines() if ROW.match(l)]
+
+
+def _default_cell(row):
+    return row.strip().strip("|").split("|")[1].replace("`", "").strip()
+
+
+def _format_default(value):
+    if isinstance(value, tuple):
+        def format_item(item):
+            if isinstance(item, tuple):
+                return "(" + ", ".join(format_item(part) for part in item) + ")"
+            if isinstance(item, float) and item.is_integer():
+                return str(int(item))
+            return repr(item)
+        return "(" + ", ".join(format_item(item) for item in value) + ")"
+    if isinstance(value, str):
+        return f'"{value}"'
+    if isinstance(value, type) and value.__name__ == "uint16":
+        return "uint16"
+    return repr(value)
+
+
+def _expected_default(name, value):
+    if name == "min_inliers":
+        assert value == 0
+        return "0 → min_peaks"
+    if name == "retry_nbest":
+        assert value is None
+        return f"None → {DEFAULT_NBEST}"
+    if name == "tiers":
+        assert len(value) == 4
+        return "four tiers"
+    return "required" if value is inspect.Parameter.empty else _format_default(value)
 
 
 def test_every_option_is_documented_once_and_nothing_else():
@@ -45,6 +78,19 @@ def test_every_option_is_documented_once_and_nothing_else():
     assert len(named) == len(expected) and len(named) > 60, len(named)
 
 
+def test_documented_defaults_match_code():
+    defaults = {name: parameter.default for name, parameter
+                in inspect.signature(StreamDriver.__init__).parameters.items() if name != "self"}
+    policy = _EffortPolicy({"rate_hz": 1})
+    for key in _EffortPolicy.KEYS:
+        defaults[key] = inspect.Parameter.empty if key == "rate_hz" else getattr(policy, key)
+    rows = {ROW.match(row).group(1): _default_cell(row) for row in _rows()}
+    mismatches = [(name, _expected_default(name, value), rows.get(name))
+                  for name, value in defaults.items()
+                  if _expected_default(name, value) != rows.get(name)]
+    assert not mismatches, f"documented defaults differ from code (option, expected, displayed): {mismatches}"
+
+
 def test_cited_recorder_flags_exist():
     with open(RECORDER, encoding="utf-8") as fh:
         flags = set(re.findall(r"add_argument\(\s*\"(--[A-Za-z][A-Za-z0-9-]*)\"", fh.read()))
@@ -55,6 +101,7 @@ def test_cited_recorder_flags_exist():
 
 
 TESTS = [test_every_option_is_documented_once_and_nothing_else,
+         test_documented_defaults_match_code,
          test_cited_recorder_flags_exist]
 
 if __name__ == "__main__":

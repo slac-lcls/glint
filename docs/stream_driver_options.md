@@ -7,7 +7,8 @@ constructor has grown one keyword per measured mechanism, so this page is the ma
 option, grouped by what it is for, with its default, the pull request or note that measured it, and the
 flag of `experiments/record_stream_replay.py` that sets it (the recorder is how the driver is run on a
 q-list or a pixel set without writing code). `experiments/test_stream_driver_options_doc.py` checks that
-the tables below name every constructor option and nothing else, so this page cannot drift silently.
+the tables below name every constructor option and nothing else, and that their displayed defaults match
+the code, so this page cannot drift silently.
 
 Read alongside [`streaming_replay.md`](streaming_replay.md) (two recorded runs of the driver, with
 provenance) and the class docstring, which is the fuller treatment of each mechanism.

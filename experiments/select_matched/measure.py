@@ -106,11 +106,11 @@ def cmd_run(a):
     wall = time.time() - t0
     keep = {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in st.items()
             if k not in ("escalation",)}
-    out = dict(header=dict(arm=a.arm, set=a.set, select=a.select, frames=os.path.abspath(path), md5=md5,
+    out = dict(header=dict(arm=a.arm, set=a.set, select=a.select, frames=os.path.basename(path), md5=md5,
                            n=len(orig), git=git_head(), prereg="experiments/select_matched/PREREG.md",
                            torch=torch.__version__, numpy=np.__version__, python=platform.python_version(),
-                           host=platform.node(), env={k: os.environ.get(k) for k in ("STEPS", "OMP_NUM_THREADS",
-                                                                                      "KC_FP", "NC", "CUDA_VISIBLE_DEVICES")},
+                           env={k: os.environ.get(k) for k in ("STEPS", "OMP_NUM_THREADS",
+                                                              "KC_FP", "NC", "CUDA_VISIBLE_DEVICES")},
                            wall_s=round(wall, 1)),
                stats=keep,
                M=[None if r["M"] is None else np.asarray(r["M"], float).tolist() for r in res],
@@ -173,7 +173,8 @@ def cmd_score(a):
                                                 f"{REF_REF}:experiments/joint_ceiling/results_{tag}.json"]))
         return d["per_frame"]["hyb_Mc"], d["per_frame"]["admm"][0]
 
-    S = dict(header=dict(git=git_head(), prereg="experiments/select_matched/PREREG.md", out=os.path.abspath(a.out)))
+    S = dict(header=dict(git=git_head(), prereg="experiments/select_matched/PREREG.md",
+                         out=os.path.basename(os.path.normpath(a.out))))
     for arm in ("clean", "n50"):
         for tag in SETS:
             q0 = origs[tag]

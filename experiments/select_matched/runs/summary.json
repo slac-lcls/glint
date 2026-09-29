@@ -2,7 +2,7 @@
  "header": {
   "git": "bb9c9ac0f8b320512efd7ebaa139ae283a9a3cd3",
   "prereg": "experiments/select_matched/PREREG.md",
-  "out": "/private/tmp/claude-1284456810/-Users-smarches/727bb51b-146d-4278-815e-8d700bb424e2/scratchpad/select_wt/experiments/select_matched/runs"
+  "out": "runs"
  },
  "clean_120": {
   "first": 91,

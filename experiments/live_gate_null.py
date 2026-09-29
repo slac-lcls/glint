@@ -4,7 +4,7 @@
 The live gate accepts a registration when it explains >= min_inliers peaks AND >= min_inlier_frac of them
 (HKL_TOL = 0.15 per index). Its default 0.15 was chosen against a WRONG cell on 16 synthetic frames. The
 case that matters on a dense stream is different: a frame with no lattice at all, searched with the RIGHT
-cell. The known-cell search maximises the inlier count over ~10^4 orientations, so on a peak-rich frame the
+cell. The known-cell search maximises the inlier count over ~10^4 orientations, so on a sparse frame the
 best of those chance counts clears a count-and-fraction bar that was never calibrated against it.
 
 `measure` runs the driver's own registration (glint.replica_gpu_batch.index_fused, the call flush() makes,

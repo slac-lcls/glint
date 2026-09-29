@@ -11,7 +11,7 @@ Where it bit: `_integrate_one` canonicalised every ACCEPTED frame with `_canonic
 predicted it on an `HKLGrid` whose candidate hkl box was built from the `_conventional_tetragonal`
 reference cell -- a different setting -- so the grid was missing ~19% of the frame's reflections
 (58/58/130, measured in the issue); then folded the frame's hkl into a 4/mmm accumulator whose
-4-fold is about c while the frame's was about b. `write_fromfile` (the CrystFEL `tPc` handoff) and
+4-fold is about c while the frame's was about b. `write_solution_file` (the CrystFEL `tPc` handoff) and
 `integrate_cxi` labelled the same wrong axis "c".
 
 Both helpers are now thin wrappers over `glint.lattice.standardize_axes`. What is pinned here:

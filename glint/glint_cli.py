@@ -240,9 +240,9 @@ def main():
         if args.fromfile and not args.tofile:
             print("  note: --fromfile is deprecated, use --tofile (GLINT WRITES this file; "
                   "'fromfile' was named for CrystFEL, which reads it)", file=sys.stderr)
-        from glint.predict import write_fromfile
+        from glint.predict import write_solution_file
         lattice_code = args.lattice or "aP"
-        nsol = write_fromfile(results, sol_path, lattice_code)
+        nsol = write_solution_file(results, sol_path, lattice_code, ref_cell=Mc_known)
         print(f"  solution file      : {nsol} ({lattice_code}) -> {sol_path}"
               f"  [indexamajig --indexing=file --fromfile-input-file={sol_path} --tolerance=10,10,10,3]")
 

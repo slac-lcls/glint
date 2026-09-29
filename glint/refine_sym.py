@@ -6,7 +6,7 @@ realistic peak-position noise those extra DOF absorb noise into a spurious
 lower-symmetry cell distortion (measured on real lyso: ``a != b`` by ~2.5%,
 ``gamma`` ~92.9 off 90), which couples into the orientation and drifts the
 PREDICTED spot positions off the Bravais manifold -- the deficiency flagged at
-``predict.py`` write_fromfile and the reason a native GLINT merge lags the
+``predict.py`` write_solution_file and the reason a native GLINT merge lags the
 CrystFEL ``--fromfile`` handoff (whose prediction-refinement imposes lattice
 symmetry).
 

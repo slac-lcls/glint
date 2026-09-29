@@ -13,7 +13,9 @@ Conventions match the rest of fftindex exactly (so a predicted q inverts an obse
   (z = clen + coffset constant; fs/ss z-components ignored, as the forward bridge does).
 """
 from __future__ import annotations
+import itertools
 import os
+import sys
 import numpy as np
 
 from glint.lattice import standardize_axes
@@ -540,41 +542,100 @@ def _canonical_axes(M, laue=None, centering=None):
     falling back to (long, long, short) when no two lengths are equal. Right-handed (det > 0) and
     idempotent. This used to sort by length to (long, long, short), which for c > a cells put the
     4-fold axis in b while the reference cell's ``HKLGrid`` and 4/mmm operators had it in c
-    (glint#181). ``write_fromfile`` (the CrystFEL handoff), ``integrate_cxi`` (native merge) and the
+    (glint#181). ``write_solution_file`` (the CrystFEL handoff), ``integrate_cxi`` (native merge) and the
     streaming driver's ``_integrate_one`` all use it, so every merge path shares one setting."""
     return standardize_axes(M, laue=laue, centering=centering)
 
 
-def write_fromfile(results, path, lattice_code="aP"):
+def _match_reference_setting(M, ref):
+    """The right-handed signed column permutation of ``M`` whose metric is closest to ``ref``'s.
+
+    Both are real-space bases, columns = a, b, c in A. A monoclinic unique axis cannot be found from
+    lengths alone -- ``standardize_axes`` leaves triclinic, monoclinic and base-centred cells exactly
+    as handed in -- so the known-cell engine's column order (e.g. 41/111/172 for a C2 cell given as
+    111.94/172.23/41.23, beta 106.2 on b) went into the solution file under a code (``mCb``) that
+    says the unique axis is b, and CrystFEL's cell check rejected every frame. The reference cell
+    decides instead: of the 24 proper signed permutations, the one whose metric tensor is nearest
+    ``ref``'s (relative Frobenius distance). Returns (basis, distance)."""
+    M = np.asarray(M, float); R = np.asarray(ref, float)
+    Gr = R.T @ R
+    best, err = None, np.inf
+    for perm in itertools.permutations(range(3)):
+        for signs in itertools.product((1.0, -1.0), repeat=3):
+            P = M[:, perm] * np.array(signs)
+            if np.linalg.det(P) <= 0:
+                continue
+            e = np.linalg.norm(P.T @ P - Gr) / np.linalg.norm(Gr)
+            if e < err:
+                best, err = P, e
+    return best, err
+
+
+# A signed permutation further than this (relative metric distance) from the reference cell is not the
+# reference's setting of the same lattice -- another basis of it, or another lattice -- and is written
+# as it came, with a warning, rather than forced into a setting it does not have.
+SETTING_MATCH_RTOL = 0.1
+
+
+def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
     """Emit a CrystFEL ``--indexing=file`` solution file -- the refined-merge handoff. GLINT supplies
     the orientation; CrystFEL's own prediction-refinement imposes the lattice symmetry (run with a loose
     ``--tolerance``), which on real data merges better than either freezing GLINT's raw orientation
-    (--no-refine) or pre-symmetrising the cell. One line per indexed frame:
+    (--no-refine) or pre-symmetrising the cell. CrystFEL reads the file with
+    ``indexamajig --indexing=file --fromfile-input-file=<path>``. One line per indexed frame:
 
         <image> //<event> a*x a*y a*z b*x b*y b*z c*x c*y c*z shift_x shift_y <lattice_code>
 
-    with the reciprocal cell in nm^-1 and axes in the standard setting of ``_canonical_axes`` -- the
-    equal-length pair as a, b and the unique axis as c, whether c is the short axis (lysozyme) or the
-    long one (a 58/58/130 cell) -- so the setting matches the lattice code's unique axis (e.g. ``tPc``
-    for tetragonal lysozyme; ``--tolerance=10,10,10,3`` recommended). Before glint#181 the axes were
-    sorted to (long, long, short), which for c > a cells labelled the 4-fold axis "b", not "c".
-    """
+    with the reciprocal cell in nm^-1. The axes are in the setting the lattice code names:
+
+      * tetragonal, orthorhombic, hexagonal codes (``tPc``, ``oP``...): the standard setting of
+        ``_canonical_axes`` -- the equal-length pair as a, b and the unique axis as c, whether c is
+        the short axis (lysozyme) or the long one (a 58/58/130 cell). Before glint#181 the axes were
+        sorted to (long, long, short), which for c > a cells labelled the 4-fold axis "b", not "c".
+      * every other code (monoclinic ``mPb``/``mCb``, triclinic, ...) with ``ref_cell`` given: the
+        setting of the reference cell (``_match_reference_setting``) -- the cell CrystFEL is handed
+        with ``-p``, so its cell check compares like with like. Without ``ref_cell`` these are written
+        as they came, as before, and a monoclinic code says so on stderr: no rule on lengths alone
+        can place a monoclinic unique axis.
+
+    ``write_fromfile`` is the old name of this function (named after CrystFEL's reader flag, not
+    what the function does) and still works."""
     rows = []
     laue = _laue_hint_from_lattice_code(lattice_code)
     centering = str(lattice_code or "")[1:2]
+    ref = None if ref_cell is None else np.asarray(ref_cell, float)
+    if laue is None and ref is None and str(lattice_code or "").strip().lower().startswith("m"):
+        print(f"write_solution_file: lattice code {lattice_code!r} without a reference cell -- the axes are "
+              f"written in the indexer's order, which need not put the unique axis where the code says",
+              file=sys.stderr)
+    far = 0
     for r in results:
         M = r.get("M")
         if M is None:
             continue
-        Are = _canonical_axes(M, laue=laue, centering=centering)   # standard setting: unique axis c
+        if laue is None and ref is not None:
+            Are, e = _match_reference_setting(M, ref)
+            if e > SETTING_MATCH_RTOL:
+                Are, far = _canonical_axes(M, laue=laue, centering=centering), far + 1
+        else:
+            Are = _canonical_axes(M, laue=laue, centering=centering)   # standard setting: unique axis c
         Br = np.linalg.inv(Are).T * 10.0                           # reciprocal a*,b*,c* in nm^-1 (1/A -> 1/nm)
         v = Br[:, 0].tolist() + Br[:, 1].tolist() + Br[:, 2].tolist()
         ev = r.get("event", "")
         rows.append("%s //%s %s 0.0 0.0 %s"
                     % (r.get("image", "glint.cxi"), ev, " ".join("%.7f" % x for x in v), lattice_code))
+    if far:
+        print(f"write_solution_file: {far} frame(s) are no signed permutation of the reference cell "
+              f"(metric distance > {SETTING_MATCH_RTOL}); written in the indexer's order", file=sys.stderr)
     with open(path, "w") as f:
         f.write("\n".join(rows) + "\n")
     return len(rows)
+
+
+# The old name, kept so existing callers and scripts do not break: it was named after CrystFEL's READER
+# flag (--fromfile-input-file), but the function WRITES the file, which is why the CLI flag was renamed
+# --fromfile -> --tofile. New code calls write_solution_file.
+write_fromfile = write_solution_file
 
 
 def _panel_slab(p):
@@ -943,7 +1004,7 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
     2.1 A (partialator, default 10 cycles; the older 0.90/39% figure was a --iterations=1 under-converged
     merge, glint#129) -- on par with a CrystFEL/xgandalf run on the same frames (CC*=0.930 / Rsplit=34.9%)
     -- with peak search, indexing AND integration all in GLINT. For the best (prediction-refined) merge,
-    hand orientations to CrystFEL via ``write_fromfile``."""
+    hand orientations to CrystFEL via ``write_solution_file``."""
     import h5py
     from glint.lute_bridge import parse_geom as _parse_geom, lambda_from_eV, _meta
     panels, glob = _parse_geom(geom_path)

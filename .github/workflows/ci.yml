@@ -207,6 +207,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_stream_hit_ring.py
 
+      # StreamDriver effort= (adaptive effort): the known-cell depth follows the hit rate, the spare budget buys
+      # the chance-controlled deep search on the misses, decisions at flush boundaries only and logged; off by
+      # default and byte-identical off. q-list frames, fit-oracle indexers, numpy only.
+      - name: experiments/test_stream_effort.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_stream_effort.py
+
       - name: experiments/test_geom_bridge.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_geom_bridge.py

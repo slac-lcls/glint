@@ -669,6 +669,137 @@ class _PixelStore:
                 self._free.append(e[0])
 
 
+# Depth tiers for the adaptive effort policy: (topa, nc, full_grid, ms per frame). The costs are the known-cell
+# depth sweep on the cxidb-17 480 (one A100, B=120, exp/batched-escalation): 308 / 341 / 365 / 379 frames indexed at
+# 0.15 / 0.27 / 0.40 / 0.94 ms per frame. Tier 0 is the shipped search (replica_gpu's topa=8, nc=NC=16, adaptive
+# azimuth grid); the last tier is also the depth of the deep search on the misses.
+EFFORT_TIERS = ((8, 16, False, 0.15), (32, 16, False, 0.27), (32, 32, False, 0.40), (128, 32, True, 0.94))
+
+
+class _EffortPolicy:
+    """Effort that follows the hit rate (StreamDriver's `effort=`). The GPU time each hit may have is
+    1000 * n_gpu / (rate_hz * hit_rate) ms per hit, so the veto count sets the search depth. It is spent in two
+    steps, both decided from the recent history at flush boundaries only, so a run is reproducible from its log:
+      1. the fast path runs EVERY hit at the deepest tier whose per-frame cost fits the budget;
+      2. if what is left also covers the misses' deep searches -- the miss fraction of the recent flushes times
+         (1 + k_null) searches at the top tier -- the misses of a flush get the top-tier search with the
+         azimuth-scrambled null of glint.retry_cascade.escalate_batch (glint#211). Only below the top tier: at the
+         top the deep search would repeat the fast path's own search, and the null can only reject. k_null
+         defaults to 32, the setting glint#211 measured 0 null accepts at (a lattice-free frame beats all k_null
+         exchangeable copies with probability <= 1/(k_null + 1)); at 32 copies the deep search is affordable only
+         while misses are rare, which is the point.
+    The hit rate is estimated from the last `hit_window` frames pushed while locked (a frame with too few peaks to
+    index is a blank), the miss fraction from the last `miss_window` flushes. The FIRST decision ignores the window
+    and uses the conservative estimates (`hit_prior` hits per frame, every frame a miss), so a fresh driver's first
+    flush runs at the depth the prior affords (tier 0 with the default prior of 1); later decisions use the window.
+    With more than one active cell (adaptive relock) every search may be repeated per cell -- best-fit assignment
+    searches every frame against every cell, first-fit tries the remaining frames on each further cell, and the
+    deep search runs per cell -- so the per-frame costs are multiplied by the number of active cells before they
+    are compared with the budget. A log entry's `at` is the arrival index of the first frame the decision applied
+    to (the first frame of the flush it was taken for); it stays in force until the next entry.
+    `overhead_ms` is the per-hit GPU time that is not search -- integration when the driver integrates (about
+    0.33 ms per frame on the fused integrator, see the class docstring), nothing for an index-only stream -- and is
+    taken off the budget before the tier is chosen; `n_gpu` is the share of a GPU left to the indexer after peak
+    finding. The tier costs are per-frame costs AT THE BATCH SIZE THEY WERE MEASURED (the defaults: B=120 on an
+    A100); at a smaller B the same search costs more per frame (index_fused: B=16 is 0.58 ms against B=120's 0.17
+    at tier 0), so give `tiers=` measured at the B you run."""
+
+    KEYS = ("rate_hz", "n_gpu", "k_null", "round_copies", "every", "hit_window", "miss_window", "hit_prior",
+            "tiers", "seed", "deep_budget", "overhead_ms")
+
+    def __init__(self, cfg):
+        if not isinstance(cfg, dict):
+            raise ValueError(f"effort must be a dict of settings (rate_hz, n_gpu, ...), got {type(cfg).__name__}")
+        unknown = sorted(set(cfg) - set(self.KEYS))
+        if unknown:
+            raise ValueError(f"effort: unknown setting(s) {unknown}; known: {list(self.KEYS)}")
+        if "rate_hz" not in cfg:
+            raise ValueError("effort needs rate_hz (frames per second the driver has to keep up with)")
+        self.rate_hz = self._pos("rate_hz", cfg["rate_hz"])
+        self.n_gpu = self._pos("n_gpu", cfg.get("n_gpu", 1.0))
+        self.k_null = self._int("k_null", cfg.get("k_null", 32))     # glint#211's measured setting (0 null accepts)
+        self.round_copies = self._int("round_copies", cfg.get("round_copies", 8))
+        self.every = self._int("every", cfg.get("every", 1))
+        self.hit_window = self._int("hit_window", cfg.get("hit_window", 256))
+        self.miss_window = self._int("miss_window", cfg.get("miss_window", 4))
+        hp = cfg.get("hit_prior", 1.0)
+        if isinstance(hp, bool) or not isinstance(hp, (int, float, np.integer, np.floating)) or not 0.0 < hp <= 1.0:
+            raise ValueError(f"effort: hit_prior must be in (0, 1], got {hp!r}")
+        self.hit_prior = float(hp)
+        self.seed = self._int("seed", cfg.get("seed", 20260926))
+        self.deep_budget = self._int("deep_budget", cfg.get("deep_budget", 12000))
+        oh = cfg.get("overhead_ms", 0.0)
+        if isinstance(oh, bool) or not isinstance(oh, (int, float, np.integer, np.floating)) or not oh >= 0:
+            raise ValueError(f"effort: overhead_ms must be a number >= 0, got {oh!r}")
+        self.overhead_ms = float(oh)
+        try:
+            tiers = [(self._int("topa", t[0]), self._int("nc", t[1]), bool(t[2]), float(t[3]))
+                     for t in cfg.get("tiers", EFFORT_TIERS)]
+        except (TypeError, IndexError):
+            raise ValueError("effort: tiers must be a sequence of (topa, nc, full_grid, ms_per_frame)") from None
+        if not tiers or any(t[3] <= 0 for t in tiers) or any(b[3] <= a[3] for a, b in zip(tiers, tiers[1:])):
+            raise ValueError("effort: tiers need strictly increasing positive ms per frame, shallowest first")
+        self.tiers = tuple(tiers)
+        self.hits = deque(maxlen=self.hit_window)          # 1 per pushed frame that had a q, 0 per blank
+        self.flushes = deque(maxlen=self.miss_window)      # (frames, fast-path misses) per flush
+        self.tier = None; self.deep = False
+        self.budget = self.hit_est = self.miss_frac = None
+        self.n_flush = 0; self.log = []
+        self.fast_by_tier = Counter(); self.n_tried = self.n_accepted = self.n_searches = 0
+
+    @staticmethod
+    def _int(name, v):
+        if isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, np.integer)) or v < 1:
+            raise ValueError(f"effort: {name} must be an integer >= 1, got {v!r}")
+        return int(v)
+
+    @staticmethod
+    def _pos(name, v):
+        if isinstance(v, bool) or not isinstance(v, (int, float, np.integer, np.floating)) or not v > 0:
+            raise ValueError(f"effort: {name} must be a number > 0, got {v!r}")
+        return float(v)
+
+    def seen(self, hit):
+        self.hits.append(1 if hit else 0)
+
+    def flushed(self, n, n_miss):
+        self.flushes.append((int(n), int(n_miss)))
+        self.fast_by_tier[self.tier] += int(n)
+
+    def decide(self, at, n_cells=1):
+        """Re-choose (tier, deep) from the recent history; True when either changed. Called at a flush boundary,
+        before that flush's fast path, every `every` flushes. `at` = arrival index of the first frame in that flush;
+        `n_cells` = active cells the searches are repeated for (see the class docstring)."""
+        first = self.n_flush <= 1                            # the first decision: the conservative prior, not the window
+        self.hit_est = self.hit_prior if first or not self.hits else max(float(np.mean(self.hits)), 0.02)
+        nf = sum(n for n, _ in self.flushes)
+        self.miss_frac = 1.0 if first or not nf else sum(m for _, m in self.flushes) / nf
+        self.budget = 1000.0 * self.n_gpu / (self.rate_hz * self.hit_est) - self.overhead_ms   # what the SEARCH may spend
+        n_cells = max(int(n_cells), 1)
+        tier = 0
+        for i, t in enumerate(self.tiers):
+            if t[3] * n_cells <= self.budget:
+                tier = i
+        top = len(self.tiers) - 1
+        deep = tier < top and (self.tiers[tier][3] + self.miss_frac * (1 + self.k_null) * self.tiers[top][3]) * n_cells <= self.budget
+        changed = (tier, deep) != (self.tier, self.deep)
+        self.tier, self.deep = tier, deep
+        if changed:
+            self.log.append(dict(at=int(at), tier=tier, deep=bool(deep), budget_ms=round(self.budget, 4),
+                                 hit_est=round(self.hit_est, 4), miss_frac=round(self.miss_frac, 4), n_cells=n_cells))
+        return changed
+
+    def depth_kw(self):
+        topa, nc, full_grid, _ = self.tiers[self.tier if self.tier is not None else 0]
+        return dict(topa=topa, nc=nc, full_grid=full_grid)
+
+    def summary(self):
+        return dict(tier=self.tier, deep=self.deep, budget_ms=self.budget, hit_est=self.hit_est,
+                    miss_frac=self.miss_frac, n_changes=len(self.log), log=[dict(e) for e in self.log],
+                    fast_by_tier={int(k): int(v) for k, v in sorted(self.fast_by_tier.items())},
+                    n_deep_tried=self.n_tried, n_escalated=self.n_accepted, deep_searches=self.n_searches)
+
+
 class StreamDriver:
     """Streaming index+integrate with the frame resident on the device.
 
@@ -690,6 +821,11 @@ class StreamDriver:
     that it is "4/mmm", the historical default. Blind locks are put in the tetragonal conventional
     setting (4-fold axis in c) only for the tetragonal classes; other classes are merged in the
     setting the cell arrives in, so a known cell must be given in the setting its class assumes.
+
+    Adaptive effort: `effort=dict(rate_hz=..., n_gpu=1)` makes the known-cell search depth follow the hit rate
+    (GPU time per hit = n_gpu / (rate x hit rate)) and spends what is left on deep, chance-controlled searches of
+    the misses; decisions are taken at flush boundaries and logged (stats()["effort"], "effort" events). Off by
+    default. See _EffortPolicy.
     """
 
     def __init__(self, Mc, panels, clen_m, wavelength_A, shape, dtype=np.uint16, mask=None,
@@ -721,6 +857,8 @@ class StreamDriver:
                  # ring slots for hits only, and pixels kept for the retroactive rescues (both off by
                  # default) -- see the class docstring and the warm-up rescue block below
                  hits_only=False, rescue_pixels=0,
+                 # adaptive effort (off by default): the search depth follows the hit rate -- see _EffortPolicy
+                 effort=None,
                  # a per-peak-count chance floor on the live gate (off by default) -- see min_inlier_frac
                  null_floor=None):
         if use_gpu and not _HAVE_CP:
@@ -1107,6 +1245,10 @@ class StreamDriver:
         self._pix = _PixelStore(rescue_pixels, self.shape, self.dtype, xp) if rescue_pixels else None
         self.n_warmup_integrated = self.n_rescued_integrated = 0
         self.hits_only = bool(hits_only)
+        # Adaptive effort (opt-in): the known-cell search depth follows the hit rate and the spare budget buys
+        # deep, chance-controlled searches on the misses -- see _EffortPolicy. Off (None) nothing here is
+        # constructed, the known-cell calls carry no depth arguments, and the emitted stream is byte-identical.
+        self._eff = _EffortPolicy(effort) if effort is not None else None
         # Per-frame confidence flag (opt-in, DIAGNOSTIC-only -- never affects what gets integrated).
         # The live accept gate above (_fits) is deliberately looser than the
         # matched_frac>=25% bar used for the paper's offline comparison numbers: on a DRP time/
@@ -1426,7 +1568,7 @@ class StreamDriver:
 
     # ------------------------------------------------------------------ events ------------------
     # One record per pushed frame, emitted where the decision is made (batching is invisible to the
-    # consumer): terminal outcomes blank / warmup_vote / warmup_lock / indexed / rescued_watchdog /
+    # consumer): terminal outcomes blank / warmup_vote / warmup_lock / indexed / escalated / rescued_watchdog /
     # rescued_cascade / miss / gate_rejected -- exactly one per frame, guaranteed by the control flow
     # (each stage returns only what it did not accept). Retroactive outcomes rescued_warmup /
     # rescued_relock refer to a PAST ev (at > ev) and never replace a terminal one; "relock" marks a
@@ -1685,6 +1827,8 @@ class StreamDriver:
                     # the observed peaks can.
                     self._pkq[slot] = np.stack([fs[ok], ss[ok], pi[ok]], 1)
         self._q[slot] = q
+        if self._eff is not None:
+            self._eff.seen(q is not None)                    # the hit rate the effort policy follows
         self._idx[slot] = self.n_pushed                      # arrival index, so a stream chunk names its frame
         self._haspix[slot] = True
         if q is None and self._events_on:
@@ -1735,6 +1879,8 @@ class StreamDriver:
             return
         slot = self._n
         self._q[slot] = q
+        if self._eff is not None:
+            self._eff.seen(q is not None)
         self._idx[slot] = self.n_pushed
         self._pkq[slot] = pkq if self.stream_peaks else None
         self._haspix[slot] = False
@@ -2134,7 +2280,7 @@ class StreamDriver:
 
         cell_id just labels which active cell this is, for per-chunk stream provenance."""
         qs = [self._q[i] for i in slots]
-        Ms = rgb.index_fused(qs, Mc, B=max(len(qs), 1))
+        Ms = rgb.index_fused(qs, Mc, B=max(len(qs), 1), **self._depth_kw())
         missed = []
         for i, M in zip(slots, Ms):
             M = np.asarray(M, float) if M is not None else None
@@ -2153,6 +2299,64 @@ class StreamDriver:
             self._integrate_one(i, M, grid, acc, cell_id=cell_id, known_cell=True)
         return missed
 
+    def _depth_kw(self):
+        """The fast path's search-depth arguments: none (the shipped call, verbatim) unless the adaptive effort
+        policy is on, then its current tier's topa/nc/full_grid on every call."""
+        eff = getattr(self, "_eff", None)
+        return eff.depth_kw() if eff is not None else {}
+
+    def _escalate_misses(self, slots):
+        """Adaptive effort's deep search on this flush's fast-path misses: glint.retry_cascade.escalate_batch at
+        the top tier against each active cell in turn. A fit is accepted only if it passes the live gate for that
+        cell (_fits and same_lattice) AND matches more peaks than every one of its k_null azimuth-scrambled copies
+        -- the chance control of glint#211, scored with the driver's own inlier count. Accepted frames are
+        integrated under the accepting cell with outcome "escalated"; the rest continue down the miss path (retry
+        cascade, miss buffer, watchdog) exactly as before. Copy k of the frame that arrived at index ev is
+        scrambled with rng([seed, ev, k]), so a replay reproduces the decisions."""
+        from glint.retry_cascade import escalate_batch
+        eff = self._eff
+        topa, nc, full_grid, _ = eff.tiers[-1]
+
+        def search(qs, Mcell):
+            return rgb.index_known_deep_batch(qs, Mcell, topa, nc, full_grid=full_grid, budget=eff.deep_budget,
+                                              return_errors=True)
+
+        def count(M, q):
+            return self._inliers(q, M)
+
+        still = list(slots)
+        eff.n_tried += len(still)
+        for k, Mk in enumerate(self._all_cells()):
+            if not still:
+                break
+
+            def gate(M, q, Mk=Mk):
+                return abs(np.linalg.det(M)) >= 1.0 and self._fits(q, M) and same_lattice(M, Mk)
+
+            Ms, recs = escalate_batch([self._q[i] for i in still], Mk, search, count, gate,
+                                      seeds=[[eff.seed, int(self._idx[i])] for i in still],
+                                      k_null=eff.k_null, round_copies=eff.round_copies)
+            eff.n_searches += sum(r["searches"] for r in recs)
+            nxt = []
+            for i, M in zip(still, Ms):
+                if M is None:
+                    nxt.append(i)
+                    continue
+                grid, acc = self._cell_sink(k)
+                self._integrate_one(i, np.asarray(M, float), grid, acc, cell_id=k, known_cell=True, outcome="escalated")
+                eff.n_accepted += 1
+            still = nxt
+        return still
+
+    def _emit_effort(self):
+        """The effort policy changed its mind (tier or deep search): one marker record, like "relock", so a
+        recorded stream shows which depth every frame from `ev` on was searched at."""
+        e = self._eff.log[-1]
+        rec = self._event_base(e["at"], "effort", None)      # ev = the first frame the decision applies to
+        rec.update(tier=e["tier"], deep=e["deep"], budget_ms=e["budget_ms"], hit_est=e["hit_est"], miss_frac=e["miss_frac"],
+                   n_cells=e["n_cells"])
+        self._emit(rec)
+
     def _index_best_fit(self, slots):
         """assign="best": index `slots` against EVERY active cell. The incumbent is the first cell (in
         cell order) whose registration passes the live gate -- first-fit's answer; the challenger is
@@ -2168,7 +2372,7 @@ class StreamDriver:
         cells = self._all_cells()
         fits = []                                              # fits[k][j] = (M or None, n_inliers) for cell k, slot j
         for Mk in cells:
-            Ms = rgb.index_fused(qs, Mk, B=max(len(qs), 1))
+            Ms = rgb.index_fused(qs, Mk, B=max(len(qs), 1), **self._depth_kw())
             row = []
             for i, M in zip(slots, Ms):
                 M = np.asarray(M, float) if M is not None else None
@@ -2563,6 +2767,13 @@ class StreamDriver:
         if self._blind or self._n == 0:                         # nothing to integrate without a cell
             return
         slots = [i for i in range(self._n) if self._q[i] is not None]
+        eff = self._eff
+        if eff is not None:                                     # adaptive effort: (tier, deep) for THIS flush
+            eff.n_flush += 1
+            if (eff.n_flush - 1) % eff.every == 0:
+                at = int(self._idx[0]) if self._n else self.n_pushed          # the first frame this decision applies to
+                if eff.decide(at, n_cells=1 + len(self.extra)) and self._events_on:
+                    self._emit_effort()
         if slots and not self.adaptive_relock:
             # gate=self.retry_cascade, not gate=False: with the cascade OFF this is the historical
             # single-cell call verbatim (rejects counted and dropped inside _index_integrate). With
@@ -2570,9 +2781,13 @@ class StreamDriver:
             # save is counted in n_gate_rejected here -- the same frames, the same counter.
             pl = getattr(self, "per_lattice", False)
             missed = self._index_integrate(slots, self.Mc, self.grid, self.acc,
-                                           gate=self.retry_cascade or pl)
+                                           gate=self.retry_cascade or pl or eff is not None)
+            if eff is not None:
+                eff.flushed(len(slots), len(missed))
             if missed and pl:                               # per-lattice first: it scores the registration in hand
                 missed = self._per_lattice_rescue(missed)
+            if missed and eff is not None and eff.deep:     # then the deep known-cell search with its null
+                missed = self._escalate_misses(missed)
             if missed:
                 # no watchdog here -> no cache to carry; without the cascade the misses are just counted
                 still, _ = self._cascade_retry(missed) if self.retry_cascade else (missed, None)
@@ -2582,8 +2797,12 @@ class StreamDriver:
                         self._emit_frame(i, "gate_rejected")
         elif slots and self.assign == "best" and self.extra:
             remaining = self._index_best_fit(slots)            # every cell sees every frame; most inliers wins
+            if eff is not None:
+                eff.flushed(len(slots), len(remaining))
             if remaining and getattr(self, "per_lattice", False):
                 remaining = self._per_lattice_rescue(remaining)
+            if remaining and eff is not None and eff.deep:      # deep known-cell search before the blind retry
+                remaining = self._escalate_misses(remaining)
             cached_nbest = None
             if remaining and self.retry_cascade:
                 remaining, cached_nbest = self._cascade_retry(remaining)
@@ -2598,8 +2817,12 @@ class StreamDriver:
                     break
                 remaining = self._index_integrate(remaining, e["Mc"], e["grid"], e["acc"], gate=True,
                                                   cell_id=k)
+            if eff is not None:
+                eff.flushed(len(slots), len(remaining))
             if remaining and getattr(self, "per_lattice", False):
                 remaining = self._per_lattice_rescue(remaining)
+            if remaining and eff is not None and eff.deep:      # deep known-cell search before the blind retry
+                remaining = self._escalate_misses(remaining)
             cached_nbest = None
             if remaining and self.retry_cascade:                # retry BEFORE the miss buffer claims them
                 remaining, cached_nbest = self._cascade_retry(remaining)
@@ -2727,6 +2950,9 @@ class StreamDriver:
             s["n_pl_null"] = self.n_pl_null_tested
             s["pl_null_found_rate"] = self.n_pl_null_found / max(self.n_pl_null_tested, 1)
             s["pl_null_rescued_rate"] = self.n_pl_null_rescued / max(self.n_pl_null_tested, 1)
+        eff = getattr(self, "_eff", None)
+        if eff is not None:                                     # adaptive effort: what the policy is doing now
+            s["effort"] = eff.summary()
         if self._grefiner is not None:
             s["geom_correction"] = self._grefiner.correction()
         return s

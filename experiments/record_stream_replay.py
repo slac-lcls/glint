@@ -98,11 +98,11 @@ PANELS = [dict(name="p0", fs=np.array([1.0, 0, 0]), ss=np.array([0, 1.0, 0]), re
                min_fs=0, max_fs=N_PX - 1, min_ss=0, max_ss=N_PX - 1)]
 CLEN_M = DIST_MM / 1000.0
 
-TERMINAL = ("blank", "warmup_vote", "warmup_lock", "indexed", "rescued_watchdog", "rescued_cascade",
+TERMINAL = ("blank", "warmup_vote", "warmup_lock", "indexed", "escalated", "rescued_watchdog", "rescued_cascade",
             "rescued_per_lattice", "miss", "gate_rejected")
-ACCEPTED = ("indexed", "rescued_watchdog", "rescued_cascade", "rescued_per_lattice")
+ACCEPTED = ("indexed", "escalated", "rescued_watchdog", "rescued_cascade", "rescued_per_lattice")
 RETRO = ("rescued_warmup", "rescued_relock")
-MARKERS = ("relock", "integrated")                        # neither replaces a frame's terminal outcome
+MARKERS = ("relock", "integrated", "effort")              # none replaces a frame's terminal outcome
 
 
 # ----------------------------------------------------------------------------- inputs -----------
@@ -371,6 +371,8 @@ def main(argv=None):
     ap.add_argument("--edge-mask", type=int, default=0, help="mask this many pixels along every panel border")
     ap.add_argument("--mask", default=None, help=".npy bool array (True = good pixel), ANDed with the edge mask")
     ap.add_argument("--geom-refine", action="store_true", help="run the diagnostic geometry refiner (pixel or peaks input)")
+    ap.add_argument("--effort", default=None, metavar="JSON",
+                    help="StreamDriver effort= settings, e.g. '{\"rate_hz\": 2000, \"n_gpu\": 1}' (adaptive depth; off when unset)")
     ap.add_argument("--peaks-in", action="store_true",
                     help="for .stream inputs: push the stream's own peak lists through push_peaks() -- no pixels are read; "
                          "the control that separates the finder from the rest of the pixel path")
@@ -450,6 +452,8 @@ def main(argv=None):
         kw["stream_symmetry"] = sym
     if a.laue:
         kw["laue"] = a.laue
+    if a.effort:                                             # only when set: published driver_kw stay byte-identical
+        kw["effort"] = json.loads(a.effort)
     geom_meta = None
     if pixel_pools or a.geom:
         if not a.geom:
@@ -541,6 +545,11 @@ def main(argv=None):
             by_ev[k].setdefault("relock", 0); by_ev[k]["relock"] += 1
             by_ev[k]["relock_cell"] = e["cell_name"]
             continue
+        if oc == "effort":                                   # effort=: the policy changed tier / deep search; ev = the
+            k = min(e["ev"], n - 1)                          # first frame the new setting applied to (in force until the next)
+            by_ev[k]["effort"] = dict(tier=e["tier"], deep=e["deep"], budget_ms=e["budget_ms"],
+                                      hit_est=e["hit_est"], miss_frac=e["miss_frac"], n_cells=e.get("n_cells", 1))
+            continue
         if oc == "integrated":
             r = by_ev[e["ev"]]
             r["n_pred"] = e["n_pred"]; r["n_refl"] = e["n_refl"]; r["frame_no"] = e["frame_no"]
@@ -579,7 +588,7 @@ def main(argv=None):
                # where the per-lattice numbers come from: rescues kept under the residual's lattice, rescues the
                # whole-frame strict gate credits anyway, and frames ONLY the per-lattice score credits
                rescued_per_lattice_swapped=0, rescued_per_lattice_strict=0, per_lattice_only=0)
-    by_sp = {sp: dict(n=0, ok=0, ok_drv=0, indexed=0, miss=0, blank=0, warmup=0, rescued=0) for sp in pools}
+    by_sp = {sp: dict(n=0, ok=0, ok_drv=0, indexed=0, escalated=0, miss=0, blank=0, warmup=0, rescued=0) for sp in pools}
     confusion = {}
     tot["integrated"] = 0
     for r in recs:
@@ -621,6 +630,7 @@ def main(argv=None):
         if oc in ACCEPTED:
             tot["indexed"] += 1; by_sp[sp]["indexed"] += 1
             tot["rescued_per_lattice"] += oc == "rescued_per_lattice"
+            by_sp[sp]["escalated"] += oc == "escalated"       # effort=: taken by the deep search on the misses
         elif oc == "miss":
             tot["miss"] += 1; by_sp[sp]["miss"] += 1
         elif oc == "blank":
@@ -642,7 +652,7 @@ def main(argv=None):
                     integrated=st.get("integrated", 0))
     for key in ("n_per_lattice_searched", "n_per_lattice_found", "n_per_lattice_rescued", "n_per_lattice_swapped", "n_pl_null",
                 "pl_null_found_rate", "pl_null_rescued_rate", "n_double", "n_double_raw", "n_dh_null", "dh_null_rate",
-                "null_floor", "n_null_floor_refused"):
+                "effort", "null_floor", "n_null_floor_refused"):
         if key in st:                                        # opt-in counters, present only when the option is on
             counters[key] = st[key]
     # self-checks: the event log must agree with the driver's own counters

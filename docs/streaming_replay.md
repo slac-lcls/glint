@@ -7,7 +7,9 @@ replay, [below](#two-species-replay--the-cell-registry-at-work)) is built the sa
 simulation, and nothing on it is drawn from a model: every counter, the recovered cell, the lock
 frame, the ring occupancy, the rescues and the re-lock are read out of a trace the driver wrote while
 it ran. This page says exactly what that run was, how each animation frame maps onto it, what the
-crop removed from the replay page, and how to regenerate the whole thing.
+crop removed from the replay page, and how to regenerate the whole thing. The driver's options — every
+constructor keyword by topic, with its default and the pull request that measured it — are in
+[`stream_driver_options.md`](stream_driver_options.md).
 
 ## What was run
 

@@ -311,11 +311,10 @@ changes three things and adds a fourth:
 - **Batches are a ring on the device.** `B` frames sit in preallocated device memory; when the ring is full they
   are indexed as one `index_fused` batch and each is integrated against its still-resident pixels, then folded
   into a running merge (completeness, CC½, CC*, R_split under a chosen Laue class).
-- **Misses have a ladder, in cost order, all opt-in.** Warm-up frames re-indexed once the cell locks
-  (`warmup_rescue`); a blind watchdog on the misses that rescues same-cell frames and adds a second cell when a
-  new lattice recurs (`adaptive_relock`, with `rescue_buffer` to re-index the misses it still holds); the retry
-  cascade (`retry_cascade`); per-lattice scoring of double hits (`per_lattice`); and the deep, chance-controlled
-  search of `effort=`. Each shipped with a CPU suite and a measured number; off, the base path is byte-identical.
+- **Recovery is opt-in.** `warmup_rescue` re-indexes startup frames when the initial cell locks. For locked
+  batches, misses go through `per_lattice`, the deep search enabled by `effort=`, `retry_cascade`, and finally
+  the `adaptive_relock` watchdog (with `rescue_buffer` for retroactive re-indexing), in that order. Each
+  mechanism shipped with a CPU suite and a measured number; off, the base path is byte-identical.
 - **Effort follows the hit rate** (`effort=dict(rate_hz=..., n_gpu=1)`, glint#213). The GPU time per hit is
   `n_gpu / (rate × hit rate)`; the known-cell depth is the deepest tier that fits, and what is left buys a deep
   search on the misses that must beat the frame's own scrambled copies (glint#211's null). Decisions at flush

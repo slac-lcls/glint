@@ -22,7 +22,7 @@ valid controls for its held-out null copy (the per-frame test, option c).
 `fit` reads that file, fits the candidate gates on the FIT copies at a target null rate, and scores them on
 the held-out null and on the real frames (live gate, strict gate, and the published xgandalf arm when its
 solutions are given):
-  (a) floor     n_inl >= a*n + b   (linear quantile regression of the fit copies at quantile 1 - alpha)
+  (a) floors    n_inl >= a*n + b or a*n + b + c*sqrt(n) (quantile regressions at quantile 1 - alpha)
   (b) fraction  n_inl >= f*n       (smallest f whose fit-copy accept rate is <= alpha)
   (c) per-frame n_inl > every one of k scrambled copies' counts (escalate_batch's rule), k in --k-test
 

@@ -130,7 +130,7 @@ glint/          the engine — one file per stage (import glint.<mod>)
   multilattice.py       double-hit primitives: deflate, second-lattice verdict, azimuth scramble
   alias_gate.py, spurious_meter.py
                         lock-time alias gate; spurious-peak meters and the lock-quality null
-  lattice.py            cell ↔ basis, SO(3), Laue classes, axis standardization
+  lattice.py            cell ↔ basis, SO(3)
   geom.py, lute_bridge.py
                         CrystFEL .geom + peaks → reciprocal q (the offline and the driver bridges)
   peakfinder_v4.py, peakfinder8.py, peakfinder9.py, radial.py, ring_mask.py

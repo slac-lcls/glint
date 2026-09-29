@@ -437,3 +437,10 @@ jobs:
       - name: experiments/test_live_gate_floor.py (real frames, CPU torch)
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_live_gate_floor.py
+
+      # glint_cli --gate: with --cell every frame is registered and same_lattice cannot fail, so --gate strict
+      # applies the paper's scoring bar to what is WRITTEN. Synthetic frames, 30 real cxidb-17 frames against
+      # their azimuth-scrambled copies (CPU torch), and the CLI end to end; self-skips without torch.
+      - name: experiments/test_cli_gate.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_cli_gate.py

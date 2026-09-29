@@ -32,6 +32,44 @@ def _hkl(q, M):
     return r[inl].astype(int), q[inl], int(inl.sum())
 
 
+GATES = ("none", "strict")
+
+
+def gate_results(results, frames, gate="none"):
+    """Withdraw, in place, the registration of every frame that fails `gate`; return how many were withdrawn.
+
+    Without a gate (``"none"``, the default and the historical output) every registration the indexer returns
+    is written as a crystal. With a known cell that is nearly every frame: the rescue's only test is
+    `same_lattice(M, Mc)`, which a known-cell search passes by construction, since it returns the cell it was
+    asked for. On LUTE's SFX test runs this wrote 28 % of mfx100848724 r51 as crystals where CrystFEL and
+    cctbx index about 1 %, and 98 % of mfxl1038923 r58.
+
+    ``"strict"`` applies the paper's scoring bar to what gets WRITTEN: at least GATE_MIN peaks matched and at
+    least GATE_FRAC of the frame's peaks (matched_strict, |q @ M - round(q @ M)| < GATE_TOL). A withdrawn frame
+    is written exactly as an unindexed one (M, hkl None; q the frame's peaks), so --integrate and --tofile skip
+    it too. The strict bar is not a null-calibrated one: on dense lattice-free frames it still passes about 5 %
+    (azimuth-scrambled cxidb-17, 26 / 480), so at a hit rate of a few percent most of what passes can still be
+    chance. A per-peak-count floor calibrated on a scrambled null is the follow-up."""
+    if gate not in GATES:
+        raise ValueError(f"gate must be one of {GATES}, got {gate!r}")
+    if len(results) != len(frames):
+        raise ValueError(f"results ({len(results)}) and frames ({len(frames)}) must align one to one")
+    if gate == "none":
+        return 0
+    n = 0
+    for r, q in zip(results, frames):
+        M = r.get("M")
+        if M is None:
+            continue
+        q = np.asarray(q, float)
+        m = matched_strict(np.asarray(M, float), q)
+        if m >= GATE_MIN and m >= GATE_FRAC * len(q):
+            continue
+        r.update(M=None, hkl=None, q=q)
+        n += 1
+    return n
+
+
 
 def _escalation_config(escalate):
     """hybrid_index's `escalate` -> the deep arm's settings, or None when it is off.
@@ -290,6 +328,8 @@ def _report(stats, out):
     n = max(stats["n"], 1)
     if stats.get("mode") == "dense":
         print(f"=== GLINT dense/rotation (local-cluster FFT), N={stats['n']} ===")
+        if "n_gated" in stats:
+            print(f"  gate ({stats['gate']})      : {stats['n_gated']} registrations withdrawn (written as unindexed)")
         print(f"  indexed            : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
         return
     print(f"=== GLINT hybrid (blind+consensus+general-rescue), N={stats['n']} ===")
@@ -312,6 +352,8 @@ def _report(stats, out):
         c = stats["n_escalation_candidates"]
         print(f"  escalated          : {stats['n_escalated']} of {c} gate-failing frames "
               f"(deep search + scrambled null, {stats['escalation_searches'] / max(c, 1):.1f} searches each)")
+    if "n_gated" in stats:
+        print(f"  gate ({stats['gate']})      : {stats['n_gated']} registrations withdrawn (written as unindexed)")
     print(f"  FINAL indexed      : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
 
 

@@ -17,6 +17,7 @@
 # 4) the scrambled arm (480 real, then 480 scrambled as "scr"), default gate and --null-floor cxidb17
 #    (CPU: scr accepted 234 -> 5, lyso strict 331 -> 332, watchdog rescues 9 -> 33);
 # 5) live_gate_null.py measure on the fused path, 8 fit copies (~2 min), then fit: do the GPU counts give the same floor?
+set -eo pipefail
 source /sdf/group/lcls/ds/ana/sw/conda1/manage/bin/psconda.sh >/dev/null 2>&1
 conda activate ana-4.0.58-py3-minipytorch >/dev/null 2>&1
 export PYTHONPATH=.

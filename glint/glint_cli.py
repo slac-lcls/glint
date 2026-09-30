@@ -147,8 +147,10 @@ def main():
                     help="Bravais lattice code (e.g. tPc tetragonal, oP orthorhombic). Labels the "
                          "--tofile solution file, and with --images --integrate also names the Laue "
                          "class the per-frame axis setting is standardized under. Default and 'aP' "
-                         "both mean unconstrained: the file is labelled aP and the setting is "
-                         "decided by axis lengths alone")
+                         "both mean unconstrained: the file is labelled aP. The solution file's axis "
+                         "setting: tetragonal/orthorhombic/hexagonal codes get the standard setting "
+                         "(unique axis c); every other code (aP, monoclinic, hR) gets the setting of "
+                         "--cell when it is given, else the one decided by axis lengths alone")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
     if (args.peaks or args.images) and not args.geom:

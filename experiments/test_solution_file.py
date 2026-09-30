@@ -87,6 +87,15 @@ for cell, code, name in ((C2, "mCb", "C2 111.94/172.23/41.23 beta 106.2"), (P21,
                   and np.linalg.det(A) > 0 for (A, _), Ri in zip(W, R)))
         check(f"{name}, {label}: code written as given, nothing on stderr", all(c == code for _, c in W) and not err, err)
 
+print("\nrhombohedral hR with the reference cell (standardize_axes leaves -3m_R as handed in)")
+HR = cell_to_Ar(50.0, 50.0, 50.0, 75.0, 75.0, 75.0)
+# (b, a, -c): right-handed, but the negated axis turns two of the 75-degree angles into 105 degrees
+res = [{"image": "x.cxi", "event": i, "M": rot(30 + i) @ HR[:, [1, 0, 2]] * np.array([1, 1, -1])} for i in range(3)]
+n, W, _, err = run(res, "hR", ref=HR)
+check("hR: the reference's angles (75, 75, 75), right-handed",
+      all(np.allclose(params(A), params(HR), atol=1e-4) and np.linalg.det(A) > 0 for A, _ in W) and not err,
+      [np.round(params(A), 2) for A, _ in W[:1]])
+
 print("\nwithout the reference cell: the old behaviour, and a warning for monoclinic codes")
 res = [{"image": "x.cxi", "event": 0, "M": rot(9) @ C2[:, [2, 0, 1]]}]
 n, W, _, err = run(res, "mCb")

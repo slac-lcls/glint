@@ -576,6 +576,11 @@ def _match_reference_setting(M, ref):
 # as it came, with a warning, rather than forced into a setting it does not have.
 SETTING_MATCH_RTOL = 0.1
 
+# The Laue classes whose lattice code already fixes a standard setting in ``_canonical_axes`` (unique axis c,
+# or a <= b <= c); the solution file keeps that setting, reference cell or not. Every other code -- monoclinic,
+# rhombohedral (``-3m_R``, which ``standardize_axes`` leaves as handed in), triclinic -- takes the reference's.
+STANDARD_SETTING_LAUE = ("4/mmm", "mmm", "6/mmm")
+
 
 def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
     """Emit a CrystFEL ``--indexing=file`` solution file -- the refined-merge handoff. GLINT supplies
@@ -592,11 +597,13 @@ def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
         ``_canonical_axes`` -- the equal-length pair as a, b and the unique axis as c, whether c is
         the short axis (lysozyme) or the long one (a 58/58/130 cell). Before glint#181 the axes were
         sorted to (long, long, short), which for c > a cells labelled the 4-fold axis "b", not "c".
-      * every other code (monoclinic ``mPb``/``mCb``, triclinic, ...) with ``ref_cell`` given: the
-        setting of the reference cell (``_match_reference_setting``) -- the cell CrystFEL is handed
-        with ``-p``, so its cell check compares like with like. Without ``ref_cell`` these are written
-        as they came, as before, and a monoclinic code says so on stderr: no rule on lengths alone
-        can place a monoclinic unique axis.
+      * every other code (monoclinic ``mPb``/``mCb``, rhombohedral ``hR``, triclinic ``aP``) with
+        ``ref_cell`` given: the setting of the reference cell (``_match_reference_setting``) -- the cell
+        CrystFEL is handed with ``-p``, so its cell check compares like with like. Without ``ref_cell``
+        (or for a frame that is no signed permutation of it) they get ``_canonical_axes``, as before:
+        base-centred cells as they came, the rest by the length-only rule, which can reorder columns
+        but cannot place a monoclinic unique axis -- a monoclinic code without a reference says so
+        on stderr.
 
     ``write_fromfile`` is the old name of this function (named after CrystFEL's reader flag, not
     what the function does) and still works."""
@@ -605,15 +612,15 @@ def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
     centering = str(lattice_code or "")[1:2]
     ref = None if ref_cell is None else np.asarray(ref_cell, float)
     if laue is None and ref is None and str(lattice_code or "").strip().lower().startswith("m"):
-        print(f"write_solution_file: lattice code {lattice_code!r} without a reference cell -- the axes are "
-              f"written in the indexer's order, which need not put the unique axis where the code says",
+        print(f"write_solution_file: lattice code {lattice_code!r} without a reference cell -- the axes get the "
+              f"length-only setting of _canonical_axes, which need not put the unique axis where the code says",
               file=sys.stderr)
     far = 0
     for r in results:
         M = r.get("M")
         if M is None:
             continue
-        if ref is not None and laue not in ("4/mmm", "mmm", "6/mmm"):
+        if ref is not None and laue not in STANDARD_SETTING_LAUE:
             Are, e = _match_reference_setting(M, ref)
             if e > SETTING_MATCH_RTOL:
                 Are, far = _canonical_axes(M, laue=laue, centering=centering), far + 1
@@ -626,7 +633,8 @@ def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
                     % (r.get("image", "glint.cxi"), ev, " ".join("%.7f" % x for x in v), lattice_code))
     if far:
         print(f"write_solution_file: {far} frame(s) are no signed permutation of the reference cell "
-              f"(metric distance > {SETTING_MATCH_RTOL}); written in the indexer's order", file=sys.stderr)
+              f"(metric distance > {SETTING_MATCH_RTOL}); written in the setting _canonical_axes gives them",
+              file=sys.stderr)
     with open(path, "w") as f:
         f.write("\n".join(rows) + "\n")
     return len(rows)

@@ -160,7 +160,7 @@ def _driver(Mc=A, oracle_default=None, oracle=None, **kw):
 
 
 ROSTER = {"lyso": CELL_A, "other": CELL_B}
-TERMINAL = {"blank", "warmup_vote", "warmup_lock", "indexed", "rescued_watchdog", "rescued_cascade", "rescued_per_lattice",
+TERMINAL = {"blank", "warmup_vote", "warmup_lock", "indexed", "escalated", "rescued_watchdog", "rescued_cascade", "rescued_per_lattice",
             "miss", "gate_rejected"}
 RETRO = {"rescued_warmup", "rescued_relock"}
 
@@ -348,10 +348,11 @@ def test_default_config_stats_key_set_unchanged():
 
 def test_new_constructor_options_are_appended():
     params = list(inspect.signature(StreamDriver.__init__).parameters)
-    assert params[-11:] == ["roster", "events", "on_event", "cell_window",
+    assert params[-13:] == ["roster", "events", "on_event", "cell_window",
                             "assign", "assign_margin", "assign_margin_frac",
                             "per_lattice", "per_lattice_below",
-                            "hits_only", "rescue_pixels"], params[-13:]
+                            "hits_only", "rescue_pixels", "effort",
+                            "null_floor"], params[-14:]
     sig = inspect.signature(StreamDriver.__init__).parameters
     assert sig["roster"].default is None and sig["events"].default is False
     assert sig["on_event"].default is None and sig["cell_window"].default == 200

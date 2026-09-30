@@ -829,6 +829,17 @@ DEFAULT_TARGETS = [
     # lineage.md and train_cnn.py and carries quantitative training settings (Copilot review of
     # #168). Verified green before wiring in, same protocol as the other three.
     REPO / "docs/perlmutter_cnn.md",
+    # ...and the pages written after that list was last extended (added 2026-09-29): the replay provenance
+    # page and the driver's option reference under docs/, the reproduction map, and the three LUTE pages an
+    # S3DF user reads before anything else. Verified green before wiring in, same protocol; REPRODUCING.md
+    # and lute/README.md were not -- each named a merge dataset without its record-sourced row, which is
+    # exactly what the REQUIRED rules exist to catch -- and were completed rather than exempted.
+    REPO / "docs/streaming_replay.md",
+    REPO / "docs/stream_driver_options.md",
+    REPO / "REPRODUCING.md",
+    REPO / "lute/README.md",
+    REPO / "lute/GETTING_STARTED.md",
+    REPO / "lute/STATUS.md",
 ]
 PDF_TARGETS = [
     HOME / "git/slides/glint/glint_summary.pdf",

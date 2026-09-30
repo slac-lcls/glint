@@ -109,6 +109,12 @@ def main():
                     help="sparse mode: which consensus-consistent candidate a frame keeps. first = the first N-best "
                          "cell, the known-cell search only if there is none (default); matched = the known-cell search "
                          "on every frame, keep whichever candidate matches the most peaks")
+    ap.add_argument("--gate", choices=("none", "strict"), default="none",
+                    help="what a frame must satisfy to be WRITTEN as a crystal. none (default): every registration, "
+                         "as before -- with --cell that is nearly every frame, since a known-cell search always "
+                         "returns the asked-for cell. strict: >= 10 peaks and >= 25%% of the frame's peaks matched "
+                         "(the paper's scoring bar); a failing frame is written as unindexed and is skipped by "
+                         "--integrate and --tofile. Not null-calibrated: ~5%% of dense lattice-free frames pass")
     ap.add_argument("--integrate", action="store_true",
                     help="native predict+integrate -> a stream with REAL I/sigma, self-contained (no CrystFEL). "
                          "With --images the frames are read straight from the stacked .cxi by event; with --peaks "
@@ -180,6 +186,11 @@ def main():
             casc = external_cascade(args.cascade)
         results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest, cascade=casc,
                                       escalate=args.escalate or None, select=args.select)
+    if args.gate != "none":                                      # before --integrate / --tofile / the stream
+        from glint.hybrid_stream import gate_results
+        stats["n_gated"] = gate_results(results, frames, args.gate)
+        stats["gate"] = args.gate
+        stats["n_idx"] -= stats["n_gated"]
     if args.integrate:
         if not args.geom:
             ap.error("--integrate requires --geom (and --image-dir for the frame images)")

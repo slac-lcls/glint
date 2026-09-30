@@ -613,7 +613,7 @@ def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
         M = r.get("M")
         if M is None:
             continue
-        if laue is None and ref is not None:
+        if ref is not None and laue not in ("4/mmm", "mmm", "6/mmm"):
             Are, e = _match_reference_setting(M, ref)
             if e > SETTING_MATCH_RTOL:
                 Are, far = _canonical_axes(M, laue=laue, centering=centering), far + 1

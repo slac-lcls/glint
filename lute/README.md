@@ -14,7 +14,7 @@ rest of the DAG consumes.
 
 The DAG runs end to end on real data and produces a mergeable dataset. On `cxil1015922` r0033
 (Jungfrau-4M lysozyme, 1563 frames) it indexes 1506 blind (96%) and merges 1482 of them to
-CC\* 0.915 / R_split 31.6% at 2.1 Å. On sparse cxidb-17 frames GLINT-① indexes 361 of 480 blind
+CC\* 0.915 / R_split 31.6% / ⟨I/σ⟩ 7.7 at 2.1 Å. On sparse cxidb-17 frames GLINT-① indexes 361 of 480 blind
 against xgandalf's 350 at the same gate — a match, not a lead (McNemar *p* = 0.18).
 
 Those merge numbers come from job `35507050` and are pinned, with their protocol, in

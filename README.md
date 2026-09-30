@@ -57,6 +57,13 @@ first-fit over the active cells, on 170-peak frames — and none of them pass th
 (no pixels); the GIF plays every second frame, 2× real time.
 [`docs/streaming_replay.md`](docs/streaming_replay.md#two-species-replay--the-cell-registry-at-work).
 
+Everything the driver does beyond the base path is opt-in and was measured before it shipped: the warm-up
+and re-lock rescues above, a retry cascade on the misses, per-lattice scoring of double hits, best-fit
+assignment between cells, a named cell registry with a per-frame event trace, ring slots for hits only, and
+`effort=`, which makes the known-cell search depth follow the hit rate and spends the spare GPU time on a
+chance-controlled deep search of the misses (glint#213). Every constructor option, by topic, with its default
+and the pull request that measured it: [`docs/stream_driver_options.md`](docs/stream_driver_options.md).
+
 ## Install
 
 ```bash
@@ -76,8 +83,12 @@ glint --qframes frames.txt -o indexed.stream
 ```
 
 Options: `--cell "a b c al be ga"` (known cell, skip consensus) · `--nbest N` (multi-hypothesis
-consensus, default 3) · `--mode auto|sparse|dense` · `--integrate` (real I/σ) · `--tofile` (hand
-orientations to CrystFEL for the refined merge) · `--device cpu|auto` · `-N` (limit frames).
+consensus, default 3) · `--mode auto|sparse|dense` · `--escalate` (a deeper known-cell search on the frames
+that still fail the gate, accepted only against the frame's own azimuth-scrambled copies; off by default) ·
+`--gate none|strict` (write a frame as a crystal only if it passes the paper's scoring bar; default none) ·
+`--integrate` (real I/σ) · `--tofile` (hand orientations to CrystFEL for the refined merge) ·
+`--device cpu|auto` · `-N` (limit frames). `--images raw.cxi --geom detector.geom` runs GLINT's own GPU
+peak finder on the pixels instead of reading a peak stream.
 
 ## LUTE pipeline
 
@@ -122,6 +133,7 @@ its run, the negative results, and the assumptions that have never been tested.
 from glint.geom import parse_geom, read_crystfel_peaks, peaks_to_q   # CrystFEL .geom + peaks -> q
 from glint.hybrid_stream import hybrid_index                         # blind -> consensus -> rescue
 from glint.stream import write_stream                                # results -> CrystFEL .stream
+from glint.stream_driver import StreamDriver                         # streaming: push frames, batched index+integrate
 ```
 
 The blind front-end (`glint.glint_fast.index_blind_nbest`), the consensus

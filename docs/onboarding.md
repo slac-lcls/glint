@@ -43,7 +43,7 @@ step). No FFT, no grid: the true lattice vectors are simply the basins that attr
 For **dense** data (full / partial rotations, many peaks) it instead seeds from a **3-D FFT** of local
 peak clusters — the transform method the project was originally built on (see [`lineage.md`](lineage.md)).
 Both front ends feed one refine → assemble → anneal → score core plus a GPU known-cell rescue, all
-GPU-batched (hundreds of frames/s), emitting an oriented lattice per frame → CrystFEL `.stream` → merge.
+GPU-batched (the blind pass at ~39 frames/s on one A100, the batched known-cell engine at ~5900 frames/s at B=120), emitting an oriented lattice per frame → CrystFEL `.stream` → merge.
 Where the maths lives: `glint/glint_fast.py` (seed grid + objective + ascent — the *optimizer*),
 `glint/multishot.py` (cross-frame consensus — the *selector*), `glint/lattice.py` (cell ↔ basis, SO(3)).
 The paper's *Architecture* and *Candidate-generation* sections are the fuller treatment.
@@ -91,9 +91,9 @@ git clone git@github.com:slac-lcls/glint.git
 cd glint
 ```
 
-- Work on a **feature branch**, open a **pull request**, get a quick review, then merge to `main`.
-  (`main` is the shared trunk; keep it green.) For tiny, low-risk fixes among the core team, a direct
-  push to `main` is fine — use judgement.
+- Work on a **feature branch**, open a **pull request**, let CI go green, get a quick review, then merge to
+  `main` (`main` is the shared trunk; keep it green). Small fixes go the same way: the suites and the number
+  guard run on the pull request, and that is where a pin or a figure gets checked.
 - **S3DF and NERSC are already wired to GitHub** (SSH). On those machines just `git pull` / `git push`
   like anywhere else; the local repo is `~/git/glint` on S3DF.
 
@@ -113,20 +113,43 @@ GLINT is pure Python (numpy/scipy/torch/h5py); CUDA is used automatically when p
 
 ```
 glint/          the engine — one file per stage (import glint.<mod>)
-  glint_fast.py     M1–M3 blind front end (seed grid, score, gradient ascent)
-  glint_index.py    M4 assembly / refine
-  replica_gpu.py    GPU known-cell rescue (ffbidx-style)
-  multishot.py      cross-frame consensus (derive the cell; reject non-crystals)
-  hybrid_stream.py  orchestration: blind → consensus → rescue (→ optional cascade)
-  geom.py           CrystFEL .geom + peaks → reciprocal q
-  predict.py        spot prediction + integration (→ real I/σ)
-  stream.py         results → CrystFEL .stream
-  cascade.py        optional external fallback — shells out to any indexer binary speaking
-                    the FRAME-in / basis-out protocol (real ffbidx + real xgandalf drivers
-                    in experiments/xgandalf/)
-experiments/    research scripts + the validation harness (NOT shipped in the wheel)
+  glint_fast.py         M1–M3 blind front end (seed grid, score, gradient ascent); the strict-gate constants
+  glint_index.py        M4 assembly / refine
+  fused_m3.py, fused_kernels.py, fused_integrate.py
+                        the cupy RawKernels behind M3, the batched known-cell engine and the integrator
+  replica_gpu.py        per-frame GPU known-cell rescue (ffbidx-style)
+  replica_gpu_batch.py  the batched, fused known-cell engine (index_fused; the deep search's depth arguments)
+  multishot.py          cross-frame consensus (derive the cell; reject non-crystals) — the batch path
+  running_consensus.py  the same consensus one frame at a time, with the sequential lock (streaming)
+  hybrid_stream.py      offline orchestration: blind → consensus → rescue (→ escalation → cascade)
+  stream_driver.py      the streaming driver: device ring, blind warm-up and lock, batched known-cell,
+                        the rescue ladder, cell registry, running merge, effort policy
+                        (options: docs/stream_driver_options.md)
+  retry_cascade.py      the retry arms the driver and the offline measurement share; escalate_batch
+  warmup_batch.py       peak-triaged, fanned-out blind warm-up
+  multilattice.py       double-hit primitives: deflate, second-lattice verdict, azimuth scramble
+  alias_gate.py, spurious_meter.py
+                        lock-time alias gate; spurious-peak meters and the lock-quality null
+  lattice.py            cell ↔ basis, SO(3), axis standardization (standardize_axes); the Laue operator
+                        registry (LAUE_CLASSES, laue_ops) lives in stream_driver.py
+  geom.py, lute_bridge.py
+                        CrystFEL .geom + peaks → reciprocal q (the offline and the driver bridges)
+  peakfinder_v4.py, peakfinder8.py, peakfinder9.py, radial.py, ring_mask.py
+                        device peak finders (the driver uses v4) and the radial primitive
+  predict.py            spot prediction + box integration (→ real I/σ); the driver's .stream writer
+  geom_refine.py        running detector-geometry refinement (diagnostic)
+  stream.py             results → CrystFEL .stream (offline)
+  cascade.py            optional external fallback — shells out to any indexer binary speaking
+                        the FRAME-in / basis-out protocol (real ffbidx + real xgandalf drivers
+                        in experiments/xgandalf/)
+  glint_cli.py          the `glint` command
+  index.py, transform.py, peakfind.py, localize.py, seed.py, cnn*.py, detector.py, features.py
+                        the FFT-volume lineage and the learned peak finder (docs/lineage.md)
+  gpu_pool.py, device_merge.py, joint.py, partiality.py, refine_sym.py, simulate.py, synth_sfx.py
+                        idle-GPU pool, device-side merge, joint cell recovery, merge models, simulators
+experiments/    research scripts, the CPU suites CI runs, results notes (NOT shipped in the wheel)
 lute/           LUTE `GLINTIndexer` task (drop-in for CrystFELIndexer in the SFX DAG)
-docs/           this file + notes
+docs/           this file, the driver's option reference, the replay provenance, settled results, lineage
 ```
 
 > **Two indexers — don't start from `demo.py`.** `experiments/demo.py` calls `glint.index_shot`
@@ -147,9 +170,10 @@ not the same problem at two speeds.**
 | **Known cell** | 3 rotation DOF — lengths and angles are given | rotate a known basis until it fits |
 
 Blind indexing is *combinatorial*; known-cell is *registration*. Per frame that is worth ~1.6× on its
-own — blind 26 ms vs the per-frame rescue `index_known_gpu_cell` at 16.5 ms. The dramatic number,
-~0.36 ms/frame, belongs to the *batched, fused* known-cell engine (`replica_gpu_batch.index_fused`) and is
-amortized over a batch, not the per-frame rescue this diagram shows. More important than either is that
+own — blind 26 ms vs the per-frame rescue `index_known_gpu_cell` at 16.5 ms. The dramatic numbers belong
+to the *batched, fused* known-cell engine (`replica_gpu_batch.index_fused`): 0.33 ms/hit at B=32 and
+0.17 ms/hit at B=120 (fp64, one A100), amortized over a batch, not the per-frame rescue this diagram shows.
+More important than either is that
 the known-cell pass indexes frames the blind pass could not (see "why rescue works", below).
 
 ```text
@@ -269,9 +293,61 @@ lattice or stays unindexed — the rescue cannot pollute the run with a differen
 | `index_fused()` / `index_all_graph()` | `replica_gpu_batch.py` | the batched known-cell engine itself (fused CUDA kernels / CUDA graph) |
 | `index_known_gpu_cell()` | `replica_gpu.py` | one frame against one cell (what the rescue calls) |
 | `dense_index()` | `hybrid_stream.py` | rotation/dense data — self-indexes per frame, no consensus needed |
+| `hybrid_index(..., escalate=True)` | `hybrid_stream.py` | offline, plus a deep known-cell search on the frames that still fail the gate, accepted only against the frame's own scrambled copies (glint#208, #211) |
+| `escalate_batch()` | `retry_cascade.py` | that deep search as a batched, null-controlled arm — what the driver's `effort=` calls on the misses |
+| `StreamDriver` | `stream_driver.py` | **streaming** — frames pushed one at a time, blind warm-up and lock, batched known-cell, the rescue ladder, running merge; the fourth path below |
 
 The third path, `dense_index`, needs no consensus at all: a dense rotation cloud is already 3-D complete,
 so each frame self-indexes via the local-cluster-FFT front end (`index_blind_cluster_seeded`).
+
+### The fourth path — the streaming driver
+
+`hybrid_index` sees all frames at once. `glint.stream_driver.StreamDriver` sees them one at a time, which
+changes three things and adds a fourth:
+
+- **The cell is discovered while the data arrive.** With `Mc=None` the first frames are indexed blind and vote
+  in a running consensus (`running_consensus.py`, the incremental twin of `consensus_cell`); the cell locks when
+  the vote is unambiguous — about six frames on cxidb-17 — and the driver switches to the batched known-cell
+  engine for the rest of the run. Hand it a cell and it starts there.
+- **Batches are a ring on the device.** `B` frames sit in preallocated device memory; when the ring is full they
+  are indexed as one `index_fused` batch and each is integrated against its still-resident pixels, then folded
+  into a running merge (completeness, CC½, CC*, R_split under a chosen Laue class).
+- **Recovery is opt-in, and runs in a fixed order.** Warm-up frames are re-indexed the moment the cell locks
+  (`warmup_rescue`). For a locked batch, a frame that fits no active cell goes through, in this order:
+  per-lattice scoring of double hits (`per_lattice`), the deep chance-controlled search of `effort=`, the retry
+  cascade (`retry_cascade`), and last the blind watchdog of `adaptive_relock`, which rescues a same-cell miss from
+  its own candidates and adds a second cell when a new lattice recurs (`rescue_buffer` re-indexes the misses it
+  still holds against that cell). Each shipped with a CPU suite and a measured number; off, the base path is
+  byte-identical.
+- **Effort follows the hit rate** (`effort=dict(rate_hz=..., n_gpu=1)`, glint#213). The GPU time per hit is
+  `n_gpu / (rate × hit rate)`; the known-cell depth is the deepest tier that fits, and what is left buys a deep
+  search on the misses that must beat the frame's own scrambled copies (glint#211's null). Decisions at flush
+  boundaries, logged, reproducible from the record.
+
+Two cautions travel with it. The driver's live accept gate (`min_inliers`, `min_inlier_frac`) is looser than
+the paper's strict bar, and on lattice-free frames it accepts about half of the sparse ones, so a yield read off
+`indexed` is a live-gate yield: compare the recorder's strict column (glint#214 adds the calibrated floor). And
+the effort policy's tier costs are per-hit costs at B=120; at the B=20 the replays use the same search is dearer
+per hit, so pass `tiers=` measured at the batch size you run.
+
+Run it through the recorder rather than by hand — it is the driver's public surface (`push_q`, `events`) with
+strict scoring per species and a regression gate:
+
+```bash
+# the published 480-frame arm, as a gate (S3DF, one A100; ~/q480_fix.txt is the lysozyme q list)
+PYTHONPATH=. python experiments/record_stream_replay.py --input lyso=~/q480_fix.txt --B 20 --dmin 2.0 \
+    --warmup-rescue --adaptive-relock --min-inliers 10 --out replay480.json \
+    --expect 333/480 --expect-wresc 10 --expect-relock 1
+# the same arm with the effort policy at a 2 kHz budget on one GPU
+PYTHONPATH=. python experiments/record_stream_replay.py --input lyso=~/q480_fix.txt --B 20 --dmin 2.0 \
+    --warmup-rescue --adaptive-relock --min-inliers 10 --effort '{"rate_hz": 2000, "n_gpu": 1}' \
+    --out replay480_effort.json
+```
+
+The record's header carries the counters and the effort log; per frame, the event trace says which cell took
+the frame, at what inlier fraction, and by which mechanism. Every option, with its default and the pull request
+that measured it: [`stream_driver_options.md`](stream_driver_options.md). Two recorded runs, with what each
+animation frame means: [`streaming_replay.md`](streaming_replay.md).
 
 ## 4. Run it
 
@@ -283,19 +359,36 @@ python -m glint.glint_cli --qframes frames.txt -o indexed.stream
 ```
 
 Useful flags: `--cell "a b c al be ga"` (known cell) · `--nbest N` (consensus hypotheses) ·
-`--mode auto|sparse|dense` · `--cascade <driver>` (external fallback) · `--integrate` (real I/σ) ·
-`--fromfile <sol>` (hand orientations to CrystFEL for the refined merge) · `--device cpu|auto`.
+`--mode auto|sparse|dense` · `--escalate` (a deep known-cell search on the frames that still fail the gate,
+accepted only against the frame's own scrambled copies; glint#208) · `--gate none|strict` (write a frame as a
+crystal only if it passes the paper's scoring bar; glint#216) · `--cascade <driver>` (external fallback) ·
+`--integrate` (real I/σ) · `--tofile <sol>` (hand orientations to CrystFEL for the refined merge) ·
+`--device cpu|auto`. `--images raw.cxi --geom detector.geom` runs GLINT's own peak finder on the pixels
+instead of reading a peak stream.
 
 ## 5. Validate before you push ("definition of done")
 
-- **CPU smoke test must pass** — no GPU needed, runs anywhere:
+- **The `experiments/` suites CI runs must pass locally, in an environment as poor as CI's:**
   ```bash
-  python experiments/test_cli_smoke.py     # expect ALL PASS (6/6)
+  python experiments/run_ci_locally.py               # the root-level experiments/ steps of the CPU job, torch/cupy/numba blocked
+  python experiments/run_ci_locally.py --check-sync  # its list matches ci.yml (CI runs this check too)
   ```
-- **No indexing-rate regression.** Any change to the front end / consensus / rescue must hold the
-  rate on the 120 sparse cxidb frames — blind 77% (92/120) at the strict ≥25%-of-spots bar, and 96%
-  (115/120) at the correct-lattice bar — and 100% on the 10-cell dense sweep. The `experiments/` harness has the scripts (run on GPU via
-  `srun`, below). If a change is meant to be bit-identical, verify it is.
+  That is about fifty suites — the smoke test (`test_cli_smoke.py`, 6/6), the consensus and gate pins, every
+  driver mechanism with a fit-oracle indexer (`test_stream_*.py`, `test_cell_registry.py`, `test_per_lattice.py`,
+  `test_stream_effort.py`), and the number guard (`check_numbers.py`) over the README and the docs. The LUTE and
+  `xtc_bridge` suites run only in CI, and the torch-backed checks take their skip path here. A suite
+  added to `ci.yml` but not to the runner's list fails `--check-sync`; a figure that contradicts
+  `check_numbers.py --facts` fails the guard.
+- **No indexing-rate regression on the GPU.** Any change to the front end / consensus / rescue / driver must
+  hold the rate on the 120 sparse cxidb frames — blind 77% (92/120) at the strict ≥25%-of-spots bar, and 96%
+  (115/120) at the correct-lattice bar — 100% on the 10-cell dense sweep, and the streaming arm on the 480
+  (`record_stream_replay.py --expect 333/480 --expect-wresc 10 --expect-relock 1`, §3). The `experiments/`
+  harness has the scripts (run on GPU via `srun`, below). If a change is meant to be bit-identical, verify it is.
+- **Constructor pins.** `StreamDriver.__init__` is not keyword-only, so a new option is appended, never
+  inserted, and the positional pins in `test_cell_registry.py`, `test_per_lattice.py` and
+  `test_lock_gate_wiring.py` are extended; the option gets a row in
+  [`stream_driver_options.md`](stream_driver_options.md), which `test_stream_driver_options_doc.py` checks
+  against the signature.
 - Keep the change scoped; put throwaway analysis in `experiments/`, not the shipped `glint/` package.
 
 ## 6. Where the compute + data live
@@ -312,6 +405,12 @@ Useful flags: `--cell "a b c al be ga"` (known cell) · `--nbest N` (consensus h
 - Run GLINT blind on a real SFX dataset you know and sanity-check the cell + merge vs cctbx.xfel/DIALS.
 - Extend the `--fromfile` → CrystFEL-refine → `partialator` merge to more proteins beyond ProK/lysozyme.
 - Exercise the LUTE `GLINTIndexer` task in a real SFX DAG (`lute/`), where LUTE's CrystFEL builds lack FFBIDX.
+
+**Streaming driver** (§3, the fourth path)
+- Measure `tiers=` for `effort=` at another batch size or another GPU (the shipped table is B=120 on an A100)
+  and rerun `experiments/effort_gpu.sbatch` at that B; the recorder's effort log is the readout.
+- A two-species *pixel* stream: the recorded mixture is q-level because the CXIDB 45 deposit is MPCCD data,
+  so two species on one detector would be new evidence for the cell registry.
 
 **GPU / algorithms**
 - Throughput: the *known-cell* engine is batched and fused down to sub-ms (`index_fused`, PR #16) and now

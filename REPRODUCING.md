@@ -146,8 +146,8 @@ paper's SI explains as two pipelines at one gate. That is a different distinctio
 and the numerical coincidence is unfortunate; do not merge the two stories.
 
 Note also that this is *not* `compare3.py`'s blind-top-1 arm -- the two agree on the 120-frame
-subset and differ by 15 frames at n=480 (361 vs 346), so the distinction only becomes visible on
-the larger set.
+subset and part by 15 frames on the larger set (GLINT-① indexes 361 of 480; the `compare3.py` arm
+is 15 lower), so the distinction only becomes visible there.
 
 To write a CrystFEL stream instead of a score:
 
@@ -220,7 +220,8 @@ indexer in `tab:summary` was actually fed. Download the raw data only if you wan
 peak lists themselves.
 
 The Jungfrau-4M lysozyme dataset (`cxil1015922` r0033) is **LCLS experimental data and is not
-public**.
+public**. Its row is record-sourced (job 35507050): 1506 of 1563 frames indexed blind, 1482 crystals
+merged, CC* 0.915, R_split 31.6%, ⟨I/σ⟩ 7.7; the protocol is in [`lute/STATUS.md`](lute/STATUS.md).
 
 Timing tables (`tab:throughput`, `tab:stages`) are per-row measurements from
 `experiments/bench_kc_graph.py`, `bench_fused.py`, `index_batch_sweep.py` and `profile_glint.py`.
@@ -263,8 +264,9 @@ Stated plainly, because a wrong guess costs more than a gap:
   TORO and Nasser figures in that table are **those works' own published numbers under their own
   acceptance conventions**, not measurements made here; the caption says so, and it is not a
   controlled head-to-head like `tab:summary`.
-- **The cxidb-45 and cxidb-17 merge rows** of `tab:realmerge` — the indexing side is reproducible,
-  but no committed script runs the merges themselves; the route is documented in prose only.
+- **The cxidb-45 and cxidb-17 merge rows** of `tab:realmerge` (cxidb-45 Proteinase K: CC* 0.90,
+  R_split 31%, ⟨I/σ⟩ 7.8 on the 290-frame merge) — the indexing side is reproducible, but no committed
+  script runs the merges themselves; the route is documented in prose only.
 - **The `asdf` and `mosflm` rows** of `tab:summary` — the input builder (`experiments/make_cxi.py`)
   and the scorer are committed, but the harness that drove those two indexers is not.
 

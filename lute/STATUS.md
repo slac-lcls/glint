@@ -571,6 +571,73 @@ along invisibly — which is exactly the `cxilu8823` r0226 situation.
 
 ---
 
+## Jungfrau common mode on the psana2 route (2026-09-30, for glint#219)
+
+Measured because glint#219 flags that psana2-gpu's `JungfrauCalibration` example has no
+common-mode correction. **For parity it does not need one: the reader GLINT runs today applies
+none either.**
+
+**What `det.raw.calib(evt)` does in the env the reader actually uses.** Read from the installed
+source in `xpp_drp_gpu_311` (Python 3.11.14; `psana` from the env's own `site-packages`, after
+`unset PYTHONPATH` — see item 2 under *What is left*), not from lcls2 `master`, which differs:
+`jungfrau.calib` calls the pure-Python `UtilsJungfrau.calib_jungfrau` (`cversion` defaults to 0
+here; on `master` it defaults to a C++ path), and the only assignment of the common-mode
+parameters is `self.cmps = self.kwa.get('cmpars', None)`. `xtc_qreader.py` passes no `cmpars`, so
+**no common-mode correction is applied**. Nor is there an experiment setting to pick up:
+`mfx101555026` r0013's `calibconst` holds `geometry, pedestals, pixel_gain, pixel_max, pixel_min,
+pixel_offset, pixel_rms, pixel_status` and **no `common_mode`**.
+
+**What it would change if it were on.** First 200 events of `mfx101555026` r0013 (Jungfrau 16M,
+`(32, 512, 1024)`), arm A `det.raw.calib(evt)` against arm C `det.raw.calib(evt,
+cmpars=(7,3,200,10))` — psana's documented default (rows + columns per 256x64 bank, `cormax` 200
+ADU), since the experiment supplies none. Peaks from GLINT's `peakfinder_v4.py` (main `b91ce63`) on
+its **numpy** path, per panel, at the production settings from `xtc_core` (`min_pix` 3, `son_min`
+15, `thr_high` 10, `thr_low` 5) and the reader's `pixel_status == 0` mask. The same finder runs on
+both arms, so a difference is attributable to common mode; absolute counts will not equal the GPU
+fp32 kernel's. Peaks matched greedily within 1.5 px on the same panel.
+
+- **The data does carry common-mode offsets.** Per event, a median **4.6%** of live pixels change
+  (p10 3.5%, p90 22.4%), typically by **0.92 keV** (per-event median; p90 2.86 keV), up to ~10 keV
+  where the row and column corrections stack.
+- **V4 absorbs them in aggregate, not peak for peak.** 3098 peaks without, 3085 with; **2938
+  matched, Jaccard 0.905**. Hits (>= 6 peaks) **134 vs 135**: 7 events lost hit status and 8 gained
+  it, every one with 4 to 7 peaks in both arms (lost: 6->5 x4, 6->4, 7->5 x2; gained: 5->6 x3,
+  5->7 x2, 4->6 x2, 4->7). Events with >= 20 peaks: median
+  per-event Jaccard 0.948 (n=38, min 0.762); over all hits 0.879 (n=142, p10 0.667, min 0.375).
+- **The peaks that differ are marginal.** Median integrated SNR 16.2 (only without) and 15.7 (only
+  with) against `son_min` 15; matched peaks 25.2. Below SNR 30: 90.0% and 96.6%, against 61.0%.
+- **Peaks lost when common mode is turned on cluster at bank edges**: 38.8% within 4 px of a
+  256x64 bank edge, against 22.5% of matched peaks (24.5% of peaks gained). Consistent with V4's
+  local background ring straddling an uncorrected offset step between banks, which is what common
+  mode removes — an interpretation, not separately tested.
+- **Cost:** 1.34 s/event for calib with common mode against 0.11 s without (CPU, `sdfiana027`,
+  `OMP_NUM_THREADS=8`).
+
+**What this does NOT establish:** which arm is scientifically better. That needs an indexing and
+merging comparison, not a peak comparison. Nor does it cover pf8: its background is estimated in
+radial shells over the whole detector, not in a local ring, so a per-bank offset is not expected to
+cancel there the way it largely does for V4. Not measured.
+
+**Consequences.** For glint#219 the parity baseline is *no common mode*, which the psana2-gpu
+example matches; enabling it in one arm only would confound an ingest comparison with a
+calibration change. A Jungfrau GPU decode (*What is left*, item 1) needs no common mode to match
+today's reader. If common mode is ever wanted, it goes into both arms and is costed separately:
+it is 12x the CPU calib time here, and the example does not implement it.
+
+**A trap that nearly made this a null gauge.** psana returns the **same** Detector object for
+repeated `run.Detector("jungfrau")` calls, and `calib_jungfrau` caches its kwargs on `det._odc` at
+first entry, then **ignores** different kwargs on later calls with only a logged warning. A naive
+A/B — two Detector objects, or one called with and without `cmpars` — compares the default against
+itself. The script caught it with an assertion (both arms had the same `raw` object), then kept one
+`_odc` per arm, swapped it in before each call, and asserted each cache held the expected `cmps` and
+kwargs.
+
+Provenance: script, log and the copied finder in `/sdf/scratch/users/s/smarches/cm_ab_20260930/`
+(`cm_ab.py`, `run200.log`, `peakfinder_v4.py`), run interactively on `sdfiana027`. Scratch is
+purgeable; the script is not in this repo.
+
+---
+
 ## What is left
 
 All seven items are closed. Item 6 closed 2026-08-13 as a measurement on Jungfrau 16M (see its
@@ -586,6 +653,8 @@ tests excluded as unhostable. Read the workflow for the current list rather than
    Jungfrau and epixHR need their own decode (`UtilsJungfrau` / `UtilsEpixHR`) before they get the
    4.1x — and this now matters more than when it was written: current SFX at MFX runs Jungfrau 16M
    on LCLS-II xtc2, where the psana1 route (and with it `gpu_calib`) does not apply at all.
+   A Jungfrau decode needs no common-mode step to match today's psana2 reader, which applies none
+   (see *Jungfrau common mode on the psana2 route*, above; glint#219).
 2. **The psana2 route has no GPU-capable default environment**: the conda2 release lacks cupy, the
    one env with psana2+cupy (`xpp_drp_gpu_311`) lacks torch, and activating it under psconda.sh
    requires `unset PYTHONPATH` (the release psana is pinned ahead of the env). The item-6 ladder ran

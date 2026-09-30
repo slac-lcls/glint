@@ -1107,8 +1107,10 @@ class StreamDriver:
         if null_floor is None:
             self.null_floor = None
         else:
-            vals = (list(null_floor) if not isinstance(null_floor, (str, bytes, dict)) and np.iterable(null_floor)
-                    else None)
+            # ORDERED containers only: the coefficients are positional, and a set would hand them over in
+            # hash order -- a different gate, not an error (Copilot review of #214)
+            vals = (list(null_floor) if isinstance(null_floor, (list, tuple))
+                    or (isinstance(null_floor, np.ndarray) and null_floor.ndim == 1) else None)
             if (vals is None or len(vals) not in (2, 3)
                     or any(isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, float, np.integer, np.floating))
                            for v in vals)

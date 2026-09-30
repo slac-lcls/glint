@@ -76,7 +76,8 @@ def test_signature_default_and_validation():
     sig = inspect.signature(StreamDriver.__init__).parameters
     assert list(sig)[-1] == "null_floor" and sig["null_floor"].default is None, list(sig)[-3:]
     for bad in ((0.1,), (0.1, 1.0, 2.0, 3.0), (float("nan"), 1.0), (0.1, float("inf")), "0.1,5", (True, 1.0),
-                {"a": 1, "b": 2}, 3.0, (0.1, "5")):
+                {"a": 1, "b": 2}, 3.0, (0.1, "5"), {0.1, 5.0}, frozenset((0.02, 5.0, 1.2)),
+                (v for v in (0.1, 5.0)), np.array([[0.1, 5.0]])):
         try:
             _driver(null_floor=bad)
         except ValueError as exc:
@@ -90,8 +91,10 @@ def test_signature_default_and_validation():
 
 def test_default_gate_is_the_historical_rule():
     """null_floor=None: _gate_count equals the two-bar rule it replaced, on every (count, peaks) pair of a grid
-    and at three gate settings -- the default path's decisions are unchanged, not merely similar."""
-    for kw in (dict(), dict(min_inliers=10), dict(min_inliers=10, min_inlier_frac=0.0)):
+    and at four gate settings -- the default path's decisions are unchanged, not merely similar. The NaN fraction
+    is the edge: the old `n >= nan` refused everything, and `n < nan` would accept everything (Copilot review)."""
+    for kw in (dict(), dict(min_inliers=10), dict(min_inliers=10, min_inlier_frac=0.0),
+               dict(min_inliers=10, min_inlier_frac=float("nan"))):
         drv, _ = _driver(**kw)
         for npk in range(1, 400, 7):
             for n in range(0, npk + 1):

@@ -174,12 +174,14 @@ of 405), because more misses reach the watchdog. It admits 15 lysozyme frames in
 ```
 python experiments/live_gate_null.py measure --input ~/q480_fix.txt --k-fit 32 \
     --extra-cell cell1=87.5,87.6,109.5,69.3,72.7,100.7 --extra-cell prok=68.7,68.7,108.6,90,90,90 --k-extra 8 \
-    --out live_gate_null_480.npz                       # CPU torch, ~25 min
-python experiments/live_gate_null.py fit experiments/live_gate_null_480.npz --xgandalf ~/xgd480_fix.txt --input ~/q480_fix.txt
-python experiments/live_gate_null.py confirm experiments/live_gate_null_480.npz --floor 0.0224,5.32,1.211 --xgandalf ~/xgd480_fix.txt
+    --out rerun_480.npz                                # CPU torch, ~25 min
+python experiments/live_gate_null.py fit rerun_480.npz --xgandalf ~/xgd480_fix.txt --input ~/q480_fix.txt
+python experiments/live_gate_null.py confirm rerun_480.npz --floor 0.0224,5.32,1.211 --xgandalf ~/xgd480_fix.txt
 python experiments/live_gate_null.py measure --input experiments/frames_cxidb_clean.txt \
-    --cell 79.02,79.02,37.98,90,90,90 --k-fit 16 --out live_gate_null_120.npz
+    --cell 79.02,79.02,37.98,90,90,90 --k-fit 16 --out rerun_120.npz
 python experiments/record_stream_replay.py --input lyso=~/q480_fix.txt --input scr=q480_scrambled.txt \
     --ref scr=79.02,79.02,37.98,90,90,90 --B 20 --dmin 2.0 --warmup-rescue --adaptive-relock --min-inliers 10 \
     [--null-floor cxidb17] --out replay.json
 ```
+
+`fit` and `confirm` also take the committed `experiments/live_gate_null_480.npz` directly, with no measurement.

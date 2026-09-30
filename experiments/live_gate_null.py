@@ -36,11 +36,11 @@ steps need no torch:
 
   python experiments/live_gate_null.py measure --input ~/q480_fix.txt --k-fit 32 \\
       --extra-cell cell1=87.5,87.6,109.5,69.3,72.7,100.7 --extra-cell prok=68.7,68.7,108.6,90,90,90 --k-extra 8 \\
-      --out live_gate_null_480.npz                    # CPU torch: ~30 s per pass of 480, 52 passes
-  python experiments/live_gate_null.py fit experiments/live_gate_null_480.npz --xgandalf ~/xgd480_fix.txt \\
-      --input ~/q480_fix.txt
-  python experiments/live_gate_null.py confirm experiments/live_gate_null_480.npz --floor 0.0224,5.32,1.211 \\
-      --xgandalf ~/xgd480_fix.txt
+      --out rerun_480.npz                             # CPU torch: ~30 s per pass of 480, 52 passes
+  python experiments/live_gate_null.py fit rerun_480.npz --xgandalf ~/xgd480_fix.txt --input ~/q480_fix.txt
+  python experiments/live_gate_null.py confirm rerun_480.npz --floor 0.0224,5.32,1.211 --xgandalf ~/xgd480_fix.txt
+
+(pass experiments/live_gate_null_480.npz instead of rerun_480.npz to fit the committed arrays without measuring)
 """
 import argparse
 import hashlib

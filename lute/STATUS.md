@@ -632,9 +632,11 @@ itself. The script caught it with an assertion (both arms had the same `raw` obj
 `_odc` per arm, swapped it in before each call, and asserted each cache held the expected `cmps` and
 kwargs.
 
-Provenance: script, log and the copied finder in `/sdf/scratch/users/s/smarches/cm_ab_20260930/`
-(`cm_ab.py`, `run200.log`, `peakfinder_v4.py`), run interactively on `sdfiana027`. Scratch is
-purgeable; the script is not in this repo.
+Provenance: [`experiments/xtc_bridge/common_mode_ab.py`](../experiments/xtc_bridge/common_mode_ab.py)
+is the runnable measurement script and
+[`common_mode_ab_result.json`](../experiments/xtc_bridge/common_mode_ab_result.json) is the durable
+result artifact (the original interactive log and copied finder were in purgeable scratch on
+`sdfiana027`).
 
 ---
 

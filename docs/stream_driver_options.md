@@ -100,24 +100,27 @@ per-peak-count floor is glint#214 (`null_floor=`, open).
 | `min_inlier_frac` | `0.15` | minimum inlier fraction of the frame's peaks; 0.15 is the smallest value that refused every wrong-cell frame in the calibration (n=16, synthetic), costing 4 of 115 real frames | commit 907c057; #170 pins it | `--min-inlier-frac` |
 | `tol` | `0.002` | excitation-error window of the prediction (1/Å): which reflections count as on the Ewald sphere for integration | #19 | `--tol` |
 
-### Recovery and multi-lattice processing
+### Recovering the misses, in execution order
 
-Once locked, the base path runs known-cell indexing. Optional miss recovery runs `per_lattice`, the `effort`
-deep search, `retry_cascade`, and finally the adaptive-relock watchdog, in that order; warm-up rescue, pixel
-retention, and accepted-frame double-hit processing are described here as related mechanisms.
+Once locked the driver runs known-cell only; a frame that fits no active cell is a miss. The optional recoveries
+take it in this order (`flush()`): per-lattice scoring of double hits, the deep search of `effort=`, the retry
+cascade, then the miss buffer and blind watchdog of `adaptive_relock`. The rows follow that order; the last three
+belong to the same family but act elsewhere — `warmup_rescue` on the pre-lock frames, `rescue_pixels` on what the two
+retroactive rescues can integrate, `double_hit` on frames already accepted. Each is off by default, so the base path
+stays byte-identical.
 
 | option | default | what it does | measured / introduced | recorder |
 |---|---|---|---|---|
-| `warmup_rescue` | `False` | keep the warm-up frames' q and re-index them against the cell the instant it locks (index-only unless `rescue_pixels`) | commit 041dfa3; published arm: 323 → 331 of 480 with `adaptive_relock` | `--warmup-rescue` |
-| `adaptive_relock` | `False` | a blind watchdog on the misses: their votes add a second active cell when one recurs (a sample change or a mixture), and a miss whose own candidates fit an active cell is rescued individually (`rescued_watchdog`) | #54; two-species replay in [`streaming_replay.md`](streaming_replay.md) | `--adaptive-relock` |
-| `rescue_buffer` | `0` | with `adaptive_relock`: keep the last N misses' q and re-index them against a newly locked cell (`rescued_relock`) | commit 401cd98; in the two-species replay the 10 buffered misses were re-indexed against the new cell, 8 strict | `--rescue-buffer` |
-| `rescue_pixels` | `0` | keep up to N frames' pixels on the device so the two rescues above integrate what they recover, not only count it | #212 | — |
-| `retry_cascade` | `False` | on a miss, run the measured arm union before the miss path: blind N-best, then the per-frame known-cell indexer. Streaming with the retry indexes 365 of 480 against offline's 357 (`retry_rate_of480`); at the shipped live gate it fires on few frames, and it pays with the strict bar as the live gate (`min_inliers=10, min_inlier_frac=0.25`, the constructor comment's table) | #145; `check_numbers.py --facts` | `--retry-cascade` |
-| `retry_nbest` | `None` → 10 | N-best depth of that blind arm | #145 | — |
-| `effort` | `None` | adaptive effort: the known-cell search depth follows the hit rate, and the spare budget buys a chance-controlled deep search on the misses (`escalated`). Settings below | #213; [`RESULTS_stream_effort_a100.md`](../experiments/RESULTS_stream_effort_a100.md) | `--effort JSON` |
-| `double_hit` | `False` | after each accepted frame, deflate its peaks and look for a second lattice of the same cell ≥15° away; the gated rule is reported with its own 1-in-16 scrambled null | #56; #207 | `--double-hit` |
 | `per_lattice` | `False` | score the stronger of two lattices against the peaks the other does not claim: a frame failing the gate under every cell is searched for a second lattice in the residual (`rescued_per_lattice`), and an accepted frame below `per_lattice_below` gets a per-lattice QC fraction | #206 | `--per-lattice` |
 | `per_lattice_below` | `0.25` | lattice-1 share below which an accepted frame is searched | #206 | `--per-lattice-below` |
+| `effort` | `None` | adaptive effort: the known-cell search depth follows the hit rate, and the spare budget buys a chance-controlled deep search on the misses (`escalated`). Settings below | #213; [`RESULTS_stream_effort_a100.md`](../experiments/RESULTS_stream_effort_a100.md) | `--effort JSON` |
+| `retry_cascade` | `False` | on a miss, run the measured arm union before the miss path: blind N-best, then the per-frame known-cell indexer. Streaming with the retry indexes 365 of 480 against offline's 357 (`retry_rate_of480`); at the shipped live gate it fires on few frames, and it pays with the strict bar as the live gate (`min_inliers=10, min_inlier_frac=0.25`, the constructor comment's table) | #145; `check_numbers.py --facts` | `--retry-cascade` |
+| `retry_nbest` | `None` → 10 | N-best depth of that blind arm | #145 | — |
+| `adaptive_relock` | `False` | a blind watchdog on the misses: their votes add a second active cell when one recurs (a sample change or a mixture), and a miss whose own candidates fit an active cell is rescued individually (`rescued_watchdog`) | #54; two-species replay in [`streaming_replay.md`](streaming_replay.md) | `--adaptive-relock` |
+| `rescue_buffer` | `0` | with `adaptive_relock`: keep the last N misses' q and re-index them against a newly locked cell (`rescued_relock`) | commit 401cd98; in the two-species replay the 10 buffered misses were re-indexed against the new cell, 8 strict | `--rescue-buffer` |
+| `warmup_rescue` | `False` | keep the warm-up frames' q and re-index them against the cell the instant it locks (index-only unless `rescue_pixels`) | commit 041dfa3; published arm: 323 → 331 of 480 with `adaptive_relock` | `--warmup-rescue` |
+| `rescue_pixels` | `0` | keep up to N frames' pixels on the device so the warm-up and relock rescues integrate what they recover, not only count it | #212 | — |
+| `double_hit` | `False` | after each accepted frame, deflate its peaks and look for a second lattice of the same cell ≥15° away; the gated rule is reported with its own 1-in-16 scrambled null | #56; #207 | `--double-hit` |
 
 ### More than one cell
 

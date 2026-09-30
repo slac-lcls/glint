@@ -130,7 +130,8 @@ glint/          the engine — one file per stage (import glint.<mod>)
   multilattice.py       double-hit primitives: deflate, second-lattice verdict, azimuth scramble
   alias_gate.py, spurious_meter.py
                         lock-time alias gate; spurious-peak meters and the lock-quality null
-  lattice.py            cell ↔ basis, SO(3)
+  lattice.py            cell ↔ basis, SO(3), axis standardization (standardize_axes); the Laue operator
+                        registry (LAUE_CLASSES, laue_ops) lives in stream_driver.py
   geom.py, lute_bridge.py
                         CrystFEL .geom + peaks → reciprocal q (the offline and the driver bridges)
   peakfinder_v4.py, peakfinder8.py, peakfinder9.py, radial.py, ring_mask.py
@@ -311,10 +312,13 @@ changes three things and adds a fourth:
 - **Batches are a ring on the device.** `B` frames sit in preallocated device memory; when the ring is full they
   are indexed as one `index_fused` batch and each is integrated against its still-resident pixels, then folded
   into a running merge (completeness, CC½, CC*, R_split under a chosen Laue class).
-- **Recovery is opt-in.** `warmup_rescue` re-indexes startup frames when the initial cell locks. For locked
-  batches, misses go through `per_lattice`, the deep search enabled by `effort=`, `retry_cascade`, and finally
-  the `adaptive_relock` watchdog (with `rescue_buffer` for retroactive re-indexing), in that order. Each
-  mechanism shipped with a CPU suite and a measured number; off, the base path is byte-identical.
+- **Recovery is opt-in, and runs in a fixed order.** Warm-up frames are re-indexed the moment the cell locks
+  (`warmup_rescue`). For a locked batch, a frame that fits no active cell goes through, in this order:
+  per-lattice scoring of double hits (`per_lattice`), the deep chance-controlled search of `effort=`, the retry
+  cascade (`retry_cascade`), and last the blind watchdog of `adaptive_relock`, which rescues a same-cell miss from
+  its own candidates and adds a second cell when a new lattice recurs (`rescue_buffer` re-indexes the misses it
+  still holds against that cell). Each shipped with a CPU suite and a measured number; off, the base path is
+  byte-identical.
 - **Effort follows the hit rate** (`effort=dict(rate_hz=..., n_gpu=1)`, glint#213). The GPU time per hit is
   `n_gpu / (rate × hit rate)`; the known-cell depth is the deepest tier that fits, and what is left buys a deep
   search on the misses that must beat the frame's own scrambled copies (glint#211's null). Decisions at flush
@@ -356,21 +360,23 @@ python -m glint.glint_cli --qframes frames.txt -o indexed.stream
 
 Useful flags: `--cell "a b c al be ga"` (known cell) · `--nbest N` (consensus hypotheses) ·
 `--mode auto|sparse|dense` · `--escalate` (a deep known-cell search on the frames that still fail the gate,
-accepted only against the frame's own scrambled copies; glint#208) · `--cascade <driver>` (external fallback) ·
+accepted only against the frame's own scrambled copies; glint#208) · `--gate none|strict` (write a frame as a
+crystal only if it passes the paper's scoring bar; glint#216) · `--cascade <driver>` (external fallback) ·
 `--integrate` (real I/σ) · `--tofile <sol>` (hand orientations to CrystFEL for the refined merge) ·
 `--device cpu|auto`. `--images raw.cxi --geom detector.geom` runs GLINT's own peak finder on the pixels
 instead of reading a peak stream.
 
 ## 5. Validate before you push ("definition of done")
 
-- **The CPU suites CI runs must pass, locally, in an environment as poor as CI's:**
+- **The `experiments/` suites CI runs must pass locally, in an environment as poor as CI's:**
   ```bash
-  python experiments/run_ci_locally.py               # every CPU step of ci.yml, with torch/cupy/numba blocked
+  python experiments/run_ci_locally.py               # the root-level experiments/ steps of the CPU job, torch/cupy/numba blocked
   python experiments/run_ci_locally.py --check-sync  # its list matches ci.yml (CI runs this check too)
   ```
   That is about fifty suites — the smoke test (`test_cli_smoke.py`, 6/6), the consensus and gate pins, every
   driver mechanism with a fit-oracle indexer (`test_stream_*.py`, `test_cell_registry.py`, `test_per_lattice.py`,
-  `test_stream_effort.py`), and the number guard (`check_numbers.py`) over the README and the docs. A suite
+  `test_stream_effort.py`), and the number guard (`check_numbers.py`) over the README and the docs. The LUTE and
+  `xtc_bridge` suites run only in CI, and the torch-backed checks take their skip path here. A suite
   added to `ci.yml` but not to the runner's list fails `--check-sync`; a figure that contradicts
   `check_numbers.py --facts` fails the guard.
 - **No indexing-rate regression on the GPU.** Any change to the front end / consensus / rescue / driver must

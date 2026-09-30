@@ -112,7 +112,7 @@ def test_new_options_stay_at_the_end_of_the_signature():
               "assign", "assign_margin", "assign_margin_frac",       # best-fit cell assignment, appended
               "per_lattice", "per_lattice_below",                    # per-lattice scoring, appended
               "hits_only", "rescue_pixels",                          # hit-only ring + rescue pixels, appended
-              "effort"]                                              # adaptive effort, appended
+              "effort", "null_floor"]                                # adaptive effort, then live-gate chance floor
     assert params == expect, (params, expect)
 
 

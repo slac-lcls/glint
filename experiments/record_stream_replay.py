@@ -352,6 +352,9 @@ def main(argv=None):
     ap.add_argument("--per-lattice-below", type=float, default=0.25,
                     help="per_lattice: search accepted frames whose lattice-1 share is below this")
     ap.add_argument("--double-hit", action="store_true", help="the driver's gated double-hit detection on every accepted frame")
+    ap.add_argument("--null-floor", default=None, metavar="a,b[,c] | cxidb17",
+                    help="the live gate's chance floor (StreamDriver null_floor): n_inl >= a*n + b + c*sqrt(n); "
+                         "'cxidb17' = stream_driver.NULL_FLOOR_CXIDB17 (experiments/live_gate_null.py)")
     ap.add_argument("--stream-out", default=None); ap.add_argument("--cupy", action="store_true", help="use_gpu=True")
     ap.add_argument("--stream-symmetry", default=None, metavar="lattice_type=..,centering=..,unique_axis=..",
                     help="CrystFEL symmetry record stamped on every .stream chunk; also fixes the driver's merge class "
@@ -432,6 +435,9 @@ def main(argv=None):
         kw.update(per_lattice=True, per_lattice_below=a.per_lattice_below)
     if a.double_hit:
         kw["double_hit"] = True
+    if a.null_floor:                                         # only when set: published driver_kw stay byte-identical
+        kw["null_floor"] = (list(sd.NULL_FLOOR_CXIDB17) if a.null_floor == "cxidb17"
+                            else [float(v) for v in a.null_floor.split(",")])
     if a.stream_out:
         kw["stream_out"] = a.stream_out
     if a.geom_refine:
@@ -646,7 +652,7 @@ def main(argv=None):
                     integrated=st.get("integrated", 0))
     for key in ("n_per_lattice_searched", "n_per_lattice_found", "n_per_lattice_rescued", "n_per_lattice_swapped", "n_pl_null",
                 "pl_null_found_rate", "pl_null_rescued_rate", "n_double", "n_double_raw", "n_dh_null", "dh_null_rate",
-                "effort"):                                   # effort=: tier / deep / budget now, the change log, deep-search counts
+                "effort", "null_floor", "n_null_floor_refused"):
         if key in st:                                        # opt-in counters, present only when the option is on
             counters[key] = st[key]
     # self-checks: the event log must agree with the driver's own counters

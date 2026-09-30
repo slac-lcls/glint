@@ -68,6 +68,14 @@ if HKL_TOL != _SPURIOUS_HKL_TOL:
         "stream_driver.HKL_TOL and spurious_meter.HKL_TOL have drifted apart "
         f"({HKL_TOL} vs {_SPURIOUS_HKL_TOL}); the live gate and the spurious meters must count "
         "inliers at the same window")
+
+# The live gate's chance floor for StreamDriver(null_floor=...) (opt-in): n_inl >= a*n + b + c*sqrt(n), as
+# (a, b, c). Fitted on cxidb-17 (480 frames, peakfinder8 peaks, the locked lysozyme cell, the shipped
+# index_fused depth, HKL_TOL 0.15) at the 99th percentile of 32 azimuth-scrambled copies per frame --
+# experiments/live_gate_null.py, experiments/RESULTS_live_gate_null.md. Not portable as is: re-fit for
+# another detector, peak finder, cell family or search depth.
+NULL_FLOOR_CXIDB17 = (0.0224, 5.32, 1.211)
+
 try:
     import glint.replica_gpu_batch as rgb                     # the q-only batch indexer (needs torch)
 except Exception:                                            # pragma: no cover - CPU-only unit env (no torch)
@@ -850,7 +858,9 @@ class StreamDriver:
                  # default) -- see the class docstring and the warm-up rescue block below
                  hits_only=False, rescue_pixels=0,
                  # adaptive effort (off by default): the search depth follows the hit rate -- see _EffortPolicy
-                 effort=None):
+                 effort=None,
+                 # a per-peak-count chance floor on the live gate (off by default) -- see min_inlier_frac
+                 null_floor=None):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -1061,7 +1071,54 @@ class StreamDriver:
         # chance-level one, so a wrong-cell frame lands above the 2.7% random rate. Above it the cost
         # climbs with no further benefit. Caveat: the wrong-cell column is n=16 on one synthetic pair,
         # so read 0.15-vs-0.10 as indicative, not as a sharp threshold. Set 0.0 for the pure count gate.
+        #
+        # MEASURED SINCE (28 Sep 2026, experiments/live_gate_null.py, RESULTS_live_gate_null.md): the case
+        # a stream actually presents is not that one. A frame with NO lattice, searched with the RIGHT cell,
+        # passes this gate often, because the known-cell search keeps the best of ~10^4 orientations. On
+        # the cxidb-17 480 at the shipped depth, azimuth-scrambled copies (|q| and q_z kept, lattice gone)
+        # pass it 211/480 times (44%), and the real lysozyme frames searched with the Proteinase K cell,
+        # a real wrong cell, pass 204/480. The chance accepts sit at the SPARSE end: 96% of null frames
+        # with < 60 peaks pass, 2.5% at 130-200 peaks, none above 200 -- there the fraction does its job,
+        # below it the 10-count is at chance. null_floor (below) is the opt-in fix.
         self.min_inlier_frac = float(min_inlier_frac)
+        # CHANCE FLOOR (opt-in). null_floor=(a, b) or (a, b, c) adds a third bar to the live gate: the
+        # registration must explain n_inl >= a*n + b + c*sqrt(n) of the frame's n peaks. The shape follows
+        # the null: the best of K orientations of a Binomial(n, p) count sits near n*p + sqrt(2 n p ln K),
+        # so a straight line (c = 0, the form of the 16 Sep per-event calibration) over-rejects sparse
+        # frames and under-rejects the middle. NULL_FLOOR_CXIDB17 is fitted at the 99th percentile of
+        # 15,360 scrambled copies of the 480; with it, on frames and copies not used in the fit:
+        #     gate                  null accepts (480 held-out)   real accepted   strict-gate frames kept
+        #     live (10, 0.15)           211  (44%)                    447              327 of 327
+        #     live + floor                2  (0.4%)                   335              305 of 327
+        # (0.63% of the fit copies; median 0.66%, max 1.03% on held-out FRAMES in a 20x2 frame-split
+        # cross-validation; 0.5-1.2% in every peak-count band below 200 peaks, 0 above.) The 22 strict
+        # frames it refuses all have 38-60 peaks and 10-16 inliers, where the null's 99th percentile is
+        # 14-17: the published xgandalf arm finds the same lattice within 2 deg on 0 of them, against 23
+        # of the 27 sparse strict frames the floor keeps. Of the 112 frames the live gate accepts and the
+        # floor refuses, xgandalf confirms 2. End to end (the published 480 arm, adaptive_relock, plus
+        # the 480 scrambled): chance accepts 234 -> 5, strict 331 -> 332, because 23 real frames the
+        # batched pass had accepted in a WRONG orientation now miss and come back from the watchdog in
+        # xgandalf's -- at the price of sending every lattice-free frame to the watchdog's blind search.
+        # The constants are specific to that peak finder, detector, cell family, HKL_TOL and search depth
+        # (the floor transferred to the relock cell 87.5/87.6/109.5 at 1.2% and to Proteinase K at 0.7% on
+        # the same frames): re-fit with experiments/live_gate_null.py before relying on them elsewhere.
+        # It applies wherever the live gate does (_gate_count), so a cascade, watchdog or warm-up rescue
+        # is held to the same floor. Default None: the gate is exactly the two bars above.
+        if null_floor is None:
+            self.null_floor = None
+        else:
+            # ORDERED containers only: the coefficients are positional, and a set would hand them over in
+            # hash order -- a different gate, not an error (Copilot review of #214)
+            vals = (list(null_floor) if isinstance(null_floor, (list, tuple))
+                    or (isinstance(null_floor, np.ndarray) and null_floor.ndim == 1) else None)
+            if (vals is None or len(vals) not in (2, 3)
+                    or any(isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, float, np.integer, np.floating))
+                           for v in vals)
+                    or not all(np.isfinite(float(v)) for v in vals)):
+                raise ValueError("null_floor must be (a, b) or (a, b, c), finite numbers: a registration then "
+                                 f"needs n_inl >= a*n + b + c*sqrt(n) of its n peaks; got {null_floor!r}")
+            self.null_floor = tuple(float(v) for v in vals) + (0.0,) * (3 - len(vals))
+        self.n_null_floor_refused = 0                   # registrations the floor alone turned down
         self.extra = []; self._watch = None; self.n_relock = 0
         if (self.adaptive_relock or retry_cascade) and not hasattr(self, "_blind_index"):
             try:
@@ -1863,7 +1920,13 @@ class StreamDriver:
         must not count again). The one place the gate's arithmetic lives."""
         if n < self.min_inliers:
             return False
-        return not self.min_inlier_frac or n >= self.min_inlier_frac * n_peaks
+        if self.min_inlier_frac and not (n >= self.min_inlier_frac * n_peaks):
+            return False
+        nf = getattr(self, "null_floor", None)
+        if nf is None or n >= nf[0] * n_peaks + nf[1] + nf[2] * np.sqrt(n_peaks):
+            return True
+        self.n_null_floor_refused += 1                  # the floor alone turned this registration down
+        return False
 
 
     def _sl_laue(self):
@@ -2842,6 +2905,11 @@ class StreamDriver:
             s["n_rescued_integrated"] = self.n_rescued_integrated
             s["pixels_held"] = len(self._pix)                      # frames the store holds right now
             s["pixels_evicted"] = self._pix.n_evicted              # kept frames pushed out before any rescue
+        if getattr(self, "null_floor", None) is not None:        # opt-in chance floor on the live gate
+            s["null_floor"] = list(self.null_floor)
+            # registrations that cleared the count and fraction bars and failed only the floor -- per
+            # registration tested, so a frame tried under two cells or by a rescue can count twice
+            s["n_null_floor_refused"] = self.n_null_floor_refused
         if self.retry_cascade:                                   # glint#75, opt-in
             s["n_cascade_retried"] = self.n_cascade_retried      # gate failures the cascade was run on
             s["n_cascade_rescued"] = self.n_cascade_rescued      # ...INTEGRATED after a retry (not misses)

@@ -91,13 +91,14 @@ known-cell path. The lock takes about six frames on cxidb-17 (median over 400 ar
 A frame is accepted under a cell when its near-integer inliers pass both a count and a fraction of its peaks
 (`_fits`). The gate is deliberately looser than the paper's strict bar (same lattice, ≥25 % of peaks, ≥10
 reflections); yields quoted from `indexed` are live-gate yields, and the recorder's strict column is the one to
-compare. On lattice-free frames the count-plus-fraction gate accepts about half of the sparse ones; the calibrated
-per-peak-count floor is glint#214 (`null_floor=`, open).
+compare. On lattice-free frames the count-plus-fraction gate accepts about half of the sparse ones; `null_floor`
+adds the calibrated per-peak-count floor (#214).
 
 | option | default | what it does | measured / introduced | recorder |
 |---|---|---|---|---|
 | `min_inliers` | `0` → `min_peaks` | minimum inlier count; the published arms use 10 | #54 | `--min-inliers` |
 | `min_inlier_frac` | `0.15` | minimum inlier fraction of the frame's peaks; 0.15 is the smallest value that refused every wrong-cell frame in the calibration (n=16, synthetic), costing 4 of 115 real frames | commit 907c057; #170 pins it | `--min-inlier-frac` |
+| `null_floor` | `None` | opt-in third bar: a registration must explain `n_inl >= a*n + b + c*sqrt(n)` of the frame's `n` peaks, as `(a, b)` or `(a, b, c)`. `NULL_FLOOR_CXIDB17 = (0.0224, 5.32, 1.211)` is fitted on cxidb-17 at the 99th percentile of azimuth-scrambled copies: chance accepts on 480 held-out lattice-free frames 211 → 2, strict-gate frames kept 305 of 327. Re-fit (`experiments/live_gate_null.py`) for another detector, peak finder, cell family or search depth | #214 | `--null-floor a,b[,c]` or `cxidb17` |
 | `tol` | `0.002` | excitation-error window of the prediction (1/Å): which reflections count as on the Ewald sphere for integration | #19 | `--tol` |
 
 ### Recovering the misses, in execution order

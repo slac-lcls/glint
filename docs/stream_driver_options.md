@@ -91,14 +91,15 @@ known-cell path. The lock takes about six frames on cxidb-17 (median over 400 ar
 A frame is accepted under a cell when its near-integer inliers pass both a count and a fraction of its peaks
 (`_fits`). The gate is deliberately looser than the paper's strict bar (same lattice, ≥25 % of peaks, ≥10
 reflections); yields quoted from `indexed` are live-gate yields, and the recorder's strict column is the one to
-compare. On lattice-free frames the count-plus-fraction gate accepts about half of the sparse ones; `null_floor`
-adds the calibrated per-peak-count floor (#214).
+compare. On lattice-free frames the count-plus-fraction gate accepts about half of the sparse ones (211 of 480
+azimuth-scrambled copies of the cxidb-17 frames); `null_floor=` adds a per-peak-count floor fitted on that null,
+which brings the chance accepts to 2 of 480 while keeping 305 of the 327 strict frames (glint#214).
 
 | option | default | what it does | measured / introduced | recorder |
 |---|---|---|---|---|
 | `min_inliers` | `0` → `min_peaks` | minimum inlier count; the published arms use 10 | #54 | `--min-inliers` |
 | `min_inlier_frac` | `0.15` | minimum inlier fraction of the frame's peaks; 0.15 is the smallest value that refused every wrong-cell frame in the calibration (n=16, synthetic), costing 4 of 115 real frames | commit 907c057; #170 pins it | `--min-inlier-frac` |
-| `null_floor` | `None` | opt-in third bar: a registration must explain `n_inl >= a*n + b + c*sqrt(n)` of the frame's `n` peaks, as `(a, b)` or `(a, b, c)`. `NULL_FLOOR_CXIDB17 = (0.0224, 5.32, 1.211)` is fitted on cxidb-17 at the 99th percentile of azimuth-scrambled copies: chance accepts on 480 held-out lattice-free frames 211 → 2, strict-gate frames kept 305 of 327. Re-fit (`experiments/live_gate_null.py`) for another detector, peak finder, cell family or search depth | #214 | `--null-floor a,b[,c]` or `cxidb17` |
+| `null_floor` | `None` | a third bar on the live gate, `(a, b)` or `(a, b, c)`: the registration must explain `n_inl ≥ a·n + b + c·√n` of the frame's `n` peaks, the shape of a best-of-K null. `NULL_FLOOR_CXIDB17 = (0.0224, 5.32, 1.211)` is fitted on cxidb-17 at the 99th percentile of 15,360 scrambled copies and is specific to that peak finder, detector, cell family and search depth: re-fit with `experiments/live_gate_null.py` before relying on it elsewhere. Applies wherever the live gate does (cascade, watchdog, warm-up rescue); refusals in `n_null_floor_refused` | #214; [`RESULTS_live_gate_null.md`](../experiments/RESULTS_live_gate_null.md) | `--null-floor a,b[,c]` or `--null-floor cxidb17` |
 | `tol` | `0.002` | excitation-error window of the prediction (1/Å): which reflections count as on the Ewald sphere for integration | #19 | `--tol` |
 
 ### Recovering the misses, in execution order
@@ -196,7 +197,7 @@ reached at those budgets (it is a rare-miss feature under the default tiers). De
 
 `stats()` returns the merge figures of merit at an I/σ floor (`completeness`, `cc_half`, `cc_star`, `rsplit`,
 `unique`, `theoretical_unique`, `laue`) and the counters, among them `locked`, `pushed`, `indexed`, `integrated`,
-`locked_after`, `consensus_support`, `consensus_members`, `gate_refused`; the rescues (`n_warmup_rescued`, `n_watchdog_rescued`, `n_rescued`, `n_cascade_retried`,
+`locked_after`, `consensus_support`, `consensus_members`, `gate_refused`, `null_floor`, `n_null_floor_refused`; the rescues (`n_warmup_rescued`, `n_watchdog_rescued`, `n_rescued`, `n_cascade_retried`,
 `n_cascade_rescued`, `n_cascade_by_arm`, `n_per_lattice_*`); the cells (`n_cells`, `cells`, `extra_cells`,
 `n_relock`, `lock_z`); the diagnostics (`geom_correction`, `n_low_confidence`, `double_hit_rate`, the null rates);
 the stream (`stream_out`, `stream_chunks`, `stream_indexed`); the ring (`pixels_held`, `pixels_evicted`); and

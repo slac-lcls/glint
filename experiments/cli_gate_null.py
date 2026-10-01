@@ -72,6 +72,31 @@ def load_frames(path):
     return [np.asarray(q, float) for q in load(os.path.expanduser(path)) if len(q) >= 6]   # glint_cli --min-peaks 6
 
 
+def _search_config(cell, nbest):
+    """Return the search settings and source fingerprint that make a checkpoint valid."""
+    import glint.glint_fast as gf
+    import glint.replica_gpu as rg
+
+    files = [__file__]
+    for root, _, names in os.walk(os.path.join(ROOT, "glint")):
+        files.extend(os.path.join(root, name) for name in sorted(names) if name.endswith(".py"))
+    code = hashlib.sha256()
+    for path in sorted(files):
+        with open(path, "rb") as f:
+            code.update(f.read())
+    env_names = ("STEPS", "NC", "NANG", "CDIRS", "REFINER", "NEWTON_STEPS",
+                 "RESCUE_CG", "KC_FP", "KC_SOLVE_FP", "KC_ADAPTIVE_DIRS")
+    return dict(
+        code_version=code.hexdigest(),
+        route="hybrid_index(Mc_known, nbest=3, cascade=None, escalate=None)",
+        cell=list(cell), nbest=nbest,
+        steps=gf.STEPS, gate_tol=gf.GATE_TOL, gate_min=gf.GATE_MIN, gate_frac=gf.GATE_FRAC,
+        env={name: os.environ.get(name) for name in env_names},
+        replica={name: getattr(rg, name, None) for name in ("NC", "NANG", "CDIRS", "REFINER",
+                                                              "NEWTON_STEPS", "RESCUE_CG")},
+    )
+
+
 # ------------------------------------------------------------------------------------------ measure ----
 def _init_worker():
     os.environ["OMP_NUM_THREADS"] = "1"
@@ -136,15 +161,18 @@ def measure(a):
     secs = np.zeros(F)
     done_mask = np.zeros(F, bool)
     in_md5 = hashlib.md5(open(os.path.expanduser(a.input), "rb").read()).hexdigest()
-    key = json.dumps(dict(md5=in_md5, cell=cell, k=K, fit_seed=a.fit_seed, null_seed=a.null_seed, F=F))
+    search_config = _search_config(cell, nbest=3)
+    key = json.dumps(dict(md5=in_md5, cell=cell, k=K, fit_seed=a.fit_seed, null_seed=a.null_seed, F=F,
+                          search=search_config), sort_keys=True)
     part = a.out + ".partial.npz"                            # checkpoint: a killed run resumes where it stopped
     if os.path.exists(part):
         c = np.load(part)
-        if str(c["key"]) == key:
-            done_mask = c["done"]
-            m_real, p_real, m_null, p_null = c["m_real"], c["p_real"], c["m_null"], c["p_null"]
-            m_fit, p_fit, M_real, secs = c["m_fit"], c["p_fit"], c["M_real"], c["secs"]
-            print(f"resuming from {part}: {int(done_mask.sum())}/{F} frames done", flush=True)
+        if str(c["key"]) != key:
+            raise SystemExit(f"checkpoint {part} does not match this input, search configuration, or code version")
+        done_mask = c["done"]
+        m_real, p_real, m_null, p_null = c["m_real"], c["p_real"], c["m_null"], c["p_null"]
+        m_fit, p_fit, M_real, secs = c["m_fit"], c["p_fit"], c["M_real"], c["secs"]
+        print(f"resuming from {part}: {int(done_mask.sum())}/{F} frames done", flush=True)
 
     def checkpoint():
         np.savez_compressed(part + ".tmp.npz", key=key, done=done_mask, m_real=m_real, p_real=p_real, m_null=m_null,
@@ -182,7 +210,8 @@ def measure(a):
                 cell=cell, route="glint_cli --cell: hybrid_index(Mc_known, nbest=3), no cascade/escalation",
                 null_seed=a.null_seed, fit_seed=a.fit_seed, k_fit=K, gate_tol=gf.GATE_TOL, gate_min=gf.GATE_MIN,
                 gate_frac=gf.GATE_FRAC, torch=torch.__version__, device="cpu", steps=gf.STEPS,
-                procs=a.procs, wall_seconds=time.time() - t0, cpu_seconds=float(secs.sum()), whole_check=whole)
+                procs=a.procs, search_config=search_config, wall_seconds=time.time() - t0,
+                cpu_seconds=float(secs.sum()), whole_check=whole)
     np.savez_compressed(a.out, meta=json.dumps(meta), n=n, m_real=m_real, p_real=p_real, m_null=m_null,
                         p_null=p_null, m_fit=m_fit, p_fit=p_fit, M_real=M_real)
     if os.path.exists(part):

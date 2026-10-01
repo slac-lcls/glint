@@ -91,8 +91,8 @@ known-cell path. The lock takes about six frames on cxidb-17 (median over 400 ar
 A frame is accepted under a cell when its near-integer inliers pass both a count and a fraction of its peaks
 (`_fits`). The gate is deliberately looser than the paper's strict bar (same lattice, ≥25 % of peaks, ≥10
 reflections); yields quoted from `indexed` are live-gate yields, and the recorder's strict column is the one to
-compare. On lattice-free frames the count-plus-fraction gate accepts about half of the sparse ones (211 of 480
-azimuth-scrambled copies of the cxidb-17 frames); `null_floor=` adds a per-peak-count floor fitted on that null,
+compare. On azimuth-scrambled copies of the 480 cxidb-17 frames, the count-plus-fraction gate accepts 211
+(44%), concentrated among the sparse frames; `null_floor=` adds a per-peak-count floor fitted on that null,
 which brings the chance accepts to 2 of 480 while keeping 305 of the 327 strict frames (glint#214).
 
 | option | default | what it does | measured / introduced | recorder |

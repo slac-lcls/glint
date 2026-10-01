@@ -445,6 +445,13 @@ instead of reading a peak stream.
   | 0.10–0.20 | 66.3% → 100% | 89.2% → 97.3% |
   | 0.20–1.00 | 62.7% → 99.8% | 88.3% → 95.0% |
 
+  **Re-scored 2026-10-01 (review r2, s4-01): this table overstates correct indexing by ~40 points.** Its gate
+  (`same_lattice` + ≥25 % + ≥10) passed the mirrored, non-lattice bases described under the known-cell rescue in §3. Re-run on CPU
+  (`experiments/azimuth_oblique_rescore_s4-01/`) with a ground-truth check, on the production ("full") grid:
+  main ef6d068 finds the true lattice on **52–60 %** of frames (dense and still, every `|c01|` bin), the fix
+  (#225) on **99.4–100 %**. The half → full lesson stands: under the truth gate the full turn still adds
+  25–45 points. The old-gate run reproduces the table above to within a few points (CPU vs A100).
+
   Even ~1° of obliquity costs ~28 points. Fixed by `_azimuth_grid(c01)` (half turn iff perpendicular,
   else full turn at the *same* sample count — cost-neutral; doubling `NANG` instead buys nothing).
   Perpendicular cells keep the half turn and are **bit-identical**, verified elementwise on the 120

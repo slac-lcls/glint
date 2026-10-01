@@ -597,8 +597,9 @@ both arms, so a difference is attributable to common mode; absolute counts will 
 fp32 kernel's. Peaks matched greedily within 1.5 px on the same panel.
 
 - **The data does carry common-mode offsets.** Per event, a median **4.6%** of live pixels change
-  (p10 3.5%, p90 22.4%), typically by **0.92 keV** (per-event median; p90 2.86 keV), up to ~10 keV
-  where the row and column corrections stack.
+  (p10 3.5%, p90 22.4%), typically by **0.92 keV** (per-event median; p90 2.86 keV). The largest
+  per-pixel change is ~10 keV in a typical event (median per-event max 10.0 keV) and 12.9 keV over
+  the run, where the row and column corrections stack.
 - **V4 absorbs them in aggregate, not peak for peak.** 3098 peaks without, 3085 with; **2938
   matched, Jaccard 0.905**. Hits (>= 6 peaks) **134 vs 135**: 7 events lost hit status and 8 gained
   it, every one with 4 to 7 peaks in both arms (lost: 6->5 x4, 6->4, 7->5 x2; gained: 5->6 x3,
@@ -632,11 +633,18 @@ itself. The script caught it with an assertion (both arms had the same `raw` obj
 `_odc` per arm, swapped it in before each call, and asserted each cache held the expected `cmps` and
 kwargs.
 
-Provenance: [`experiments/xtc_bridge/common_mode_ab.py`](../experiments/xtc_bridge/common_mode_ab.py)
-is the runnable measurement script and
-[`common_mode_ab_result.json`](../experiments/xtc_bridge/common_mode_ab_result.json) is the durable
-result artifact (the original interactive log and copied finder were in purgeable scratch on
-`sdfiana027`).
+Provenance, all in `experiments/xtc_bridge/`:
+[`common_mode_ab.py`](../experiments/xtc_bridge/common_mode_ab.py) is the script that made the
+measurement, committed verbatim (md5 `baa3c89e`), run interactively on `sdfiana027` in
+`xpp_drp_gpu_311`; it imported a copy of `glint/peakfinder_v4.py` that is byte-identical to the one
+in this repo. [`common_mode_ab_run200.log`](../experiments/xtc_bridge/common_mode_ab_run200.log) is
+its complete output (one JSON line per event plus the SUMMARY block). Every number above is
+regenerated from that log alone, with no psana or data, by
+[`common_mode_ab_summary.py`](../experiments/xtc_bridge/common_mode_ab_summary.py), whose output is
+[`common_mode_ab_result.json`](../experiments/xtc_bridge/common_mode_ab_result.json) (`--check`
+verifies the committed JSON is current). The SNR and bank-edge figures are copied from the log's
+SUMMARY block, because the per-peak values were not logged. Re-running the measurement itself needs
+the psana2 env: `PYTHONPATH=../../glint python common_mode_ab.py 200`.
 
 ---
 

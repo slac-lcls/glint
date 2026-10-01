@@ -3,61 +3,115 @@
   "run": 13,
   "detector": "jungfrau",
   "events": 200,
-  "cmpars": [7, 3, 200, 10],
-  "settings": {
+  "cmpars_arm_C": [
+    7,
+    3,
+    200,
+    10
+  ],
+  "arm_A": "det.raw.calib(evt)  (no cmpars: what xtc_qreader.py calls)",
+  "arm_C": "det.raw.calib(evt, cmpars=(7, 3, 200, 10))",
+  "finder": {
+    "code": "glint/peakfinder_v4.py @ b91ce63, numpy path, per panel, float32",
     "min_pix": 3,
-    "son_min": 15,
-    "thr_high": 10,
-    "thr_low": 5
+    "son_min": 15.0,
+    "thr_high": 10.0,
+    "thr_low": 5.0,
+    "mask": "pixel_status == 0 in every gain stage",
+    "good_frac": 0.9987
   },
-  "matching_radius_px": 1.5,
-  "summary": {
-    "changed_pixels_median_fraction": 0.046,
-    "changed_pixels_p10_fraction": 0.035,
-    "changed_pixels_p90_fraction": 0.224,
-    "median_abs_delta_kev": 0.92,
-    "delta_p90_kev": 2.86,
-    "delta_max_kev": 10.0,
-    "peaks_off": 3098,
-    "peaks_on": 3085,
-    "matched_peaks": 2938,
-    "jaccard": 0.905,
+  "match_radius_px": 1.5,
+  "pixels": {
+    "frac_changed_median": 0.0455,
+    "frac_changed_p10": 0.0352,
+    "frac_changed_p90": 0.2236,
+    "abs_delta_kev_per_event_median_median": 0.9172,
+    "abs_delta_kev_per_event_median_p90": 2.8608,
+    "abs_delta_kev_per_event_max_median": 10.0148,
+    "abs_delta_kev_max_over_run": 12.897
+  },
+  "peaks": {
+    "off": 3098,
+    "on": 3085,
+    "matched": 2938,
+    "jaccard": 0.9054,
     "events_with_20_plus_peaks": 38,
-    "jaccard_20_plus_median": 0.948,
-    "jaccard_20_plus_min": 0.762,
-    "hit_jaccard_median": 0.879,
-    "hit_jaccard_p10": 0.667,
-    "hit_jaccard_min": 0.375,
-    "hits_off": 134,
-    "hits_on": 135,
-    "hits_lost": 7,
-    "hits_gained": 8,
-    "hit_changes": {
-      "lost": ["6->5 x4", "6->4", "7->5 x2"],
-      "gained": ["5->6 x3", "5->7 x2", "4->6 x2", "4->7"]
+    "jaccard_20_plus_median": 0.9484,
+    "jaccard_20_plus_min": 0.7619,
+    "events_hit_in_either_arm": 142,
+    "jaccard_hits_median": 0.8787,
+    "jaccard_hits_p10": 0.6667,
+    "jaccard_hits_min": 0.375
+  },
+  "hits": {
+    "off": 134,
+    "on": 135,
+    "lost": [
+      "6->4",
+      "6->5",
+      "6->5",
+      "6->5",
+      "6->5",
+      "7->5",
+      "7->5"
+    ],
+    "gained": [
+      "4->6",
+      "4->6",
+      "4->7",
+      "5->6",
+      "5->6",
+      "5->6",
+      "5->7",
+      "5->7"
+    ]
+  },
+  "snr_and_bank_edge": {
+    "matched": {
+      "n": 2938,
+      "snr_median": 25.2,
+      "snr_p10": 16.1,
+      "frac_snr_below_30": 0.61,
+      "frac_within_4px_of_bank_edge": 0.225
     },
-    "snr": {
-      "only_off_median": 16.2,
-      "only_on_median": 15.7,
-      "matched_median": 25.2,
-      "below_30_percent_only_off": 90.0,
-      "below_30_percent_only_on": 96.6,
-      "below_30_percent_matched": 61.0
+    "onlyA": {
+      "n": 160,
+      "snr_median": 16.2,
+      "snr_p10": 15.2,
+      "frac_snr_below_30": 0.9,
+      "frac_within_4px_of_bank_edge": 0.388
     },
-    "bank_edge_fraction": {
-      "only_off": 38.8,
-      "matched": 22.5,
-      "only_on": 24.5
-    },
-    "calibration_seconds_per_event": {
-      "off": 0.11,
-      "on": 1.34
+    "onlyC": {
+      "n": 147,
+      "snr_median": 15.7,
+      "snr_p10": 15.2,
+      "frac_snr_below_30": 0.966,
+      "frac_within_4px_of_bank_edge": 0.245
     }
+  },
+  "calib_seconds_per_event_median": {
+    "off": 0.11,
+    "on": 1.34
   },
   "provenance": {
     "host": "sdfiana027",
-    "environment": "xpp_drp_gpu_311",
-    "source": "common_mode_ab.py",
-    "measurement_date": "2026-09-30"
+    "psana": "/sdf/group/lcls/ds/ana/sw/conda2/inst/envs/xpp_drp_gpu_311/lib/python3.11/site-packages/psana/__init__.py",
+    "numpy": "2.3.5",
+    "calibconst_keys": [
+      "geometry",
+      "pedestals",
+      "pixel_gain",
+      "pixel_max",
+      "pixel_min",
+      "pixel_offset",
+      "pixel_rms",
+      "pixel_status"
+    ],
+    "measured": "2026-09-30, interactive on sdfiana027",
+    "script": "common_mode_ab.py",
+    "script_md5": "baa3c89e81ecac2944aad5bfd01de38b",
+    "log": "common_mode_ab_run200.log",
+    "log_md5": "e51bc2a72ae6bc558cf54cf8a104d319",
+    "derived_by": "common_mode_ab_summary.py"
   }
 }

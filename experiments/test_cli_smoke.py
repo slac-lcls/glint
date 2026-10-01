@@ -10,7 +10,7 @@ import os, sys, subprocess, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from glint.lattice import cell_to_Ar
-from glint.predict import (predict_spots, integrate_spots, write_fromfile,
+from glint.predict import (predict_spots, integrate_spots, write_solution_file,
                               write_stream_integrated, panels_from_geom, integrate_frames)
 from glint.stream import write_stream
 from glint.geom import parse_geom, peaks_to_q
@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory() as d:
     check("geom<->predict", frac > 0.95, f"{100*frac:.0f}% of back-projected spots index to lysozyme")
 
     results = [{"image": "a.h5", "event": i, "M": LYSO} for i in range(3)]
-    sol = os.path.join(d, "s.sol"); n = write_fromfile(results, sol, "tPc")
+    sol = os.path.join(d, "s.sol"); n = write_solution_file(results, sol, "tPc")
     lines = [l for l in open(sol).read().splitlines() if l.strip()]
 
     def cellrec(v):
@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory() as d:
     ok = (n == 3 and all(len(l.split()) == 14 and l.split()[-1] == "tPc" for l in lines)
           and all(np.allclose(cellrec(np.array(list(map(float, l.split()[2:11])))),
                               [37.98, 79.02, 79.02], rtol=0.06) for l in lines))
-    check("write_fromfile", ok, f"{n} tPc solutions, cell ~lyso")
+    check("write_solution_file", ok, f"{n} tPc solutions, cell ~lyso")
 
     r2 = [{"image": "a.h5", "event": i, "M": LYSO, "hkl": np.array([[1, 0, 0]]), "q": np.zeros((1, 3))}
           for i in range(2)]

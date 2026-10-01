@@ -151,8 +151,10 @@ def main():
                     help="Bravais lattice code (e.g. tPc tetragonal, oP orthorhombic). Labels the "
                          "--tofile solution file, and with --images --integrate also names the Laue "
                          "class the per-frame axis setting is standardized under. Default and 'aP' "
-                         "both mean unconstrained: the file is labelled aP and the setting is "
-                         "decided by axis lengths alone")
+                         "both mean unconstrained: the file is labelled aP. The solution file's axis "
+                         "setting: tetragonal/orthorhombic/hexagonal codes get the standard setting "
+                         "(unique axis c); every other code (aP, monoclinic, hR) gets the setting of "
+                         "--cell when it is given, else the one decided by axis lengths alone")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
     if (args.peaks or args.images) and not args.geom:
@@ -244,9 +246,9 @@ def main():
         if args.fromfile and not args.tofile:
             print("  note: --fromfile is deprecated, use --tofile (GLINT WRITES this file; "
                   "'fromfile' was named for CrystFEL, which reads it)", file=sys.stderr)
-        from glint.predict import write_fromfile
+        from glint.predict import write_solution_file
         lattice_code = args.lattice or "aP"
-        nsol = write_fromfile(results, sol_path, lattice_code)
+        nsol = write_solution_file(results, sol_path, lattice_code, ref_cell=Mc_known)
         print(f"  solution file      : {nsol} ({lattice_code}) -> {sol_path}"
               f"  [indexamajig --indexing=file --fromfile-input-file={sol_path} --tolerance=10,10,10,3]")
 

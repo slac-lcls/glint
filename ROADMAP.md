@@ -29,8 +29,9 @@ Run GLINT blind on real SFX datasets and judge output against established indexe
   under a CrystFEL geometry (#200, #203), a merge class chosen per sample (#186), an opt-in chance floor on the
   live gate fitted on a lattice-free null (#214, `null_floor=`), and two recorded replays with provenance in
   [`docs/streaming_replay.md`](docs/streaming_replay.md).
-- **Open on the driver:** the chance floor in the published arm, re-fitted per detector and peak finder (its
-  constants are cxidb-17's); index before compress on the DRP — ring slots for hits only and pixels kept for the retroactive rescues shipped in #212,
+- **Open on the driver:** the chance floor in the published arm, re-fitted per detector, peak finder, cell family,
+  search depth and HKL tolerance (its constants are cxidb-17's); index before compress on the DRP — ring slots
+  for hits only and pixels kept for the retroactive rescues shipped in #212,
   the reducer-side wiring has not; the adaptive-effort arms rerun at the batch size the cost table was measured
   at (#213 checked the mechanism at B=20); deployment recipes for `effort=` per beamline rate. The option map
   is [`docs/stream_driver_options.md`](docs/stream_driver_options.md).

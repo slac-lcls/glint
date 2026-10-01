@@ -123,11 +123,14 @@ print("\northogonal-a2 cells do not take the two-handed path (they run the code 
 for name, cell, _ in CONTROLS:
     L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(*cell))
     check(f"{name}: _both_hands is False", not rg._both_hands(float(L[2]), c01, c02, c12))
-# A consensus cell of an orthogonal lattice is skewed by a few hundredths of a degree; the paper's pipelines run on
-# such cells, and the mirror seed is ~0.1 A from the lattice vector there, so they must not take the new path.
-L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(79.1, 78.95, 38.02, 90.03, 89.98, 90.04))
-check("lysozyme consensus-like 79.1/78.95/38.02/90.03/89.98/90.04: _both_hands is False",
-      not rg._both_hands(float(L[2]), c01, c02, c12))
+# A consensus or lock cell of an orthogonal lattice is skewed; the paper's pipelines and StreamDriver run on such
+# cells, so they must not take the new path. The second is StreamDriver's actual GPU lock on the cxidb-17 480
+# (0.27 deg tilt), which the first version of this gate (0.2 A) let through.
+for label, cp in (("consensus-like 79.1/78.95/38.02/90.03/89.98/90.04", (79.1, 78.95, 38.02, 90.03, 89.98, 90.04)),
+                  ("GPU stream lock 78.706/78.792/37.813/89.81/90.08/90.19",
+                   (78.706, 78.792, 37.813, 89.8107, 90.0832, 90.1885))):
+    L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(*cp))
+    check(f"lysozyme {label}: _both_hands is False", not rg._both_hands(float(L[2]), c01, c02, c12))
 for name, cell, _ in AFFECTED:
     L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(*cell))
     check(f"{name}: _both_hands is True", rg._both_hands(float(L[2]), c01, c02, c12))

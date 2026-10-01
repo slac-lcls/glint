@@ -229,6 +229,15 @@ det filter leaves **~1,200** to actually anneal and score; the rescue explores *
 one of its three axes is never searched at all — `_third_axis()` places it analytically from the metric
 constraints `a2·e0 = L2·c02`, `a2·e1 = L2·c12`, `|a2| = L2`, with handedness inherited from the reference
 cell (`sign(det)` of Mc's columns *after* they are sorted shortest-first, in `_axes_from_cell`).
+That inherited handedness is only right when the anchor is +v0: the anchor grid is a half-sphere, so on a
+frame whose shortest axis points to z<0 the anchor is −v0, the lattice's third axis is −v2 with the opposite
+handedness, and the reference-handed seed is the mirror image of −v2. Unless a2 is perpendicular to the
+(v0, v1) plane that mirror is not a lattice vector (review r2, s4-01: 10–15 of 24 triclinic and monoclinic
+frames came back as non-lattice bases that passed every gate). So for cells whose mirror seed lands more than
+`MIRROR_TOL_A` = 0.2 Å from the lattice vector (`_both_hands`), both handednesses are seeded (256 bases), the
+winner is negated back to the reference hand (−M indexes the same spots as hkl → −hkl), and `_ref_setting`
+moves a basis that annealed into another setting of the right lattice (metric off by more than 1 %) to the
+reference's. Orthogonal-a2 cells, lysozyme and its consensus cells included, run the 128-basis path unchanged.
 
 Two scoping notes that bite if you skip them:
 

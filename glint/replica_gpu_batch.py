@@ -13,7 +13,8 @@ import os, sys, warnings
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("CDIRS", "16384")
 import numpy as np, torch
 from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, AXIS0_DEDUP_COS, _axes_from_cell,
-                               _third_axis, _fib_halfsphere, _azimuth_grid, _depth)
+                               _third_axis, _fib_halfsphere, _azimuth_grid, _depth,
+                               _both_hands, _ref_setting)
 from glint.multishot import same_lattice
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
@@ -198,6 +199,10 @@ def _stage_compute(Q, m, P):
     a0s = torch.gather(a0, 2, topi[..., None].expand(-1, -1, -1, 3)).reshape(F, nc * ta, 3)
     a1s = torch.gather(a1, 2, topi[..., None].expand(-1, -1, -1, 3)).reshape(F, nc * ta, 3)
     a2s = _third_axis(a0s.reshape(-1, 3), a1s.reshape(-1, 3), L2, c02, c12, sgn).reshape(F, nc * ta, 3)
+    both = _both_hands(L2, c01, c02, c12)              # host bool, fixed per cell: graph capture unaffected
+    if both:                                           # s4-01: seed the other hand too (see replica_gpu._both_hands)
+        a2m = _third_axis(a0s.reshape(-1, 3), a1s.reshape(-1, 3), L2, c02, c12, -sgn).reshape(F, nc * ta, 3)
+        a0s = torch.cat([a0s, a0s], 1); a1s = torch.cat([a1s, a1s], 1); a2s = torch.cat([a2s, a2m], 1)
     M0 = torch.stack([a0s, a1s, a2s], dim=3)
     det = torch.abs(det3(M0) if _ANALYTIC else torch.linalg.det(M0)); validM = det >= 1e3
     M0 = torch.where(validM[..., None, None], M0, _EYE3[None, None])
@@ -207,6 +212,8 @@ def _stage_compute(Q, m, P):
     subm = (torch.log2(torch.clamp(dd, TRIML, TRIMH) + DELTA).mean(3) * m[:, None, :]).sum(2) / m.sum(1, keepdim=True).clamp(min=1)
     key = torch.where(validM, main.double() * 1000 - subm, torch.full_like(main.double(), -1e18))
     bidx = key.argmax(1); best = Mt[ar, bidx]; mainb = main[ar, bidx]
+    if both:                                           # back to the reference hand: -M is hkl -> -hkl, same spots
+        best = torch.where((det3(best) * sgn < 0)[:, None, None], -best, best)
     # --- guarded polish, batched ---
     pol = anneal_b(best[:, None], Q, m, thr0=0.30, contract=0.85, max_iter=10, min_thr=0.15)[:, 0]
     Hp = torch.einsum('fpc,fcd->fpd', Q, pol); mp = ((torch.abs(Hp - torch.round(Hp)).amax(2) < 0.15) & m).sum(1)
@@ -237,7 +244,14 @@ def _cpu_stage(best, pol, mp, mainb, Mc):
 def index_known_gpu_cell_batch(frames, Mc, topa=8, nc=None, full_grid=False):
     """Returns list of M (3x3 np) or None, one per frame -- single batched pass over all F.
     topa / nc / full_grid set the search depth (see _cell_params); the defaults are the shipped search."""
-    return _cpu_stage(*_gpu_stage(frames, Mc, topa, nc, full_grid), Mc)
+    return _settle(_cpu_stage(*_gpu_stage(frames, Mc, topa, nc, full_grid), Mc), Mc)
+
+
+def _settle(res, Mc):
+    """replica_gpu._ref_setting on every frame, for the cells that take the two-handed seed (s4-01). Applied
+    after _cpu_stage, which the fused kernels replace with their own (fused_kernels.patch(cpu=True))."""
+    L, c01, c02, c12, _ = _axes_from_cell(Mc)
+    return [_ref_setting(M, Mc) for M in res] if _both_hands(float(L[2]), c01, c02, c12) else res
 
 
 def index_known_deep_batch(frames, Mc, topa, nc, full_grid=True, budget=12000, return_errors=False):
@@ -371,7 +385,7 @@ def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS):
             if G is None:
                 G = _GRAPHS[(cell, B, bkt)] = _StageGraph(P, B, bkt)
             best, pol, mp, mainb = G.run(*_pad_fixed(fb, B, bkt))
-            res = _cpu_stage(best[:Fb], pol[:Fb], mp[:Fb], mainb[:Fb], Mc)
+            res = _settle(_cpu_stage(best[:Fb], pol[:Fb], mp[:Fb], mainb[:Fb], Mc), Mc)
         for j, r in zip(chunk, res):
             out[j] = r
     return out

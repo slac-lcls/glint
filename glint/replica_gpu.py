@@ -6,7 +6,7 @@ The numpy replica is ~127 ms/frame; this targets a few ms on the A100.
 
   python replica_gpu.py [frames.txt] [N]
 """
-import os, sys, time
+import itertools, os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
 from glint.glint_fast import anneal_batch_t, matched_strict, GATE_FRAC, GATE_MIN
@@ -248,6 +248,65 @@ def _third_axis(a0, a1, L2, c02, c12, sgn):
     return torch.where(feas[:, None], a2, torch.zeros_like(a2))
 
 
+MIRROR_TOL_A = float(os.environ.get("KC_MIRROR_TOL_A", "0.2"))   # see _both_hands
+
+
+def _both_hands(L2, c01, c02, c12):
+    """True when a2 must be seeded at BOTH gamma signs (review r2 s4-01).
+
+    The anchor pool is a half-sphere (DIRS), so on a frame whose true shortest axis points to z<0 the anchor
+    is -v0; the axis-1 sweep then finds -v1, and the lattice's own third axis is -v2, whose handedness is the
+    OPPOSITE of the reference's. _third_axis at the reference's sign then builds the mirror image of -v2
+    through the (v0, v1) plane, which is +v2 displaced by twice a2's in-plane component. When a2 is
+    perpendicular to both that displacement is 0 and the seed IS a lattice vector. Otherwise the anneal can
+    return a basis with the reference metric that indexes ~40 % of the spots (triclinic, and monoclinic with
+    the unique axis shortest or in the middle), and same_lattice and the live gate both pass it. Seeding the
+    other sign too gives (-v0, -v1, -v2), which is negated back to the reference hand after the pick.
+
+    Gated on the displacement in Angstrom, not on c02 = c12 = 0 exactly: a consensus cell of an orthogonal
+    lattice is skewed by a few hundredths of a degree (displacement ~0.1 A on lysozyme), a seed that close
+    anneals onto the lattice vector anyway, and the paper's pipelines run on such cells, so they keep exactly
+    the code they ran before. MIRROR_TOL_A = 0.2 A is 0.1 of a reflection at 2 A, inside the 0.15 gate."""
+    g = c01
+    alpha = L2 * (c02 - g * c12) / (1.0 - g * g)
+    beta = L2 * (c12 - g * c02) / (1.0 - g * g)
+    inplane = np.sqrt(max(alpha * alpha + beta * beta + 2.0 * alpha * beta * g, 0.0))
+    return 2.0 * inplane > MIRROR_TOL_A
+
+
+# Proper unimodular changes of basis with entries in {-1, 0, 1}: enough to reach every setting of a lattice
+# basis whose axes are sums or differences of the reference's (a+c for c, a swapped pair, ...).
+_UNIMOD = np.array(list(itertools.product((-1, 0, 1), repeat=9)), dtype=float).reshape(-1, 3, 3)
+_UNIMOD = _UNIMOD[np.rint(np.linalg.det(_UNIMOD)) == 1]                     # 3480 of them
+SETTING_TOL = float(os.environ.get("KC_SETTING_TOL", "0.01"))   # relative metric deviation counted as "off"
+
+
+def _ref_setting(M, Mc):
+    """The engines' output basis, moved to the setting of the same lattice whose metric is closest to the
+    reference's (review r2 s4-01, the INEQUIV half).
+
+    The engines return the frame's axes shortest-first, and StreamDriver's _relabel_like undoes only that sort.
+    On an oblique cell the anneal sometimes converges to another basis of the right lattice: (-a, -c, -b) on a
+    triclinic HEWL cell (metric 13 % off), or (a, -b, -a-c) on a monoclinic one (3 % off). Every spot is
+    indexed, same_lattice passes, and hkl come out in a setting that is not Laue-equivalent to the grid's.
+    The metric shows it: such a basis is moved to M @ U, U the proper {-1,0,1} change of basis that brings
+    M.T M closest to the reference's shortest-first metric. Left alone unless M's own metric is more than
+    SETTING_TOL off AND U at least halves the deviation, so frames already in the reference setting and
+    pseudo-symmetric ties (|a+c| ~ |a|, where geometry cannot decide) are returned unchanged."""
+    if M is None:
+        return M
+    A = np.asarray(Mc, float)
+    S = A[:, np.argsort(np.linalg.norm(A, axis=0))]            # the order _axes_from_cell anchors in
+    G0 = S.T @ S; nrm = np.abs(G0).max()
+    G = np.asarray(M, float).T @ np.asarray(M, float)
+    dev0 = np.abs(G - G0).max() / nrm
+    if dev0 <= SETTING_TOL:
+        return M
+    dev = np.abs(np.einsum('kji,jl,klm->kim', _UNIMOD, G, _UNIMOD) - G0).max((1, 2)) / nrm
+    k = int(np.argmin(dev))
+    return np.asarray(M, float) @ _UNIMOD[k] if dev[k] < 0.5 * dev0 else M
+
+
 def index_known_gpu_cell(q, Mc, topa=8, nc=None):
     """GPU known-cell rescue against an ARBITRARY consensus cell Mc (3x3 real-space cols).
 
@@ -280,6 +339,10 @@ def index_known_gpu_cell(q, Mc, topa=8, nc=None):
     a0s = torch.gather(a0, 1, topi[:, :, None].expand(-1, -1, 3)).reshape(-1, 3)
     a1s = torch.gather(a1, 1, topi[:, :, None].expand(-1, -1, 3)).reshape(-1, 3)
     a2s = _third_axis(a0s, a1s, float(L[2]), c02, c12, sgn)
+    both = _both_hands(float(L[2]), c01, c02, c12)
+    if both:                                                # s4-01: the -v0 anchor's seed has the other hand
+        a2s = torch.cat([a2s, _third_axis(a0s, a1s, float(L[2]), c02, c12, -sgn)])
+        a0s = torch.cat([a0s, a0s]); a1s = torch.cat([a1s, a1s])
     M0 = torch.stack([a0s, a1s, a2s], dim=2)                # cols = anchor, axis1, axis2
     det = torch.abs(torch.linalg.det(M0))
     M0 = M0[det >= 1e3]
@@ -291,6 +354,8 @@ def index_known_gpu_cell(q, Mc, topa=8, nc=None):
     sub = torch.log2(torch.clamp(dd, TRIML, TRIMH) + DELTA).mean((1, 2))
     key = main.double() * 1000.0 - sub
     b = int(torch.argmax(key)); best = Mt[b]
+    if both and float(torch.linalg.det(best)) * sgn < 0:   # -M indexes the same spots, as hkl -> -hkl (a Friedel
+        best = -best                                       # mate; -1 is in every Laue group): reference hand
     # GUARDED gate-matched polish: the winner was annealed tight (min_thr 0.02) and over-fits a few spots;
     # re-anneal it to the 0.15 gate tolerance so it indexes MORE spots (completeness). Accept the looser
     # refit ONLY if it indexes at least as many 0.15-inliers (reverts on drift -> never loses the lattice
@@ -299,8 +364,10 @@ def index_known_gpu_cell(q, Mc, topa=8, nc=None):
     Hp = Q @ pol; mp = int((torch.abs(Hp - torch.round(Hp)).amax(1) < 0.15).sum())
     poln = pol.cpu().numpy()
     if mp >= int(main[b]) and same_lattice(poln, np.asarray(Mc, float)):    # more spots AND still the known cell
-        return poln
-    return best.cpu().numpy()
+        out = poln
+    else:
+        out = best.cpu().numpy()
+    return _ref_setting(out, Mc) if both else out
 
 
 def load(p):

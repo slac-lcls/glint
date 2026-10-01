@@ -197,7 +197,8 @@ reached at those budgets (it is a rare-miss feature under the default tiers). De
 
 `stats()` returns the merge figures of merit at an I/σ floor (`completeness`, `cc_half`, `cc_star`, `rsplit`,
 `unique`, `theoretical_unique`, `laue`) and the counters, among them `locked`, `pushed`, `indexed`, `integrated`,
-`locked_after`, `consensus_support`, `consensus_members`, `gate_refused`, `null_floor`, `n_null_floor_refused`; the rescues (`n_warmup_rescued`, `n_watchdog_rescued`, `n_rescued`, `n_cascade_retried`,
+`locked_after`, `consensus_support`, `consensus_members`, `gate_refused`; when the floor is configured, `null_floor` and
+`n_null_floor_refused` (registration attempts, so one frame may count more than once); the rescues (`n_warmup_rescued`, `n_watchdog_rescued`, `n_rescued`, `n_cascade_retried`,
 `n_cascade_rescued`, `n_cascade_by_arm`, `n_per_lattice_*`); the cells (`n_cells`, `cells`, `extra_cells`,
 `n_relock`, `lock_z`); the diagnostics (`geom_correction`, `n_low_confidence`, `double_hit_rate`, the null rates);
 the stream (`stream_out`, `stream_chunks`, `stream_indexed`); the ring (`pixels_held`, `pixels_evicted`); and

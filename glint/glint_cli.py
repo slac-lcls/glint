@@ -34,6 +34,25 @@ def _lattice_type_from_lattice_code(lattice_code):
             "t": "tetragonal", "h": "hexagonal", "c": "cubic"}.get(c[:1])
 
 
+def _sparse_only_flags(args, ap):
+    """The options this run set that only the sparse front end (hybrid_index) reads. dense_index takes
+    none of them -- no cell, no N-best list, no cascade, no escalation -- so a run that goes dense must
+    say so rather than look as though it honoured them (review s8-04). --nbest and --select count only
+    when moved off their defaults, so a wrapper that always passes the default (LUTE) is not flagged."""
+    used = []
+    if args.cell:
+        used.append("--cell")
+    if args.nbest != ap.get_default("nbest"):
+        used.append(f"--nbest {args.nbest}")
+    if args.select != ap.get_default("select"):
+        used.append(f"--select {args.select}")
+    if args.escalate:
+        used.append("--escalate")
+    if args.cascade:
+        used.append("--cascade")
+    return used
+
+
 def _load_frames(args):
     """Return (frames [list of (N,3) q in 1/A], images [list of {image,event}])."""
     from glint.geom import clean_frames, parse_geom, read_crystfel_peaks, peaks_to_q
@@ -83,7 +102,8 @@ def main():
     ap.add_argument("--cell", nargs="+", metavar="V",
                     help='known cell (skip consensus): one quoted string "a b c al be ga" OR six '
                          'space-separated values a b c al be ga (both accepted, e.g. for LUTE which '
-                         'splits the field into separate argv tokens)')
+                         'splits the field into separate argv tokens). Sparse front end only: --mode '
+                         'dense refuses it, and --mode auto takes the sparse front end when it is given')
     ap.add_argument("-N", type=int, default=0, help="limit to first N frames")
     ap.add_argument("--min-peaks", type=int, default=6, help="skip frames with fewer peaks")
     ap.add_argument("--peakfinder", choices=("v4", "pf9", "pf8", "stored"), default="v4",
@@ -102,12 +122,15 @@ def main():
                     help="--ring-focus low-order shell cutoff in 1/A (default 0.15 ~ d>6.7 A)")
     ap.add_argument("--device", choices=("auto", "cpu"), default="auto")
     ap.add_argument("--nbest", type=int, default=3,
-                    help="keep N-best cell hypotheses/frame for consensus (1 = top-1 only)")
+                    help="sparse mode: keep N-best cell hypotheses/frame for consensus (1 = top-1 only)")
     ap.add_argument("--mode", choices=("auto", "sparse", "dense"), default="auto",
                     help="front end: sparse=nbest+consensus (SFX stills); dense=local-cluster FFT "
-                         "(rotation clouds, self-indexing); auto=pick by median rlp count (default)")
+                         "(rotation clouds, self-indexing); auto=pick by median rlp count (default). dense "
+                         "reads none of --cell, --nbest, --select, --escalate, --cascade: an explicit "
+                         "--mode dense refuses them; auto goes sparse when --cell is given and warns on "
+                         "stderr about the others when it picks dense")
     ap.add_argument("--cascade", metavar="DRIVER",
-                    help="optional external cell-given indexer binary (e.g. ffbidx/xgandalf driver) to "
+                    help="sparse mode: optional external cell-given indexer binary (e.g. ffbidx/xgandalf driver) to "
                          "fall back on for frames left unindexed; must use the FRAME-in / basis-out protocol")
     ap.add_argument("--escalate", action="store_true",
                     help="sparse mode: give frames that still fail the observable gate a deeper known-cell search, "
@@ -178,6 +201,11 @@ def main():
         ap.error("--floor is used only with --gate floor")
     if args.gate == "floor" and args.floor is None:
         ap.error("--gate floor needs --floor NAME|a,b[,c] (the floor is dataset-specific; see --help)")
+    unread = _sparse_only_flags(args, ap)
+    if args.mode == "dense" and unread:
+        them = "them" if len(unread) > 1 else "it"
+        ap.error(f"--mode dense self-indexes every frame and does not read {', '.join(unread)}; "
+                 f"use --mode sparse (or auto) to apply {them}, or drop {them} to self-index")
     if args.device == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
@@ -206,6 +234,19 @@ def main():
     if mode == "auto":
         med = int(np.median([len(q) for q in frames]))
         mode = "dense" if med >= CLUSTER_MIN else "sparse"
+        if mode == "dense" and Mc_known is not None:
+            # A given cell outranks a peak-count heuristic: the dense front end has no cell parameter
+            # and would write its own blind lattices as if they were --cell's (review s8-04).
+            print(f"note: --mode auto: median {med} peaks/frame >= CLUSTER_MIN={CLUSTER_MIN} would pick the "
+                  f"dense front end, which cannot use --cell; indexing against --cell with the sparse "
+                  f"(known-cell) front end instead. Pass --mode dense without --cell to self-index.",
+                  file=sys.stderr)
+            mode = "sparse"
+        elif mode == "dense" and unread:
+            print(f"WARNING: --mode auto picked the dense front end (median {med} peaks/frame >= "
+                  f"CLUSTER_MIN={CLUSTER_MIN}), which does not read {', '.join(unread)}: IGNORED for "
+                  f"this run. Pass --mode sparse to apply {'them' if len(unread) > 1 else 'it'}.",
+                  file=sys.stderr)
     if mode == "dense":
         results, stats = dense_index(frames, images)
     else:

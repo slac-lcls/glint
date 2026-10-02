@@ -311,6 +311,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cli_smoke.py
 
+      # glint_cli and the dense front end, which reads no cell: --mode dense refuses --cell and the other
+      # sparse-only options before loading a frame; --mode auto stays sparse when --cell is given and
+      # names what it ignores when it picks dense (review s8-04). Front ends replaced by recorders
+      # (they need torch); the CLI's own argument handling and dispatch run for real.
+      - name: experiments/test_cli_dense_flags.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_cli_dense_flags.py
+
       # ~50s, by far the slowest step here: it refines over 540 synthetic frames. Kept because
       # it is the only cover of the geometry-refinement solver, but it is the first candidate
       # to trim if this job gets tight.

@@ -83,8 +83,10 @@ glint --qframes frames.txt -o indexed.stream
 ```
 
 Options: `--cell "a b c al be ga"` (known cell, skip consensus) · `--nbest N` (multi-hypothesis
-consensus, default 3) · `--mode auto|sparse|dense` · `--escalate` (a deeper known-cell search on the frames
-that still fail the gate, accepted only against the frame's own azimuth-scrambled copies; off by default) ·
+consensus, default 3) · `--mode auto|sparse|dense` (dense self-indexes each frame and refuses `--cell`,
+`--nbest`, `--select`, `--escalate` and `--cascade`; auto stays sparse when `--cell` is given) · `--escalate`
+(a deeper known-cell search on the frames that still fail the gate, accepted only against the frame's own
+azimuth-scrambled copies; off by default) ·
 `--gate none|strict|floor` (write a frame as a crystal only if it passes the paper's scoring bar; `floor` also
 requires `--floor NAME|a,b[,c]` for a dataset-specific chance floor; default none) ·
 `--integrate` (real I/σ) · `--tofile` (hand orientations to CrystFEL for the refined merge) ·

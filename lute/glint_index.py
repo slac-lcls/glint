@@ -203,11 +203,15 @@ class IndexGLINTParameters(ThirdPartyParameters):
         flag_type="--", rename_param="out", is_result=True,
     )
     cell: Optional[str] = Field(
-        None, description='Known unit cell "a b c al be ga" (else fully-blind cross-frame consensus).',
+        None, description='Known unit cell "a b c al be ga" (else fully-blind cross-frame consensus). '
+                          'Sparse front end only: mode "dense" refuses it, and mode "auto" stays sparse '
+                          'when it is set.',
         flag_type="--", rename_param="cell",
     )
     mode: str = Field(
-        "auto", description="Front end: auto | sparse (SFX stills) | dense (rotation clouds).",
+        "auto", description="Front end: auto | sparse (SFX stills) | dense (rotation clouds; "
+                            "self-indexes each frame, so it refuses cell, a non-default nbest and "
+                            "cascade).",
         flag_type="--", rename_param="mode",
     )
     nbest: PositiveInt = Field(

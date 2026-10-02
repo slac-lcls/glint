@@ -264,8 +264,9 @@ def _both_hands(L2, c01, c02, c12, laue=None):
     other sign too gives (-v0, -v1, -v2), which is negated back to the reference hand after the pick.
 
     Which cells take this path depends on what is known about the crystal's symmetry:
-    - `laue` is a low-symmetry class (glint.lattice.LOW_LAUE: -1 or a 2/m setting): always. No rotation of
-      the class makes the mirror seed a lattice vector, however close to 90 deg the angles are; and only this
+    - `laue` is a low-symmetry class (glint.lattice.LOW_LAUE: -1, a 2/m setting, or a rhombohedral-axes class):
+      always. No rotation of the class makes the mirror seed a lattice vector, however close to 90 deg the
+      angles are; and only this
       path runs _ref_setting, which is what puts a near-orthogonal cell (triclinic 50/60/70/89.5/90/90.2) in
       the reference setting instead of a 2-fold sign-flipped one (review of #225).
     - Otherwise (a higher class, or no class): when a2 tilts more than KC_MIRROR_TOL_DEG (1 deg) from the
@@ -294,6 +295,23 @@ _UNIMOD = _UNIMOD[np.rint(np.linalg.det(_UNIMOD)) == 1]                     # 34
 SETTING_TOL = float(os.environ.get("KC_SETTING_TOL", "0.01"))   # relative metric deviation counted as "off"
 
 
+# The four proper 2-fold sign flips of a basis, identity first: (a,b,c) -> (+-a, +-b, +-c) with det +1.
+_FLIPS = np.array([np.diag(d) for d in ((1., 1., 1.), (-1., -1., 1.), (-1., 1., -1.), (1., -1., -1.))])
+_FLIP_SIGN = np.array([[d[0] * d[1], d[0] * d[2], d[1] * d[2]] for d in np.diagonal(_FLIPS, axis1=1, axis2=2)])
+# Only the reference's cosines whose sign a flip changes by at least 2 sin(KC_FLIP_MIN_DEG) -- angles at least
+# this far from 90 deg -- take part in the sign-flip step. Closer to 90 the choice would follow rounding (an exact
+# 90 deg has cos ~6e-17) or per-frame noise: on real mfx101343025 r199 (beta 90.07 deg, per-frame DIALS beta
+# 88.5-91.7) it only reshuffled frames at chance. The price: a genuine 0-0.1 deg skew is not corrected.
+FLIP_MIN = 2.0 * np.sin(np.radians(float(os.environ.get("KC_FLIP_MIN_DEG", "0.1"))))
+
+
+def _cosines(M):
+    """cos(a,b), cos(a,c), cos(b,c) of the basis columns: the scale-free part of the metric."""
+    G = M.T @ M
+    d = np.sqrt(np.diag(G))
+    return np.array([G[0, 1] / (d[0] * d[1]), G[0, 2] / (d[0] * d[2]), G[1, 2] / (d[1] * d[2])])
+
+
 def _ref_setting(M, Mc):
     """The engines' output basis, moved to the setting of the same lattice whose metric is closest to the
     reference's (review r2 s4-01, the INEQUIV half).
@@ -305,19 +323,39 @@ def _ref_setting(M, Mc):
     The metric shows it: such a basis is moved to M @ U, U the proper {-1,0,1} change of basis that brings
     M.T M closest to the reference's shortest-first metric. Left alone unless M's own metric is more than
     SETTING_TOL off AND U at least halves the deviation, so frames already in the reference setting and
-    pseudo-symmetric ties (|a+c| ~ |a|, where geometry cannot decide) are returned unchanged."""
+    pseudo-symmetric ties (|a+c| ~ |a|, where geometry cannot decide) are returned unchanged.
+
+    Then the 2-fold sign flips (#225 review). A near-orthogonal triclinic or monoclinic frame can come back as
+    (+-a, +-b, +-c): the same lengths, and cosines that differ from the reference's only in sign -- 0.4-0.5 % of
+    max|G| at 89.5 deg, under SETTING_TOL. Only the reference's resolvable cosines count (an angle at least
+    KC_FLIP_MIN_DEG from 90): among the proper flips that change one of them, the one whose resolvable cosines
+    are closest to the reference's (summed absolute error) is taken if it is strictly closer than the identity. Cosines only, so a length or scale error in the reference cannot pull
+    the choice; a flip the reference cannot resolve (an angle within KC_FLIP_MIN_DEG of 90) is never taken, and
+    a clearly oblique frame never prefers one (a flip changes a large cosine's sign). A non-finite or singular
+    basis is returned untouched."""
     if M is None:
+        return M
+    Mf = np.asarray(M, float)
+    if not np.isfinite(Mf).all() or abs(np.linalg.det(Mf)) <= 1e-9 * np.prod(np.linalg.norm(Mf, axis=0)):
         return M
     A = np.asarray(Mc, float)
     S = A[:, np.argsort(np.linalg.norm(A, axis=0))]            # the order _axes_from_cell anchors in
     G0 = S.T @ S; nrm = np.abs(G0).max()
-    G = np.asarray(M, float).T @ np.asarray(M, float)
+    G = Mf.T @ Mf
     dev0 = np.abs(G - G0).max() / nrm
-    if dev0 <= SETTING_TOL:
+    if dev0 > SETTING_TOL:
+        dev = np.abs(np.einsum('kji,jl,klm->kim', _UNIMOD, G, _UNIMOD) - G0).max((1, 2)) / nrm
+        k = int(np.argmin(dev))
+        if dev[k] < 0.5 * dev0:
+            M = Mf = Mf @ _UNIMOD[k]
+    cS = _cosines(S)
+    res = 2.0 * np.abs(cS) >= FLIP_MIN * (1.0 - 1e-9)          # cosines a sign flip visibly changes (89.9 counts)
+    if not res.any():
         return M
-    dev = np.abs(np.einsum('kji,jl,klm->kim', _UNIMOD, G, _UNIMOD) - G0).max((1, 2)) / nrm
-    k = int(np.argmin(dev))
-    return np.asarray(M, float) @ _UNIMOD[k] if dev[k] < 0.5 * dev0 else M
+    err = (np.abs(_FLIP_SIGN * _cosines(Mf) - cS) * res).sum(1)   # unresolvable cosines cannot break ties
+    err[1:][~((_FLIP_SIGN[1:] < 0) & res).any(1)] = np.inf      # a flip that changes no resolvable cosine
+    k = int(np.argmin(err))                                     # identity first: a tie keeps the frame as is
+    return Mf @ _FLIPS[k] if k and err[k] < err[0] else M
 
 
 def index_known_gpu_cell(q, Mc, topa=8, nc=None, laue=None):

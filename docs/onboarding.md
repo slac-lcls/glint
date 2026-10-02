@@ -233,12 +233,20 @@ That inherited handedness is only right when the anchor is +v0: the anchor grid 
 frame whose shortest axis points to z<0 the anchor is −v0, the lattice's third axis is −v2 with the opposite
 handedness, and the reference-handed seed is the mirror image of −v2. Unless a2 is perpendicular to the
 (v0, v1) plane that mirror is not a lattice vector (review r2, s4-01: 10–15 of 24 triclinic and monoclinic
-frames came back as non-lattice bases that passed every gate). So whenever a2 has a measurable in-plane
-component (`_both_hands`; only a relative component ≤ `1e-8` is treated as numerical noise), both handednesses
-are seeded (256 bases), the winner is negated back to the reference hand (−M indexes the same spots as
-hkl → −hkl), and `_ref_setting` moves a basis that annealed into another setting of the right lattice
-(metric off by more than 1 %) to the reference's. Exactly orthogonal-a2 cells run the unchanged 128-basis
-path; skewed consensus and lock cells take the two-handed path because their skew does not establish symmetry.
+frames came back as non-lattice bases that passed every gate). So `_both_hands` seeds both handednesses (256
+bases) for a cell whose Laue class is given as −1, a 2/m setting or a rhombohedral-axes class (`laue=`:
+StreamDriver passes its class for its own cell, `hybrid_index` takes one), and otherwise for a cell whose a2
+tilts more than `MIRROR_TOL_DEG` = 1° from the (v0, v1) plane's normal. The winner is negated back to the
+reference hand (−M indexes the same spots as hkl → −hkl), and `_ref_setting` moves a basis that annealed into
+another setting of the right lattice to the reference's: the {−1, 0, 1} change of basis with the closest metric
+when the metric is more than 1 % off, then the 2-fold sign flip (±a, ±b, ±c) whose cosines are closest to the
+reference's, among the flips the reference itself can resolve (an angle at least `KC_FLIP_MIN_DEG` = 0.1° from
+90°). The second step is what places near-orthogonal triclinic and monoclinic frames, whose settings differ only
+by the sign of a cosine, in the reference setting; comparing cosines only, it cannot be pulled by a length error
+in the reference. Orthogonal-a2 cells, lysozyme and its consensus and lock cells (skewed ~0.3°) included, run
+the 128-basis path unchanged when no low-symmetry class is given: the metric alone cannot tell such a lock cell
+from a near-orthogonal triclinic one, so without a class a near-orthogonal low-symmetry cell stays on that path
+too (its frames are a lattice basis, possibly in a sign-flipped setting).
 
 Two scoping notes that bite if you skip them:
 

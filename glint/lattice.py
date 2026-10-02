@@ -74,12 +74,16 @@ AXIS_EQUAL_RTOL = 0.05
 # axes are all within the tolerance has no "equal pair" a tolerance can identify.
 UNIQUE_C_LAUE = ("4/m", "4/mmm", "-3", "-3m1", "-31m", "6/m", "6/mmm")   # one unique axis, goes to c
 LENGTH_ORDER_LAUE = ("mmm",)                                            # a <= b <= c IS the setting
-# The classes for which the known-cell engines seed the third axis at both hands whatever its tilt
-# (replica_gpu._both_hands): no rotation of the class makes the mirror seed a lattice vector.
-LOW_LAUE = ("-1", "2/m", "2/m_uaa", "2/m_uab", "2/m_uac")
 # Everything else -- triclinic, the monoclinic settings, the rhombohedral settings and the cubic
 # classes -- is left exactly as handed in: no length rule locates a monoclinic unique axis or a
 # rhombohedral 3-fold, and for cubic every axis is equivalent so any permutation is already standard.
+
+# The classes for which the known-cell engines seed the third axis at both hands whatever its tilt
+# (replica_gpu._both_hands). The engines place the longest axis analytically from the other two; its mirror
+# seed is a lattice vector only if a 2-fold of the lattice lies along it, and these classes do not guarantee
+# one there: triclinic, monoclinic (the unique axis need not be the longest) and the rhombohedral-axes
+# classes (-3_R has no 2-fold; -3m_R's lie along [1-10], never along a cell axis).
+LOW_LAUE = ("-1", "2/m", "2/m_uaa", "2/m_uab", "2/m_uac", "-3_R", "-3m_R")
 
 
 def standardize_axes(M, laue=None, rtol=AXIS_EQUAL_RTOL, centering=None):

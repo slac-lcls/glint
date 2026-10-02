@@ -104,12 +104,14 @@ CONTROLS = [("orthorhombic 40/60/70", (40., 60., 70., 90., 90., 90.), "mmm"),
 
 # Near-orthogonal LOW-symmetry cells (review of #225): the tilt of a2 is under the 1 deg gate, so without a class
 # they look like the skewed lock cell of an orthogonal lattice. With their Laue class given (laue=, as StreamDriver
-# and hybrid_index pass it) they take the two-handed path and its setting step. Measured floors per engine.
+# and hybrid_index pass it) they take the two-handed path and its setting step.
 NEAR = [("near-orthogonal triclinic 50/60/70/89.5/90/90.2", (50., 60., 70., 89.5, 90., 90.2), "-1"),
         ("near-orthogonal triclinic 50/60/70/90.3/89.6/90.4", (50., 60., 70., 90.3, 89.6, 90.4), "-1"),
         ("near-orthogonal monoclinic b-mid 40/60/70 beta=90.6", (40., 60., 70., 90., 90.6, 90.), "2/m_uab"),
-        ("near-orthogonal monoclinic b-shortest 60/40/70 beta=90.6", (60., 40., 70., 90., 90.6, 90.), "2/m_uab")]
-NEAR_FLOOR = {NEAR[0][0]: 18, NEAR[1][0]: 13, NEAR[2][0]: N, NEAR[3][0]: N}
+        ("near-orthogonal monoclinic b-shortest 60/40/70 beta=90.6", (60., 40., 70., 90., 90.6, 90.), "2/m_uab"),
+        ("pseudo-cubic rhombohedral 50/50/50 alpha=89.5", (50., 50., 50., 89.5, 89.5, 89.5), "-3m_R"),
+        ("pseudo-cubic rhombohedral 50/50/50 alpha=89.9 (the 0.1 deg boundary)", (50., 50., 50., 89.9, 89.9, 89.9), "-3m_R")]
+NEAR_FLOOR = {}                    # every NEAR cell: 24/24
 
 for name, cell, laue in AFFECTED + CONTROLS + PSEUDO + NEAR:
     print(f"\n{name}  (Laue {laue})")
@@ -157,6 +159,48 @@ for name, cell, laue in NEAR:
     L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(*cell))
     check(f"{name}: _both_hands True with laue {laue!r}", rg._both_hands(float(L[2]), c01, c02, c12, laue))
     check(f"{name}: _both_hands False with no class", not rg._both_hands(float(L[2]), c01, c02, c12))
+
+print("\n_ref_setting leaves a non-finite or singular basis alone (it used to; a raise would kill the batch)")
+Mt = cell_to_Ar(*NEAR[0][1])
+for label, Mb in (("NaN", np.full((3, 3), np.nan)), ("zero", np.zeros((3, 3)))):
+    try:
+        out = rg._ref_setting(Mb, Mt); ok = out is Mb
+    except Exception as e:                                              # noqa: BLE001
+        ok, out = False, repr(e)
+    check(f"{label} basis returned unchanged", ok, "" if ok else out)
+
+print("\n_ref_setting's sign-flip step: only angles the reference resolves (>= KC_FLIP_MIN_DEG from 90) count")
+
+
+def _sf(cell):                                   # the reference basis, columns shortest-first (as the engines return)
+    A = cell_to_Ar(*cell)
+    return A[:, np.argsort(np.linalg.norm(A, axis=0))]
+
+
+R = np.linalg.qr(np.random.default_rng(3).normal(size=(3, 3)))[0]
+R = R * np.sign(np.linalg.det(R))                # a proper rotation: the same frame seen at an arbitrary orientation
+for label, cell, D, want_flip in (
+        ("triclinic 89.9/90/90.2 flipped (-a,-b,c)", (50., 60., 70., 89.9, 90., 90.2), (-1, -1, 1), True),
+        ("triclinic 89.5/90/90.2 flipped (-a,b,-c)", (50., 60., 70., 89.5, 90., 90.2), (-1, 1, -1), True),
+        ("monoclinic beta=105 (exact 90s) given the 2-fold (-a,b,-c)", (40., 60., 70., 90., 105., 90.), (-1, 1, -1), False),
+        ("hexagonal 60/60/40 (columns c,a,b) given the flip of its two 90 deg cosines", (60., 60., 40., 90., 90., 120.),
+         (1, -1, -1), False),
+        ("hexagonal 60/60/40 (columns c,a,b) given a flip of its 120 deg cosine", (60., 60., 40., 90., 90., 120.),
+         (-1, 1, -1), True),
+        ("r199-like 27.92/62.95/60.11 (columns a,c,b) flipped in beta=90.07", (27.92, 62.95, 60.11, 90., 90.07, 90.),
+         (-1, 1, -1), False)):
+    S = _sf(cell); Mi = R @ S @ np.diag(D)
+    out = rg._ref_setting(Mi, cell_to_Ar(*cell))
+    got = not np.array_equal(out, Mi)
+    back = np.allclose(out.T @ out, S.T @ S, atol=1e-6)        # back in a setting with the reference's metric
+    check(f"{label}: {'back in the reference metric' if want_flip else 'left exactly as it is'}",
+          (got and back) if want_flip else (not got), f"changed={got}")
+
+print("\nStreamDriver passes its class for the primary cell only, not for a relocked extra cell")
+dP = StreamDriver(Mt, PANELS, 0.1, 1.3, (NPAN, NPAN), dtype=np.uint16, B=4, dmin=2.0, use_gpu=False, laue="-1")
+lyso = cell_to_Ar(78.706, 78.792, 37.813, 89.8107, 90.0832, 90.1885)
+check("primary cell gets laue='-1'", dP._kc_kw(dP.Mc) == {"laue": "-1"} and dP._kc_kw() == {"laue": "-1"})
+check("another cell gets no class", dP._kc_kw(lyso) == {})
 
 print("\nthe CUDA-graph cache is keyed on the handedness branch, not on the cell alone")
 P0 = rgb._cell_params(cell_to_Ar(*NEAR[0][1])); P1 = rgb._cell_params(cell_to_Ar(*NEAR[0][1]), laue="-1")

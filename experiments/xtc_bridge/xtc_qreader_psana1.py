@@ -110,8 +110,13 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
                           min_pix=xtc_core.PF_MIN_PIX, son_min=xtc_core.PF_SON_MIN,
                           thr_high=xtc_core.PF_THR_HIGH, thr_low=xtc_core.PF_THR_LOW,
                           pf8_min_snr=xtc_core.PF8_MIN_SNR, gpu_calib=False):
-    """Peak-find a whole psana1 (LCLS-I) run in-process and return its q-frames -- same dict contract
-    as the psana2 reader: {qframes, events, n_events, n_sent, n_skipped_wl}.
+    """Peak-find a whole psana1 (LCLS-I) run in-process and return its q-frames -- the psana2
+    reader's dict contract {qframes, events, n_events, n_sent, n_skipped_wl}, plus `lams`.
+
+    `lams[k]` is the wavelength (A) `qframes[k]` was built with: `wavelength` when given, else that
+    event's EBeam photon energy. `--integrate` re-predicts each indexed event in a second pass and
+    must use the SAME wavelength; without this list it had only `--wavelength`, 0.0 by default,
+    and predicted every reflection onto the beam centre (review finding s7-03).
 
     rank/nranks shard events round-robin (rank r owns event i iff i % nranks == r) for the MPI wrapper;
     the default rank=0/nranks=1 owns everything, so single-process behaviour is unchanged. Events are
@@ -222,7 +227,7 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
 
     X = Y = Zc = kin = None
     finders = []
-    qframes, events = [], []
+    qframes, events, lams = [], [], []
     n_events = n_skipped_wl = 0
     for i, evt in enumerate(ds.events()):
         if max_events and i >= max_events:
@@ -297,6 +302,7 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
         if len(q):
             qframes.append(np.ascontiguousarray(q))
             events.append(i)
+            lams.append(float(lam))
 
-    return {"qframes": qframes, "events": events,
+    return {"qframes": qframes, "events": events, "lams": lams,
             "n_events": n_events, "n_sent": len(qframes), "n_skipped_wl": n_skipped_wl}

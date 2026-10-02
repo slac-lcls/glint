@@ -413,6 +413,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_axis_standardizer.py
 
+      # refine_sym.refine_bravais (integrate_cxi's sym_refine) from a start that is NOT the conventional
+      # cell -- the Buerger-reduced primitive cells the blind indexer emits, hexagonal gamma 60, mixed
+      # rhombohedral angles, every centred lattice -- used to return a different lattice that fit a few
+      # percent of the spots (review s4-04). All 14 Bravais lattices from four settings each must come
+      # back a basis of the true lattice with an exactly symmetric metric; conventional starts unchanged.
+      - name: experiments/test_refine_bravais_setting.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_refine_bravais_setting.py
+
       # Not a test: it checks that run_ci_locally.py's STEPS still matches the steps above, so the
       # local "run it as poor as CI" harness cannot quietly fall behind this file and start
       # reporting ALL PASS over a step it no longer runs.

@@ -124,14 +124,34 @@ def _frame_qmax(frames):
     return out
 
 
+_CELL_L0 = {}
+
+
+def _orthogonal_L0(Mc):
+    """L0 (the shortest axis) if cell Mc is orthogonal, else None; cached per cell. _coarse_ok runs on every batch
+    (twice in _gpu_stage) and once per index_fused call, and _orthogonal + _axes_from_cell cost ~45 us on a Mac
+    each time. Uncached (153ecf8), that repeated work was 60-65 % of the host time index_fused added over main at
+    B=32 and 32-38 % at B=120 (Mac, GPU work stubbed, the 120 cxidb-17 frames AG02b times); the rest was _frame_qmax,
+    run over every frame once per call and again per batch, now once per call. No GPU job has timed index_fused
+    with either change, so whether the +3-7 % the review-r2 GPU job (AG02b) measured on 153ecf8 is gone is not
+    known."""
+    k = np.asarray(Mc, float).tobytes()
+    if k not in _CELL_L0:
+        if len(_CELL_L0) >= 256:                     # a relocking stream sees a handful of cells; never grow unbounded
+            _CELL_L0.clear()
+        _CELL_L0[k] = float(_axes_from_cell(Mc)[0][0]) if _orthogonal(Mc) else None
+    return _CELL_L0[k]
+
+
 def _coarse_ok(Mc, qmax):
     """Where the coarse 4096 grid is safe for cell Mc at largest |q| qmax (scalar or per-frame array): adaptive
     grid on, orthogonal cell, and L0 * qmax <= _ADAPT_L0Q (L0 = the shortest axis, the anchor). A NaN qmax is
     not safe (full grid)."""
     q = np.asarray(qmax, float)
-    if not (_ADAPT and _orthogonal(Mc)):
+    L0 = _orthogonal_L0(Mc) if _ADAPT else None
+    if L0 is None:
         return np.zeros(q.shape, bool)
-    return float(_axes_from_cell(Mc)[0][0]) * q <= _ADAPT_L0Q
+    return L0 * q <= _ADAPT_L0Q
 
 
 def _adaptive_dirs(Mc, qmax):
@@ -250,19 +270,24 @@ def _stage_compute(Q, m, P):
     return best, pol, mp, mainb
 
 
-def _gpu_stage(frames, Mc, topa=8, nc=None, full_grid=False):
+def _gpu_stage(frames, Mc, topa=8, nc=None, full_grid=False, qf=None):
     """Eager wrapper: pad this batch then run the pure-torch stage compute. The anchor grid is chosen per frame
     (_coarse_ok on the frame's own largest |q|); a batch that needs both grids runs as two sub-batches whose
-    outputs are put back in frame order, so no frame's grid depends on the frames batched with it."""
-    qf = _frame_qmax(frames)
+    outputs are put back in frame order, so no frame's grid depends on the frames batched with it.
+    qf: these frames' _frame_qmax, when the caller already has it (index_fused); computed here otherwise. The
+    full grid does not read it, so with full_grid it is never computed."""
+    qmax = None
     if not full_grid:
+        if qf is None:
+            qf = _frame_qmax(frames)
         ok = _coarse_ok(Mc, qf)
         if ok.any() and not ok.all():
             parts = [np.flatnonzero(ok), np.flatnonzero(~ok)]
-            res = [_gpu_stage([frames[j] for j in p], Mc, topa, nc) for p in parts]
+            res = [_gpu_stage([frames[j] for j in p], Mc, topa, nc, qf=qf[p]) for p in parts]
             inv = torch.as_tensor(np.argsort(np.concatenate(parts)), device=DEV)
             return tuple(torch.cat(t)[inv] for t in zip(*res))
-    P = _cell_params(Mc, topa, nc, full_grid, float(qf.max()) if len(qf) else 0.0)   # validates the depth first
+        qmax = float(qf.max()) if len(qf) else 0.0
+    P = _cell_params(Mc, topa, nc, full_grid, qmax)   # validates the depth first
     Pmax = max(len(f) for f in frames)
     Q, m = pad(frames, Pmax)
     return _stage_compute(Q, m, P)
@@ -491,23 +516,28 @@ def index_fused(frames, Mc, B=32, topa=8, nc=None, full_grid=False):
     except Exception:
         return _unfused(frames, Mc, B, topa, nc, full_grid)
     cap = _fk.max_peaks()
-    ok = np.ones(len(frames), bool) if full_grid else _coarse_ok(Mc, _frame_qmax(frames))
+    qf = None if full_grid else _frame_qmax(frames)          # once per call; each batch takes its slice
+    ok = np.ones(len(frames), bool) if full_grid else _coarse_ok(Mc, qf)
     order = sorted(range(len(frames)), key=lambda i: (not ok[i], len(frames[i])))   # by grid, tight per-batch Pmax
     fits = [j for j in order if len(frames[j]) <= cap]
     over = [j for j in order if len(frames[j]) > cap]
     out = [None] * len(frames)
+
+    def batch(js):                     # index_known_gpu_cell_batch on frames js, without recomputing their qmax
+        return _cpu_stage(*_gpu_stage([frames[j] for j in js], Mc, topa, nc, full_grid,
+                                      qf=None if qf is None else qf[js]), Mc)
     _fk.patch(anneal=True, obj=True, refine=True, cpu=True)
     try:
         for s in range(0, len(fits), B):
             chunk = fits[s:s + B]
-            res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc, topa, nc, full_grid)
+            res = batch(chunk)
             for j, r in zip(chunk, res):
                 out[j] = r
     finally:
         _fk.unpatch()
     for j in over:                     # unpatched: the stock ops, one frame at a time. The stock
         try:                           # path materialises (F, NC*NANG, Pmax) tensors, so at these
-            out[j] = index_known_gpu_cell_batch([frames[j]], Mc, topa, nc, full_grid)[0]   # peak counts F must stay 1.
+            out[j] = batch([j])[0]     # peak counts F must stay 1.
         except Exception as e:                                        # OOM, etc: a miss, not a death
             warnings.warn(f"index_fused: frame with {len(frames[j])} peaks failed on the non-fused "
                           f"fallback ({type(e).__name__}: {e}); returning it as a miss", RuntimeWarning)

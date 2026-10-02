@@ -12,16 +12,21 @@ WHAT IT CHECKS, all on CPU torch:
   1. The rule, observed on the grid _stage_compute actually runs with: lysozyme at 2.0 A, the six committed
      cxidb-17 frames with the largest |q|, and 100x120x150 at 4.0 A (L0*qmax = 25) stay on 4096;
      100x120x150 at 1.8 A and a 117x160x200 cell at 2.5 A get 16384; an oblique cell and KC_ADAPTIVE_DIRS off
-     get 16384. Plus _adaptive_dirs(Mc, qmax) directly, and every committed cxidb-17 frame on 4096.
+     get 16384. Plus _adaptive_dirs(Mc, qmax) directly, every committed cxidb-17 frame on 4096, and the per-cell
+     cache behind _coarse_ok: lysozyme with one angle 2.5 deg off, or a cached array tilted 2.5 deg in place,
+     gets the full grid.
   2. A batch mixing frames that need different grids: each frame runs on its own grid, and the answer equals
      the answer from a batch of only its kind (split + reorder).
   3. The CUDA-graph path (index_all_graph) on that mixed batch. There is no GPU in CI, so it runs here with a
      stand-in for the captured graph that calls _stage_compute with the P it was captured with: a graph built
      for one grid must never run a frame that needs the other (the graph cache is keyed on the grid).
-  4. Rate: 16 simulated stills of 100x120x150 at 1.8 A through the default call (index_fused, as StreamDriver
+  4. index_fused's batched branch on that mixed batch, with a stand-in for glint.fused_kernels (the stock torch
+     ops): _frame_qmax runs once per call and each batch gets its slice (none at all with full_grid=True), and
+     each frame's answer is its answer in check 2.
+  5. Rate: 16 simulated stills of 100x120x150 at 1.8 A through the default call (index_fused, as StreamDriver
      makes it): at least 14 orientation-correct, and no more than 1 fewer than with full_grid=True.
      origin/main (149370e) gets 7/16 here (the full grid 16/16).
-Checks 1, 2 and 3 audit every _stage_compute call: no frame with L0*|q|max > 25 may run on the 4096 grid.
+Every _stage_compute call above is audited: no frame with L0*|q|max > 25 may run on the 4096 grid.
 
 SKIPS, exit 0, without torch (replica_gpu imports it unconditionally) or below pyproject's floor (>= 1.12).
 
@@ -29,6 +34,7 @@ SKIPS, exit 0, without torch (replica_gpu imports it unconditionally) or below p
 """
 import os
 import sys
+import types
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
@@ -154,6 +160,23 @@ def _direct():
     check("every committed cxidb-17 frame is on the 4096 grid", bool(ok.all()), f"{int(ok.sum())}/{len(real)}")
     check("_frame_qmax", np.allclose(rgb._frame_qmax([np.zeros((0, 3)), [[1., 0, 0], [0, 2., 0]], real[0]]),
                                      [0.0, 2.0, qmax_real[0]]))
+    # the per-cell cache (_orthogonal_L0): each cell keeps its own answer whatever was asked before it
+    obl = np.asarray(cell_to_Ar(70.0, 80.0, 90.0, 80.0, 85.0, 95.0), float)
+    seq = [bool(rgb._coarse_ok(c, 1 / 2.0)) for c in (LYSO, obl, LYSO, obl)]
+    check("_coarse_ok per cell, cache warm or cold: lysozyme coarse, oblique full", seq == [True, False, True, False], seq)
+    # ... and the key is the whole cell: the same axis lengths with one angle 2.5 deg off is another cell, and so
+    # is an array the cache has seen, changed in place
+    warm = bool(rgb._coarse_ok(LYSO, 1 / 2.0))
+    beta = bool(rgb._coarse_ok(np.asarray(cell_to_Ar(79.02, 79.02, 37.98, 90.0, 92.5, 90.0), float), 1 / 2.0))
+    check("_coarse_ok, cache warm on lysozyme: lysozyme with beta 92.5 (one angle 2.5 deg off) -> full grid",
+          warm and not beta, (warm, beta))
+    M = np.array(LYSO, float)
+    warm = bool(rgb._coarse_ok(M, 1 / 2.0))
+    a, c, t = M[:, 0].copy(), M[:, 2].copy(), np.radians(2.5)
+    M[:, 2] = np.cos(t) * c - np.sin(t) * np.linalg.norm(c) * a / np.linalg.norm(a)   # c tilted 2.5 deg off a
+    tilt = bool(rgb._coarse_ok(M, 1 / 2.0))
+    check("_coarse_ok on a lysozyme array the cache has seen, its c axis then tilted 2.5 deg in place -> full grid",
+          warm and not tilt, (warm, tilt))
 
 
 safe("_adaptive_dirs / _coarse_ok / _frame_qmax", _direct)
@@ -165,11 +188,13 @@ hi_shots = [simulate_shot(cell=(100., 120., 150., 90., 90., 90.), n_target=100, 
 lo_shots = [simulate_shot(cell=(100., 120., 150., 90., 90., 90.), n_target=60, dmin=4.5, pos_sigma=2e-4,
                           frac_spurious=0.2, rng=srng) for _ in range(4)]
 mixed = [q for pair in zip([s.g for s in lo_shots], [s.g for s in hi_shots[:4]]) for q in pair]   # lo, hi, lo, hi ...
+MIXED_REF = []                   # index_known_gpu_cell_batch(mixed, LONG), for section 4
 
 
 def _mixed():
     n0 = len(AUDIT)
     got = rgb.index_known_gpu_cell_batch(mixed, LONG)
+    MIXED_REF[:] = got
     runs = AUDIT[n0:]
     lo_ref = rgb.index_known_gpu_cell_batch(mixed[0::2], LONG)
     hi_ref = rgb.index_known_gpu_cell_batch(mixed[1::2], LONG)
@@ -231,7 +256,67 @@ def _graph():
 
 safe("graph path", _graph)
 
-print("4. rate: 16 stills of 100x120x150 A at 1.8 A through the default call")
+print("4. index_fused's batched branch: each frame's |q|max computed once per call (stand-in fused kernels, CPU)")
+
+
+def _fused():
+    """index_fused past its `DEV != "cuda"` test, with a stand-in glint.fused_kernels: patch / unpatch do nothing,
+    so the stock torch ops run, and max_peaks is set per call (100 sends the 120-peak frames one at a time)."""
+    import glint
+    cap = [10 ** 6]
+    fk = types.ModuleType("glint.fused_kernels")
+    fk.max_peaks = lambda: cap[0]
+    fk.patch = lambda **k: None
+    fk.unpatch = lambda: None
+    nq, stages = [0, 0], []
+    real_fq, real_gs = rgb._frame_qmax, rgb._gpu_stage
+
+    def fq(frames):
+        nq[0] += 1
+        nq[1] += len(frames)
+        return real_fq(frames)
+
+    def gs(frames, *a, **k):
+        stages.append((k.get("qf"), frames))
+        return real_gs(frames, *a, **k)
+    saved = (rgb.DEV, sys.modules.get("glint.fused_kernels"), getattr(glint, "fused_kernels", None))
+    rgb.DEV, sys.modules["glint.fused_kernels"], glint.fused_kernels = _CudaLookalike("cpu"), fk, fk
+    rgb._frame_qmax, rgb._gpu_stage = fq, gs
+    try:
+        for c, label in ((10 ** 6, "B=3: a batch on both grids"), (100, "B=3, max_peaks 100: one at a time")):
+            cap[0], nq[:], stages[:] = c, [0, 0], []
+            out = rgb.index_fused(mixed, LONG, B=3)
+            check(f"index_fused ({label}): _frame_qmax runs once per call, over each frame once",
+                  nq == [1, len(mixed)], f"{nq[0]} calls over {nq[1]} frames, {len(mixed)} frames in")
+            check(f"index_fused ({label}): each batch's |q|max, sliced from the call's, equals its own frames' "
+                  "_frame_qmax bit for bit",
+                  len(stages) > 0 and all(q is not None and np.array_equal(q, real_fq(f)) for q, f in stages))
+            check(f"index_fused ({label}): each frame's answer is its answer in the mixed batch of section 2",
+                  len(out) == len(MIXED_REF) and all(
+                      (a is None and b is None)
+                      or (a is not None and b is not None and (np.array_equal(a, b) or ori_ok(a, b)))
+                      for a, b in zip(out, MIXED_REF)))
+        cap[0] = 10 ** 6
+        nq[:] = [0, 0]
+        rgb.index_fused(mixed[0::2][:2], LONG, B=2, full_grid=True)
+        check("index_fused(full_grid=True): _frame_qmax never runs (the full grid does not read it)", nq == [0, 0],
+              f"{nq[0]} calls over {nq[1]} frames")
+    finally:
+        rgb._frame_qmax, rgb._gpu_stage = real_fq, real_gs
+        rgb.DEV = saved[0]
+        if saved[1] is None:
+            sys.modules.pop("glint.fused_kernels", None)
+        else:
+            sys.modules["glint.fused_kernels"] = saved[1]
+        if saved[2] is None:
+            del glint.fused_kernels
+        else:
+            glint.fused_kernels = saved[2]
+
+
+safe("index_fused batched branch", _fused)
+
+print("5. rate: 16 stills of 100x120x150 A at 1.8 A through the default call")
 
 
 def _rate():

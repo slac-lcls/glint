@@ -149,11 +149,13 @@ def _driver(Mc=A, oracle_default=None, oracle=None, **kw):
     oracle = oracle if oracle is not None else _Oracle(default=oracle_default)
     sd.rgb = oracle
     kw.setdefault("B", 8); kw.setdefault("dmin", DMIN); kw.setdefault("use_gpu", False)
+    # float32: the pixel frames rendered below (_pixel_frame) are float32 with fractional values, and a
+    # uint16 ring now REFUSES them instead of truncating them silently (stream_driver._check_ring_dtype)
     if Mc is None:
         with _no_torch_needed():
-            drv = StreamDriver(None, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, **kw)
+            drv = StreamDriver(None, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.float32, **kw)
     else:
-        drv = StreamDriver(Mc, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, **kw)
+        drv = StreamDriver(Mc, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.float32, **kw)
     drv._blind_index = oracle.blind
     drv._known_index = oracle.index_fused
     return drv, oracle

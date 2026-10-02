@@ -273,6 +273,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_stream_hit_ring.py
 
+      # StreamDriver's ring is preallocated at the constructor's dtype (uint16 by default, for raw ADU) and push()
+      # used to cast every frame into it silently: a calibrated float32 frame lost its fractions and negatives
+      # (93 peaks instead of 6 on a sigma=1 frame), float64/int16 frames wrapped. Now push() and the rescue-pixel
+      # store raise TypeError on a lossy cast, before any state changes; a uint16 frame lands bit-for-bit. numpy only.
+      - name: experiments/test_ring_dtype.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_ring_dtype.py
+
       # StreamDriver effort= (adaptive effort): the known-cell depth follows the hit rate, the spare budget buys
       # the chance-controlled deep search on the misses, decisions at flush boundaries only and logged; off by
       # default and byte-identical off. q-list frames, fit-oracle indexers, numpy only.

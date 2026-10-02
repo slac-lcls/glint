@@ -860,7 +860,9 @@ class StreamDriver:
                  # adaptive effort (off by default): the search depth follows the hit rate -- see _EffortPolicy
                  effort=None,
                  # a per-peak-count chance floor on the live gate (off by default) -- see min_inlier_frac
-                 null_floor=None):
+                 null_floor=None,
+                 # one peak finder per panel rectangle of a multi-panel slab (off by default) -- see below
+                 per_panel_finder=False):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -901,10 +903,13 @@ class StreamDriver:
         # built ONCE and reused; dtype=float32 is what enables the fused GPU stats kernel
         kw = dict(dtype=xp.float32) if self.gpu else {}
         kw.update(pf_kw or {})
-        # A multi-panel slab gets one finder per panel rectangle: a single finder's ring, local-max
-        # window and labelling would reach across each panel seam into rows that are elsewhere in the
-        # lab (PerPanelFinder). One panel -- every synthetic and square-frame caller -- is unchanged.
-        rects = slab_rects(panels, self.shape) if len(self.shape) == 2 else None
+        # per_panel_finder: a multi-panel slab gets one finder per panel rectangle, so no ring, local-max
+        # window or labelling reaches across a panel seam into rows that are elsewhere in the lab
+        # (PerPanelFinder). OFF by default: on 64-panel CSPAD it costs ~1 ms per panel per frame on an
+        # A100 (end to end 73.0 vs 8.6 ms/frame, review-r2 GPU job 39724839) until the panels share one
+        # launch. One panel -- every synthetic and square-frame caller -- is unchanged either way.
+        self.per_panel_finder = bool(per_panel_finder)
+        rects = slab_rects(panels, self.shape) if self.per_panel_finder and len(self.shape) == 2 else None
         if rects is None:
             self.finder = PeakFinderV4(m, **kw)
         else:

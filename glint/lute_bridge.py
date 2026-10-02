@@ -171,7 +171,7 @@ def _get_finder(name):
 
 
 def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, data_key=None,
-                    clen_scale=None, peakfinder="v4", top_n=0, ring_focus=None, **pf_kw):
+                    clen_scale=None, peakfinder="v4", top_n=0, ring_focus=None, per_panel=False, **pf_kw):
     """Self-contained GLINT front end: read a .cxi and bridge detector peaks to reciprocal q-vectors -- no
     CrystFEL peak-search stream in between. Returns (frames [(N,3) q in 1/A], images [{image,event}]).
 
@@ -179,6 +179,8 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
     -> REUSE the .cxi's own peakfinder8/Cheetah peaks in /entry_1/result_1 (no redundant peak-find -- the
     efficient path when FindPeaksSFX/Cheetah already stored them); 'pf8' -> not yet vendored (needs a q-map).
     top_n: keep only the N strongest peaks per frame (0 = all; guards a finder that over-finds on background).
+    per_panel: on a multi-panel slab, run the finder once per panel rectangle (slab_rects), so nothing it
+    computes reaches across a panel seam. Off by default: one finder per panel costs a fixed overhead per panel.
     clen/photon_energy may be per-event h5 paths; clen_scale converts encoder units to metres (auto: >10 => mm).
 
     cxi_path may also be a CrystFEL .list/.lst of .cxi files (FindPeaksSFX's result); frames from all listed
@@ -191,7 +193,7 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
             remaining = (n - len(frames)) if n else 0   # pass the REMAINING budget so we don't read whole files
             fr, im = frames_from_cxi(pth, geom_path, wavelength_A=wavelength_A, n=remaining, min_peaks=min_peaks,
                                      data_key=data_key, clen_scale=clen_scale, peakfinder=peakfinder,
-                                     top_n=top_n, **pf_kw)
+                                     top_n=top_n, per_panel=per_panel, **pf_kw)
             frames += fr; images += im
             if n and len(frames) >= n:
                 break
@@ -269,9 +271,9 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
         rmask = ring_qmask(panels, c0 * sc + coff, wl0, cell6, (data.shape[-2], data.shape[-1]), qlow=qlow)
         cmask = rmask if cmask is None else (cmask & rmask)
     finder = _get_finder(peakfinder)
-    # Multi-panel slab: one finder per panel rectangle, so no background ring, local-max window or
-    # component reaches across a panel seam (peakfinder_v4.PerPanelFinder). One panel: unchanged.
-    rects = slab_rects(panels, (data.shape[-2], data.shape[-1])) if data.ndim in (2, 3) else None
+    # per_panel on a multi-panel slab: one finder per panel rectangle, so no background ring, local-max
+    # window or component reaches across a panel seam (peakfinder_v4.PerPanelFinder). One panel: unchanged.
+    rects = slab_rects(panels, (data.shape[-2], data.shape[-1])) if per_panel and data.ndim in (2, 3) else None
     if rects is not None:
         from glint.peakfinder_v4 import merge_panel_peaks
     for i in range(nfr):

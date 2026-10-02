@@ -123,7 +123,8 @@ def _run_one(fx, pl, lattices=None, before=None, **kw):
 def test_signature_defaults_and_validation():
     import inspect
     params = list(inspect.signature(StreamDriver.__init__).parameters)
-    assert params[-6:-4] == ["per_lattice", "per_lattice_below"], params[-7:]   # hits_only, rescue_pixels, effort, null_floor follow
+    assert params[-7:] == ["per_lattice", "per_lattice_below", "hits_only", "rescue_pixels", "effort",
+                           "null_floor", "per_panel_finder"], params[-8:]
     sig = inspect.signature(StreamDriver.__init__).parameters
     assert sig["per_lattice"].default is False and sig["per_lattice_below"].default == 0.25
     for bad in (-0.1, 1.5):

@@ -9,16 +9,27 @@ with panel backgrounds of different level the mixed ring inflated sigma and peak
 seam were lost, and two spots either side of an unmasked seam merged into one peak between them.
 Masking a 1-px panel border does not help, since the ring reaches r=4 px.
 
+The per-panel search is OPT-IN (StreamDriver(per_panel_finder=True), frames_from_cxi(per_panel=True),
+`glint --per-panel-finder`, record_stream_replay --per-panel-finder): on 64-panel CSPAD one finder per panel
+costs ~1 ms per panel per frame on an A100 (end to end 73.0 vs 8.6 ms/frame, review-r2 GPU job 39724839).
+The default stays the single finder, bit for bit.
+
 The checks:
   1  lute_bridge.slab_rects: two rects for two stacked panels; None (the old single finder) for one
      panel, a 3-D layout, a rect outside the array, overlapping rects.
-  2  StreamDriver: one panel keeps a plain PeakFinderV4; two panels with backgrounds 10|100 and rows
-     63/64 masked find the peaks 1-3 rows from the seam, equal to one finder per panel run by hand,
-     and push() hands every planted peak to the indexer as a q-vector.
-  3  spots either side of an UNMASKED seam are two peaks, one per panel.
-  4  frames_from_cxi (v4 and pf9) on a two-panel .cxi: every planted peak's q recovered (needs h5py).
+  2  StreamDriver: by default (and with one panel) a plain PeakFinderV4, bit-identical to one finder over
+     the slab; with per_panel_finder=True two panels with backgrounds 10|100 and rows 63/64 masked find
+     the peaks 1-3 rows from the seam, equal to one finder per panel run by hand, and push() hands every
+     planted peak to the indexer as a q-vector.
+  3  per_panel_finder=True: spots either side of an UNMASKED seam are two peaks, one per panel.
+  4  frames_from_cxi (v4 and pf9) on a two-panel .cxi with per_panel=True: every planted peak's q
+     recovered; without it the per-panel merge is never called (needs h5py).
+  5  the plumbing (needs h5py): frames_from_cxi on a .list of two such .cxi files with per_panel=True runs
+     the per-panel merge on every frame and returns what the files give read one by one; without it the
+     merge is never called. glint_cli._load_frames hands --per-panel-finder (args.per_panel_finder) to
+     frames_from_cxi the same way.
 
-Plain script: prints ok/FAIL lines, exits 1 on any failure. numpy + scipy (+ h5py for 4).
+Plain script: prints ok/FAIL lines, exits 1 on any failure. numpy + scipy (+ h5py for 4 and 5).
 """
 import os
 import shutil
@@ -122,6 +133,59 @@ def _driver(panels, shape, **kw):
 SEAM_MASK = np.ones(SLAB, bool); SEAM_MASK[HP - 1] = False; SEAM_MASK[HP] = False   # 1-px panel border
 
 
+def _write_geom(path):
+    """The two panels as a CrystFEL .geom over one (128, 128) data array, mask bit 0x1 = bad."""
+    g = ("clen = 0.1\nres = 10000\ndata = /entry_1/data_1/data\nmask = /entry_1/data_1/mask\n"
+         "mask_good = 0x0\nmask_bad = 0x1\n")
+    for p in _panels():
+        n = p["name"]
+        g += (f"{n}/min_fs = {p['min_fs']}\n{n}/max_fs = {p['max_fs']}\n{n}/min_ss = {p['min_ss']}\n"
+              f"{n}/max_ss = {p['max_ss']}\n{n}/fs = +1.0x +0.0y\n{n}/ss = +0.0x +1.0y\n"
+              f"{n}/corner_x = {p['cx']}\n{n}/corner_y = {p['cy']}\n")
+    open(path, "w").write(g)
+
+
+def _write_cxi(h5py, path, frames):
+    """A stacked .cxi of slab frames with SEAM_MASK as its mask."""
+    with h5py.File(path, "w") as h:
+        h["/entry_1/data_1/data"] = np.stack(frames)
+        mk = np.zeros(SLAB, np.uint16); mk[~SEAM_MASK] = 1
+        h["/entry_1/data_1/mask"] = mk
+
+
+def _merge_calls(fn):
+    """Run fn() with peakfinder_v4.merge_panel_peaks counted; return (fn(), number of calls)."""
+    real, calls = V4.merge_panel_peaks, []
+
+    def _spy(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+    V4.merge_panel_peaks = _spy
+    try:
+        return fn(), len(calls)
+    finally:
+        V4.merge_panel_peaks = real
+
+
+def _no_merge_calls(fn):
+    """Run fn() with peakfinder_v4.merge_panel_peaks raising, i.e. assert the per-panel merge is never reached."""
+    real = V4.merge_panel_peaks
+
+    def _no_merge(*a, **k):
+        raise AssertionError("per-panel merge called on the default path")
+    V4.merge_panel_peaks = _no_merge
+    try:
+        return fn()
+    finally:
+        V4.merge_panel_peaks = real
+
+
+def _same_q(a, b):
+    """Two lists of (N, 3) q arrays equal bit for bit."""
+    return len(a) == len(b) and all(np.asarray(x).shape == np.asarray(y).shape
+                                    and np.asarray(x).tobytes() == np.asarray(y).tobytes() for x, y in zip(a, b))
+
+
 def part_1():
     from glint.lute_bridge import slab_rects
     pan = _panels()
@@ -136,10 +200,14 @@ def part_1():
 
 
 def part_2():
-    drv1 = _driver(_panels()[:1], (HP, WP))
-    check("2 StreamDriver, one panel: the finder is a plain PeakFinderV4 (unchanged)",
+    drv1 = _driver(_panels()[:1], (HP, WP), per_panel_finder=True)
+    check("2 StreamDriver, one panel, per_panel_finder=True: the finder is a plain PeakFinderV4 (unchanged)",
           type(drv1.finder) is V4.PeakFinderV4)
-    drv = _driver(_panels(), SLAB, mask=SEAM_MASK)
+    drv0 = _driver(_panels(), SLAB, mask=SEAM_MASK)
+    img0, _ = _slab_frame(0)
+    check("2 StreamDriver, two panels, default: a plain PeakFinderV4 over the slab, bit-identical to main's finder",
+          type(drv0.finder) is V4.PeakFinderV4 and same(drv0.finder.find(img0), V4.PeakFinderV4(SEAM_MASK).find(img0)))
+    drv = _driver(_panels(), SLAB, mask=SEAM_MASK, per_panel_finder=True)
     hits = np.zeros(len(ROWS), int); found = []
     for seed in range(10):
         img, pl = _slab_frame(seed)
@@ -159,7 +227,7 @@ def part_2():
     section("2 by hand", by_hand)
     # through push(): the warm-up ingest hands the peaks' q to the blind indexer (stubbed here)
     got = []
-    drv2 = _driver(_panels(), SLAB, mask=SEAM_MASK, min_peaks=1)
+    drv2 = _driver(_panels(), SLAB, mask=SEAM_MASK, min_peaks=1, per_panel_finder=True)
     drv2._ingest_blind_q = lambda qq, n_peaks=None: got.append(qq)
     img, pl = _slab_frame(3)
     drv2.push(img)
@@ -170,7 +238,7 @@ def part_2():
 
 def part_3():
     """Spots either side of an UNMASKED seam are two peaks, one per panel -- not one merged centroid."""
-    drv = _driver(_panels(), SLAB)
+    drv = _driver(_panels(), SLAB, per_panel_finder=True)
     r = np.random.default_rng(5)
     img = r.poisson(20.0, SLAB).astype(np.float64)
     Y, X = np.mgrid[0:SLAB[0], 0:SLAB[1]]
@@ -194,34 +262,75 @@ def part_4():
     tmp = tempfile.mkdtemp(prefix="glint_pfmask_")
     try:
         geom = os.path.join(tmp, "slab2.geom")
-        g = ("clen = 0.1\nres = 10000\ndata = /entry_1/data_1/data\nmask = /entry_1/data_1/mask\n"
-             "mask_good = 0x0\nmask_bad = 0x1\n")
-        for p in _panels():
-            n = p["name"]
-            g += (f"{n}/min_fs = {p['min_fs']}\n{n}/max_fs = {p['max_fs']}\n{n}/min_ss = {p['min_ss']}\n"
-                  f"{n}/max_ss = {p['max_ss']}\n{n}/fs = +1.0x +0.0y\n{n}/ss = +0.0x +1.0y\n"
-                  f"{n}/corner_x = {p['cx']}\n{n}/corner_y = {p['cy']}\n")
-        open(geom, "w").write(g)
+        _write_geom(geom)
         frames, pls = zip(*[_slab_frame(100 + s) for s in range(4)])
-        stack = np.stack(frames)
         cxi = os.path.join(tmp, "slab2.cxi")
-        with h5py.File(cxi, "w") as h:
-            h["/entry_1/data_1/data"] = stack
-            mk = np.zeros(SLAB, np.uint16); mk[~SEAM_MASK] = 1
-            h["/entry_1/data_1/mask"] = mk
+        _write_cxi(h5py, cxi, frames)
         panels, _ = parse_geom(geom)
+        fr0, _ = _no_merge_calls(lambda: frames_from_cxi(cxi, geom, wavelength_A=1.3, min_peaks=1, peakfinder="v4"))
+        check("4 frames_from_cxi default (per_panel=False): one finder over the slab, no per-panel merge",
+              len(fr0) == len(pls))
         for pf in ("v4", "pf9"):
-            fr, _ = frames_from_cxi(cxi, geom, wavelength_A=1.3, min_peaks=1, peakfinder=pf)
+            fr, _ = frames_from_cxi(cxi, geom, wavelength_A=1.3, min_peaks=1, peakfinder=pf, per_panel=True)
             n = tot = 0
             for q, pl in zip(fr, pls):
                 n += _q_hits(q, pl, panels); tot += len(pl)
-            check(f"4 frames_from_cxi(peakfinder={pf!r}), two-panel slab: every planted peak's q recovered",
+            check(f"4 frames_from_cxi(peakfinder={pf!r}, per_panel=True), two-panel slab: every planted peak's q recovered",
                   n == tot, f"{n}/{tot}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-for nm, fn in (("1", part_1), ("2", part_2), ("3", part_3), ("4", part_4)):
+def part_5():
+    """per_panel reaches the finder through frames_from_cxi's .list recursion and through glint --images."""
+    try:
+        import h5py
+    except ImportError:
+        print("SKIP  F5: no h5py (CI installs it) -- the .list and glint_cli routes not exercised")
+        return
+    import argparse
+    from glint.lute_bridge import frames_from_cxi
+    from glint.glint_cli import _load_frames
+    tmp = tempfile.mkdtemp(prefix="glint_pfmask_")
+    try:
+        geom = os.path.join(tmp, "slab2.geom")
+        _write_geom(geom)
+        cxis = [os.path.join(tmp, f"slab2_{k}.cxi") for k in range(2)]
+        for k, cxi in enumerate(cxis):                             # two files of two frames each
+            _write_cxi(h5py, cxi, [_slab_frame(200 + 2 * k + s)[0] for s in range(2)])
+        lst = os.path.join(tmp, "slab2.lst")
+        open(lst, "w").write("".join(c + "\n" for c in cxis))
+        kw = dict(wavelength_A=1.3, min_peaks=1, peakfinder="v4")
+        one = {pp: [frames_from_cxi(c, geom, per_panel=pp, **kw)[0] for c in cxis] for pp in (False, True)}
+        check("5 the two-panel files: per_panel=True changes the peaks (so the checks below can fail)",
+              not _same_q(sum(one[True], []), sum(one[False], [])),
+              f"peaks/frame {[len(q) for q in sum(one[True], [])]} vs {[len(q) for q in sum(one[False], [])]}")
+
+        (fr, _), calls = _merge_calls(lambda: frames_from_cxi(lst, geom, per_panel=True, **kw))
+        check("5 frames_from_cxi(.list of two .cxi, per_panel=True): the per-panel merge runs on every frame, "
+              "q bit-identical to the files read one by one", calls == 4 and _same_q(fr, sum(one[True], [])),
+              f"{calls} merge call(s) for 4 frames")
+        fr0, _ = _no_merge_calls(lambda: frames_from_cxi(lst, geom, **kw))
+        check("5 frames_from_cxi(.list) default: no per-panel merge, q bit-identical to the files read one by one",
+              _same_q(fr0, sum(one[False], [])))
+
+        # glint --images: the Namespace argparse builds (ring focus off); per_panel_finder is the
+        # --per-panel-finder flag, and absent on a Namespace built before the flag existed
+        ns = dict(qframes=None, images=cxis[0], geom=geom, wavelength=1.3, N=0, min_peaks=1, data_path=None,
+                  peakfinder="v4", top_peaks=0, ring_focus=False, cell=None)
+        want = {pp: [q for q in one[pp][0] if len(q) >= 1] for pp in (False, True)}
+        (fr, _), calls = _merge_calls(lambda: _load_frames(argparse.Namespace(per_panel_finder=True, **ns)))
+        check("5 glint_cli._load_frames(per_panel_finder=True): the per-panel merge runs on every frame, "
+              "q bit-identical to frames_from_cxi(per_panel=True)", calls == 2 and _same_q(fr, want[True]),
+              f"{calls} merge call(s) for 2 frames")
+        fr0, _ = _no_merge_calls(lambda: _load_frames(argparse.Namespace(**ns)))
+        check("5 glint_cli._load_frames, no per_panel_finder: no per-panel merge, q bit-identical to the default",
+              _same_q(fr0, want[False]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+for nm, fn in (("1", part_1), ("2", part_2), ("3", part_3), ("4", part_4), ("5", part_5)):
     section(nm, fn)
 
 print()

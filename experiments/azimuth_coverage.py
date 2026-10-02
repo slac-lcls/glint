@@ -151,19 +151,21 @@ def run(regime):
             if len(q) >= 10:
                 frames.append(q); Mcs.append(Ar)
         okc, msc = {}, {}
-        for aname, full, mult in ARMS:
-            set_grid(full, mult)
-            index_known_gpu_cell(frames[0], Mcs[0])                      # warmup for this grid
-            if rg.DEV == "cuda":
-                torch.cuda.synchronize()
-            t0 = time.perf_counter()
-            res = [index_known_gpu_cell(q, Mc) for q, Mc in zip(frames, Mcs)]
-            if rg.DEV == "cuda":
-                torch.cuda.synchronize()
-            msc[aname] = 1e3 * (time.perf_counter() - t0) / len(frames)
-            okc[aname] = sum(gate(M, q, Mc) for M, q, Mc in zip(res, frames, Mcs))
-            tot[aname] += okc[aname]
-        restore_grid()
+        try:
+            for aname, full, mult in ARMS:
+                set_grid(full, mult)
+                index_known_gpu_cell(frames[0], Mcs[0])                      # warmup for this grid
+                if rg.DEV == "cuda":
+                    torch.cuda.synchronize()
+                t0 = time.perf_counter()
+                res = [index_known_gpu_cell(q, Mc) for q, Mc in zip(frames, Mcs)]
+                if rg.DEV == "cuda":
+                    torch.cuda.synchronize()
+                msc[aname] = 1e3 * (time.perf_counter() - t0) / len(frames)
+                okc[aname] = sum(gate(M, q, Mc) for M, q, Mc in zip(res, frames, Mcs))
+                tot[aname] += okc[aname]
+        finally:
+            restore_grid()
         ntot += len(frames)
         n = len(frames); med = int(np.median([len(f) for f in frames]))
         print(f"{name:<11}{c01:+8.4f}{med:7d} |" +

@@ -606,8 +606,9 @@ def _relabel_like(M, ref):
     keep, not this function's: it only permutes columns, so a basis in another setting of the same
     lattice -- or a mirrored, non-lattice basis with the reference metric -- passes through unrepaired.
     Before review r2 s4-01 the known-cell engines returned such bases on ~half of triclinic and most
-    monoclinic frames; replica_gpu._both_hands and _ref_setting now return the reference setting
-    (experiments/test_kc_setting.py checks it against ground truth). Length ties are broken the same
+    monoclinic frames; replica_gpu._both_hands and _ref_setting now return the reference setting when
+    its metric distinguishes that setting. Pseudo-symmetric ties may remain in an inequivalent setting;
+    experiments/test_kc_setting.py requires only lattice membership for those cases. Length ties are broken the same
     way at both ends (`kind="stable"`), so the round trip is the identity when the reference is
     already shortest-first."""
     M = np.asarray(M, float)
@@ -1421,7 +1422,8 @@ class StreamDriver:
         used instead when one is given: the known-cell indexer returns its axes shortest-first
         whatever order the reference was written in, and `_relabel_like` undoes exactly that
         permutation (glint#186 review). That is exact only because the engine returns the reference's
-        setting in the first place (replica_gpu._both_hands / _ref_setting, review r2 s4-01); a basis in
+        setting in the first place (replica_gpu._both_hands / _ref_setting, review r2 s4-01), when its
+        metric distinguishes that setting; pseudo-symmetric ties can remain inequivalent. A basis in
         another setting of the lattice is not a permutation away and no relabel repairs it. The two halves compose -- the class fixes the setting where
         one exists, the reference supplies it where none does.
 
@@ -2073,7 +2075,8 @@ class StreamDriver:
         # exactly. That holds because the engines guarantee it: until review r2 s4-01 they did not on
         # triclinic and most monoclinic cells (a mirrored, non-lattice basis on ~half the frames, or
         # another setting of the right lattice), and no relabel could repair that; replica_gpu's
-        # _both_hands / _ref_setting now return the reference setting. A BLIND candidate cannot: it arrives through primitivize(buerger_reduce(...)) and
+        # _both_hands / _ref_setting now return the reference setting when its metric distinguishes that
+        # setting; pseudo-symmetric ties can remain inequivalent. A BLIND candidate cannot: it arrives through primitivize(buerger_reduce(...)) and
         # may differ from the reference by a general integer change of basis, not a permutation, so
         # undoing a sort would be a guess (glint#186 review). Those paths keep the canonical-setting
         # behaviour only -- see glint#188.

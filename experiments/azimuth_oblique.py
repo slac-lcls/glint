@@ -79,12 +79,14 @@ def run(regime):
         if not frames:
             continue
         ok = {}
-        for aname, full, mult in ARMS:
-            set_grid(full, mult)
-            index_known_gpu_cell(frames[0], Mcs[0])
-            res = [index_known_gpu_cell(q, Mc) for q, Mc in zip(frames, Mcs)]
-            ok[aname] = sum(gate(M, q, Mc) for M, q, Mc in zip(res, frames, Mcs)) / len(frames)
-        restore_grid()                                     # never leave an arm's grid patched in replica_gpu
+        try:
+            for aname, full, mult in ARMS:
+                set_grid(full, mult)
+                index_known_gpu_cell(frames[0], Mcs[0])
+                res = [index_known_gpu_cell(q, Mc) for q, Mc in zip(frames, Mcs)]
+                ok[aname] = sum(gate(M, q, Mc) for M, q, Mc in zip(res, frames, Mcs)) / len(frames)
+        finally:
+            restore_grid()                                     # never leave an arm's grid patched in replica_gpu
         rows.append((abs(c01), ok, len(frames)))
         print(f"  |c01|={abs(c01):.4f}  n={len(frames):3d}  " +
               "  ".join(f"{a[0]}={100*ok[a[0]]:5.1f}%" for a in ARMS), flush=True)

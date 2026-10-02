@@ -936,7 +936,7 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None, panel_sla
 
 
 def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol=0.006,
-                     bg_mode="clipmean", event_axis=None):
+                     bg_mode="clipmean", event_axis=None, wavelength_A=None):
     """Native predict + box-integrate (the fast, self-contained QC path; for the best MERGE use
     ``glint --fromfile`` -> CrystFEL refine). For each result carrying an orientation ``M``: load the
     frame image (``image_dir/<basename(image)>`` at the geom ``data`` path), predict on-detector spots,
@@ -947,7 +947,21 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
     is decided from the geometry's panel count, and ``event_axis`` to override it. It does NOT read
     per-event clen/energy: for a modern STACKED .cxi (the ``--images`` front end, many events in one
     file) ``integrate_cxi`` is still the better route. Until glint#136 this function ignored
-    ``event`` entirely and integrated every result against event 0 of its file."""
+    ``event`` entirely and integrated every result against event 0 of its file.
+
+    ``wavelength_A`` (A) is the wavelength the spots are predicted at. When given it wins over the
+    .geom's, as it does on the indexing side (``geom.peaks_to_q``), so pass the value the frames were
+    INDEXED at (``glint --wavelength``); a non-positive or non-finite value is refused rather than
+    predicted at. This function used to read only
+    ``geom['wavelength_A']``: with an HDF5-path ``photon_energy`` in the .geom (None there) it died
+    inside predict_spots after indexing had run, and with a literal one that ``--wavelength``
+    overrode it predicted at the .geom energy, off the spots the frames were indexed from."""
+    lam = wavelength_A if wavelength_A is not None else geom.get("wavelength_A")
+    if lam is None or not (np.isfinite(lam) and lam > 0):
+        raise ValueError(
+            f"integrate_frames: no usable wavelength ({lam!r}). Pass wavelength_A (glint "
+            f"--wavelength, the value the frames were indexed at) or give the .geom a literal "
+            f"photon_energy/wavelength; an HDF5-path photon_energy has no file to be read from here.")
     panels, clen = panels_from_geom(geom)
     # Slab mapping from the .geom's integer dimN keys, required on EVERY panel to count: with it,
     # an un-assembled (panel, ss, fs) stack comes back whole from _load_image and is integrated
@@ -956,7 +970,6 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
     panel_slabs = slabs if len(panels) > 1 and all(s is not None for s in slabs) else None
     if data_path is None:
         data_path = geom.get("global", {}).get("data", "/data/data")
-    lam = geom.get("wavelength_A")
     n = tot = 0
     for r in results:
         M = r.get("M")

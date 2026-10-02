@@ -11,6 +11,8 @@ were never affected and must run exactly the code they ran before. A second, rar
 (present before the mirror too): the anneal converges to another basis of the right lattice, (-a, -c, -b) on the
 triclinic HEWL cell or (a, -b, -a-c) on the b-mid monoclinic one, which _relabel_like cannot undo either;
 replica_gpu._ref_setting moves those to the setting whose metric matches the reference.
+Near-orthogonal low-symmetry cells (tilt under the 1 deg gate) take that path only when their Laue class is given
+(laue=; review of #225): the metric alone cannot tell them from the skewed lock cell of an orthogonal lattice.
 
 For each frame, T = inv(M_true) @ M must be an integer unimodular matrix whose transpose is in the Laue group
 (EQUIV). INEQUIV = a lattice basis in another setting; MISOR = not a basis of the lattice at all.
@@ -90,8 +92,6 @@ def driver_bases(Mc, shots, laue):
 
 
 AFFECTED = [("triclinic 50/60/70/80/85/95", (50., 60., 70., 80., 85., 95.), "-1"),
-            ("near-orthogonal triclinic 50/60/70/89.5/90/90.2",
-             (50., 60., 70., 89.5, 90., 90.2), "-1"),
             ("monoclinic b-mid 40/60/70 beta=105", (40., 60., 70., 90., 105., 90.), "2/m_uab"),
             ("monoclinic b-shortest 60/40/70 beta=105", (60., 40., 70., 90., 105., 90.), "2/m_uab"),
             ("triclinic HEWL 27.24/31.87/34.23/88.52/108.53/111.89", (27.24, 31.87, 34.23, 88.52, 108.53, 111.89), "-1")]
@@ -102,18 +102,28 @@ CONTROLS = [("orthorhombic 40/60/70", (40., 60., 70., 90., 90., 90.), "mmm"),
             ("tetragonal 79/79/38", (79., 79., 38., 90., 90., 90.), "4/mmm"),
             ("hexagonal 60/60/100", (60., 60., 100., 90., 90., 120.), "6/mmm")]
 
-for name, cell, laue in AFFECTED + CONTROLS + PSEUDO:
+# Near-orthogonal LOW-symmetry cells (review of #225): the tilt of a2 is under the 1 deg gate, so without a class
+# they look like the skewed lock cell of an orthogonal lattice. With their Laue class given (laue=, as StreamDriver
+# and hybrid_index pass it) they take the two-handed path and its setting step. Measured floors per engine.
+NEAR = [("near-orthogonal triclinic 50/60/70/89.5/90/90.2", (50., 60., 70., 89.5, 90., 90.2), "-1"),
+        ("near-orthogonal triclinic 50/60/70/90.3/89.6/90.4", (50., 60., 70., 90.3, 89.6, 90.4), "-1"),
+        ("near-orthogonal monoclinic b-mid 40/60/70 beta=90.6", (40., 60., 70., 90., 90.6, 90.), "2/m_uab"),
+        ("near-orthogonal monoclinic b-shortest 60/40/70 beta=90.6", (60., 40., 70., 90., 90.6, 90.), "2/m_uab")]
+NEAR_FLOOR = {NEAR[0][0]: 18, NEAR[1][0]: 13, NEAR[2][0]: N, NEAR[3][0]: N}
+
+for name, cell, laue in AFFECTED + CONTROLS + PSEUDO + NEAR:
     print(f"\n{name}  (Laue {laue})")
     ops = {tuple(np.asarray(o, int).ravel()) for o in laue_ops(laue)}
     Mc = cell_to_Ar(*cell)
     shots = shots_for(cell)
-    floor = 0 if (name, cell, laue) in PSEUDO else N
+    floor = 0 if (name, cell, laue) in PSEUDO else NEAR_FLOOR.get(name, N)
+    kw = {"laue": laue} if (name, cell, laue) in NEAR else {}          # the original cells: no class, as before
     per = collections.Counter(classify(s.M, _relabel_like(np.asarray(M, float), Mc), ops) if M is not None else "None"
-                              for s, M in zip(shots, (rg.index_known_gpu_cell(s.g, Mc) for s in shots)))
+                              for s, M in zip(shots, (rg.index_known_gpu_cell(s.g, Mc, **kw) for s in shots)))
     check(f"per-frame index_known_gpu_cell: no non-lattice basis, >= {floor}/{N} equivalent",
           per["MISOR"] == 0 and per["EQUIV"] >= floor, dict(per))
     bat = collections.Counter(classify(s.M, _relabel_like(np.asarray(M, float), Mc), ops) if M is not None else "None"
-                              for s, M in zip(shots, rgb.index_fused([s.g for s in shots], Mc, B=N)))
+                              for s, M in zip(shots, rgb.index_fused([s.g for s in shots], Mc, B=N, **kw)))
     check(f"batched index_fused: no non-lattice basis, >= {floor}/{N} equivalent",
           bat["MISOR"] == 0 and bat["EQUIV"] >= floor, dict(bat))
     cap = driver_bases(Mc, shots, laue)
@@ -125,16 +135,32 @@ print("\northogonal-a2 cells do not take the two-handed path (they run the code 
 for name, cell, _ in CONTROLS:
     L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(*cell))
     check(f"{name}: _both_hands is False", not rg._both_hands(float(L[2]), c01, c02, c12))
-# Consensus or lock cells can be slightly skewed even when the underlying crystal is orthogonal. Without
-# explicit symmetry metadata, that skew cannot safely be used to rule out the opposite hand.
+# A consensus or lock cell of an orthogonal lattice is skewed; the paper's pipelines and StreamDriver run on such
+# cells, so they must not take the new path. The second is StreamDriver's actual GPU lock on the cxidb-17 480
+# (0.27 deg tilt), which the first version of this gate (0.2 A) let through.
 for label, cp in (("consensus-like 79.1/78.95/38.02/90.03/89.98/90.04", (79.1, 78.95, 38.02, 90.03, 89.98, 90.04)),
                   ("GPU stream lock 78.706/78.792/37.813/89.81/90.08/90.19",
                    (78.706, 78.792, 37.813, 89.8107, 90.0832, 90.1885))):
     L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(*cp))
-    check(f"skewed {label}: _both_hands is True", rg._both_hands(float(L[2]), c01, c02, c12))
+    check(f"lysozyme {label}: _both_hands is False", not rg._both_hands(float(L[2]), c01, c02, c12))
 for name, cell, _ in AFFECTED:
     L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(*cell))
     check(f"{name}: _both_hands is True", rg._both_hands(float(L[2]), c01, c02, c12))
+for label, cp in (("consensus-like", (79.1, 78.95, 38.02, 90.03, 89.98, 90.04)),
+                  ("GPU stream lock", (78.706, 78.792, 37.813, 89.8107, 90.0832, 90.1885))):
+    L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(*cp))
+    check(f"lysozyme {label} with its class 4/mmm: _both_hands is False",
+          not rg._both_hands(float(L[2]), c01, c02, c12, "4/mmm"))
+
+print("\nthe declared class decides near 90 deg; without one the 1 deg tilt gate does (unchanged)")
+for name, cell, laue in NEAR:
+    L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(*cell))
+    check(f"{name}: _both_hands True with laue {laue!r}", rg._both_hands(float(L[2]), c01, c02, c12, laue))
+    check(f"{name}: _both_hands False with no class", not rg._both_hands(float(L[2]), c01, c02, c12))
+
+print("\nthe CUDA-graph cache is keyed on the handedness branch, not on the cell alone")
+P0 = rgb._cell_params(cell_to_Ar(*NEAR[0][1])); P1 = rgb._cell_params(cell_to_Ar(*NEAR[0][1]), laue="-1")
+check("_cell_params carries both (P[-2]) and keeps nc last", P0[-2] is False and P1[-2] is True and P0[-1] == P1[-1])
 
 print(f"\n{'FAILURES: ' + ', '.join(FAILS) if FAILS else 'ALL PASS'}")
 sys.exit(1 if FAILS else 0)

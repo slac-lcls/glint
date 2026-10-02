@@ -74,6 +74,9 @@ AXIS_EQUAL_RTOL = 0.05
 # axes are all within the tolerance has no "equal pair" a tolerance can identify.
 UNIQUE_C_LAUE = ("4/m", "4/mmm", "-3", "-3m1", "-31m", "6/m", "6/mmm")   # one unique axis, goes to c
 LENGTH_ORDER_LAUE = ("mmm",)                                            # a <= b <= c IS the setting
+# The classes for which the known-cell engines seed the third axis at both hands whatever its tilt
+# (replica_gpu._both_hands): no rotation of the class makes the mirror seed a lattice vector.
+LOW_LAUE = ("-1", "2/m", "2/m_uaa", "2/m_uab", "2/m_uac")
 # Everything else -- triclinic, the monoclinic settings, the rhombohedral settings and the cubic
 # classes -- is left exactly as handed in: no length rule locates a monoclinic unique axis or a
 # rhombohedral 3-fold, and for cubic every axis is equivalent so any permutation is already standard.

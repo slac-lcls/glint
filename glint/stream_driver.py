@@ -44,7 +44,8 @@ except Exception:                                            # pragma: no cover 
     cp = None
     _HAVE_CP = False
 
-from glint.lattice import LENGTH_ORDER_LAUE, UNIQUE_C_LAUE, cell_to_Ar, standardize_axes
+from functools import partial
+from glint.lattice import LENGTH_ORDER_LAUE, LOW_LAUE, UNIQUE_C_LAUE, cell_to_Ar, standardize_axes
 from glint.lute_bridge import peaks_to_q
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
                            _hkl_grid, project_q)
@@ -1178,7 +1179,8 @@ class StreamDriver:
         if self.retry_cascade:
             try:
                 from glint.replica_gpu import index_known_gpu_cell
-                self._known_perframe = index_known_gpu_cell
+                kw = self._kc_kw()
+                self._known_perframe = partial(index_known_gpu_cell, **kw) if kw else index_known_gpu_cell
             except Exception:                                # pragma: no cover - CPU-only unit env (no torch)
                 self._known_perframe = None                  # tests inject a fake via the seam
 
@@ -1198,7 +1200,9 @@ class StreamDriver:
         self.n_rescued = 0
         self._missbuf = (deque(maxlen=int(rescue_buffer))
                          if self.adaptive_relock and rescue_buffer > 0 else None)
-        self._known_index = rgb.index_fused if rgb is not None else None   # q-only batch indexer (test seam)
+        _kw = self._kc_kw()
+        self._known_index = ((partial(rgb.index_fused, **_kw) if _kw else rgb.index_fused)
+                             if rgb is not None else None)                 # q-only batch indexer (test seam)
         self._fanout = fanout or (lambda Q, k: [self._blind_index(q, k) for q in Q])
         # Opt-in lock-time alias gate (glint.alias_gate.AliasGate): a deterministic Occam-tightness
         # confirmation over the leader's small-index derivative lattices, run on the observed q of the
@@ -1943,6 +1947,12 @@ class StreamDriver:
         header), None if it is only the 4/mmm merge fallback -- then misorientation_deg infers it."""
         return self.laue if getattr(self, "_laue_known", False) else None
 
+    def _kc_kw(self):
+        """laue= for the known-cell engines (replica_gpu._both_hands): the GIVEN class when it is one that
+        seeds both hands (LOW_LAUE), else nothing -- the engines' tilt gate, the exact call made before."""
+        lk = self._sl_laue()
+        return {"laue": lk} if lk in LOW_LAUE else {}
+
     def _sl_index(self):
         """The blind indexer the second-lattice search uses (index_blind_nbest), resolved lazily."""
         if getattr(self, "_dh_index", None) is None:
@@ -2295,7 +2305,7 @@ class StreamDriver:
 
         cell_id just labels which active cell this is, for per-chunk stream provenance."""
         qs = [self._q[i] for i in slots]
-        Ms = rgb.index_fused(qs, Mc, B=max(len(qs), 1), **self._depth_kw())
+        Ms = rgb.index_fused(qs, Mc, B=max(len(qs), 1), **self._depth_kw(), **self._kc_kw())
         missed = []
         for i, M in zip(slots, Ms):
             M = np.asarray(M, float) if M is not None else None
@@ -2334,7 +2344,7 @@ class StreamDriver:
 
         def search(qs, Mcell):
             return rgb.index_known_deep_batch(qs, Mcell, topa, nc, full_grid=full_grid, budget=eff.deep_budget,
-                                              return_errors=True)
+                                              return_errors=True, **self._kc_kw())
 
         def count(M, q):
             return self._inliers(q, M)
@@ -2387,7 +2397,7 @@ class StreamDriver:
         cells = self._all_cells()
         fits = []                                              # fits[k][j] = (M or None, n_inliers) for cell k, slot j
         for Mk in cells:
-            Ms = rgb.index_fused(qs, Mk, B=max(len(qs), 1), **self._depth_kw())
+            Ms = rgb.index_fused(qs, Mk, B=max(len(qs), 1), **self._depth_kw(), **self._kc_kw())
             row = []
             for i, M in zip(slots, Ms):
                 M = np.asarray(M, float) if M is not None else None

@@ -64,7 +64,7 @@ class _FakeRGB:
     def __init__(self, good):
         self.good = good                       # set of id() of the q arrays it registers correctly
 
-    def index_fused(self, qs, Mc, B=1):
+    def index_fused(self, qs, Mc, B=1, **kw):
         return [np.asarray(Mc, float).copy() if id(q) in self.good else JUNK.copy() for q in qs]
 
 

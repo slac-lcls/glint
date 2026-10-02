@@ -10,7 +10,7 @@ import itertools, os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
 from glint.glint_fast import anneal_batch_t, matched_strict, GATE_FRAC, GATE_MIN
-from glint.lattice import cell_to_Ar
+from glint.lattice import LOW_LAUE, cell_to_Ar
 from glint.multishot import same_lattice
 
 # cuda -> cpu, with NO mps rung. Apple's MPS backend does not implement float64, and this module
@@ -248,7 +248,10 @@ def _third_axis(a0, a1, L2, c02, c12, sgn):
     return torch.where(feas[:, None], a2, torch.zeros_like(a2))
 
 
-def _both_hands(L2, c01, c02, c12):
+MIRROR_TOL_DEG = float(os.environ.get("KC_MIRROR_TOL_DEG", "1.0"))   # see _both_hands
+
+
+def _both_hands(L2, c01, c02, c12, laue=None):
     """True when a2 must be seeded at BOTH gamma signs (review r2 s4-01).
 
     The anchor pool is a half-sphere (DIRS), so on a frame whose true shortest axis points to z<0 the anchor
@@ -260,14 +263,28 @@ def _both_hands(L2, c01, c02, c12):
     the unique axis shortest or in the middle), and same_lattice and the live gate both pass it. Seeding the
     other sign too gives (-v0, -v1, -v2), which is negated back to the reference hand after the pick.
 
-    Only suppress the second seed for numerical noise around an exactly perpendicular a2. A small tilt in a
-    consensus cell does not establish the crystal's rotational symmetry, and even a near-orthogonal
-    triclinic cell still needs both hands."""
+    Which cells take this path depends on what is known about the crystal's symmetry:
+    - `laue` is a low-symmetry class (glint.lattice.LOW_LAUE: -1 or a 2/m setting): always. No rotation of
+      the class makes the mirror seed a lattice vector, however close to 90 deg the angles are; and only this
+      path runs _ref_setting, which is what puts a near-orthogonal cell (triclinic 50/60/70/89.5/90/90.2) in
+      the reference setting instead of a 2-fold sign-flipped one (review of #225).
+    - Otherwise (a higher class, or no class): when a2 tilts more than KC_MIRROR_TOL_DEG (1 deg) from the
+      (v0, v1) plane's normal. A consensus or lock cell of an orthogonal lattice is skewed -- StreamDriver's
+      GPU lock on cxidb-17 lysozyme is 78.71/78.79/37.81 at 89.81/90.08/90.19 deg, a 0.27 deg tilt -- and its
+      2-fold makes either seed valid, so the second seed only reshuffles marginal frames (333 -> 334 strict on
+      the 480-frame replay when this gate was 0.2 A). Such cells keep exactly the code they ran before. Every
+      clearly oblique cell (triclinic, monoclinic at beta >~ 91 deg) takes the path with or without a class.
+    A near-orthogonal low-symmetry cell with NO class given stays on the one-handed path: the metric alone
+    cannot tell it from the skewed lock cell of an orthogonal lattice. Its frames are then a lattice basis in
+    a possibly sign-flipped setting (not a non-lattice basis). Callers that know the class pass it:
+    StreamDriver (its laue=, or the class derived from stream_symmetry) and hybrid_index(laue=)."""
+    if laue is not None and str(laue).strip() in LOW_LAUE:
+        return True
     g = c01
     alpha = L2 * (c02 - g * c12) / (1.0 - g * g)
     beta = L2 * (c12 - g * c02) / (1.0 - g * g)
     inplane = np.sqrt(max(alpha * alpha + beta * beta + 2.0 * alpha * beta * g, 0.0))
-    return inplane / L2 > 1e-8
+    return float(np.degrees(np.arcsin(min(inplane / L2, 1.0)))) > MIRROR_TOL_DEG
 
 
 # Proper unimodular changes of basis with entries in {-1, 0, 1}: enough to reach every setting of a lattice
@@ -303,7 +320,7 @@ def _ref_setting(M, Mc):
     return np.asarray(M, float) @ _UNIMOD[k] if dev[k] < 0.5 * dev0 else M
 
 
-def index_known_gpu_cell(q, Mc, topa=8, nc=None):
+def index_known_gpu_cell(q, Mc, topa=8, nc=None, laue=None):
     """GPU known-cell rescue against an ARBITRARY consensus cell Mc (3x3 real-space cols).
 
     topa (azimuths kept per anchor) and nc (anchor directions, default NC) set the search depth. The
@@ -335,7 +352,7 @@ def index_known_gpu_cell(q, Mc, topa=8, nc=None):
     a0s = torch.gather(a0, 1, topi[:, :, None].expand(-1, -1, 3)).reshape(-1, 3)
     a1s = torch.gather(a1, 1, topi[:, :, None].expand(-1, -1, 3)).reshape(-1, 3)
     a2s = _third_axis(a0s, a1s, float(L[2]), c02, c12, sgn)
-    both = _both_hands(float(L[2]), c01, c02, c12)
+    both = _both_hands(float(L[2]), c01, c02, c12, laue)
     if both:                                                # s4-01: the -v0 anchor's seed has the other hand
         a2s = torch.cat([a2s, _third_axis(a0s, a1s, float(L[2]), c02, c12, -sgn)])
         a0s = torch.cat([a0s, a0s]); a1s = torch.cat([a1s, a1s])

@@ -16,22 +16,15 @@ experiments/bench_lute.py `inspect`.
 
 from __future__ import annotations
 
-import re
 import sys
 
 import numpy as np
 
 from glint.geom import Q_FLOOR, _q_from_panels, clean_q   # one geometry core, two panel schemas -- see geom.py
-from glint.geom import is_bad_region, warn_bad_regions
+from glint.geom import _vec             # ...and one fs/ss direction parser, so the routes agree
+from glint.geom import _check_basis, is_bad_region, warn_bad_regions
 
 HC_EV_A = 12398.419843320026     # h*c in eV*Angstrom -> lambda[A] = HC/E[eV]
-
-
-def _vec(s):
-    v = [0.0, 0.0, 0.0]
-    for m in re.finditer(r"([+-]?[\d.eE]+)\s*([xyz])", s):
-        v["xyz".index(m.group(2))] = float(m.group(1))
-    return np.array(v)
 
 
 def parse_geom(path):
@@ -62,6 +55,7 @@ def parse_geom(path):
             coffset=float(d.get("coffset", glob.get("coffset", 0.0))),
             min_fs=int(d["min_fs"]), max_fs=int(d["max_fs"]),
             min_ss=int(d["min_ss"]), max_ss=int(d["max_ss"]))
+        _check_basis(name, p["fs"][0], p["fs"][1], p["ss"][0], p["ss"][1])
         # Carry the dimN keys through in geom.parse_geom's convention -- integers as floats, axis
         # names ('%', 'ss', 'fs') as strings -- so predict._panel_slab reads the slab mapping off
         # THESE panels too. This schema dropped them, which left integrate_cxi's layout decision

@@ -9,6 +9,10 @@ It also pins the .geom grammar the bridge has to read the way CrystFEL does (ok/
     --peaks route then died with a bare KeyError 'corner_x'. They must parse to the same panels and
     the same q as the file without them, lute_bridge and the stream writer must agree, and the
     fact that GLINT does not apply them must be said, not silent.
+  * fs/ss directions (glint review s3-05). A term may omit its coefficient (`fs = x`, `ss = -y`,
+    which GLINT's own stream header writes). Both parsers dropped such terms and returned a zero
+    basis, collapsing every peak on the panel onto its corner with no warning. geom and lute_bridge
+    now share one parser, which reads those forms and raises on anything it cannot read.
 
   python test_geom_bridge.py
 """
@@ -185,6 +189,77 @@ def bad_region_checks(peaks):
               lambda: named(lambda: panels_from_geom(gnc)))
 
 
+def _raises_value_error(fn, *must_contain):
+    try:
+        fn()
+    except ValueError as exc:
+        return all(t in str(exc) for t in must_contain), repr(exc)
+    except Exception as exc:                       # noqa: BLE001
+        return False, repr(exc)
+    return False, "no exception"
+
+
+def direction_checks(peaks):
+    """s3-05: CrystFEL direction terms without a coefficient, through ONE shared parser."""
+    from glint import geom as G, lute_bridge
+    print("\n.geom fs/ss directions (s3-05):")
+    cases = {"x": (1, 0, 0), "+x": (1, 0, 0), "-x": (-1, 0, 0), "y": (0, 1, 0), "-y": (0, -1, 0),
+             "z": (0, 0, 1), "-x +0.5y": (-1, 0.5, 0), "+1.0x +0.0y": (1, 0, 0),
+             "-0.005723x +0.999984y": (-0.005723, 0.999984, 0), "+1.0e-03x -1y": (1e-3, -1, 0),
+             "-0.999882x -0.000169y -0.015358z": (-0.999882, -0.000169, -0.015358)}
+    for txt, want in cases.items():
+        check(f"geom._vec({txt!r}) == {list(want)}",
+              lambda: (lambda v: (np.array_equal(v, np.array(want, float)), v.tolist()))(G._vec(txt)))
+    check("lute_bridge reads directions with the SAME parser as glint.geom",
+          lambda: (lute_bridge._vec is G._vec, lute_bridge._vec))
+    check("...so the two agree on every case above",
+          lambda: (all(np.array_equal(lute_bridge._vec(t), G._vec(t)) for t in cases),
+                   {t: np.asarray(lute_bridge._vec(t)).tolist() for t in cases
+                    if not np.array_equal(lute_bridge._vec(t), G._vec(t))}))
+    for txt in ("", "q", "1.0", "+1.0x junk", "1x 1x", "X"):
+        check(f"an unreadable direction {txt!r} raises ValueError instead of a silent zero",
+              lambda: _raises_value_error(lambda: G._vec(txt), repr(txt)))
+
+    with tempfile.TemporaryDirectory() as d, warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        q0 = peaks_to_q(peaks, parse_geom(_write(d, "plain.geom", GEOM)))   # round-trip reference
+        DIRS = "p0/fs = +1.0x +0.0y\np0/ss = +0.0x +1.0y\n"
+        flip = GEOM.replace(f"p0/corner_y = {CY}", f"p0/corner_y = {-CY}")   # ss = -y needs it
+        variants = (("fs = x, ss = y", GEOM, "p0/fs = x\np0/ss = y\n", "p0/fs = +1.0x\np0/ss = +1.0y\n"),
+                    ("fs = +x, ss = +y", GEOM, "p0/fs = +x\np0/ss = +y\n", "p0/fs = +1.0x\np0/ss = +1.0y\n"),
+                    ("fs = x, ss = -y", flip, "p0/fs = x\np0/ss = -y\n", "p0/fs = +1.0x\np0/ss = -1.0y\n"))
+        for i, (label, base, bare_dirs, num_dirs) in enumerate(variants):
+            bare = _write(d, f"bare{i}.geom", base.replace(DIRS, bare_dirs))
+            numeric = _write(d, f"num{i}.geom", base.replace(DIRS, num_dirs))
+            qn = peaks_to_q(peaks, parse_geom(numeric))
+            if i == 0:
+                check("(control) the explicit `+1.0x`/`+1.0y` file reproduces the round-trip reference q",
+                      lambda: (np.array_equal(qn, q0), "differs"))
+            check(f"[{label}] peaks_to_q equals the explicit-coefficient file",
+                  lambda: (lambda qb: (qb.shape == qn.shape and np.array_equal(qb, qn),
+                                       f"{len(np.unique(np.round(qb, 9), axis=0))} distinct q of {len(qb)}"))(
+                      peaks_to_q(peaks, parse_geom(bare))))
+            qln = lute_bridge.peaks_to_q(peaks[:, 0], peaks[:, 1], lute_bridge.parse_geom(numeric)[0], CLEN, LAM)
+            check(f"[{label}] lute_bridge.peaks_to_q equals the explicit-coefficient file",
+                  lambda: (lambda qb: (np.array_equal(qb, qln, equal_nan=True),
+                                       f"{len(np.unique(np.round(qb, 9), axis=0))} distinct q"))(
+                      lute_bridge.peaks_to_q(peaks[:, 0], peaks[:, 1], lute_bridge.parse_geom(bare)[0],
+                                             CLEN, LAM)))
+
+        from glint.stream import _FALLBACK_GEOM
+        gf = parse_geom(_write(d, "fallback.geom", _FALLBACK_GEOM))["panels"]["p0"]
+        check("GLINT's own stream-header fallback geometry (fs = x, ss = y) parses to a unit basis",
+              lambda: ((gf["fsx"], gf["fsy"], gf["ssx"], gf["ssy"]) == (1.0, 0.0, 0.0, 1.0),
+                       (gf["fsx"], gf["fsy"], gf["ssx"], gf["ssy"])))
+
+        degen = GEOM.replace("p0/fs = +1.0x +0.0y", "p0/fs = +0.0x +0.0y")
+        gd = _write(d, "degen.geom", degen)
+        check("a panel whose fs/ss span no area raises ValueError naming it (geom.parse_geom)",
+              lambda: _raises_value_error(lambda: parse_geom(gd), "p0"))
+        check("...and lute_bridge.parse_geom",
+              lambda: _raises_value_error(lambda: lute_bridge.parse_geom(gd), "p0"))
+
+
 if __name__ == "__main__":
     with tempfile.NamedTemporaryFile("w", suffix=".geom", delete=False) as f:
         f.write(GEOM); gpath = f.name
@@ -247,5 +322,6 @@ if __name__ == "__main__":
     pk, _ = project(ewald_spots(0))
     pk = pk[(pk[:, 0] >= 0) & (pk[:, 0] < NPX) & (pk[:, 1] >= 0) & (pk[:, 1] < NPX)]
     bad_region_checks(pk)
+    direction_checks(pk)
     print(f"\n.geom grammar FAILURES: {len(FAILS)}" + ("" if not FAILS else "  " + "; ".join(FAILS)))
     raise SystemExit(0 if (ok_roundtrip and ok_index and ok_peakstream and not FAILS) else 1)

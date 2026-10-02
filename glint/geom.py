@@ -10,6 +10,7 @@ Convention (CrystFEL): a pixel at data-array (fs, ss) lies on the panel whose [m
 coords  X = corner_x + lfs*fsx + lss*ssx ,  Y = corner_y + lfs*fsy + lss*ssy ; metres via /res;
 z = clen + coffset. Scattered unit s_hat = R/|R|; incident beam +z (s0=(0,0,1)); q=(s_hat-s0)/lambda.
 """
+import re
 import warnings
 
 import numpy as np
@@ -22,13 +23,49 @@ _GLOBAL = ("photon_energy", "wavelength", "clen", "res", "coffset", "adu_per_eV"
 _PANEL_INHERIT = ("res", "clen", "coffset")
 
 
+# One term of a CrystFEL direction (geometry(5) fs/ss): optional sign, optional coefficient, axis.
+_DIR_TERM = re.compile(r"\s*([+-]?)\s*((?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)?\s*([xyz])")
+
+
 def _vec(s):
-    """Parse a CrystFEL direction string like '+1.0x -0.0y' or '-0.5x +0.866y +0.0z' -> (x,y,z)."""
+    """Parse a CrystFEL direction string -> np.array([x, y, z]).
+
+    The ONE fs/ss parser: glint.lute_bridge imports it, so the --peaks and --images routes cannot
+    read the same .geom differently. Each term is an optional sign, an optional coefficient and an
+    axis: 'x' and '+x' are +1, '-y' is -1, and '+1.0x -0.0y', '-0.5x +0.866y +0.0z', '1e-3x' read
+    as written. Anything else raises a ValueError naming the string. The old parsers skipped any
+    term they could not read, so a bare 'x' (GLINT's own stream header writes `fs = x`) came back
+    as the zero vector and every peak on that panel collapsed onto its corner, with no warning."""
+    text = str(s)
     v = [0.0, 0.0, 0.0]
-    import re
-    for val, axis in re.findall(r"([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*([xyz])", s):
-        v["xyz".index(axis)] += float(val)
+    seen = []
+    pos = 0
+    while text[pos:].strip():
+        m = _DIR_TERM.match(text, pos)
+        if m is None:
+            raise ValueError(f"cannot read CrystFEL direction {s!r} at {text[pos:].strip()!r} "
+                             f"(expected terms like 'x', '-y', '+1.0x -0.0y')")
+        sign, num, axis = m.groups()
+        if axis in seen:
+            raise ValueError(f"CrystFEL direction {s!r} gives axis {axis!r} twice")
+        seen.append(axis)
+        c = float(num) if num else 1.0
+        v["xyz".index(axis)] += -c if sign == "-" else c
+        pos = m.end()
+    if not seen:
+        raise ValueError(f"empty CrystFEL direction {s!r}")
     return np.array(v, float)
+
+
+def _check_basis(name, fsx, fsy, ssx, ssy):
+    """Refuse a panel whose fs/ss span no area in the detector plane.
+
+    Every peak on such a panel maps to one point, and integration later fails with a bare
+    'Singular matrix'. With _vec strict this needs explicit zeros or fs parallel to ss, but it is
+    the one check that names the panel whatever the cause."""
+    if abs(fsx * ssy - fsy * ssx) < 1e-12:
+        raise ValueError(f"panel {name}: fs = ({fsx:g}, {fsy:g}) and ss = ({ssx:g}, {ssy:g}) are "
+                         f"parallel or zero in x/y, so the panel has no area")
 
 
 def _wavelength_A(d):
@@ -122,6 +159,8 @@ def parse_geom(path):
         p.setdefault("coffset", 0.0)
         p.setdefault("fsx", 1.0); p.setdefault("fsy", 0.0)
         p.setdefault("ssx", 0.0); p.setdefault("ssy", 1.0)
+    for name, p in panels.items():
+        _check_basis(name, p["fsx"], p["fsy"], p["ssx"], p["ssy"])
     warn_bad_regions(path, list(bad))
     return {"panels": panels, "wavelength_A": _wavelength_A(g), "global": g, "bad_regions": bad}
 

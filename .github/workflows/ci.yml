@@ -58,6 +58,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_peakfinder_mask.py
 
+      # A multi-panel slab is searched one panel at a time (lute_bridge.slab_rects + PerPanelFinder, wired into
+      # frames_from_cxi and StreamDriver): no ring, local-max window or component reaches across a panel seam.
+      # Two stacked panels of different background; builds a .cxi with h5py (installed above). The tree before
+      # the per-panel change fails 7 checks.
+      - name: experiments/test_peakfinder_per_panel.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_peakfinder_per_panel.py
+
       - name: experiments/test_negative_intensities.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_negative_intensities.py

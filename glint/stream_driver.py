@@ -45,10 +45,10 @@ except Exception:                                            # pragma: no cover 
     _HAVE_CP = False
 
 from glint.lattice import LENGTH_ORDER_LAUE, UNIQUE_C_LAUE, cell_to_Ar, standardize_axes
-from glint.lute_bridge import peaks_to_q
+from glint.lute_bridge import peaks_to_q, slab_rects
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
                            _hkl_grid, project_q)
-from glint.peakfinder_v4 import PeakFinderV4
+from glint.peakfinder_v4 import PeakFinderV4, PerPanelFinder
 from glint.running_consensus import RunningConsensus
 from glint.multishot import same_lattice
 from glint.multilattice import deflate_peaks
@@ -901,7 +901,15 @@ class StreamDriver:
         # built ONCE and reused; dtype=float32 is what enables the fused GPU stats kernel
         kw = dict(dtype=xp.float32) if self.gpu else {}
         kw.update(pf_kw or {})
-        self.finder = PeakFinderV4(m, **kw)
+        # A multi-panel slab gets one finder per panel rectangle: a single finder's ring, local-max
+        # window and labelling would reach across each panel seam into rows that are elsewhere in the
+        # lab (PerPanelFinder). One panel -- every synthetic and square-frame caller -- is unchanged.
+        rects = slab_rects(panels, self.shape) if len(self.shape) == 2 else None
+        if rects is None:
+            self.finder = PeakFinderV4(m, **kw)
+        else:
+            self.finder = PerPanelFinder([PeakFinderV4(m[a:b, c:d], **kw) for (a, b, c, d) in rects],
+                                         rects, self.shape)
 
         # preallocated resident ring -- no per-frame device allocation
         self._ring = [xp.zeros(self.shape, self.dtype) for _ in range(self.B)]

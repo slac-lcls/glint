@@ -90,6 +90,8 @@ def driver_bases(Mc, shots, laue):
 
 
 AFFECTED = [("triclinic 50/60/70/80/85/95", (50., 60., 70., 80., 85., 95.), "-1"),
+            ("near-orthogonal triclinic 50/60/70/89.5/90/90.2",
+             (50., 60., 70., 89.5, 90., 90.2), "-1"),
             ("monoclinic b-mid 40/60/70 beta=105", (40., 60., 70., 90., 105., 90.), "2/m_uab"),
             ("monoclinic b-shortest 60/40/70 beta=105", (60., 40., 70., 90., 105., 90.), "2/m_uab"),
             ("triclinic HEWL 27.24/31.87/34.23/88.52/108.53/111.89", (27.24, 31.87, 34.23, 88.52, 108.53, 111.89), "-1")]
@@ -123,14 +125,13 @@ print("\northogonal-a2 cells do not take the two-handed path (they run the code 
 for name, cell, _ in CONTROLS:
     L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(*cell))
     check(f"{name}: _both_hands is False", not rg._both_hands(float(L[2]), c01, c02, c12))
-# A consensus or lock cell of an orthogonal lattice is skewed; the paper's pipelines and StreamDriver run on such
-# cells, so they must not take the new path. The second is StreamDriver's actual GPU lock on the cxidb-17 480
-# (0.27 deg tilt), which the first version of this gate (0.2 A) let through.
+# Consensus or lock cells can be slightly skewed even when the underlying crystal is orthogonal. Without
+# explicit symmetry metadata, that skew cannot safely be used to rule out the opposite hand.
 for label, cp in (("consensus-like 79.1/78.95/38.02/90.03/89.98/90.04", (79.1, 78.95, 38.02, 90.03, 89.98, 90.04)),
                   ("GPU stream lock 78.706/78.792/37.813/89.81/90.08/90.19",
                    (78.706, 78.792, 37.813, 89.8107, 90.0832, 90.1885))):
     L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(*cp))
-    check(f"lysozyme {label}: _both_hands is False", not rg._both_hands(float(L[2]), c01, c02, c12))
+    check(f"skewed {label}: _both_hands is True", rg._both_hands(float(L[2]), c01, c02, c12))
 for name, cell, _ in AFFECTED:
     L, c01, c02, c12, _ = rg._axes_from_cell(cell_to_Ar(*cell))
     check(f"{name}: _both_hands is True", rg._both_hands(float(L[2]), c01, c02, c12))

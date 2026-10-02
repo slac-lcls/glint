@@ -248,9 +248,6 @@ def _third_axis(a0, a1, L2, c02, c12, sgn):
     return torch.where(feas[:, None], a2, torch.zeros_like(a2))
 
 
-MIRROR_TOL_DEG = float(os.environ.get("KC_MIRROR_TOL_DEG", "1.0"))   # see _both_hands
-
-
 def _both_hands(L2, c01, c02, c12):
     """True when a2 must be seeded at BOTH gamma signs (review r2 s4-01).
 
@@ -263,18 +260,14 @@ def _both_hands(L2, c01, c02, c12):
     the unique axis shortest or in the middle), and same_lattice and the live gate both pass it. Seeding the
     other sign too gives (-v0, -v1, -v2), which is negated back to the reference hand after the pick.
 
-    Gated on how far a2 tilts from the (v0, v1) plane's normal, not on c02 = c12 = 0 exactly. A consensus or
-    lock cell of an orthogonal lattice is skewed: StreamDriver's GPU lock on cxidb-17 lysozyme is
-    78.71/78.79/37.81 at 89.81/90.08/90.19 deg, a 0.27 deg tilt. The crystal there has the 2-fold that makes
-    either seed valid, so the second seed only reshuffles marginal frames (333 -> 334 strict on the 480-frame
-    replay when this gate was 0.2 A). Below ~1 deg the metric cannot tell the two settings apart anyway (the
-    pseudo-merohedral limit, like myoglobin's |a+c| ~ a), so such cells keep exactly the code they ran before,
-    and every real oblique case (triclinic, monoclinic at beta >~ 91 deg) takes the new path."""
+    Only suppress the second seed for numerical noise around an exactly perpendicular a2. A small tilt in a
+    consensus cell does not establish the crystal's rotational symmetry, and even a near-orthogonal
+    triclinic cell still needs both hands."""
     g = c01
     alpha = L2 * (c02 - g * c12) / (1.0 - g * g)
     beta = L2 * (c12 - g * c02) / (1.0 - g * g)
     inplane = np.sqrt(max(alpha * alpha + beta * beta + 2.0 * alpha * beta * g, 0.0))
-    return float(np.degrees(np.arcsin(min(inplane / L2, 1.0)))) > MIRROR_TOL_DEG
+    return inplane / L2 > 1e-8
 
 
 # Proper unimodular changes of basis with entries in {-1, 0, 1}: enough to reach every setting of a lattice

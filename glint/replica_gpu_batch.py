@@ -6,9 +6,13 @@ Keeps replica_gpu (per-frame) and the ffbidx handoff as the other two options.
 index_all_graph() captures the whole GPU stage as a CUDA graph (one replay per batch instead of
 thousands of host kernel dispatches -- the engine is host-dispatch-bound). It needs a fixed shape,
 so it sorts frames by peak count and routes each batch to the smallest of a few Pmax buckets; this
-is BIT-IDENTICAL to index_known_gpu_cell_batch (per-frame independence + masked padding) and ~1.3x
-faster on real cxidb / ~1.5x at deployment peak-caps. Enabled by the analytic solve/det (cuSOLVER
-is uncapturable and forces a stream sync)."""
+is ~1.3x faster than index_known_gpu_cell_batch on real cxidb / ~1.5x at deployment peak-caps, and
+in fp64 (KC_FP=64) BIT-IDENTICAL to it (per-frame independence + masked padding). In fp32 the two
+can pick a different setting of the same lattice on near-ties (A100 job 39730411; fp64 equal on
+every frame): 10/120 lysozyme-lock frames, symmetry-equivalent under 4/mmm, and 8/87 r199 frames,
+a 2-fold about a that its 2/m class does not contain (the beta = 90.07 deg cell's pseudo-orthorhombic
+indexing ambiguity). Enabled by the
+analytic solve/det (cuSOLVER is uncapturable and forces a stream sync)."""
 import os, sys, warnings
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("CDIRS", "16384")
 import numpy as np, torch
@@ -331,6 +335,13 @@ class _StageGraph:
         self.g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self.g):
             self.out = _stage_compute(self.Q, self.m, P)
+        # The capture reads P's tensors by address: keep them alive as long as the graph. In fp32 _cell_params
+        # makes fresh copies of the azimuth grid (ca, sa = CA.to(FP)) that nothing else holds, so a graph cached
+        # in _GRAPHS and replayed by a LATER index_all_graph call read freed, reused memory: a second fp32 call over
+        # the same 480 lysozyme frames differed on 437-448 of them (A100, review-r2 GPU job 39724840; fp64 equal),
+        # on the nonfinite-q-rows tree f9c2e3d, whose graph code is main's: 448 in its dirty-rows check (clean_q
+        # reduces the dirty list to the same frames), 437 in its timing check's identity-vs-real clean_q pass.
+        self.P = P
 
     def run(self, Q, m):
         self.Q.copy_(Q); self.m.copy_(m); self.g.replay()
@@ -352,9 +363,12 @@ def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS):
     """Graphed known-cell indexer. Sorts frames by peak count and routes each B-batch to the
     smallest Pmax bucket that fits, replaying a per-bucket captured stage graph (host kernel
     dispatch collapsed). Because each frame indexes INDEPENDENTLY (known cell, no cross-frame
-    coupling) and padding is masked out, this is BIT-IDENTICAL to index_known_gpu_cell_batch and
-    full-rate -- the sort just makes each graph's fixed Pmax tight instead of over-padding the
-    largest frame. Oversized frames (> max bucket) fall back to the eager path. cuSOLVER-free
+    coupling) and padding is masked out, this is full-rate and, in fp64, BIT-IDENTICAL to
+    index_known_gpu_cell_batch -- the sort just makes each graph's fixed Pmax tight instead of
+    over-padding the largest frame. In fp32 (the default) the two can pick a different setting of
+    the same lattice on near-ties: 10/120 lysozyme-lock frames (symmetry-equivalent) and 8/87 r199
+    frames (its pseudo-orthorhombic indexing ambiguity), A100 job 39730411; fp64 equal on every
+    frame. _StageGraph holding P does not change that. Oversized frames (> max bucket) fall back to the eager path. cuSOLVER-free
     (analytic solve, ~1e-13 vs linalg). CPU / capture-unsupported -> eager."""
     if DEV != "cuda":
         return [M for i in range(0, len(frames), B) for M in index_known_gpu_cell_batch(frames[i:i + B], Mc)]

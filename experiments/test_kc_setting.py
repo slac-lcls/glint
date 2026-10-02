@@ -196,6 +196,19 @@ for label, cell, D, want_flip in (
     check(f"{label}: {'back in the reference metric' if want_flip else 'left exactly as it is'}",
           (got and back) if want_flip else (not got), f"changed={got}")
 
+print("\n_closest_setting (shortlist + exact einsum) picks what the full 3480-way search picks, ties included")
+rs = np.random.default_rng(5); nbad = 0; ntot = 0
+for cell in ((50., 60., 70., 80., 85., 95.), (79.1, 79.1, 38., 90., 90., 90.), (60., 60., 40., 90., 90., 120.),
+             (27.24, 31.87, 34.23, 88.52, 108.53, 111.89), (50., 50., 50., 90., 90., 90.)):
+    S = _sf(cell); G0 = S.T @ S; nrm = np.abs(G0).max()
+    for t in range(40):
+        Mb = S @ rg._UNIMOD[rs.integers(len(rg._UNIMOD))] @ (np.eye(3) + (t % 2) * rs.normal(0, 1e-3, (3, 3)))
+        G = Mb.T @ Mb
+        full = np.abs(np.einsum('kji,jl,klm->kim', rg._UNIMOD, G, rg._UNIMOD) - G0).max((1, 2)) / nrm
+        k, dk = rg._closest_setting(G, G0, nrm); kf = int(np.argmin(full))
+        nbad += (k != kf) or (dk != full[kf]); ntot += 1
+check("same index and deviation on every metric (exact-tie metrics included)", nbad == 0, f"{nbad}/{ntot} differ")
+
 print("\nStreamDriver passes its class for the primary cell only, not for a relocked extra cell")
 dP = StreamDriver(Mt, PANELS, 0.1, 1.3, (NPAN, NPAN), dtype=np.uint16, B=4, dmin=2.0, use_gpu=False, laue="-1")
 lyso = cell_to_Ar(78.706, 78.792, 37.813, 89.8107, 90.0832, 90.1885)

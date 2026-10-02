@@ -14,7 +14,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("CDIRS", "1
 import numpy as np, torch
 from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, AXIS0_DEDUP_COS, _axes_from_cell,
                                _third_axis, _fib_halfsphere, _azimuth_grid, _depth,
-                               _both_hands, _ref_setting)
+                               _both_hands, _ref_setting, _ref_settings)
 from glint.multishot import same_lattice
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
@@ -251,7 +251,7 @@ def _settle(res, Mc, laue=None):
     """replica_gpu._ref_setting on every frame, for the cells that take the two-handed seed (s4-01). Applied
     after _cpu_stage, which the fused kernels replace with their own (fused_kernels.patch(cpu=True))."""
     L, c01, c02, c12, _ = _axes_from_cell(Mc)
-    return [_ref_setting(M, Mc) for M in res] if _both_hands(float(L[2]), c01, c02, c12, laue) else res
+    return _ref_settings(res, Mc) if _both_hands(float(L[2]), c01, c02, c12, laue) else res
 
 
 def index_known_deep_batch(frames, Mc, topa, nc, full_grid=True, budget=12000, return_errors=False, laue=None):
@@ -345,6 +345,10 @@ class _StageGraph:
         self.g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self.g):
             self.out = _stage_compute(self.Q, self.m, P)
+        # The capture reads P's tensors by address: keep them alive as long as the graph. In fp32 _cell_params
+        # makes fresh copies of the azimuth grid (ca, sa = CA.to(FP)) that nothing else holds, so a cached graph
+        # replayed after they were freed read reused memory (fp32 graph != eager on lysozyme / r199 frames).
+        self.P = P
 
     def run(self, Q, m):
         self.Q.copy_(Q); self.m.copy_(m); self.g.replay()

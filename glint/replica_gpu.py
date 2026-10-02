@@ -333,29 +333,65 @@ def _ref_setting(M, Mc):
     the choice; a flip the reference cannot resolve (an angle within KC_FLIP_MIN_DEG of 90) is never taken, and
     a clearly oblique frame never prefers one (a flip changes a large cosine's sign). A non-finite or singular
     basis is returned untouched."""
-    if M is None:
-        return M
-    Mf = np.asarray(M, float)
-    if not np.isfinite(Mf).all() or abs(np.linalg.det(Mf)) <= 1e-9 * np.prod(np.linalg.norm(Mf, axis=0)):
-        return M
+    return _ref_settings([M], Mc)[0]
+
+
+# vec(G) -> the 6 unique entries of U^T G U for all 3480 U in one product: a shortlist for _closest_setting.
+_IU = np.triu_indices(3)
+_UPROJ = np.einsum('kji,klm->kimjl', _UNIMOD, _UNIMOD)[:, _IU[0], _IU[1]].reshape(-1, 9)
+
+
+def _closest_setting(G, G0, nrm):
+    """(k, dev[k]) for k = argmin over the 3480 U of max|U^T G U - G0| / nrm, EXACTLY as the full einsum gives it
+    (same values, the first index among exact ties), at a fraction of its cost: one product over the 6 unique
+    entries shortlists every U within a rounding margin of the minimum, and only those are evaluated with the
+    original einsum (whose per-U arithmetic does not depend on how many U it is handed)."""
+    approx = np.abs((_UPROJ @ G.ravel()).reshape(-1, 6) - G0[_IU]).max(1) / nrm
+    c = np.flatnonzero(approx <= approx.min() + 1e-9)
+    dev = np.abs(np.einsum('kji,jl,klm->kim', _UNIMOD[c], G, _UNIMOD[c]) - G0).max((1, 2)) / nrm
+    j = int(np.argmin(dev))
+    return int(c[j]), dev[j]
+
+
+def _ref_settings(Ms, Mc):
+    """_ref_setting for a batch of frames against one reference: the same result per frame, with the per-frame
+    host work cut to one 3x3 product (the guard, the cosines and the sign-flip choice run on the whole batch)."""
+    out = list(Ms)
+    idx = [i for i, M in enumerate(Ms) if M is not None]
+    if not idx:
+        return out
     A = np.asarray(Mc, float)
     S = A[:, np.argsort(np.linalg.norm(A, axis=0))]            # the order _axes_from_cell anchors in
     G0 = S.T @ S; nrm = np.abs(G0).max()
-    G = Mf.T @ Mf
-    dev0 = np.abs(G - G0).max() / nrm
-    if dev0 > SETTING_TOL:
-        dev = np.abs(np.einsum('kji,jl,klm->kim', _UNIMOD, G, _UNIMOD) - G0).max((1, 2)) / nrm
-        k = int(np.argmin(dev))
-        if dev[k] < 0.5 * dev0:
-            M = Mf = Mf @ _UNIMOD[k]
+    F = np.stack([np.asarray(Ms[i], float) for i in idx])
+    good = np.isfinite(F).all((1, 2))
+    if good.any():
+        gi = np.flatnonzero(good)
+        good[gi] = np.abs(np.linalg.det(F[gi])) > 1e-9 * np.prod(np.linalg.norm(F[gi], axis=1), axis=1)
+    keep = [j for j in range(len(idx)) if good[j]]
+    if not keep:
+        return out
+    Fk = [F[j] for j in keep]; Mk = [Ms[idx[j]] for j in keep]
+    G = np.stack([f.T @ f for f in Fk])
+    dev0 = np.abs(G - G0).max((1, 2)) / nrm
+    for t in np.flatnonzero(dev0 > SETTING_TOL):              # the step of review r2 s4-01, unchanged
+        k, dk = _closest_setting(G[t], G0, nrm)
+        if dk < 0.5 * dev0[t]:
+            Fk[t] = Fk[t] @ _UNIMOD[k]; Mk[t] = Fk[t]; G[t] = Fk[t].T @ Fk[t]
     cS = _cosines(S)
     res = 2.0 * np.abs(cS) >= FLIP_MIN * (1.0 - 1e-9)          # cosines a sign flip visibly changes (89.9 counts)
-    if not res.any():
-        return M
-    err = (np.abs(_FLIP_SIGN * _cosines(Mf) - cS) * res).sum(1)   # unresolvable cosines cannot break ties
-    err[1:][~((_FLIP_SIGN[1:] < 0) & res).any(1)] = np.inf      # a flip that changes no resolvable cosine
-    k = int(np.argmin(err))                                     # identity first: a tie keeps the frame as is
-    return Mf @ _FLIPS[k] if k and err[k] < err[0] else M
+    if res.any():
+        d = np.sqrt(np.diagonal(G, axis1=1, axis2=2))
+        cM = np.stack([G[:, 0, 1] / (d[:, 0] * d[:, 1]), G[:, 0, 2] / (d[:, 0] * d[:, 2]),
+                       G[:, 1, 2] / (d[:, 1] * d[:, 2])], 1)
+        err = (np.abs(_FLIP_SIGN[None] * cM[:, None, :] - cS) * res).sum(2)   # unresolvable cosines cannot tie-break
+        err[:, 1:][:, ~((_FLIP_SIGN[1:] < 0) & res).any(1)] = np.inf          # a flip that changes no resolvable one
+        kf = np.argmin(err, 1)                                # identity first: a tie keeps the frame as is
+        for t in np.flatnonzero((kf > 0) & (err[np.arange(len(kf)), kf] < err[:, 0])):
+            Mk[t] = Fk[t] @ _FLIPS[kf[t]]
+    for j, m in zip(keep, Mk):
+        out[idx[j]] = m
+    return out
 
 
 def index_known_gpu_cell(q, Mc, topa=8, nc=None, laue=None):

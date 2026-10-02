@@ -273,6 +273,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_stream_hit_ring.py
 
+      # flush() empties the ring even when a batch raises part-way (hook, writer, integrator): later
+      # pushes keep working and a retried flush()/close() does not merge a frame twice (review r2 s2-03).
+      - name: experiments/test_flush_exception_safe.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_flush_exception_safe.py
+
       # StreamDriver effort= (adaptive effort): the known-cell depth follows the hit rate, the spare budget buys
       # the chance-controlled deep search on the misses, decisions at flush boundaries only and logged; off by
       # default and byte-identical off. q-list frames, fit-oracle indexers, numpy only.

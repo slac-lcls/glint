@@ -198,6 +198,9 @@ jobs:
       - name: experiments/test_cell_registry.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cell_registry.py
+      - name: experiments/test_record_stream_event_id.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_record_stream_event_id.py
 
       - name: experiments/test_per_lattice.py
         if: ${{ !cancelled() }}

@@ -341,7 +341,9 @@ def _write_chunk(f, serial, r, panel_name="p0", photon_eV=9392.7, clen_m=0.15, p
     f.write("----- Begin chunk -----\n")
     f.write(f"Image filename: {r.get('image', 'glint.cxi')}\n")
     ev = r.get('event', 0)
-    if ev is not None:                       # None = a one-image-per-file source: CrystFEL writes no Event line
+    # None = a one-image-per-file source: no Event line (indexamajig 0.10+ writes `Event: //` there
+    # instead; record_stream_replay reads both as no event)
+    if ev is not None:
         f.write(f"Event: //{ev}\n")
     f.write(f"Image serial number: {serial}\n")
     f.write("hit = 1\n")

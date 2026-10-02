@@ -303,6 +303,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cli_smoke.py
 
+      # Can CrystFEL read the DEFAULT stream (glint/stream.py::write_stream, glint_cli without --integrate)?
+      # The only CI step asserting on that writer's bytes: geometry block, `--- Begin crystal`, `indexed_by =
+      # file` (not `glint`, which CrystFEL 0.10.2 rejects), panel names that exist in the .geom. With
+      # stream.py reverted to `indexed_by = glint` every other step here stays green. Its second layer runs
+      # process_hkl on the output; this runner has no CrystFEL, so that layer prints SKIP and the structural
+      # layer is what CI checks. numpy only.
+      - name: experiments/test_stream_crystfel.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_stream_crystfel.py
+
       # ~50s, by far the slowest step here: it refines over 540 synthetic frames. Kept because
       # it is the only cover of the geometry-refinement solver, but it is the first candidate
       # to trim if this job gets tight.

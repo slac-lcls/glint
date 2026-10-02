@@ -76,6 +76,7 @@ STEPS = [
     "experiments/test_geom_bridge.py",
     "experiments/test_nonfinite_q_rows.py",          # also in the torch-CPU job, where its engine half runs
     "experiments/test_cli_smoke.py",
+    "experiments/test_stream_crystfel.py",           # its process_hkl layer SKIPs without CrystFEL
     "experiments/test_geom_refine.py",
     # Skips without a GPU and exits 0 (glint#123). Running it here is still worth the second it
     # costs: the module body resolves HKLGrid/_panel_geom/recip_from_M/cell_to_Ar at import, so a

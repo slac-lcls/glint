@@ -1,4 +1,5 @@
-"""glint_xtc --integrate must predict each event at the wavelength pass 1 indexed it at (review s7-03).
+"""glint_xtc --integrate must predict each event at the wavelength (s7-03) and in the frame (s7-01)
+pass 1 indexed it in.
 
 THE DEFECT. `--wavelength` defaults to 0.0, meaning "use the per-event photon energy". Pass 1 did:
 it built each event's q at that event's EBeam wavelength. But the reader kept none of them, and pass 2
@@ -6,6 +7,12 @@ it built each event's q at that event's EBeam wavelength. But the reader kept no
 through the origin instead of the Ewald sphere and projected every reflection onto the beam centre:
 a central-hole detector got a header-only stream, a beam-covering one got every row on the direct
 beam, and the run exited 0 either way. The header said photon_energy_eV = 9392.70, a constant.
+
+THE SECOND DEFECT (s7-01). On the --geom route pass 1 builds q with psana's Z sign (detector and beam
+along -z), which is CrystFEL's frame mirrored in z, and the indexer fits an orientation to that. Pass 2
+handed it unconverted to predict_spots, which works in CrystFEL's frame (+z): every predicted box
+landed on the observed pattern inverted through the beam centre, about 2% of them on a real spot,
+and the stream integrated background with exit 0.
 
 WHAT RUNS. The real xtc route end to end, through `glint_xtc.main`:
   real   xtc_qreader_psana1.run_to_qframes_psana1 (pass 1) and frames_for_events (pass 2),
@@ -344,6 +351,43 @@ def indexed_events():
     return [e for e, r in enumerate(RUN) if np.isfinite(r["ebeam_eV"])]
 
 
+def frame_checks(chunks, want):
+    """s7-01: the WRITTEN rows sit on the true spots, carry the true hkl, integrate real signal, and
+    the chunk's cell is the true right-handed basis in CrystFEL's frame."""
+    on, inv, lab, isig, cell = {}, {}, {}, {}, {}
+    for e in want:
+        c, t = chunks.get(e), RUN[e]
+        if c is None or not len(c["rows"]):
+            on[e] = inv[e] = lab[e] = isig[e] = float("nan"); cell[e] = False
+            continue
+        rows = c["rows"]
+        truth = np.stack([t["fs"], t["ss"]], 1)
+        d = np.linalg.norm(rows[:, None, 7:9] - truth[None], axis=2)
+        near = d.argmin(1); hit = d.min(1) < 2.0
+        on[e] = float(hit.mean())
+        # where the boxes go if the orientation is left in the pass-1 frame: the observed pattern
+        # inverted through the beam centre (x, y) = (0, 0)
+        x, y = rows[:, 7], rows[:, 8]
+        lab_x = np.full(len(rows), np.nan); lab_y = np.full(len(rows), np.nan)
+        for i, (cx, cy) in enumerate(CORNERS):
+            m = (y >= i * H) & (y < (i + 1) * H)
+            lab_x[m], lab_y[m] = (cx + x[m]) / RES, (cy + y[m] - i * H) / RES
+        ifs, iss = lab_to_slab(-lab_x, -lab_y)
+        di = np.linalg.norm(np.stack([ifs, iss], 1)[:, None] - truth[None], axis=2)
+        inv[e] = float(np.nanmean(np.nanmin(np.where(np.isfinite(di), di, np.inf), axis=1) < 2.0))
+        lab[e] = float(np.mean(np.all(rows[hit, :3] == t["hkl"][near[hit]], axis=1))) if hit.any() else 0.0
+        isig[e] = float(np.median(rows[:, 3] / np.where(rows[:, 4] > 0, rows[:, 4], np.inf)))
+        cell[e] = c["recip"] is not None and np.allclose(c["recip"], np.linalg.inv(t["M"]), atol=1e-6)
+    fmt = lambda dct: {e: round(v, 3) for e, v in dct.items()}       # noqa: E731
+    check(all(v >= 0.9 for v in on.values()),
+          f"written rows within 2 px of a true spot, per chunk {fmt(on)} (>= 0.9; on the "
+          f"beam-inverted pattern {fmt(inv)})")
+    check(all(v >= 0.95 for v in lab.values()),
+          f"those rows carry the true hkl, per chunk {fmt(lab)} (>= 0.95)")
+    check(all(v >= 10.0 for v in isig.values()), f"median I/sigma per chunk {fmt(isig)} (>= 10)")
+    check(all(cell.values()), f"each chunk's astar/bstar/cstar is the true right-handed basis ({cell})")
+
+
 # ---------------------------------------------------------------- cases
 def case_per_event_wavelength(tmp):
     """No --wavelength: every event at its own EBeam energy, one of them unusable (inf)."""
@@ -373,7 +417,25 @@ def case_per_event_wavelength(tmp):
     ph = {e: chunks[e]["photon_eV"] for e in chunks}
     check(len(ph) == len(want) and all(e in ph and abs(ph[e] - RUN[e]["ebeam_eV"]) < 0.006 for e in want),
           f"each chunk's photon_energy_eV is its event's energy ({ph})")
+    frame_checks(chunks, want)
     return chunks
+
+
+def case_other_hand(tmp):
+    """The same run, with the indexer returning the other of the two equally good bases. Spot
+    positions must not depend on that choice, and the chunk's cell and hkl must not either."""
+    print("\n[other handedness] same run; the indexer returns the opposite-determinant basis")
+    HAND[0] = -1.0
+    CHOSEN.clear()
+    code, chunks, log = run_main(tmp, "other_hand")
+    want = indexed_events()
+    check(code == 0, f"glint_xtc.main exits 0 (got {code})")
+    check(sorted(CHOSEN) == want and len({tuple(s) for s, _ in CHOSEN.values()}) == 1
+          and np.linalg.det(np.diag(next(iter(CHOSEN.values()))[0])) < 0,
+          f"(setup) the mock indexer now returns the det<0 basis: "
+          f"{sorted({tuple(s) for s, _ in CHOSEN.values()})}")
+    frame_checks(chunks, want)
+    HAND[0] = 1.0
 
 
 def case_explicit_wavelength(tmp):
@@ -391,6 +453,7 @@ def case_explicit_wavelength(tmp):
     check(all(f"{chunks[e]['photon_eV']:.2f}" == f"{HC / lam0:.2f}" for e in chunks),
           f"photon_energy_eV = 12398.42/--wavelength in every chunk "
           f"({sorted({c['photon_eV'] for c in chunks.values()})})")
+    frame_checks(chunks, want)
     return chunks
 
 
@@ -456,6 +519,7 @@ def main():
         X, Y, _ = geom_coords.coords_from_geom(os.path.join(tmp, "quad.geom"), (NSEG, H, W), ZDIST)
         COORDS = (X.reshape(NSEG, H, W), Y.reshape(NSEG, H, W), np.full((NSEG, H, W), -0.1e6))
         case_per_event_wavelength(tmp)
+        case_other_hand(tmp)
         case_explicit_wavelength(tmp)
         case_refusals(tmp)
         case_predict_guard()

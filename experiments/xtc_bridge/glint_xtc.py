@@ -226,9 +226,16 @@ def integrate_and_write(results, args, out_path, report=True, lam_by_event=None)
     got a header-only stream and a beam-covering one got every row on the direct beam, both with
     exit 0 (review finding s7-03). An indexed event with no wavelength now stops the run before the
     re-read. Each chunk's photon_energy_eV is that event's own value.
+
+    FRAME: pass 1 indexed q built with psana's Z sign (detector and beam along -z), which is
+    CrystFEL's frame mirrored in z; predict_spots works in CrystFEL's (+z). Each orientation goes
+    through geom_coords.orientation_to_crystfel first, and that converted basis is also what the
+    chunk's cell lines carry, so they agree with its fs/ss. Unconverted, every box landed on the
+    observed pattern inverted through the beam centre and integrated background (review s7-01).
     """
     from glint.lute_bridge import parse_geom
     from glint.predict import predict_spots, integrate_spots, write_stream_integrated
+    import geom_coords
     import xtc_qreader_psana1 as rd
 
     if not args.geom:
@@ -266,12 +273,13 @@ def integrate_and_write(results, args, out_path, report=True, lam_by_event=None)
                                           gpu_calib=args.gpu_calib):
         r = by_event[ev]
         lam = lams[ev]
-        pred = predict_spots(r["M"], panels, args.zdist, lam,
+        M = geom_coords.orientation_to_crystfel(r["M"])     # pass-1 frame -> CrystFEL's (s7-01)
+        pred = predict_spots(M, panels, args.zdist, lam,
                              dmin=args.int_dmin, tol=args.int_tol)
         if not len(pred):
             continue
         I, sig, peak, bg = integrate_spots(frame, pred, bg_mode=args.bg_mode)
-        out.append({"image": r["image"], "event": ev, "M": r["M"],
+        out.append({"image": r["image"], "event": ev, "M": M,
                     "pred": pred, "I": I, "sigma": sig, "peak": peak, "bg": bg,
                     "photon_eV": xtc_core.HC_EV_A / lam})
 

@@ -26,9 +26,14 @@ CONVENTIONS, chosen so this is a true drop-in:
   * panels are written into the flat data array through their `min_fs/min_ss`, which is the same
     (rows, cols) order psana's `calib` reshapes to -- so the result indexes identically.
 
-The frame is CrystFEL's lab frame, NOT psana's cframe=0. For BLIND indexing that is harmless: cell
-lengths and angles are invariant under the rotation between them, and a handedness flip only swaps
-the enantiomorph. Do NOT feed the resulting orientations to `indexamajig --indexing=file` unfixed.
+X and Y are CrystFEL's lab frame, NOT psana's cframe=0, but Z has psana's sign, so pass 1's q is
+CrystFEL's with z negated: q_pass1 = diag(1,1,-1) q_CrystFEL. For BLIND indexing that is harmless:
+cell lengths and angles are invariant under it, and the mirror only swaps the enantiomorph. An
+orientation indexed from that q is NOT a CrystFEL orientation, though: `orientation_to_crystfel`
+converts it. glint_xtc --integrate does so before predicting (review finding s7-01: unconverted,
+every predicted box landed on the observed pattern inverted through the beam centre). The
+orientation-only stream is still written in the pass-1 frame, so do NOT feed its orientations to
+`indexamajig --indexing=file` unconverted.
 """
 from __future__ import annotations
 
@@ -37,6 +42,12 @@ import re
 import numpy as np
 
 _VEC = re.compile(r"([+-]?[\d.eE+-]+)\s*([xyz])")
+
+# Sign of the detector Z that coords_from_geom returns: psana's (detector at NEGATIVE z), so that
+# xtc_core.prep_geometry derives kin = [0, 0, sign(Z)] = -z from it. CrystFEL puts the detector at
+# +z with the beam along +z; orientation_to_crystfel undoes the difference, and reads this constant
+# so the two cannot disagree.
+Z_SIGN = -1.0
 
 
 def _vec(s):
@@ -118,5 +129,20 @@ def coords_from_geom(path, shape, zdist):
     if np.isnan(X).any():
         raise ValueError(f"{path} leaves {int(np.isnan(X).sum())} pixels uncovered -- the panels do "
                          f"not tile the array")
-    Zf = np.full(X.size, -abs(zdist) * 1e6)              # psana sign convention, um
+    Zf = np.full(X.size, Z_SIGN * abs(zdist) * 1e6)      # psana sign convention, um
     return X.ravel(), Y.ravel(), Zf
+
+
+def orientation_to_crystfel(M):
+    """An orientation indexed from pass-1 q on the `--geom` route -> the same crystal in CrystFEL's
+    lab frame, as a RIGHT-HANDED basis (columns = real-space axes, A).
+
+    Pass 1 puts the detector at Z_SIGN*zdist and the beam along Z_SIGN, so its q is CrystFEL's with
+    z multiplied by Z_SIGN: q_pass1 = S q_CrystFEL, S = diag(1, 1, Z_SIGN). A basis M fitted to it
+    (q_pass1 . M[:, i] integer) therefore maps to S @ M in CrystFEL's frame. That map is a mirror
+    when Z_SIGN = -1, so it flips the determinant; the result is negated when it comes out
+    left-handed. -M spans the same lattice and predicts the same spot positions, so only the hkl
+    labels change, to the right-handed setting -- whichever of M and -M the indexer returned."""
+    M = np.asarray(M, float)
+    Mc = np.diag([1.0, 1.0, Z_SIGN]) @ M
+    return -Mc if np.linalg.det(Mc) < 0 else Mc

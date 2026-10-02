@@ -286,3 +286,38 @@ def test_bg_mode_field_renders_as_the_cli_flag():
         assert P(**dict(XTC, bg_mode=m)).bg_mode == m
     with pytest.raises(Exception):                          # a typo must not silently mean default
         P(**dict(XTC, bg_mode="mediann"))
+
+
+# ------------------------------------------------------------------- the write gate (review s8-03)
+def test_gate_field_renders_as_the_cli_flag():
+    """glint_cli --gate (#216) was written for LUTE's known-cell runs, which without it write nearly
+    every frame as a crystal. With no field here, a `gate: strict` YAML key never reached argv: LUTE
+    wraps an undeclared key as a template parameter, so every LUTE run was `--gate none`."""
+    f = P.__fields__["gate"]
+    assert f.field_info.extra["rename_param"] == "gate"
+    assert f.field_info.extra["flag_type"] == "--"
+    assert P(peaks="p.stream", out="o.stream").gate is None, "must default to the CLI's own default"
+    for g in ("none", "strict"):
+        assert P(peaks="p.stream", out="o.stream", gate=g).gate == g
+        assert P(images="i.cxi", out="o.stream", gate=g).gate == g
+    with pytest.raises(Exception):
+        P(peaks="p.stream", out="o.stream", gate="Strict")   # a typo must not silently mean none
+
+
+def test_gate_rejected_on_xtc():
+    """glint_xtc.py has no gate and the launcher drops --gate on that route, so accepting it would let
+    a run look gated when it was not."""
+    assert "applies only to the `peaks` / `images`" in bad(gate="strict", **XTC)
+
+
+def test_launcher_forwards_gate_to_the_cli(tmp_path):
+    argv, err = _run_launcher(tmp_path, ["--images", "i.cxi", "--cell", "79 79 38 90 90 90",
+                                         "--gate", "strict"])
+    assert any("glint.glint_cli" in a for a in argv), argv
+    assert "--gate" in argv and argv[argv.index("--gate") + 1] == "strict", (argv, err)
+
+
+def test_launcher_drops_gate_on_xtc_and_says_so(tmp_path):
+    argv, err = _run_launcher(tmp_path, ["--exp", "e", "--run", "1", "--gate", "strict"])
+    assert "--gate" not in argv
+    assert "--gate" in err and "dropped" in err

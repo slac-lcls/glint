@@ -234,6 +234,20 @@ class IndexGLINTParameters(ThirdPartyParameters):
         None, description="Optional external cell-given indexer binary (ffbidx driver) as a fallback.",
         flag_type="--", rename_param="cascade",
     )
+    gate: Optional[Literal["none", "strict"]] = Field(
+        None,
+        description="What a frame must satisfy to be WRITTEN as a crystal (glint_cli --gate). Unset = "
+                    "the CLI default `none`: every registration is written, and with `cell` that is "
+                    "nearly every frame, because a known-cell search returns the cell it was asked "
+                    "for. LUTE's SFX test runs wrote 28% of mfx100848724 r51 as crystals where "
+                    "CrystFEL and cctbx index about 1%, and 98% of mfxl1038923 r58. `strict` = at "
+                    "least 10 peaks and at least 25% of the frame's peaks matched (the paper's "
+                    "scoring bar); a frame that fails is written as unindexed and is skipped by "
+                    "`integrate` and `tofile`. Not null-calibrated: about 5% of dense lattice-free "
+                    "frames still pass. `peaks` / `images` only: the raw-xtc program has no gate, "
+                    "so `gate` is REJECTED with `exp`.",
+        flag_type="--", rename_param="gate",
+    )
 
     # ---- integration: emit REAL I/sigma so the stream goes straight to partialator ----------------
     # Without these the stream carries placeholder intensities and only the `tofile` -> CrystFEL
@@ -383,6 +397,16 @@ class IndexGLINTParameters(ThirdPartyParameters):
             raise ValueError("`top_peaks` applies only to `images`; the `peaks` path would ignore it "
                              "-- truncate the peak list in FindPeaksSFX instead")
         return top_peaks
+
+    @validator("gate", always=True)
+    def _gate_not_on_xtc(cls, gate: Optional[str], values: Dict[str, Any]) -> Optional[str]:
+        """glint_xtc.py has no write gate, and glint_launch.sh drops --gate on the xtc route (reporting
+        it on stderr only). A `gate: strict` that never runs is the failure this field was added to
+        end (review s8-03), so reject it at config time rather than let the run look gated."""
+        if gate is not None and values.get("exp"):
+            raise ValueError("`gate` applies only to the `peaks` / `images` sources: the raw-xtc "
+                             "program (glint_xtc.py) has no gate, and the launcher would drop --gate")
+        return gate
 
     @validator("out", always=True)
     def _out_required(cls, out: str) -> str:

@@ -15,6 +15,10 @@ IndexGLINT:
     peaks: "{{ work_dir }}/peaks.stream"         # FindPeaksSFX peak-search stream
     out: "{{ work_dir }}/glint.stream"           # required (it is the Task result the concatenator reads)
     cell: null                                    # blind cross-frame consensus; or "78.6 78.6 37.9 90 90 90"
+    # gate: "strict"                              # with `cell`, set this: unset (= none) writes nearly every
+    #                                              frame as a crystal (28% of mfx100848724 r51 vs ~1% for
+    #                                              CrystFEL/cctbx). strict = >=10 and >=25% of peaks matched;
+    #                                              ~5% of dense lattice-free frames still pass. Not with `exp`.
     mode: "auto"                                  # auto | sparse | dense
     nbest: 3
     device: "auto"

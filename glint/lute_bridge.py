@@ -22,6 +22,7 @@ import sys
 import numpy as np
 
 from glint.geom import Q_FLOOR, _q_from_panels, clean_q   # one geometry core, two panel schemas -- see geom.py
+from glint.geom import is_bad_region, warn_bad_regions
 
 HC_EV_A = 12398.419843320026     # h*c in eV*Angstrom -> lambda[A] = HC/E[eV]
 
@@ -49,8 +50,11 @@ def parse_geom(path):
                 glob[key] = val
     out = []
     gres = glob.get("res")                                  # res may be global or per-panel
+    # CrystFEL bad regions are not panels -- the same rule glint.geom.parse_geom applies, so the two
+    # parsers agree on what a panel is (the corner_x test below also skipped them, but by accident).
+    warn_bad_regions(path, [n for n in panels if is_bad_region(n)])
     for name, d in panels.items():
-        if "fs" not in d or "corner_x" not in d:
+        if is_bad_region(name) or "fs" not in d or "corner_x" not in d:
             continue
         p = dict(
             name=name, fs=_vec(d["fs"]), ss=_vec(d["ss"]), res=float(d.get("res", gres)),

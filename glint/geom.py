@@ -10,6 +10,8 @@ Convention (CrystFEL): a pixel at data-array (fs, ss) lies on the panel whose [m
 coords  X = corner_x + lfs*fsx + lss*ssx ,  Y = corner_y + lfs*fsy + lss*ssy ; metres via /res;
 z = clen + coffset. Scattered unit s_hat = R/|R|; incident beam +z (s0=(0,0,1)); q=(s_hat-s0)/lambda.
 """
+import warnings
+
 import numpy as np
 
 _HC_eV_A = 12398.419843320026          # h*c in eV.A  ->  lambda_A = _HC_eV_A / E_eV
@@ -51,11 +53,38 @@ def _wavelength_A(d):
     return None
 
 
+def is_bad_region(name):
+    """True if a `name/key` block in a .geom is a CrystFEL BAD REGION rather than a panel.
+
+    geometry(5) requires bad-region names to begin with "bad" (`badregionA/min_fs`,
+    `bad_beamstop/min_x`, ...), so the prefix is what tells the two kinds of block apart. Every
+    parser here that splits `name/key` must skip these: a bad region has no corner_x/fs/ss, and
+    treating one as a panel crashed the --peaks route with a bare KeyError 'corner_x'."""
+    return name.startswith("bad")
+
+
+def warn_bad_regions(path, names):
+    """Warn that a .geom's bad regions were read but are NOT applied by GLINT.
+
+    Peaks are used as given. A CrystFEL peak search run with this .geom leaves the bad regions out
+    already, but GLINT's own peak finders (--images) and --integrate do not mask the pixels inside
+    them, so the user should know."""
+    if names:
+        warnings.warn(f"{path}: {len(names)} CrystFEL bad region(s) ({', '.join(sorted(names))}) are "
+                      f"read but not applied; GLINT does not mask peaks or pixels inside them",
+                      stacklevel=3)
+
+
 def parse_geom(path):
-    """Parse a CrystFEL .geom into {'panels': {name: {...}}, 'wavelength_A': float}.
-    Panel fields: min_fs,max_fs,min_ss,max_ss,corner_x,corner_y,fsx,fsy,ssx,ssy,res,clen,coffset."""
+    """Parse a CrystFEL .geom into {'panels': {name: {...}}, 'wavelength_A': float, 'global': {...},
+    'bad_regions': {name: {...}}}.
+    Panel fields: min_fs,max_fs,min_ss,max_ss,corner_x,corner_y,fsx,fsy,ssx,ssy,res,clen,coffset.
+    Bad regions (blocks whose name starts with "bad", see `is_bad_region`) are kept apart from the
+    panels with their raw keys (min_fs/max_fs/min_ss/max_ss/panel or min_x/max_x/min_y/max_y);
+    nothing in GLINT applies them yet."""
     g = {}
     panels = {}
+    bad = {}
     for raw in open(path):
         line = raw.split(";", 1)[0].strip()
         if not line or "=" not in line:
@@ -63,6 +92,12 @@ def parse_geom(path):
         key, val = (s.strip() for s in line.split("=", 1))
         if "/" in key:
             pname, sub = key.split("/", 1)
+            if is_bad_region(pname):
+                try:
+                    bad.setdefault(pname, {})[sub] = float(val)
+                except ValueError:
+                    bad.setdefault(pname, {})[sub] = val          # e.g. `badregionA/panel = q0a0`
+                continue
             p = panels.setdefault(pname, {})
             if sub in ("fs", "ss"):
                 v = _vec(val)
@@ -87,7 +122,8 @@ def parse_geom(path):
         p.setdefault("coffset", 0.0)
         p.setdefault("fsx", 1.0); p.setdefault("fsy", 0.0)
         p.setdefault("ssx", 0.0); p.setdefault("ssy", 1.0)
-    return {"panels": panels, "wavelength_A": _wavelength_A(g), "global": g}
+    warn_bad_regions(path, list(bad))
+    return {"panels": panels, "wavelength_A": _wavelength_A(g), "global": g, "bad_regions": bad}
 
 
 def read_crystfel_peaks(path):
@@ -268,6 +304,18 @@ def _panel_z(name, p):
     return out
 
 
+def panel_corner(name, p):
+    """(corner_x, corner_y) of a parsed panel, or a ValueError NAMING the block that lacks them.
+
+    Anything that reaches a panel consumer without a corner is not a usable panel, and the bare
+    KeyError 'corner_x' this used to raise named neither the block nor the file line to fix."""
+    missing = [k for k in ("corner_x", "corner_y") if k not in p]
+    if missing:
+        raise ValueError(f".geom block '{name}/...' has no {' or '.join(missing)}, so it is not a "
+                         f"usable panel (keys present: {sorted(p)})")
+    return p["corner_x"], p["corner_y"]
+
+
 def _specs_from_geom_panels(panels):
     """.geom dict-of-dicts -> _q_from_panels specs. Bounds default to +-inf (a single-panel .geom
     need not declare min_fs) while the panel-local origin defaults to 0 -- they are different
@@ -276,9 +324,10 @@ def _specs_from_geom_panels(panels):
                  lo_ss=p.get("min_ss", -np.inf), hi_ss=p.get("max_ss", np.inf),
                  off_fs=p.get("min_fs", 0.0), off_ss=p.get("min_ss", 0.0),
                  fsx=p["fsx"], fsy=p["fsy"], ssx=p["ssx"], ssy=p["ssy"],
-                 cx=p["corner_x"], cy=p["corner_y"], res=p["res"],
+                 cx=cx, cy=cy, res=p["res"],
                  z=_panel_z(name, p))
-            for name, p in panels.items()]
+            for name, p in panels.items()
+            for cx, cy in (panel_corner(name, p),)]
 
 
 def peaks_to_q(peaks, geom, wavelength_A=None):

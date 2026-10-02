@@ -683,10 +683,12 @@ def panels_from_geom(geom):
     un-assembled panel stack slab-locally instead of refusing it (glint#148)."""
     g = geom.get("global", {})
     clen = float(g.get("clen", 0.1)); coff = float(g.get("coffset", 0.0)); res_g = float(g.get("res", 1.0))
+    from glint.geom import panel_corner
     panels = []
     for nm, p in geom["panels"].items():
+        cx, cy = panel_corner(nm, p)                    # names the block instead of KeyError 'corner_x'
         panels.append(dict(name=nm, fs=np.array([p["fsx"], p["fsy"]]), ss=np.array([p["ssx"], p["ssy"]]),
-                           res=float(p.get("res", res_g)), cx=float(p["corner_x"]), cy=float(p["corner_y"]),
+                           res=float(p.get("res", res_g)), cx=float(cx), cy=float(cy),
                            coffset=float(p.get("coffset", coff)),
                            min_fs=int(p["min_fs"]), max_fs=int(p["max_fs"]),
                            min_ss=int(p["min_ss"]), max_ss=int(p["max_ss"]),

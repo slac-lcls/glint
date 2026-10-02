@@ -86,24 +86,60 @@ def _arange(F):
         a = _ARANGE[F] = torch.arange(F, device=DEV)
     return a
 
-# --- adaptive orientation-grid density (cross-cell-validated 2026-07-17) ---
-# 4096 dirs is rate-neutral for orthogonal cells (all angles ~90: cubic/tet/ortho, incl. the
-# anisotropic long-axis case) at ~1.3x speed, but regresses triclinic ~8pts. So: coarse grid for
-# all-90 cells, full CDIRS grid for oblique (mono/tricl/rhomb). KC_ADAPTIVE_DIRS=0 forces full.
+# --- adaptive orientation-grid density ---
+# The anchor (shortest axis, length L0) is searched on a Fibonacci half-sphere and then refined, so the grid only
+# has to land inside the anchor's angular basin. That basin narrows as 1/(L0*qmax): an anchor dtheta off moves a
+# peak at |q| by L0*|q|*dtheta in index. 4096 directions (~2.2 deg spacing, ~1.3x faster than 16384) are
+# rate-neutral on orthogonal cells while L0*qmax <= ~25 (lysozyme on cxidb-17: 38 A x at most 0.61 1/A = 23, where
+# the grid was validated 2026-07-17), but on synthetic stills they lose about half the correct indexings once
+# L0*qmax > ~33 (review r2 s4-02: 26/60 vs 55/60 on 100x120x150 A at 1.8 A), and ~8 pts on triclinic cells at any
+# resolution. So the coarse grid is used for a FRAME only when the cell is orthogonal (all angles within 2 deg of
+# 90) AND L0 * (that frame's largest |q|) <= KC_ADAPT_L0Q (default 25); otherwise the full CDIRS grid. The choice
+# is per frame, from its own peaks, so a frame's answer does not depend on which frames share its batch.
+# KC_ADAPTIVE_DIRS=0 forces the full grid everywhere.
 _ADAPT = os.environ.get("KC_ADAPTIVE_DIRS", "1") != "0"
+_ADAPT_L0Q = float(os.environ.get("KC_ADAPT_L0Q", "25"))
 _DIRS_LO = torch.as_tensor(_fib_halfsphere(min(4096, int(os.environ.get("CDIRS", "16384")))), dtype=FP, device=DEV)
 
 
-def _adaptive_dirs(Mc):
-    """Coarse (4096) Fibonacci half-sphere for orthogonal known cells; full grid for oblique."""
-    if not _ADAPT:
-        return _DIRS
+def _orthogonal(Mc):
+    """All three cell angles within 2 degrees of 90."""
     M = np.asarray(Mc, float); a, b, c = M[:, 0], M[:, 1], M[:, 2]
 
     def _ang(u, v):
         return np.degrees(np.arccos(np.clip(u @ v / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-12), -1.0, 1.0)))
-    orthogonal = all(abs(x - 90.0) < 2.0 for x in (_ang(b, c), _ang(a, c), _ang(a, b)))
-    return _DIRS_LO if orthogonal else _DIRS
+    return all(abs(x - 90.0) < 2.0 for x in (_ang(b, c), _ang(a, c), _ang(a, b)))
+
+
+def _frame_qmax(frames):
+    """Each frame's largest |q| (1/A; 0.0 for a frame without peaks), as a float64 array. Host-side numpy, one
+    vectorised pass over all frames."""
+    n = np.fromiter((len(f) for f in frames), dtype=np.int64, count=len(frames))
+    out = np.zeros(len(frames))
+    nz = n > 0
+    if nz.any():
+        q = np.concatenate([np.asarray(f, float).reshape(-1, 3) for f, k in zip(frames, n) if k])
+        q2 = np.einsum("ij,ij->i", q, q)
+        out[nz] = np.sqrt(np.maximum.reduceat(q2, np.concatenate(([0], np.cumsum(n[nz])[:-1]))))
+    return out
+
+
+def _coarse_ok(Mc, qmax):
+    """Where the coarse 4096 grid is safe for cell Mc at largest |q| qmax (scalar or per-frame array): adaptive
+    grid on, orthogonal cell, and L0 * qmax <= _ADAPT_L0Q (L0 = the shortest axis, the anchor). A NaN qmax is
+    not safe (full grid)."""
+    q = np.asarray(qmax, float)
+    if not (_ADAPT and _orthogonal(Mc)):
+        return np.zeros(q.shape, bool)
+    return float(_axes_from_cell(Mc)[0][0]) * q <= _ADAPT_L0Q
+
+
+def _adaptive_dirs(Mc, qmax):
+    """The anchor grid for cell Mc and frames whose largest |q| is qmax: the coarse (4096) Fibonacci half-sphere
+    where _coarse_ok, else the full CDIRS grid. qmax=None (not known) gets the full grid."""
+    if qmax is None:
+        return _DIRS
+    return _DIRS_LO if bool(_coarse_ok(Mc, qmax)) else _DIRS
 
 
 def pad(frames, Pmax):
@@ -146,13 +182,14 @@ def anneal_b(M0, Q, m, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02):
     return M
 
 
-def _cell_params(Mc, topa=8, nc=None, full_grid=False):
+def _cell_params(Mc, topa=8, nc=None, full_grid=False, qmax=None):
     """Host-side cell geometry (numpy) + the orientation grid, hoisted out of the compute so _stage_compute
     is pure-torch (and CUDA-graph capturable for a fixed cell). The search depth rides along in P: topa
     (azimuths kept per anchor), nc (anchor directions kept; default the module's NC) and the grid -- the
-    adaptive one (4096 directions for orthogonal cells) unless full_grid, which is the CDIRS grid the
-    per-frame search uses (the escalation's deep search needs it: the adaptive grid changes which misses
-    it recovers, exp/batched-escalation RESULTS_batched_deep.md)."""
+    adaptive one (_adaptive_dirs: 4096 directions only for an orthogonal cell with L0 * qmax <= KC_ADAPT_L0Q,
+    qmax the largest |q| of the frames P will run on; None = not known = the full grid) unless full_grid, which
+    is the CDIRS grid the per-frame search uses (the escalation's deep search needs it: the adaptive grid
+    changes which misses it recovers, exp/batched-escalation RESULTS_batched_deep.md)."""
     topa = _depth("topa", topa)
     # nc is capped at the pool: the per-frame search cannot keep more anchors than the pool has, and past it
     # the dedup loop below would only fill copies of the first anchor (argmax of an all-false row is 0)
@@ -161,7 +198,7 @@ def _cell_params(Mc, topa=8, nc=None, full_grid=False):
     L, c01, c02, c12, sgn = _axes_from_cell(Mc)
     ca, sa = _azimuth_grid(c01)                     # half turn iff perpendicular (see replica_gpu)
     return (float(L[0]), float(L[1]), float(L[2]), c01, c02, c12, sgn,
-            _DIRS if full_grid else _adaptive_dirs(Mc), topa, ca.to(FP), sa.to(FP), nc)
+            _DIRS if full_grid else _adaptive_dirs(Mc, qmax), topa, ca.to(FP), sa.to(FP), nc)
 
 
 def _stage_compute(Q, m, P):
@@ -214,8 +251,18 @@ def _stage_compute(Q, m, P):
 
 
 def _gpu_stage(frames, Mc, topa=8, nc=None, full_grid=False):
-    """Eager wrapper: pad this batch then run the pure-torch stage compute."""
-    P = _cell_params(Mc, topa, nc, full_grid)        # validates the depth before any GPU work
+    """Eager wrapper: pad this batch then run the pure-torch stage compute. The anchor grid is chosen per frame
+    (_coarse_ok on the frame's own largest |q|); a batch that needs both grids runs as two sub-batches whose
+    outputs are put back in frame order, so no frame's grid depends on the frames batched with it."""
+    qf = _frame_qmax(frames)
+    if not full_grid:
+        ok = _coarse_ok(Mc, qf)
+        if ok.any() and not ok.all():
+            parts = [np.flatnonzero(ok), np.flatnonzero(~ok)]
+            res = [_gpu_stage([frames[j] for j in p], Mc, topa, nc) for p in parts]
+            inv = torch.as_tensor(np.argsort(np.concatenate(parts)), device=DEV)
+            return tuple(torch.cat(t)[inv] for t in zip(*res))
+    P = _cell_params(Mc, topa, nc, full_grid, float(qf.max()) if len(qf) else 0.0)   # validates the depth first
     Pmax = max(len(f) for f in frames)
     Q, m = pad(frames, Pmax)
     return _stage_compute(Q, m, P)
@@ -235,7 +282,7 @@ def _cpu_stage(best, pol, mp, mainb, Mc):
 
 
 def index_known_gpu_cell_batch(frames, Mc, topa=8, nc=None, full_grid=False):
-    """Returns list of M (3x3 np) or None, one per frame -- single batched pass over all F.
+    """Returns list of M (3x3 np) or None, one per frame -- one batched pass (two if the frames need both grids).
     topa / nc / full_grid set the search depth (see _cell_params); the defaults are the shipped search."""
     return _cpu_stage(*_gpu_stage(frames, Mc, topa, nc, full_grid), Mc)
 
@@ -349,8 +396,8 @@ def _bucket(p, buckets):
 
 
 def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS):
-    """Graphed known-cell indexer. Sorts frames by peak count and routes each B-batch to the
-    smallest Pmax bucket that fits, replaying a per-bucket captured stage graph (host kernel
+    """Graphed known-cell indexer. Sorts frames by anchor grid, then peak count, and routes each B-batch to the
+    smallest Pmax bucket that fits, replaying a per-(bucket, grid) captured stage graph (host kernel
     dispatch collapsed). Because each frame indexes INDEPENDENTLY (known cell, no cross-frame
     coupling) and padding is masked out, this is BIT-IDENTICAL to index_known_gpu_cell_batch and
     full-rate -- the sort just makes each graph's fixed Pmax tight instead of over-padding the
@@ -358,18 +405,23 @@ def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS):
     (analytic solve, ~1e-13 vs linalg). CPU / capture-unsupported -> eager."""
     if DEV != "cuda":
         return [M for i in range(0, len(frames), B) for M in index_known_gpu_cell_batch(frames[i:i + B], Mc)]
-    P = _cell_params(Mc); cell = tuple(np.asarray(Mc, float).ravel().round(6))
-    order = sorted(range(len(frames)), key=lambda i: len(frames[i]))   # size-homogeneous batches
+    qf = _frame_qmax(frames); ok = _coarse_ok(Mc, qf)    # each frame's anchor grid (see _gpu_stage)
+    Ps = {g: _cell_params(Mc, qmax=float(qf[ok == g].max())) for g in set(ok.tolist())}
+    cell = tuple(np.asarray(Mc, float).ravel().round(6))
+    order = sorted(range(len(frames)), key=lambda i: (not ok[i], len(frames[i])))   # by grid, then size-homogeneous
     out = [None] * len(frames)
     for s in range(0, len(order), B):
         chunk = order[s:s + B]; fb = [frames[j] for j in chunk]; Fb = len(fb)
         bkt = _bucket(max(len(f) for f in fb), buckets)
-        if bkt is None:                                   # frame(s) bigger than any bucket
+        grids = set(ok[chunk].tolist())
+        if bkt is None or len(grids) > 1:                 # frame(s) bigger than any bucket, or the chunk on both grids
             res = index_known_gpu_cell_batch(fb, Mc)
         else:
-            G = _GRAPHS.get((cell, B, bkt))
+            P = Ps[grids.pop()]
+            key = (cell, B, bkt, len(P[7]))               # the grid is baked into a captured graph: key on it
+            G = _GRAPHS.get(key)
             if G is None:
-                G = _GRAPHS[(cell, B, bkt)] = _StageGraph(P, B, bkt)
+                G = _GRAPHS[key] = _StageGraph(P, B, bkt)
             best, pol, mp, mainb = G.run(*_pad_fixed(fb, B, bkt))
             res = _cpu_stage(best[:Fb], pol[:Fb], mp[:Fb], mainb[:Fb], Mc)
         for j, r in zip(chunk, res):
@@ -403,8 +455,8 @@ def index_fused(frames, Mc, B=32, topa=8, nc=None, full_grid=False):
     ms/frame fp32 / 0.33 fp64 -- 6.6x (fp32) / 4.3x (fp64) over index_all_graph -- with per-frame output
     numerically equivalent in fp64 (max|ΔM| 1.42e-13; rate + lattice identical in both precisions,
     80/115 on 120 cxidb) to the stock engine.
-    Sorts frames by peak count so each batch pads to its own tight Pmax. Requires cupy on a GPU; falls
-    back to index_all_graph (graph path) when cupy is unavailable or on CPU.
+    Sorts frames by anchor grid (see _gpu_stage), then by peak count so each batch pads to its own tight Pmax.
+    Requires cupy on a GPU; falls back to index_all_graph (graph path) when cupy is unavailable or on CPU.
 
     Throughput scales with the batch B: anneal and refine give each frame one thread-block, so B
     still sets their occupancy (obj splits its candidates across blockIdx.y since #165, but that did
@@ -439,7 +491,8 @@ def index_fused(frames, Mc, B=32, topa=8, nc=None, full_grid=False):
     except Exception:
         return _unfused(frames, Mc, B, topa, nc, full_grid)
     cap = _fk.max_peaks()
-    order = sorted(range(len(frames)), key=lambda i: len(frames[i]))   # tight per-batch Pmax
+    ok = np.ones(len(frames), bool) if full_grid else _coarse_ok(Mc, _frame_qmax(frames))
+    order = sorted(range(len(frames)), key=lambda i: (not ok[i], len(frames[i])))   # by grid, tight per-batch Pmax
     fits = [j for j in order if len(frames[j]) <= cap]
     over = [j for j in order if len(frames[j]) > cap]
     out = [None] * len(frames)

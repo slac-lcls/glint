@@ -240,10 +240,18 @@ Two scoping notes that bite if you skip them:
   costs nothing (23.9 vs 24.0 ms/frame) — it trades 0.5° → 1° step for the missing half, which the
   annealer absorbs. Sweeping half a cone on oblique cells was a real bug, worth 28–37 points; see the
   resolved entry under "Good first tasks".
-- The 16,384 → 4,096 adaptive anchor grid (`_adaptive_dirs`, angles within 2° of 90°; rate-neutral on
-  orthogonal cells, ~8 pts worse on triclinic, `KC_ADAPTIVE_DIRS=0` forces full) lives in
-  **`replica_gpu_batch.py`** and applies to the batched family only. The per-frame rescue in
-  `replica_gpu.py` always sweeps the full 16,384-dir grid.
+- The 16,384 → 4,096 adaptive anchor grid (`_adaptive_dirs`) lives in **`replica_gpu_batch.py`** and applies
+  to the batched family only. The per-frame rescue in `replica_gpu.py` always sweeps the full 16,384-dir grid.
+  A frame gets the coarse grid only when the cell's angles are all within 2° of 90° **and** L0 × (that frame's
+  largest |q|) ≤ `KC_ADAPT_L0Q` (default 25; L0 = the shortest axis, the anchor). The anchor's angular basin
+  narrows as 1/(L0·qmax), so the coarse grid is rate-neutral only while L0·qmax is small. Lysozyme on cxidb-17
+  (L0·qmax ≤ 23), where it was validated, stays on it: the 120 committed frames give bit-identical output on
+  CPU torch. Before review r2 (s4-02) every orthogonal cell got it, and on synthetic stills that lost about
+  half the correct indexings once L0·qmax passed ~33 (26/60 vs 55/60 on 100×120×150 Å at 1.8 Å through
+  `StreamDriver`). Triclinic cells lose ~8 pts on it at any resolution, so oblique cells always get the full
+  grid. The choice is per frame, from its own peaks: a batch that needs both grids runs as two sub-batches,
+  so a frame's answer does not depend on its batch-mates, and the CUDA-graph cache is keyed on the grid.
+  `KC_ADAPTIVE_DIRS=0` forces the full grid everywhere.
 
 **Why the rescue recovers frames the blind pass missed.** It is *not* a smarter search. It shares the
 blind pass's annealer routine (`anneal_batch_t`, imported from `glint_fast`) but runs it on a longer

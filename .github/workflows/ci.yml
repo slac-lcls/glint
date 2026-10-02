@@ -184,6 +184,17 @@ jobs:
       - name: experiments/test_escalation.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_escalation.py
+
+      # hybrid_index(select=...): "first" (default) is the shipped pick; "matched" runs the known-cell search on
+      # every frame and keeps the consistent candidate matching the most peaks. Scripted indexers, torch stubbed.
+      - name: experiments/test_select_matched.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_select_matched.py
+      # The CrystFEL --indexing=file solution file puts the axes in the setting its lattice code names: with a
+      # reference cell, monoclinic codes get the reference's setting (the r136 mCb rejection); tetragonal etc. unchanged.
+      - name: experiments/test_solution_file.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_solution_file.py
       - name: experiments/test_cell_registry.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cell_registry.py

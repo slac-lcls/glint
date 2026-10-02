@@ -326,7 +326,8 @@ changes three things and adds a fourth:
 
 Two cautions travel with it. The driver's live accept gate (`min_inliers`, `min_inlier_frac`) is looser than
 the paper's strict bar, and on lattice-free frames it accepts about half of the sparse ones, so a yield read off
-`indexed` is a live-gate yield: compare the recorder's strict column (glint#214 adds the calibrated floor). And
+`indexed` is a live-gate yield: compare the recorder's strict column, or turn on the calibrated floor
+(`null_floor=`, glint#214). And
 the effort policy's tier costs are per-hit costs at B=120; at the B=20 the replays use the same search is dearer
 per hit, so pass `tiers=` measured at the batch size you run.
 

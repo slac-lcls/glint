@@ -58,6 +58,8 @@ STEPS = [
     "experiments/test_watchdog_fanout_guard.py",
     "experiments/test_retry_cascade.py",
     "experiments/test_escalation.py",
+    "experiments/test_select_matched.py",
+    "experiments/test_solution_file.py",
     "experiments/test_cell_registry.py",
     "experiments/test_per_lattice.py",
     "experiments/test_live_gate_floor.py",           # also in the torch-CPU job, where its real-frame half runs

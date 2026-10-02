@@ -26,10 +26,12 @@ Run GLINT blind on real SFX datasets and judge output against established indexe
   LUTE's CrystFEL builds lack (none is compiled with FFBIDX).
 - **Landed since August:** the `--integrate` path and the `--images` front end are exposed and smoke-tested;
   the streaming driver has a named cell registry and a per-frame event trace (#199), pixel and peaks-in replay
-  under a CrystFEL geometry (#200, #203), a merge class chosen per sample (#186), and two recorded replays with
-  provenance in [`docs/streaming_replay.md`](docs/streaming_replay.md).
-- **Open on the driver:** the live gate's chance floor on sparse frames (#214, `null_floor=`); index before
-  compress on the DRP — ring slots for hits only and pixels kept for the retroactive rescues shipped in #212,
+  under a CrystFEL geometry (#200, #203), a merge class chosen per sample (#186), an opt-in chance floor on the
+  live gate fitted on a lattice-free null (#214, `null_floor=`), and two recorded replays with provenance in
+  [`docs/streaming_replay.md`](docs/streaming_replay.md).
+- **Open on the driver:** the chance floor in the published arm, re-fitted per detector, peak finder, cell family,
+  search depth and HKL tolerance (its constants are cxidb-17's); index before compress on the DRP — ring slots
+  for hits only and pixels kept for the retroactive rescues shipped in #212,
   the reducer-side wiring has not; the adaptive-effort arms rerun at the batch size the cost table was measured
   at (#213 checked the mechanism at B=20); deployment recipes for `effort=` per beamline rate. The option map
   is [`docs/stream_driver_options.md`](docs/stream_driver_options.md).
@@ -75,8 +77,9 @@ what closed, and for the levers that were tried and rejected. The live front is 
   exactly at every I/σ floor. It is **not a live merge** — `--facts` carries the current gap.
 - **Adaptive effort** (#213, merged): the known-cell search depth follows the hit rate, and the spare GPU
   time buys a chance-controlled deep search on the misses (#208, #211). Measured as a mechanism at B=20 on one
-  A100; the cost table it reasons with is B=120. Open: `tiers=` measured per batch size and per GPU, and the
-  null floor on the live gate (#214) so the driver's `indexed` count means what it says.
+  A100; the cost table it reasons with is B=120. Open: `tiers=` measured per batch size and per GPU. The live
+  gate's chance floor (#214, `null_floor=`) landed as an opt-in; on by default is the step that makes the
+  driver's `indexed` count mean what it says.
 - **Selection, not search** (#215, open): keep each frame's best-matching consensus-consistent candidate
   instead of the first that fits; the joint multi-shot experiments found the gain in the selection, not in
   coupling the cells.

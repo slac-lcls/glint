@@ -105,6 +105,10 @@ def main():
                     help="sparse mode: give frames that still fail the observable gate a deeper known-cell search, "
                          "accepted only if the fit beats all 32 of its own azimuth-scrambled copies (sequential "
                          "null, ~8 searches per missed frame). Off by default")
+    ap.add_argument("--select", choices=("first", "matched"), default="first",
+                    help="sparse mode: which consensus-consistent candidate a frame keeps. first = the first N-best "
+                         "cell, the known-cell search only if there is none (default); matched = the known-cell search "
+                         "on every frame, keep whichever candidate matches the most peaks")
     ap.add_argument("--gate", choices=("none", "strict", "floor"), default="none",
                     help="what a frame must satisfy to be WRITTEN as a crystal. none (default): every registration, "
                          "as before -- with --cell that is nearly every frame, since a known-cell search always "
@@ -154,8 +158,10 @@ def main():
                     help="Bravais lattice code (e.g. tPc tetragonal, oP orthorhombic). Labels the "
                          "--tofile solution file, and with --images --integrate also names the Laue "
                          "class the per-frame axis setting is standardized under. Default and 'aP' "
-                         "both mean unconstrained: the file is labelled aP and the setting is "
-                         "decided by axis lengths alone")
+                         "both mean unconstrained: the file is labelled aP. The solution file's axis "
+                         "setting: tetragonal/orthorhombic/hexagonal codes get the standard setting "
+                         "(unique axis c); every other code (aP, monoclinic, hR) gets the setting of "
+                         "--cell when it is given, else the one decided by axis lengths alone")
     ap.add_argument("-o", "--out", default="glint.stream")
     args = ap.parse_args()
     if (args.peaks or args.images) and not args.geom:
@@ -200,7 +206,7 @@ def main():
             from glint.cascade import external_cascade
             casc = external_cascade(args.cascade)
         results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest, cascade=casc,
-                                      escalate=args.escalate or None)
+                                      escalate=args.escalate or None, select=args.select)
     if args.gate != "none":                                      # before --integrate / --tofile / the stream
         from glint.hybrid_stream import gate_results
         stats["n_gated"] = gate_results(results, frames, args.gate, floor=gate_floor)
@@ -261,9 +267,9 @@ def main():
         if args.fromfile and not args.tofile:
             print("  note: --fromfile is deprecated, use --tofile (GLINT WRITES this file; "
                   "'fromfile' was named for CrystFEL, which reads it)", file=sys.stderr)
-        from glint.predict import write_fromfile
+        from glint.predict import write_solution_file
         lattice_code = args.lattice or "aP"
-        nsol = write_fromfile(results, sol_path, lattice_code)
+        nsol = write_solution_file(results, sol_path, lattice_code, ref_cell=Mc_known)
         print(f"  solution file      : {nsol} ({lattice_code}) -> {sol_path}"
               f"  [indexamajig --indexing=file --fromfile-input-file={sol_path} --tolerance=10,10,10,3]")
 

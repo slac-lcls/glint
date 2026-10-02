@@ -9,7 +9,9 @@ glint.merge_scale.frame_scale is now the one rule: merge only if n > 5 and mean(
 are counted in stats()["refused_frames"]. Frames that pass are merged exactly as before (same v and w).
 Finding s1-05, same lines: the default I/sigma bins started at 0 with a strict >, so every I <= 0 measurement was
 dropped -- a selection on the sign of I that biases weak reflections up and flatters Rsplit. The bins now start
-at -inf; stats(thr=0.0) still gives the I > 0 numbers.
+at -inf. On the same merged frames stats(thr=0.0) gives the old I > 0 CC1/2, CC*, Rsplit (to a few ulp), unique,
+redundancy and completeness; stats()["measurements"] is not thresholded (every merged row, I <= 0 included),
+and the old I > 0 count is unique x redundancy at thr=0.0. Check 6 pins both.
 
   PYTHONPATH=. python experiments/test_merge_frame_gate.py      # exit 0 = all pass  (numpy only, ~5 s)
 """
@@ -127,22 +129,34 @@ with tempfile.TemporaryDirectory() as td:
           line[0] if line else (out.stdout + out.stderr)[-300:])
 
 print("\n6. no measurement is dropped on the sign of I (review r2 s1-05): weak data, <T>/sigma = 0.5")
-acc_w = MergeAccumulator(ops=laue_ops_4mmm()); n_all = 0; Tw = rng.exponential(5.0, NU)
+acc_w = MergeAccumulator(ops=laue_ops_4mmm()); n_all = 0; n_pos = 0; Tw = rng.exponential(5.0, NU)
 for i in range(400):
     j = rng.choice(NU, 250, replace=False); sig = np.full(250, 10.0)
     I = Tw[j] + rng.normal(0, 1, 250) * sig
+    I[np.abs(I) < 0.05] = 0.0                       # some rows exactly on the I/sigma = 0 edge: I > 0 is strict
     acc_w.add_frame(U[j], I, sig, i, values=I, weights=1 / sig ** 2)   # explicit v, w: scaling out of the picture
-    n_all += 250
+    n_all += 250                                    # every row here is finite
+    n_pos += int((I > 0).sum())
 st = acc_w.stats()
-check("default stats() counts every measurement", st["measurements"] == n_all, f"{st['measurements']}/{n_all}")
+check("default stats() counts every measurement",
+      st["measurements"] == n_all and round(st["unique"] * st["redundancy"]) == n_all,
+      f"measurements {st['measurements']}, unique x redundancy {st['unique'] * st['redundancy']:.0f}, rows {n_all}")
 mk = acc_w.merged_by_key(); keys = np.array(list(mk)); est = np.array([mk[k] for k in keys])
 from glint.stream_driver import _asu_key  # noqa: E402
 truth = dict(zip(_asu_key(U, laue_ops_4mmm()).tolist(), Tw))
 bias = float(np.mean(est - np.array([truth[k] for k in keys.tolist()])))
 check("merged intensity unbiased (|bias| < 0.5 on <T> = 5)", abs(bias) < 0.5, f"bias {bias:+.2f}")
 s0 = acc_w.stats(thr=0.0)
-check("stats(thr=0.0) is the I > 0 selection", s0["unique"] <= st["unique"] and s0["redundancy"] < st["redundancy"],
+# unique x redundancy is the number of rows in the thresholded sums, so this pins the selection to I > 0
+# exactly: an I/sigma > 1 floor or side="right" in stats() gives fewer rows, side="right" in add_frame
+# puts the I = 0 rows above the 0 floor
+check("stats(thr=0.0) is the I > 0 selection", round(s0["unique"] * s0["redundancy"]) == n_pos,
+      f"unique x redundancy {s0['unique'] * s0['redundancy']:.0f}, I > 0 rows fed in {n_pos}; "
       f"redundancy {s0['redundancy']:.1f} (I>0) vs {st['redundancy']:.1f} (all)")
+# "measurements" is n_meas, counted at add time and not thresholded: every finite row merged, I <= 0
+# included, whatever thr is. It is NOT the old I > 0 count; that is unique x redundancy above.
+check("stats(thr=0.0)['measurements'] is every finite row, not thresholded", s0["measurements"] == n_all,
+      f"{s0['measurements']}/{n_all}")
 
 print(f"\n{'FAILURES: ' + ', '.join(FAILS) if FAILS else 'ALL PASS'}")
 sys.exit(1 if FAILS else 0)

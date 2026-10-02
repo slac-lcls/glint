@@ -536,8 +536,8 @@ class MergeAccumulator:
         # bucket j holds measurements passing thr[j] but not thr[j+1], so summing j>=J reproduces
         # the batch selection `snr > thr[J]` EXACTLY. side="left" makes it strictly-greater, and
         # bucket -1 (snr <= thr[0]) is DROPPED rather than folded into 0. The default bins start at
-        # -inf, so nothing is dropped on the sign of I (review r2 s1-05); stats(thr=0.0) is the old
-        # I > 0 selection.
+        # -inf, so nothing is dropped on the sign of I (review r2 s1-05); stats(thr=0.0) sums the old
+        # I > 0 selection. n_meas counts every kept row and is not thresholded.
         b = np.searchsorted(self.thr, I / sigma, side="left") - 1
         keep = b >= 0
         if not keep.any():
@@ -579,7 +579,10 @@ class MergeAccumulator:
         return out
 
     def stats(self, thr=-np.inf, n_theoretical=None):
-        """Figures of merit from the running sums, at an I/sigma floor (default: none, I <= 0 kept)."""
+        """Figures of merit from the running sums, at an I/sigma floor (default: none, I <= 0 kept).
+
+        "measurements" is n_meas, every row merged, whatever thr is; the count above the floor is
+        unique * redundancy (the old I > 0 count at thr=0.0)."""
         j = int(np.searchsorted(self.thr, thr, side="left"))
         r = slice(0, self.n_rows)
         sw = self.sw[r, :, j:].sum(2); swv = self.swv[r, :, j:].sum(2); cnt = self.cnt[r, :, j:].sum(2)

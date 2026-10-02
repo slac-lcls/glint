@@ -1,14 +1,18 @@
 """Self-contained SFX merge + half-set statistics from a GLINT .stream (no CrystFEL needed).
 
 Parse (frame, h,k,l, I, sigma) rows, reduce hkl to the 4/mmm asymmetric unit, Monte-Carlo merge
-(per-frame linear scale to the common mean, then inverse-variance mean per unique reflection), and
+(per-frame linear scale to the common mean, frames whose mean(I) is not measured dropped, then a
+1/sigma^2-weighted mean per unique reflection), and
 report CC1/2, CC*, Rsplit, redundancy, <I/sigma>, #unique -- the standard real-data figures of merit.
 Same math as process_hkl (no partiality model). 4/mmm = ProK / lysozyme Laue group.
 
   python merge_stats.py [stream] [SYM=4/mmm]
 """
-import sys, re
+import os, sys, re
 import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from glint.merge_scale import frame_scale      # noqa: E402  the live merge's per-frame scale + gate
 
 stream = sys.argv[1] if len(sys.argv) > 1 else "/pscratch/sd/s/smarches/glint_real/prok_glint.stream"
 
@@ -65,11 +69,17 @@ print(f"{len(I)} measurements over {nf} indexed frames ({len(I)//max(nf,1)}/fram
 
 # ---- per-frame linear scale to common mean (1 pass) ----
 gmean = I[I > 0].mean()
-scale = np.ones(nf)
+# frames whose mean intensity is not measured are dropped, the live merge's rule (frame_scale,
+# review r2 s1-01/s1-04); they used to stay in raw units with scale 1
+scale = np.full(nf, np.nan)
 for fr in range(nf):
     m = frames == fr
-    if m.sum() > 5 and I[m].mean() > 0:
-        scale[fr] = gmean / I[m].mean()
+    fs = frame_scale(I[m])
+    if fs is not None:
+        scale[fr] = gmean * fs
+print(f"{int(np.isnan(scale).sum())}/{nf} frames not merged (mean(I) not measured)")
+_ok = np.isfinite(scale[frames])
+frames, H, I, S = frames[_ok], H[_ok], I[_ok], S[_ok]
 Is = I * scale[frames]
 
 # ---- asu key ----

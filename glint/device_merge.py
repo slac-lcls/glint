@@ -19,12 +19,15 @@ order, and a one-thread-per-segment sequential reduce replays the exact host add
 rounding at every step => bit-for-bit identical sw/swv, and integer-exact cnt/measurements/unique.
 
 The accumulands (scale, v, w, w*v, snr bucket, asu key) are computed host-side with the SAME numpy
-ops as the host path -- notably scale = 1/I.mean() (numpy's pairwise sum), which a cupy reduction
-would round differently -- so the staged values are identical before the sum even starts. Only the
-scatter/reduce moves to the GPU.
+ops as the host path -- notably scale = 1/I.mean() from the host's frame_scale (numpy's pairwise
+sum, and the same refuse-unmeasured-frames gate), which a cupy reduction would round differently --
+so the staged values are identical before the sum even starts. Only the scatter/reduce moves to the
+GPU.
 """
 import os
 import numpy as np
+
+from glint.merge_scale import frame_scale
 
 try:
     import cupy as cp
@@ -60,6 +63,7 @@ class MergeAccumulatorDevice:
     stable sort + segmented sequential reduce and then reuses MergeAccumulator.stats verbatim on the
     resulting (n_unique, 2, nb) sums. Bit-identical to the host merge on the same measurements.
     """
+    n_refused = 0                                            # frames not merged (frame_scale is None)
 
     def __init__(self, snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), ops=None, cap=1 << 16):
         if not _HAVE_CP:
@@ -73,6 +77,7 @@ class MergeAccumulatorDevice:
         self.ops = ops if ops is not None else laue_ops_4mmm()
         self.n_meas = 0
         self.n_frames = 0
+        self.n_refused = 0                                   # same rule and counter as the host path
         self._m = 0                                          # staged measurement count
         # Staging is on the HOST: appending a few hundred rows per frame is a cheap vectorised copy,
         # whereas a per-frame H2D of these arrays is latency-bound and (measured) LOSES to the host
@@ -107,9 +112,10 @@ class MergeAccumulatorDevice:
         I, sigma, hkl = I[good], sigma[good], np.asarray(hkl, int)[good]
         if I.size == 0:
             return
-        scale = 1.0
-        if I.size > 5 and I.mean() > 0:
-            scale = 1.0 / I.mean()
+        scale = frame_scale(I)                               # host's rule: same gate, same scale
+        if scale is None:
+            self.n_refused += 1; self.n_frames += 1
+            return
         v = I * scale
         w = 1.0 / sigma ** 2
         b = np.searchsorted(self.thr, I / sigma, side="left") - 1

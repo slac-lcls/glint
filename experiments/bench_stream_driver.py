@@ -50,11 +50,17 @@ ch = sd.canon(H, OPS)
 key = ch[:, 0].astype(np.int64) * 10 ** 8 + ch[:, 1] * 10 ** 4 + ch[:, 2]
 gmean = I[I > 0].mean()
 nf = frames.max() + 1
-scale = np.ones(nf)
+# frames whose mean intensity is not measured are dropped, the live merge's rule (frame_scale,
+# review r2 s1-01/s1-04); they used to stay in raw units with scale 1
+scale = np.full(nf, np.nan)
 for fr in range(nf):
     m = frames == fr
-    if m.sum() > 5 and I[m].mean() > 0:
-        scale[fr] = gmean / I[m].mean()
+    fs = sd.frame_scale(I[m])
+    if fs is not None:
+        scale[fr] = gmean * fs
+print(f"{int(np.isnan(scale).sum())}/{nf} frames not merged (mean(I) not measured)")
+_ok = np.isfinite(scale[frames])
+frames, H, I, S = frames[_ok], H[_ok], I[_ok], S[_ok]
 Is = I * scale[frames]
 
 

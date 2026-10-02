@@ -105,6 +105,10 @@ def main():
                     help="sparse mode: give frames that still fail the observable gate a deeper known-cell search, "
                          "accepted only if the fit beats all 32 of its own azimuth-scrambled copies (sequential "
                          "null, ~8 searches per missed frame). Off by default")
+    ap.add_argument("--select", choices=("first", "matched"), default="first",
+                    help="sparse mode: which consensus-consistent candidate a frame keeps. first = the first N-best "
+                         "cell, the known-cell search only if there is none (default); matched = the known-cell search "
+                         "on every frame, keep whichever candidate matches the most peaks")
     ap.add_argument("--gate", choices=("none", "strict"), default="none",
                     help="what a frame must satisfy to be WRITTEN as a crystal. none (default): every registration, "
                          "as before -- with --cell that is nearly every frame, since a known-cell search always "
@@ -183,7 +187,7 @@ def main():
             from glint.cascade import external_cascade
             casc = external_cascade(args.cascade)
         results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest, cascade=casc,
-                                      escalate=args.escalate or None)
+                                      escalate=args.escalate or None, select=args.select)
     if args.gate != "none":                                      # before --integrate / --tofile / the stream
         from glint.hybrid_stream import gate_results
         stats["n_gated"] = gate_results(results, frames, args.gate)

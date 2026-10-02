@@ -71,6 +71,10 @@ def gate_results(results, frames, gate="none"):
 
 
 
+# hybrid_index(select=...): how each frame's registration is chosen among its consensus-consistent candidates.
+SELECTS = ("first", "matched")
+
+
 def _escalation_config(escalate):
     """hybrid_index's `escalate` -> the deep arm's settings, or None when it is off.
 
@@ -106,7 +110,7 @@ def _escalation_config(escalate):
     return cfg
 
 def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, cascade=None,
-                 alias_gate=None, triage_topk=None, escalate=None):
+                 alias_gate=None, triage_topk=None, escalate=None, select="first"):
     """Fully-blind hybrid. (1) N-BEST blind-index every frame (top-`nbest` distinct cells, not just
     argmax). (2) consensus over the POOLED N-best hypotheses (aliases scatter, truth clusters ->
     sturdier cell). (3) per frame pick the highest-scored N-best cell consistent with the consensus
@@ -129,7 +133,16 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     the strict count from 366 to 387 (RESULTS_escalation_k32.md, job 39181473). An escalated frame is labelled `escalated` with its null
     record, and both stream writers carry that into the chunk as glint/escalated and the null's numbers
     (glint.stream.escalation_lines). It is A lattice of the frame, not necessarily the one the shipped
-    search would have found: on a double hit it can be the other crystal."""
+    search would have found: on a double hit it can be the other crystal.
+
+    `select` chooses each frame's registration in steps (3)-(4). "first" (the default, the rule above): the
+    first consensus-consistent N-best cell, the known-cell search only when there is none. "matched": the
+    known-cell search runs on EVERY frame and the frame keeps whichever consensus-consistent candidate (its
+    N-best cells, then the known-cell fit) matches the most peaks (matched_strict; ties keep that order). On
+    the cxidb-17 480 set this took 366 to 370 (exp/joint-ceiling RESULTS.md, "ADMM-lite round 0"); see
+    experiments/select_matched/ for the preregistered check. It costs one known-cell search per frame."""
+    if select not in SELECTS:
+        raise ValueError(f"hybrid_index(select=...): one of {SELECTS}, got {select!r}")
     esc_cfg = _escalation_config(escalate)
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
@@ -218,17 +231,31 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
             if voters:
                 Mc = alias_gate.confirm_frames(Mc, voters)       # may return a tighter alias, or None
 
-    results = []; n_idx = n_resc = n_nb = 0
+    results = []; n_idx = n_resc = n_nb = n_kc = n_swap = 0
     for q, nb, t1, meta in zip(frames, NB, top1, images):
         M = None
-        if Mc is not None:                                       # pick best consensus-consistent N-best hypothesis
+        if Mc is not None and select == "matched":              # best-matching consistent candidate, KC included
+            cands = [c for c, _ in nb if same_lattice(c, Mc)]
+            nblind = len(cands)
+            Mr = index_known_gpu_cell(q, Mc); n_kc += 1
+            if Mr is not None and same_lattice(Mr, Mc):
+                cands.append(Mr)
+            if cands:
+                j = int(np.argmax([matched_strict(c, q) for c in cands]))   # first max: blind order, then KC
+                M = cands[j]
+                if j == nblind:
+                    n_resc += 1                                  # the known-cell fit
+                else:
+                    n_nb += (M is not t1)
+                n_swap += (nblind > 0 and j > 0)                 # the shipped rule would have kept cands[0]
+        if Mc is not None and select == "first":                 # pick best consensus-consistent N-best hypothesis
             for c, _ in nb:
                 if same_lattice(c, Mc):
                     M = c
                     n_nb += (c is not t1)                        # recovered via a non-top-1 hypothesis
                     break
-        if M is None and Mc is not None:                         # cell-general GPU known-cell rescue (ffbidx-style)
-            Mr = index_known_gpu_cell(q, Mc)
+        if M is None and Mc is not None and select == "first":   # cell-general GPU known-cell rescue (ffbidx-style)
+            Mr = index_known_gpu_cell(q, Mc); n_kc += 1
             if Mr is not None and same_lattice(Mr, Mc):
                 M = Mr; n_resc += 1
         if M is None and Mc is None:                             # no consensus formed -> top-1 fallback
@@ -292,6 +319,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     edges = np.round(np.sort(np.linalg.norm(Mc, axis=0)), 1) if Mc is not None else None
     stats = {"n": n, "n_blind": n_blind, "support": support, "edges": edges, "n_nbest": n_nb,
              "n_resc": n_resc, "n_casc": n_casc, "n_idx": n_idx, "Mc": Mc,
+             "select": select, "n_kc_searches": n_kc, "n_select_swaps": n_swap,
              "n_pool": n_pool, "support_frac": (support / n_pool) if n_pool else None,
              "n_voters": len(vote_idx) if Mc_known is None else 0, "triage_topk": triage_topk,
              "n_refine": n_refine,
@@ -345,7 +373,11 @@ def _report(stats, out):
         print(f"  consensus cell     : {stats['edges']} A  support {stats['support']}{share}")
     if stats.get("n_nbest"):
         print(f"  N-best recovered   : {stats['n_nbest']} (consensus-consistent non-top-1 hypothesis)")
-    print(f"  rescued failures   : {stats['n_resc']}")
+    if stats.get("select") == "matched":
+        print(f"  known-cell picks   : {stats['n_resc']} (select=matched: the known-cell fit matched the most peaks; "
+              f"{stats['n_select_swaps']} frames changed pick, {stats['n_kc_searches']} known-cell searches)")
+    else:
+        print(f"  rescued failures   : {stats['n_resc']}")
     if stats.get("n_casc"):
         print(f"  cascade recovered  : {stats['n_casc']} (external fallback on still-unindexed)")
     if "n_escalated" in stats:

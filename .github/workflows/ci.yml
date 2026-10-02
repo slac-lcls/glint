@@ -299,6 +299,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_nonfinite_q_rows.py
 
+      # Reflection-row column order of the stream writers: one planted value per column, read back by
+      # position the way CrystFEL reads it and by the header's names; write_stream_integrated and
+      # StreamWriter byte-identical; the column header matches CrystFEL's. Swapping I and sigma(I)
+      # in predict._write_chunk passed every other step here (review s8-01).
+      - name: experiments/test_stream_columns.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_stream_columns.py
+
       - name: experiments/test_cli_smoke.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cli_smoke.py

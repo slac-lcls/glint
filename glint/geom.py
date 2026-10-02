@@ -185,6 +185,42 @@ def _q_from_panels(fs_arr, ss_arr, specs, wavelength_A):
     return (s_hat - np.array([0.0, 0.0, 1.0])) / wavelength_A
 
 
+# The one rule for which q rows an indexer may see. Two kinds of row reach the indexers today and each
+# loses the WHOLE frame, not just the row:
+#   * non-finite (NaN/inf): a peak on no panel comes back from lute_bridge.peaks_to_q as a NaN row, and
+#     the --images route kept it (glint review s7-05); the known-cell and blind searches then return
+#     nothing for that frame.
+#   * zero length: a peak exactly on the beam centre maps to q = [0, 0, 0] (the geometry above returns
+#     that exactly when r_x = r_y = 0). The blind weight 1/|q| is then inf, every M3 start goes NaN, and
+#     the frame indexes to None / [] (glint review s4-05). Such a row carries no lattice information.
+# Q_FLOOR is in 1/A and sits far below anything physical: a peak one pixel from the beam is ~5.8e-4,
+# and the smallest |q| among the 172,624 real peaks in this repo's data sets is 0.0248.
+Q_FLOOR = 1e-6
+_Q_FLOOR2 = Q_FLOOR * Q_FLOOR
+
+
+def q_rows_ok(q):
+    """Boolean mask over the rows of an (n, 3) q array: True where all three components are finite
+    and |q| > Q_FLOOR. Everything that feeds q to an indexer filters with this, so the rule lives here
+    once instead of in each engine."""
+    q = np.asarray(q, float)
+    return np.isfinite(q).all(1) & (np.einsum("ij,ij->i", q, q) > _Q_FLOOR2)
+
+
+def clean_q(q):
+    """`q` without the rows `q_rows_ok` rejects. When every row passes, `q` itself is returned (the same
+    object, unconverted), so a clean frame goes through every caller exactly as before. That common case
+    costs one |q|^2 pass (a NaN or inf component makes it non-finite) and copies nothing."""
+    a = np.asarray(q)
+    if a.ndim != 2 or len(a) == 0:
+        return q
+    s = np.einsum("ij,ij->i", a, a)
+    if np.isfinite(s).all() and (s > _Q_FLOOR2).all():
+        return q
+    ok = q_rows_ok(a)
+    return q if ok.all() else a[ok]
+
+
 def _panel_z(name, p):
     """clen + coffset [m], insisting BOTH are literals.
 
@@ -219,10 +255,11 @@ def _specs_from_geom_panels(panels):
 def peaks_to_q(peaks, geom, wavelength_A=None):
     """peaks: (N,2) [fs, ss] in data-array coords (single panel ok). Returns (M,3) q in 1/A.
 
-    Peaks outside every panel are DROPPED, so M <= N and rows do not correspond positionally to the
-    input. That is this entry point's contract; `lute_bridge.peaks_to_q` shares the same geometry
-    (via `_q_from_panels`) but keeps NaN rows instead, because its streaming caller needs the
-    correspondence. Pick by which contract you want, not by which import is closer to hand.
+    Peaks outside every panel are DROPPED, and so is a peak on the beam centre (|q| <= Q_FLOOR, see
+    q_rows_ok), so M <= N and rows do not correspond positionally to the input. That is this entry
+    point's contract; `lute_bridge.peaks_to_q` shares the same geometry (via `_q_from_panels`) but
+    keeps NaN rows instead, because its streaming caller needs the correspondence. Pick by which
+    contract you want, not by which import is closer to hand.
     """
     peaks = np.asarray(peaks, float).reshape(-1, 2)
     panels = geom["panels"] if isinstance(geom, dict) and "panels" in geom else geom
@@ -232,4 +269,4 @@ def peaks_to_q(peaks, geom, wavelength_A=None):
     if len(peaks) == 0:
         return np.empty((0, 3))
     q = _q_from_panels(peaks[:, 0], peaks[:, 1], _specs_from_geom_panels(panels), lam)
-    return q[np.isfinite(q).all(1)]
+    return q[q_rows_ok(q)]

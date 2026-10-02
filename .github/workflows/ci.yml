@@ -236,6 +236,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_geom_bridge.py
 
+      # A NaN/inf or zero-length q row costs the frame that ROW, never the whole frame (review s4-05: a q = 0
+      # row made the blind weight inf; s7-05: --images kept the NaN row of an off-panel peak). Here: the row rule,
+      # the --peaks and --images loaders (h5py), StreamDriver's front doors and hybrid_index with stub indexers.
+      # Its torch half -- the real engines on simulated frames -- runs in the torch-CPU job and skips here.
+      - name: experiments/test_nonfinite_q_rows.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_nonfinite_q_rows.py
+
       - name: experiments/test_cli_smoke.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cli_smoke.py
@@ -462,3 +470,11 @@ jobs:
       - name: experiments/test_cli_gate.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cli_gate.py
+
+      # The real engines with one zero / NaN / inf q row: index_blind_fast, index_blind_nbest, the scalar
+      # index_blind, index_known_gpu_cell, the batch and hybrid_index(Mc_known) return EXACTLY the clean frame's
+      # answer, and the 1/|q| weight is 0 at q = 0 (review s4-05, s7-05). Simulated frames, CPU torch; its numpy
+      # half runs in the CPU job too. Self-skips the torch half below 1.12.
+      - name: experiments/test_nonfinite_q_rows.py (real engines, CPU torch)
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_nonfinite_q_rows.py

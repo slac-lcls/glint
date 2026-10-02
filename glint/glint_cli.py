@@ -36,7 +36,7 @@ def _lattice_type_from_lattice_code(lattice_code):
 
 def _load_frames(args):
     """Return (frames [list of (N,3) q in 1/A], images [list of {image,event}])."""
-    from glint.geom import parse_geom, read_crystfel_peaks, peaks_to_q
+    from glint.geom import clean_q, parse_geom, read_crystfel_peaks, peaks_to_q
     if args.qframes:
         from glint.glint_fast import load
         frames = [np.asarray(q, float) for q in load(args.qframes)]
@@ -61,6 +61,9 @@ def _load_frames(args):
         for ch in chunks:
             frames.append(peaks_to_q(ch["peaks"], geom, wavelength_A=args.wavelength))
             images.append({"image": ch["image"] or "glint.cxi", "event": ch["event"]})
+    # Every route, --qframes included: drop NaN/inf and zero-length rows before --min-peaks counts them
+    # (glint.geom.q_rows_ok). --images and --peaks already did; a clean frame is the same object.
+    frames = [clean_q(q) for q in frames]
     keep = [(q, im) for q, im in zip(frames, images) if len(q) >= args.min_peaks]
     if args.N:
         keep = keep[:args.N]

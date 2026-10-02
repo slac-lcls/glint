@@ -46,6 +46,7 @@ except Exception:                                            # pragma: no cover 
 
 from glint.lattice import LENGTH_ORDER_LAUE, UNIQUE_C_LAUE, cell_to_Ar, standardize_axes
 from glint.lute_bridge import peaks_to_q
+from glint.geom import q_rows_ok      # drops NaN/inf (off-panel) and |q| ~ 0 (beam-centre) rows at every front door
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
                            _hkl_grid, project_q)
 from glint.peakfinder_v4 import PeakFinderV4
@@ -1652,7 +1653,7 @@ class StreamDriver:
         pkq = None
         if fs.size >= self.min_peaks:
             qq = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
-            ok = np.isfinite(qq).all(1)
+            ok = q_rows_ok(qq)
             qq = qq[ok]
             if self.stream_peaks and len(qq) >= self.min_peaks:
                 pkq = np.stack([fs[ok], ss[ok], pi[ok]], 1)
@@ -1737,7 +1738,7 @@ class StreamDriver:
             pkq = None
             if fs.size >= self.min_peaks:
                 q = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
-                ok = np.isfinite(q).all(1)
+                ok = q_rows_ok(q)
                 q = q[ok]
                 if self.stream_peaks and len(q) >= self.min_peaks:
                     pkq = np.stack([fs[ok], ss[ok], pi[ok]], 1)
@@ -1757,7 +1758,7 @@ class StreamDriver:
         for q in qs:
             q = None if q is None else np.asarray(q, float).reshape(-1, 3)
             if q is not None:
-                q = q[np.isfinite(q).all(1)]
+                q = q[q_rows_ok(q)]
             qmap.append(q if q is not None and len(q) >= self.min_peaks else None)
         return self._warmup_from_qmap(qmap, fanout)
 
@@ -1817,7 +1818,7 @@ class StreamDriver:
         q = None
         if fs.size >= self.min_peaks:
             qq = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
-            ok = np.isfinite(qq).all(1)                      # peaks_to_q returns NaN rows off-panel
+            ok = q_rows_ok(qq)                               # peaks_to_q returns NaN rows off-panel
             qq = qq[ok]
             if len(qq) >= self.min_peaks:
                 q = qq
@@ -1859,7 +1860,7 @@ class StreamDriver:
         q = pkq = None
         if fs.size >= self.min_peaks:
             qq = peaks_to_q(fs, ss, self.panels, self.clen_m, self.wavelength_A)
-            ok = np.isfinite(qq).all(1); qq = qq[ok]
+            ok = q_rows_ok(qq); qq = qq[ok]
             if len(qq) >= self.min_peaks:
                 q = qq
                 if self.stream_peaks or self.geom_refine:
@@ -1869,7 +1870,7 @@ class StreamDriver:
     def push_q(self, q, src=None):
         """Ingest one frame as reciprocal vectors (n, 3) in 1/A (q @ M = hkl). Index-only, see push_peaks."""
         q = np.asarray(q, float).reshape(-1, 3)
-        q = q[np.isfinite(q).all(1)]
+        q = q[q_rows_ok(q)]
         self._queue_q(q if len(q) >= self.min_peaks else None, n_peaks=len(q), src=src)
 
     def _queue_q(self, q, n_peaks, pkq=None, src=None):

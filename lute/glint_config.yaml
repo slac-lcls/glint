@@ -37,7 +37,7 @@ IndexGLINT:
     # int_tol: 0.002                              # model default; the CLI's 0.006 over-predicts
     #                                              (CC1/2 0.04 vs 0.28 on real data)
     #
-    # --- self-contained GPU front end: raw .cxi instead of a peak stream ---------------------------
+    # --- self-contained front end: raw .cxi instead of a peak stream (v4/pf9 peak-find on the host CPU)
     #   Comment OUT `peaks` above if you use this -- `peaks` and `images` are mutually exclusive.
     #   Then run glint_dag_images.yaml, which has no FindPeaksSFX node.
     # images: "{{ work_dir }}/run.cxi"

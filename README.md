@@ -90,8 +90,9 @@ azimuth-scrambled copies; off by default) ·
 `--gate none|strict|floor` (write a frame as a crystal only if it passes the paper's scoring bar; `floor` also
 requires `--floor NAME|a,b[,c]` for a dataset-specific chance floor; default none) ·
 `--integrate` (real I/σ) · `--tofile` (hand orientations to CrystFEL for the refined merge) ·
-`--device cpu|auto` · `-N` (limit frames). `--images raw.cxi --geom detector.geom` runs GLINT's own GPU
-peak finder on the pixels instead of reading a peak stream.
+`--device cpu|auto` · `-N` (limit frames). `--images raw.cxi --geom detector.geom` runs GLINT's own peak
+finder on the pixels instead of reading a peak stream; on this route it runs on the host CPU (numpy/scipy),
+not the GPU (the GPU finder is used by the xtc route, `experiments/xtc_bridge`, and by `StreamDriver`).
 
 ## LUTE pipeline
 
@@ -111,8 +112,8 @@ want CrystFEL in the pipeline:
 
 * **`integrate: true`** — no CrystFEL step. GLINT predicts and box-integrates its own reflections
   and writes real I/σ, so the stream flows straight through the concatenator to
-  `PartialatorMerger`. Prediction runs on the GPU; the box gather itself is host numpy on this
-  route. This is the configuration of the validated end-to-end run.
+  `PartialatorMerger`. Prediction and the box gather are host numpy on this route (the fused GPU
+  integrator is `StreamDriver`'s). This is the configuration of the validated end-to-end run.
 * **`tofile:`** — hand the orientations to `indexamajig --indexing=file`, added as a task between
   `GLINTIndexer` and `StreamFileConcatenator`, so CrystFEL's prediction refinement imposes the
   lattice symmetry. Note that `tofile:` alone is not enough: without the added task the DAG

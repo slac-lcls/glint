@@ -136,7 +136,8 @@ python -u -m glint.glint_cli \
 ```
 
 `--peakfinder stored` reuses the peakfinder8 peaks already in the `.cxi`. Use `v4` to have
-GLINT find peaks on the GPU instead.
+GLINT find peaks itself instead; on this route that runs on the host CPU (numpy/scipy), not on
+the GPU.
 
 > Leave `--top-peaks` **unset**. It is a guard against a finder over-finding on background, not
 > a speedup. Measured on 120 real frames: `200` costs ~2 points of correct-lattice rate, `100`
@@ -405,7 +406,8 @@ submit_launch_slurm.sh $(which launch_slurm) -e <exp> -r <run> \
 ```
 
 Use `glint_dag_images.yaml` instead if you are feeding `.cxi` images — it has no `FindPeaksSFX`
-node, since GLINT peak-finds on the GPU itself.
+node, since GLINT takes the peaks itself (`stored`, or `v4`/`pf9` peak-finding on the host CPU of
+the GLINT node, not on the GPU).
 
 `lute/glint_config.yaml` is the annotated config; copy the `FindPeaksSFX` and downstream merge
 sections from the standard `peakfinder8_lcls2` example.

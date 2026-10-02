@@ -95,7 +95,8 @@ def main():
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--peaks", help="CrystFEL peak-search stream (needs --geom)")
     src.add_argument("--images", help="raw detector .cxi; GLINT peak-finds it (see --peakfinder) then indexes "
-                                      "-- self-contained GPU front end (needs --geom)")
+                                      "-- no separate peak-finding step (needs --geom). On this route v4/pf9 "
+                                      "peak-finding and --integrate run on the host (numpy/scipy), not the GPU")
     src.add_argument("--qframes", help="pre-bridged q-vector FRAME blocks (1/A)")
     ap.add_argument("--geom", help="CrystFEL .geom (with --peaks or --images)")
     ap.add_argument("--wavelength", type=float, help="wavelength in A (overrides .geom)")

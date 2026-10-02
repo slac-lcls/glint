@@ -1,7 +1,9 @@
 !LUTE_DAG
 # SFX pipeline with GLINT as a SELF-CONTAINED front end: no FindPeaksSFX node. GLINT reads the raw
-# detector .cxi (`images:` in the config), peak-finds it on the GPU, and indexes -- so the 73-core
-# CPU peak-finding stage of glint_dag.yaml disappears and the run starts on the GPU node.
+# detector .cxi (`images:` in the config), takes its peaks, and indexes -- so the separate 73-core
+# peak-finding stage of glint_dag.yaml disappears and the run starts on the GPU node. The peak-finding
+# moves rather than vanishing: `peakfinder: v4 | pf9` runs on that node's host CPU (numpy/scipy, one
+# frame at a time), not on the GPU; `stored` reuses peaks already in the .cxi.
 #
 # Use this DAG only with an IndexGLINT config that sets `images:` (and NOT `peaks:`); the two are
 # mutually exclusive and the task model rejects a config that sets both or neither.

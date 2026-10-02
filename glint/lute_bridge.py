@@ -172,7 +172,8 @@ def _get_finder(name):
 
 
 def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, data_key=None,
-                    clen_scale=None, peakfinder="v4", top_n=0, ring_focus=None, per_panel=False, **pf_kw):
+                    clen_scale=None, peakfinder="v4", top_n=0, ring_focus=None, per_panel=False,
+                    event_axis=None, **pf_kw):
     """Self-contained GLINT front end: read a .cxi and bridge detector peaks to reciprocal q-vectors -- no
     CrystFEL peak-search stream in between. Returns (frames [(N,3) q in 1/A], images [{image,event}]).
 
@@ -185,7 +186,19 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
     clen/photon_energy may be per-event h5 paths; clen_scale converts encoder units to metres (auto: >10 => mm).
 
     cxi_path may also be a CrystFEL .list/.lst of .cxi files (FindPeaksSFX's result); frames from all listed
-    .cxi are concatenated so IndexGLINT is a drop-in for the .list that feeds CrystFELIndexer."""
+    .cxi are concatenated so IndexGLINT is a drop-in for the .list that feeds CrystFELIndexer.
+
+    LAYOUT (self peak-find). The image dataset goes through the SAME layout decision as integrate_cxi and
+    the --peaks route's _load_image (``predict._leading_axis_is_events``), so the three cannot read one
+    file differently. An ``(event, ss, fs)`` stack or a 2-D frame is one assembled frame per event, as
+    before. An un-assembled ``(panel, ss, fs)`` stack is ONE event, and a 4-D ``(event, panel, ss, fs)``
+    file is one panel stack per event: each slab is peak-found on its own and its peaks are mapped only
+    through the panels the .geom's integer ``dimN`` keys put on that slab, then the slabs of an event are
+    joined into one frame. Until this was added, ``data[i]`` of a panel stack was read as event ``i`` and
+    every panel's peaks went through panel 0's corner and basis, silently; a 4-D file crashed in the
+    finder. A panel stack with no slab mapping is refused by name, and so is the ambiguous case
+    (leading axis == panel count, no per-event metadata). ``event_axis`` (True = events, False = panels,
+    None = ask the file) is the override, ``--event-axis`` on the CLI. glint#148."""
     if str(cxi_path).endswith((".list", ".lst")):
         with open(cxi_path) as fh:
             paths = [ln.split()[0] for ln in fh if ln.strip() and not ln.lstrip().startswith("#")]
@@ -194,20 +207,26 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
             remaining = (n - len(frames)) if n else 0   # pass the REMAINING budget so we don't read whole files
             fr, im = frames_from_cxi(pth, geom_path, wavelength_A=wavelength_A, n=remaining, min_peaks=min_peaks,
                                      data_key=data_key, clen_scale=clen_scale, peakfinder=peakfinder,
-                                     top_n=top_n, per_panel=per_panel, **pf_kw)
+                                     top_n=top_n, ring_focus=ring_focus, per_panel=per_panel,
+                                     event_axis=event_axis, **pf_kw)
             frames += fr; images += im
             if n and len(frames) >= n:
                 break
         return (frames[:n], images[:n]) if n else (frames, images)
     import h5py
+    from glint.predict import _leading_axis_is_events, _panel_slab
     panels, glob = parse_geom(geom_path)
+    # The slab mapping, built exactly as integrate_cxi builds it: all-or-nothing, multi-panel only.
+    _slabs = [_panel_slab(p) for p in panels]
+    panel_slabs = _slabs if len(panels) > 1 and all(s is not None for s in _slabs) else None
+    n_slabs_geom = len(set(panel_slabs)) if panel_slabs is not None else 0
     data_key = data_key or glob.get("data", "/entry_1/data_1/data")
     clen_spec, en_spec, mask_key = glob.get("clen"), glob.get("photon_energy"), glob.get("mask")
     coff = float(glob.get("coffset", 0.0))
     f = h5py.File(cxi_path, "r")
     dropped = [0, 0]                                                # rows dropped by _q, frames they were in
 
-    def _q(xarr, yarr, i):                                          # (fs,ss) peaks -> q for event i
+    def _q(xarr, yarr, i, pans=panels, clean=True):                 # (fs,ss) peaks -> q for event i
         clen = _meta(clen_spec, f, i, 0.1)
         scale = clen_scale if clen_scale is not None else (0.001 if abs(clen) > 10 else 1.0)
         clen = clen * scale + coff
@@ -221,7 +240,10 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
         # these frames have no positional use for it, and handed on, ONE such row made hybrid_index drop
         # the whole frame without a word (glint review s7-05). Drop it here, with a beam-centre row
         # (|q| <= Q_FLOOR), by the same rule every indexer applies (glint.geom.q_rows_ok).
-        q = peaks_to_q(np.asarray(xarr, float), np.asarray(yarr, float), panels, clen, wl)
+        q = peaks_to_q(np.asarray(xarr, float), np.asarray(yarr, float), pans, clen, wl)
+        return _clean(q) if clean else q
+
+    def _clean(q):                                                  # drop and count unusable rows
         kept = clean_q(q)
         if len(kept) < len(q):
             dropped[0] += len(q) - len(kept); dropped[1] += 1
@@ -235,6 +257,17 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
 
     frames, images = [], []
     if peakfinder == "stored":                                     # reuse the .cxi's own peakfinder8/Cheetah peaks
+        if n_slabs_geom > 1:
+            # A stored peak is an (x, y) and nothing else. Under a slab-mapped .geom the panel windows
+            # are slab-LOCAL and overlap across slabs, so (x, y) does not say which slab it came from,
+            # and peaks_to_q's first-match-wins put every peak through the slab-0 panels' geometry --
+            # the self-peak-find defect below, on this branch (glint#148). Refuse rather than guess.
+            raise NotImplementedError(
+                f"{geom_path} maps its {len(panels)} panels onto {n_slabs_geom} data slabs (integer "
+                f"dimN keys), so a stored peak's (x, y) is slab-local and does not name its slab: "
+                f"mapping it would put every peak through the first matching panel's geometry "
+                f"(glint#148). Use peakfinder='v4' or 'pf9', which peak-find each slab and map its "
+                f"peaks through that slab's own panels.")
         rl = glob.get("peak_list", "/entry_1/result_1")
         px, py, npk = f[rl + "/peakXPosRaw"], f[rl + "/peakYPosRaw"], f[rl + "/nPeaks"]
         # top_n MUST work here too. It used to be applied only on the self-peak-find path below, so
@@ -274,39 +307,133 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
         return frames, images
 
     data = f[data_key]
-    nfr = data.shape[0] if data.ndim >= 3 else 1
+    # LAYOUT: what ONE EVENT is in this dataset, decided as integrate_cxi and _load_image decide it
+    # (glint#148). `stack` = each event is an un-assembled (slab, ss, fs) panel stack, peak-found slab by
+    # slab; otherwise each event is one assembled 2-D frame -- the only reading this front end had, so a
+    # (panel, ss, fs) stack came back as one "event" per panel, all mapped through panel 0's geometry.
+    stack = False
+    if data.ndim >= 4:
+        if data.ndim > 4 or event_axis is False:
+            raise NotImplementedError(
+                f"{cxi_path}:{data_key} has shape {data.shape}; the self peak-find front end reads a 4-D "
+                f"dataset as (event, panel, ss, fs) only, so it cannot honour "
+                f"{'event_axis=False / --event-axis panel' if event_axis is False else 'more than 4 axes'} "
+                f"here (glint#148).")
+        nfr, stack = data.shape[0], True
+    elif data.ndim == 3:
+        stacked = data.shape[0] > 1 or event_axis is not None
+        is_event = (_leading_axis_is_events(f, data, cxi_path, data_key, n_panels=len(panels),
+                                            event_axis=event_axis, panel_slabs=panel_slabs)
+                    if stacked else None)
+        if is_event is False or (is_event is None and panel_slabs is not None):
+            nfr, stack = 1, True                                   # ONE event: (slab, ss, fs)
+        else:
+            nfr = data.shape[0]                                    # (event, ss, fs), or a (1, ss, fs) frame
+    else:
+        nfr = 1
+    H, W = data.shape[-2], data.shape[-1]
+    if not stack and n_slabs_geom > 1:
+        raise NotImplementedError(
+            f"{cxi_path}:{data_key} {data.shape} is read as one assembled 2-D frame per event, but "
+            f"{geom_path} maps its panels onto {n_slabs_geom} data slabs with integer dimN keys, so its "
+            f"panel windows are slab-local and overlap: a peak's (fs, ss) names no slab and would go "
+            f"through the first matching panel's geometry (glint#148). The data and the geometry "
+            f"disagree about the layout.")
+    if stack:
+        nslab = data.shape[-3]
+        if panel_slabs is None:
+            if nslab > 1 and len(panels) > 1:
+                raise NotImplementedError(
+                    f"{cxi_path}:{data_key} {data.shape} reads as a stack of {nslab} PANELS per event, "
+                    f"but none of the geometry's {len(panels)} panels maps to a slab, so nothing says "
+                    f"whose corner and basis a slab's peaks take; reading slab i as event i put every "
+                    f"panel's peaks through panel 0's geometry (glint#148). Declare each panel's slab "
+                    f"in the .geom with an integer dimN key (e.g. `p1/dim0 = 1`, or `p1/dim1 = 1` "
+                    f"under `dim0 = %` for 4-D data); or, if this file really is one frame per EVENT, "
+                    f"pass event_axis=True / --event-axis event.")
+            groups = {0: panels}       # one slab, or a one-panel geometry: slab 0 IS the frame (as _load_image)
+        else:
+            # every panel must address the data, checked up front as integrate_spots_stack does: a
+            # mismatch is a geometry/data disagreement, not a frame with no peaks on that panel
+            for p, sl in zip(panels, panel_slabs):
+                if not 0 <= sl < nslab:
+                    raise ValueError(
+                        f"panel {p['name']}: slab {sl} does not address the {nslab}-slab stack "
+                        f"{cxi_path}:{data_key} {data.shape} (glint#148)")
+                if not (0 <= p["min_fs"] <= p["max_fs"] < W and 0 <= p["min_ss"] <= p["max_ss"] < H):
+                    raise ValueError(
+                        f"panel {p['name']}: window fs {p['min_fs']}..{p['max_fs']} x ss "
+                        f"{p['min_ss']}..{p['max_ss']} does not address the slab shape {(H, W)}; in a "
+                        f"slab-mapped .geom (integer dimN) min/max fs/ss lie WITHIN the panel's slab "
+                        f"(glint#148)")
+            groups = {sl: [p for p, ps in zip(panels, panel_slabs) if ps == sl]
+                      for sl in sorted(set(panel_slabs))}
+    else:
+        groups = {None: panels}
     if n:
         nfr = min(n, nfr)
-    cmask = None
+    good = None
     if mask_key and mask_key in f:
-        m = f[mask_key]; m = np.asarray(m[0] if m.ndim >= 3 else m)
-        cmask = (m == int(str(glob.get("mask_good", "0")), 0))     # True = good pixel
+        m = f[mask_key]
+        if stack:      # per-slab (slab, ss, fs) or one (ss, fs) for every slab; a per-event stack -> event 0's
+            m = np.asarray(m[0] if m.ndim >= 4 else m)
+        else:
+            m = np.asarray(m[0] if m.ndim >= 3 else m)
+        good = (m == int(str(glob.get("mask_good", "0")), 0))     # True = good pixel
+    masks = {k: (None if good is None else good[k] if (stack and good.ndim == 3) else good) for k in groups}
     if ring_focus is not None:                                     # KNOWN-CELL: search only the powder-ring annuli
         cell6, qlow = ring_focus
         c0 = _meta(clen_spec, f, 0, 0.1); sc = clen_scale if clen_scale is not None else (0.001 if abs(c0) > 10 else 1.0)
         e0 = _meta(en_spec, f, 0, None); wl0 = wavelength_A or (lambda_from_eV(e0) if e0 else None)
         from glint.ring_mask import ring_qmask
-        rmask = ring_qmask(panels, c0 * sc + coff, wl0, cell6, (data.shape[-2], data.shape[-1]), qlow=qlow)
-        cmask = rmask if cmask is None else (cmask & rmask)
+        for k, grp in groups.items():                              # one canvas per slab: windows overlap across slabs
+            rmask = ring_qmask(grp, c0 * sc + coff, wl0, cell6, (H, W), qlow=qlow)
+            masks[k] = rmask if masks[k] is None else (masks[k] & rmask)
     finder = _get_finder(peakfinder)
     # per_panel on a multi-panel slab: one finder per panel rectangle, so no background ring, local-max
     # window or component reaches across a panel seam (peakfinder_v4.PerPanelFinder). One panel: unchanged.
-    rects = slab_rects(panels, (data.shape[-2], data.shape[-1])) if per_panel and data.ndim in (2, 3) else None
+    rects = slab_rects(panels, (H, W)) if per_panel and not stack else None
     if rects is not None:
         from glint.peakfinder_v4 import merge_panel_peaks
     for i in range(nfr):
-        img = np.asarray(data[i] if data.ndim >= 3 else data, np.float32)
-        if rects is None:
-            pk = finder(img, mask=cmask, **pf_kw)
-        else:
-            pk = merge_panel_peaks([finder(img[a:b, c:d], mask=None if cmask is None else cmask[a:b, c:d],
-                                           **pf_kw) for (a, b, c, d) in rects], rects)
         images.append({"image": cxi_path, "event": i})
-        x, y = np.asarray(pk["x"]), np.asarray(pk["y"])
-        if top_n and len(x) > top_n:                               # keep the strongest (guards over-finding)
-            s = np.asarray(pk.get("intensity", pk.get("snr", np.zeros(len(x)))))
-            keep = np.argsort(s)[::-1][:top_n]; x, y = x[keep], y[keep]
-        q = _q(x, y, i) if len(x) else np.empty((0, 3))
-        frames.append(q if len(q) >= min_peaks else np.empty((0, 3)))         # min_peaks counts usable rows
+        if not stack:
+            img = np.asarray(data[i] if data.ndim >= 3 else data, np.float32)
+            m = masks[None]
+            if rects is None:
+                pk = finder(img, mask=m, **pf_kw)
+            else:
+                pk = merge_panel_peaks([finder(img[a:b, c:d], mask=None if m is None else m[a:b, c:d],
+                                               **pf_kw) for (a, b, c, d) in rects], rects)
+            x, y = np.asarray(pk["x"]), np.asarray(pk["y"])
+            if top_n and len(x) > top_n:                           # keep the strongest (guards over-finding)
+                s = np.asarray(pk.get("intensity", pk.get("snr", np.zeros(len(x)))))
+                keep = np.argsort(s)[::-1][:top_n]; x, y = x[keep], y[keep]
+            q = _q(x, y, i) if len(x) else np.empty((0, 3))
+            frames.append(q if len(q) >= min_peaks else np.empty((0, 3)))     # min_peaks counts usable rows
+            continue
+        # PANEL STACK: peak-find each slab on its own, map its peaks through ITS panels only, and join
+        # the slabs into one frame for this event.
+        stk = data[i] if data.ndim >= 4 else data
+        xs, ys, ws, ks = [], [], [], []
+        for k, grp in groups.items():
+            pk = finder(np.asarray(stk[k], np.float32), mask=masks[k], **pf_kw)
+            xk = np.asarray(pk["x"], float)
+            xs.append(xk); ys.append(np.asarray(pk["y"], float))
+            ws.append(np.asarray(pk.get("intensity", pk.get("snr", np.zeros(len(xk)))), float))
+            ks.append(np.full(len(xk), k))
+        x, y, w, kk = (np.concatenate(a) for a in (xs, ys, ws, ks))
+        if top_n and len(x) > top_n:                               # strongest over the whole event, not per slab
+            keep = np.argsort(w)[::-1][:top_n]; x, y, kk = x[keep], y[keep], kk[keep]
+        if len(x) < min_peaks:
+            frames.append(np.empty((0, 3)))
+            continue
+        q = np.empty((len(x), 3))
+        for k, grp in groups.items():
+            r = kk == k
+            if r.any():
+                q[r] = _q(x[r], y[r], i, grp, clean=False)   # raw, so rows stay aligned with x, y
+        q = _clean(q)                                       # then drop unusable rows once per event
+        frames.append(q if len(q) >= min_peaks else np.empty((0, 3)))
     _report_dropped()
     return frames, images

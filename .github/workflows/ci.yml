@@ -131,6 +131,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_integrate_cxi_layout.py
 
+      # ...and the --images PEAK FINDER (frames_from_cxi) makes that same decision: an un-assembled
+      # (panel, ss, fs) file is ONE event, each slab peak-found alone and mapped through its own panels
+      # (it was one "event" per panel, all through panel 0's geometry), a 4-D (event, panel, ss, fs) file
+      # is one frame per event (it crashed), and the unmappable cases are refused by name (glint#148).
+      - name: experiments/test_images_unassembled_cxi.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_images_unassembled_cxi.py
+
       # The .geom `data =` key must reach integration (glint#143). parse_geom used to drop it,
       # so the peaks+--integrate route could never read a non-default dataset path; #142's test
       # passed data_path explicitly, which is why CI stayed green through the defect.

@@ -988,7 +988,7 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
     """Self-contained native integrate for a STACKED .cxi -- the ``--images`` merge path, no CrystFEL.
 
     LAYOUT. The frame for event ``ev`` is ``data[ev]`` of a 3-D ``(event, ss, fs)`` stack -- the
-    reading ``frames_from_cxi`` takes by definition of this front end -- but the file is put through
+    reading ``frames_from_cxi`` takes of such a file, after the same decision -- but the file is put through
     the SAME decision the --peaks route uses (``_leading_axis_is_events``) before that index is
     trusted: a dataset whose leading axis is the geometry's PANEL count and is not the file's own
     event count is an un-assembled ``(panel, ss, fs)`` stack, and ``data[ev]`` of it is one panel's

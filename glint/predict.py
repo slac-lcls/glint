@@ -343,6 +343,8 @@ def _write_chunk(f, serial, r, panel_name="p0", photon_eV=9392.7, clen_m=0.15, p
       clen_m        m          -> average_camera_length      [was the run-level kwarg]
       photon_eV     eV         -> photon_energy_eV           [was the run-level kwarg]
       lattice_type/centering/unique_axis                     [were hardcoded triclinic/P/*]
+    integrate_cxi sets clen_m and photon_eV per event, so a .geom whose photon_energy / clen are HDF5
+    paths gets each event's own values here rather than the caller's run-level placeholder.
     GLINT-specific provenance that has no CrystFEL field is emitted under a ``glint/`` prefix, the same
     convention CrystFEL uses for its own namespaced keys (``predict_refine/...``); readers skip
     unrecognised ``key = value`` lines, so this stays parseable while a GLINT-aware merger can use it.
@@ -1012,8 +1014,10 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
     ``lute_bridge`` geom panels + per-event clen/energy that ``frames_from_cxi``/``peaks_to_q`` used to make
     the q it indexed -- so the predicted (fs,ss) invert the observed peaks by construction (the round trip is
     self-consistent; a wrong orientation would look off the real spots and merge worse, not better). Attaches
-    pred/I/sigma/peak/bg to each result carrying an orientation ``M`` in place; returns (n_integrated,
-    tot_refl). Frame data are read once per file (h5 handles cached, closed on return).
+    pred/I/sigma/peak/bg to each result carrying an orientation ``M`` in place, plus that event's
+    ``photon_eV`` and ``clen_m`` (the .geom clen in metres, coffset excluded), which the stream writer puts
+    in the frame's chunk header; returns (n_integrated, tot_refl). Frame data are read once per file (h5
+    handles cached, closed on return).
 
     ``bg_mode`` is handed to ``integrate_spots``; the default changed from the annulus median to a
     MAD-clipped mean in glint#131, so the published merge numbers below were measured with
@@ -1027,7 +1031,7 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
     -- with peak search, indexing AND integration all in GLINT. For the best (prediction-refined) merge,
     hand orientations to CrystFEL via ``write_solution_file``."""
     import h5py
-    from glint.lute_bridge import parse_geom as _parse_geom, lambda_from_eV, _meta
+    from glint.lute_bridge import parse_geom as _parse_geom, lambda_from_eV, _meta, HC_EV_A
     panels, glob = _parse_geom(geom_path)
     # The shared layout decision needs the geometry's SLAB MAPPING, not just its panel count:
     # where asics share modules the slab count differs from the panel count, so a slab-mapped
@@ -1066,11 +1070,15 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
             scale = clen_scale if clen_scale is not None else (0.001 if abs(clen) > 10 else 1.0)
             clen_m = clen * scale + coff
             wl = wavelength_A
+            eV = None
             if wl is None:
                 eV = _meta(en_spec, f, ev, None)
                 wl = lambda_from_eV(eV) if eV else None
             if wl is None:
                 continue
+            # The energy this event was predicted with: the .cxi's per-event value when the .geom
+            # names an HDF5 path, else the .geom literal, or the wavelength_A override.
+            eV_used = float(eV) if eV else (HC_EV_A / wl if wl else None)
             pred = predict_spots(M, panels, clen_m, wl, dmin=dmin, tol=tol)
             dset = f[data_key]
             if getattr(dset, "ndim", 0) >= 3:
@@ -1107,6 +1115,14 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
             I, sig, peak, bg = integrate_spots(frame, pred, half=half, bg_mode=bg_mode)
             keep = np.isfinite(I) & np.isfinite(sig) & (sig > 0)   # non-positive I kept: glint#130
             r.update(M=M, pred=pred[keep], I=I[keep], sigma=sig[keep], peak=peak[keep], bg=bg[keep])  # store canonical M so the stream cell matches the hkl
+            # ...and this event's energy and camera length, for its stream chunk header. Without them
+            # the writer used its run-level kwargs, which the CLI fills from the .geom: a placeholder
+            # 9392.70 eV / 0.15 m when the .geom names HDF5 paths. clen_m is the .geom clen resolved
+            # for this event, in metres, WITHOUT coffset: the quantity the CLI already wrote for a
+            # literal .geom, so that output is unchanged.
+            r["clen_m"] = clen * scale
+            if eV_used is not None:
+                r["photon_eV"] = eV_used
             n += 1; tot += int(keep.sum())
     finally:
         for h in handles.values():

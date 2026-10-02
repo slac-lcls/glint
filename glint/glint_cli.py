@@ -248,8 +248,13 @@ def main():
                     return float(v)
                 except (TypeError, ValueError):
                     return d
+            # integrate_cxi gives each integrated frame its own photon_eV / clen_m, and its chunk header
+            # uses those. These run-level values reach only the chunks with no integrated crystal;
+            # --wavelength wins over the .geom there too, as it does in integration.
+            _run_eV = (12398.419843320026 / args.wavelength if args.wavelength
+                       else _f(_g.get("photon_energy"), 9392.7))
             write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
-                                    photon_eV=_f(_g.get("photon_energy"), 9392.7), clen_m=_f(_g.get("clen"), 0.15),
+                                    photon_eV=_run_eV, clen_m=_f(_g.get("clen"), 0.15),
                                     panel_names=_pnames)
         else:                                                    # per-file images (legacy detectors)
             from glint.predict import integrate_frames

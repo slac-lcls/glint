@@ -64,44 +64,55 @@ def _scatter_max(xp, rows, values, n):
     return out
 
 
-_PF9 = None
-def _pf9_kernel():
-    """One fused fp32 kernel for the whole pf9 front end: per pixel, sum its 8r border ring for the local
-    background mu/sigma, test its (2*lmr+1) neighbourhood for a local maximum, and emit snr, (I-bg), sigma^2,
-    the 'peak pixel' flag (cand) and the 'valid maximum' flag (ismax). Collapses ~6 uniform_filter passes +
-    maximum_filter + ~a dozen elementwise kernels into a single launch (the pf8-style fusion, for pf9)."""
-    global _PF9
-    if _PF9 is None:
-        import cupy
-        _PF9 = cupy.RawKernel(r"""
+# A pixel takes part in the ring, the local-max test and `valid` only if the mask keeps it AND its value
+# is a finite number -- the kernel twin of PeakFinder9._usable. Two comparisons rather than isfinite():
+# both are false for NaN and for +-inf, and the kernel needs no math header under NVRTC.
+_PF9_SRC = "#define GLINT_FINITE(v) ((v) <= 3.402823466e+38f && (v) >= -3.402823466e+38f)\n" + r"""
         extern "C" __global__ void pf9_stats(const float* I, const float* good, int H, int W, int r, int lmr,
             float min_snr_big, float min_snr_peak, float min_sig, float min_pon,
             float* snr, float* sub, float* var, unsigned char* cand, unsigned char* ismax){
           int idx = blockIdx.x*blockDim.x + threadIdx.x; if(idx >= H*W) return;
           int yy = idx / W, xx = idx % W; float Ic = I[idx];
           double s=0.0, sq=0.0, nn=0.0;                       // border ring (Chebyshev distance == r)
+          // g = 0 for a masked or non-finite pixel, and then v = 0 too: g*v is NaN for v = NaN or inf.
           for(int dy=-r; dy<=r; ++dy){
             int y=yy+dy; if(y<0||y>=H) continue;
             if(dy==-r || dy==r){
               for(int dx=-r; dx<=r; ++dx){ int x=xx+dx; if(x<0||x>=W) continue;
-                int j=y*W+x; double g=good[j], v=I[j]; s+=g*v; sq+=g*v*v; nn+=g; }
+                int j=y*W+x; double g=(GLINT_FINITE(I[j]) ? good[j] : 0.0f), v=(g>0 ? (double)I[j] : 0.0);
+                s+=g*v; sq+=g*v*v; nn+=g; }
             } else {
-              int x=xx-r; if(x>=0){ int j=y*W+x; double g=good[j], v=I[j]; s+=g*v; sq+=g*v*v; nn+=g; }
-              x=xx+r; if(x<W){ int j=y*W+x; double g=good[j], v=I[j]; s+=g*v; sq+=g*v*v; nn+=g; }
+              int x=xx-r; if(x>=0){ int j=y*W+x; double g=(GLINT_FINITE(I[j]) ? good[j] : 0.0f), v=(g>0 ? (double)I[j] : 0.0);
+                s+=g*v; sq+=g*v*v; nn+=g; }
+              x=xx+r; if(x<W){ int j=y*W+x; double g=(GLINT_FINITE(I[j]) ? good[j] : 0.0f), v=(g>0 ? (double)I[j] : 0.0);
+                s+=g*v; sq+=g*v*v; nn+=g; }
             }
           }
           float mu = nn>0.5 ? (float)(s/nn) : 0.0f;
           float vv = nn>0.5 ? (float)(sq/nn - (double)mu*mu) : 0.0f; if(vv<0.0f) vv=0.0f;
-          float sg = sqrtf(vv); int valid = (good[idx]>0.5f) && (nn>0.5) && (sg>min_sig);
+          float sg = sqrtf(vv); int valid = (good[idx]>0.5f) && GLINT_FINITE(Ic) && (nn>0.5) && (sg>min_sig);
           float sb = Ic - mu; float sn = valid ? sb/(sg+1e-12f) : 0.0f;
-          int islm = 1;                                        // local maximum over the (2*lmr+1) neighbourhood
+          int islm = 1;                 // local max over the GOOD, finite pixels of the (2*lmr+1) neighbourhood
           for(int dy=-lmr; dy<=lmr && islm; ++dy){ int y=yy+dy; if(y<0||y>=H) continue;
             for(int dx=-lmr; dx<=lmr; ++dx){ int x=xx+dx; if(x<0||x>=W) continue;
-              if(I[y*W+x] > Ic){ islm=0; break; } } }
+              int j=y*W+x; if(good[j]>0.5f && GLINT_FINITE(I[j]) && I[j] > Ic){ islm=0; break; } } }
           snr[idx]=sn; sub[idx]= sb>0.0f? sb:0.0f; var[idx]=vv;
           cand[idx]  = (valid && sn>min_snr_peak) ? 1 : 0;
           ismax[idx] = (valid && islm && sn>min_snr_big && sb>min_pon) ? 1 : 0;
-        }""", "pf9_stats")
+        }"""
+
+
+_PF9 = None
+def _pf9_kernel():
+    """One fused fp32 kernel for the whole pf9 front end: per pixel, sum its 8r border ring for the local
+    background mu/sigma, test its (2*lmr+1) neighbourhood for a local maximum, and emit snr, (I-bg), sigma^2,
+    the 'peak pixel' flag (cand) and the 'valid maximum' flag (ismax). Collapses ~6 uniform_filter passes +
+    maximum_filter + ~a dozen elementwise kernels into a single launch (the pf8-style fusion, for pf9).
+    The source is ``_PF9_SRC``, kept apart so it can be compiled and checked off a GPU."""
+    global _PF9
+    if _PF9 is None:
+        import cupy
+        _PF9 = cupy.RawKernel(_PF9_SRC, "pf9_stats")
     return _PF9
 
 
@@ -152,15 +163,24 @@ class PeakFinder9:
             self._cand = xp.empty(npix, xp.uint8); self._ismax = xp.empty(npix, xp.uint8)
             self._fused_gpu = True
 
-    def _ring_bg(self, I):
+    def _usable(self, I):
+        """Per-frame usable pixels: the mask keeps them AND their value is finite. A NaN or inf pixel is
+        treated as a bad pixel whatever the mask says. On a finite frame this is exactly `self.good`."""
+        return self.good & self._xp.isfinite(I)
+
+    def _ring_bg(self, I, good=None):
         """Per-pixel local background mu, sigma from the border ring of a (2r+1) window (box-sum differences,
-        mask-aware). O(1)/pixel via separable uniform_filter."""
-        xp = self._xp; ndi = self._ndi; r = self.r; goodf = self._goodf
+        mask-aware). O(1)/pixel via separable uniform_filter. `good` defaults to ``_usable(I)``."""
+        xp = self._xp; ndi = self._ndi; r = self.r
+        g = self._usable(I) if good is None else good
+        goodf = g.astype(self.dt)
         w, wi = 2 * r + 1, 2 * r - 1
         bs = lambda a, s: ndi.uniform_filter(a, size=s, mode="constant") * float(s * s)   # box SUM
-        Ig = I * goodf
+        # where(), never I * goodf: NaN*0 and inf*0 are NaN, and the running box sum then carries one
+        # masked NaN across the rest of the frame (see peakfinder_v4._ring_bg). Bit-identical on finite frames.
+        Ig = xp.where(g, I, 0.0); Ig2 = xp.where(g, I * I, 0.0)
         ring_sum = bs(Ig, w) - bs(Ig, wi)
-        ring_sq = bs(Ig * I, w) - bs(Ig * I, wi)
+        ring_sq = bs(Ig2, w) - bs(Ig2, wi)
         ring_n = bs(goodf, w) - bs(goodf, wi)
         nz = ring_n > 0.5
         den = xp.where(nz, ring_n, 1.0)
@@ -170,14 +190,16 @@ class PeakFinder9:
 
     def _stats_portable(self, I):
         """Front-end via portable ops (numpy/cupy uniform_filter): -> snr, sub(=clip(I-bg)), var(=sigma^2),
-        cand (peak pixels), ismax (valid maxima)."""
-        xp = self._xp; ndi = self._ndi; p = self.p; good = self.good
-        mu, sig, nz = self._ring_bg(I); sub = I - mu
-        valid = good & nz & (sig > p["min_sig"])
+        cand (peak pixels), ismax (valid maxima). Masked and non-finite pixels take no part: not the ring,
+        not `valid`, not the local-max test (a masked hot pixel must not unseed the peak beside it)."""
+        xp = self._xp; ndi = self._ndi; p = self.p
+        g = self._usable(I)
+        mu, sig, nz = self._ring_bg(I, g); sub = I - mu
+        valid = g & nz & (sig > p["min_sig"])
         snr = xp.where(valid, sub / (sig + 1e-12), 0.0)
         lm = 2 * p["local_max_radius"] + 1
-        ismax = valid & (I >= ndi.maximum_filter(I, size=lm)) & (snr > p["min_snr_biggest_pix"]) \
-            & (sub > p["min_peak_over_neighbour"])
+        ismax = valid & (I >= ndi.maximum_filter(xp.where(g, I, -xp.inf), size=lm)) \
+            & (snr > p["min_snr_biggest_pix"]) & (sub > p["min_peak_over_neighbour"])
         cand = valid & (snr > p["min_snr_peak_pix"])
         return snr, xp.clip(sub, 0.0, None), sig * sig, cand, ismax
 

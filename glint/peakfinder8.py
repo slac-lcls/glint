@@ -183,6 +183,7 @@ class PeakFinder8:
         self.good = (xp.ones((self.H, self.W), bool) if mask is None else mask.astype(bool)) & (q >= r_min)
         self.M = RadialIntegrator(q, nbin=nbin, mask=self.good).M.astype(self.dt)   # built ONCE
         self._good_f = self.good.ravel().astype(self.dt)
+        self._good_flat = self.good.ravel()
         self.yy, self.xx = (g.astype(xp.float64) for g in xp.mgrid[0:self.H, 0:self.W])  # fp64 for centroids
         # thr_adu is CrystFEL peakfinder8's `--threshold`: an ABSOLUTE intensity floor a pixel must
         # clear to join a peak, applied ON TOP OF the relative snr>thr_snr test. Without it, a
@@ -223,32 +224,53 @@ class PeakFinder8:
         if graph and self._fwd_fast and self._smooth <= 1:      # smoothing runs eager (not in the captured loop)
             self._Ibuf = xp.zeros(self._npix, self.dt); self._keepb = xp.empty(self._npix, self.dt)
             self._snr = xp.empty(self._npix, self.dt); self._bg = xp.empty(self._npix, self.dt)
+            # per-frame usable-pixel mask, refilled before each replay (the graph captures the buffers)
+            self._goodb_f = xp.empty(self._npix, self.dt); self._goodb_u8 = xp.empty(self._npix, xp.uint8)
             self._graph_want = True                        # (_mu/_sig ring buffers allocated above)
+
+    def _usable(self, Iflat):
+        """-> (usable, Iz): the pixels the mask keeps AND whose value is finite, and the frame with every
+        other pixel ZEROED. A NaN or inf pixel is a bad pixel whatever the mask says.
+
+        Bad pixels must be zeroed, not multiplied by keep=0: NaN*0 is NaN, and M stores a masked pixel
+        as an explicit 0.0 entry (radial._linear puts it in row 0), so `M @ (I * keep)` carried a masked
+        NaN into ring 0 -- whose mu/sigma then became 0 and produced a spurious peak at the radial
+        origin -- and a NaN on a good pixel emptied its whole resolution ring of peaks. On a finite
+        frame `usable` is exactly `self.good` and every product below is unchanged bit for bit."""
+        xp = self._xp
+        g = self._good_flat & xp.isfinite(Iflat)
+        return g, xp.where(g, Iflat, Iflat.dtype.type(0))       # typed zero: Iz keeps the loop dtype
 
     def _bg_eager(self, image):
         """Iterate the radial background; return (snr[H,W], bg[npix]). Forward = fp32 scatter kernel or 3
         cuSPARSE csrmv; ring combine + backward = one fused kernel each on GPU, elementwise + M.T on CPU."""
         xp = self._xp; ndi = self._ndi; M = self.M; H, W = self.H, self.W; p = self.p; thr = p["thr_snr"]; f64 = xp.float64
-        I = image.astype(self.dt); Iflat = I.ravel(); keep = self._good_f.copy(); snr = bg = snrf = None
+        I = image.astype(self.dt); Iflat = I.ravel(); snr = bg = snrf = None
+        g, Iz = self._usable(Iflat)
+        keep = g.astype(self.dt)
+        g2 = g.reshape(H, W)
+        g_u8 = g.astype(xp.uint8) if self._fused else None
         for _ in range(p["n_iter"]):
             if self._fwd_fast:
                 d0, s1, s2 = self._d0, self._s1, self._s2
                 d0.fill(0); s1.fill(0); s2.fill(0)
                 self._fwd((self._fwd_grid,), (self._fwd_blk,),
-                          (self._r0, self._r1, self._w0, self._w1, Iflat, keep,
+                          (self._r0, self._r1, self._w0, self._w1, Iz, keep,
                            np.int32(self._npix), np.int32(self._nring), d0, s1, s2), shared_mem=self._fwd_sh)
             else:
                 d0 = (M @ keep).astype(f64)
-                s1 = (M @ (Iflat * keep)).astype(f64)
-                s2 = (M @ (Iflat * Iflat * keep)).astype(f64)
+                s1 = (M @ (Iz * keep)).astype(f64)
+                s2 = (M @ (Iz * Iz * keep)).astype(f64)
             if self._fused:
                 self._ring(d0, s1, s2, self._mu, self._sig)   # out-args (T inferred from mu/sig)
                 mu, sig = self._mu, self._sig
                 if self._smooth > 1:                          # denoise the 1-D radial background profile
                     mu = ndi.uniform_filter1d(mu, self._smooth, mode="nearest")
                     sig = ndi.uniform_filter1d(sig, self._smooth, mode="nearest")
-                snrf, keep, bg = self._bwd(self._r0, self._r1, self._w0, self._w1, Iflat,
-                                           self._good_u8, mu, sig, thr)
+                # the per-frame usable mask, not self._good_u8: with a NaN on a good pixel the kernel's
+                # `keep = good && !(s > thr)` reads !(NaN > thr) = 1 and keeps the NaN in every iteration
+                snrf, keep, bg = self._bwd(self._r0, self._r1, self._w0, self._w1, Iz,
+                                           g_u8, mu, sig, thr)
             else:
                 den = xp.where(d0 <= 0, xp.nan, d0)
                 mu = xp.nan_to_num(s1 / den); e2 = xp.nan_to_num(s2 / den)
@@ -257,13 +279,14 @@ class PeakFinder8:
                     mu = ndi.uniform_filter1d(mu, self._smooth, mode="nearest")
                     sig = ndi.uniform_filter1d(sig, self._smooth, mode="nearest")
                 bgw = (M.T @ mu).reshape(H, W); sg = (M.T @ sig).reshape(H, W)
-                snr = xp.where(self.good, (I - bgw) / (sg + 1e-6), 0.0); bg = bgw.ravel()
-                keep = (self.good.ravel() & ~(snr.ravel() > thr)).astype(self.dt)
+                snr = xp.where(g2, (I - bgw) / (sg + 1e-6), 0.0); bg = bgw.ravel()
+                keep = (g & ~(snr.ravel() > thr)).astype(self.dt)
         return (snrf.reshape(H, W) if self._fused else snr), bg
 
     def _loop_pre(self):
-        """The fp32 background loop over PREALLOCATED buffers (out-args) -- the capturable form."""
-        thr = self.p["thr_snr"]; self._keepb[:] = self._good_f
+        """The fp32 background loop over PREALLOCATED buffers (out-args) -- the capturable form. Reads the
+        frame from _Ibuf and its usable-pixel mask from _goodb_f/_goodb_u8, all filled by _bg_graph."""
+        thr = self.p["thr_snr"]; self._keepb[:] = self._goodb_f
         for _ in range(self.p["n_iter"]):
             d0, s1, s2 = self._d0, self._s1, self._s2
             d0.fill(0); s1.fill(0); s2.fill(0)
@@ -271,14 +294,18 @@ class PeakFinder8:
                       (self._r0, self._r1, self._w0, self._w1, self._Ibuf, self._keepb,
                        np.int32(self._npix), np.int32(self._nring), d0, s1, s2), shared_mem=self._fwd_sh)
             self._ring(d0, s1, s2, self._mu, self._sig)
-            self._bwd(self._r0, self._r1, self._w0, self._w1, self._Ibuf, self._good_u8,
+            self._bwd(self._r0, self._r1, self._w0, self._w1, self._Ibuf, self._goodb_u8,
                       self._mu, self._sig, thr, self._snr, self._keepb, self._bg)
 
     def _bg_graph(self, image):
-        """Same loop via a CUDA graph captured once (cuSPARSE-free, so capturable): copy the frame into the
-        fixed input buffer, replay. Returns (snr[H,W], bg[npix]) as views of the persistent buffers."""
+        """Same loop via a CUDA graph captured once (cuSPARSE-free, so capturable): copy the frame and its
+        usable-pixel mask into the fixed input buffers, replay. Returns (snr[H,W], bg[npix]) as views of
+        the persistent buffers."""
         import cupy
-        self._Ibuf[:] = image.astype(self.dt).ravel()
+        g, Iz = self._usable(image.astype(self.dt).ravel())
+        self._Ibuf[:] = Iz
+        self._goodb_f[:] = g
+        self._goodb_u8[:] = g
         if self._graph is None:
             st = cupy.cuda.Stream(non_blocking=True)
             with st:

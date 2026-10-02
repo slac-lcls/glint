@@ -51,6 +51,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_asic_seam_mask.py
 
+      # The peak finders must not depend on what a MASKED pixel holds (NaN, inf, a hot value) and must treat a
+      # non-finite pixel as bad: v4, pf9 and pf8 on CPU, and the v4/pf9 CUDA stats kernels compiled as plain C++
+      # with the runner's g++ (not a GPU run; skips without a compiler). The pre-fix tree fails 37 checks.
+      - name: experiments/test_peakfinder_mask.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_peakfinder_mask.py
+
       - name: experiments/test_negative_intensities.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_negative_intensities.py

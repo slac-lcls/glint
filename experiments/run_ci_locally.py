@@ -36,6 +36,7 @@ STEPS = [
     "experiments/test_alias_gate.py",
     "experiments/test_pf8_thr_adu.py",
     "experiments/test_asic_seam_mask.py",
+    "experiments/test_peakfinder_mask.py",
     "experiments/test_negative_intensities.py",
     "experiments/test_integrate_event.py",
     "experiments/test_device_selection.py",

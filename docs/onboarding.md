@@ -233,12 +233,12 @@ That inherited handedness is only right when the anchor is +v0: the anchor grid 
 frame whose shortest axis points to z<0 the anchor is −v0, the lattice's third axis is −v2 with the opposite
 handedness, and the reference-handed seed is the mirror image of −v2. Unless a2 is perpendicular to the
 (v0, v1) plane that mirror is not a lattice vector (review r2, s4-01: 10–15 of 24 triclinic and monoclinic
-frames came back as non-lattice bases that passed every gate). So for cells whose a2 tilts more than
-`MIRROR_TOL_DEG` = 1° from the (v0, v1) plane's normal (`_both_hands`), both handednesses are seeded (256 bases), the
-winner is negated back to the reference hand (−M indexes the same spots as hkl → −hkl), and `_ref_setting`
-moves a basis that annealed into another setting of the right lattice (metric off by more than 1 %) to the
-reference's. Orthogonal-a2 cells, lysozyme and its consensus and lock cells (skewed ~0.3°) included, run the 128-basis path
-unchanged; below ~1° the metric cannot tell the two settings apart anyway.
+frames came back as non-lattice bases that passed every gate). So whenever a2 has a measurable in-plane
+component (`_both_hands`; only a relative component ≤ `1e-8` is treated as numerical noise), both handednesses
+are seeded (256 bases), the winner is negated back to the reference hand (−M indexes the same spots as
+hkl → −hkl), and `_ref_setting` moves a basis that annealed into another setting of the right lattice
+(metric off by more than 1 %) to the reference's. Exactly orthogonal-a2 cells run the unchanged 128-basis
+path; skewed consensus and lock cells take the two-handed path because their skew does not establish symmetry.
 
 Two scoping notes that bite if you skip them:
 

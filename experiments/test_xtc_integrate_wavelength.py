@@ -86,9 +86,9 @@ CELL = (61.2, 74.5, 41.3, 88.0, 96.0, 91.0)
 CORNERS = [(-W - GAP, -H - GAP), (GAP, -H - GAP), (-W - GAP, GAP), (GAP, GAP)]   # (corner_x, corner_y) px
 
 
-def write_geom(path):
+def write_geom(path, clen=ZDIST, coffset=0.0):
     lines = ["; synthetic 4-quadrant geometry for test_xtc_integrate_wavelength", f"res = {RES}",
-             f"clen = {ZDIST}", "coffset = 0.0", "adu_per_photon = 1", ""]
+             f"clen = {clen}", f"coffset = {coffset}", "adu_per_photon = 1", ""]
     for i, (cx, cy) in enumerate(CORNERS):
         n = f"q{i}"
         lines += [f"{n}/min_fs = 0", f"{n}/max_fs = {W - 1}",
@@ -330,8 +330,8 @@ def read_stream(path):
     return chunks
 
 
-def run_main(tmp, tag, extra_argv=()):
-    gpath = os.path.join(tmp, "quad.geom")
+def run_main(tmp, tag, extra_argv=(), geom="quad.geom"):
+    gpath = os.path.join(tmp, geom)
     out = os.path.join(tmp, f"{tag}.stream")
     SPY.update(lam=[], pred_calls=0, reread=0)
     argv = ["--exp", "synthx", "--run", "1", "--zdist", str(ZDIST), "--psana", "1",
@@ -457,6 +457,23 @@ def case_explicit_wavelength(tmp):
     return chunks
 
 
+def case_nonzero_coffset(tmp):
+    """The .geom carries a nonzero coffset and --zdist is the whole sample-detector distance, as on
+    mfxx49820 r0016 (coffset -0.1376 m, --zdist 0.102973 m). Pass 1 places every pixel at --zdist and
+    ignores the .geom's clen/coffset; pass 2 must use the same plane. Counting the coffset on top of
+    --zdist put r0016's boxes at -0.336x their true position."""
+    print("\n[nonzero coffset] .geom clen = zdist + 0.03, coffset = -0.03; --zdist is the whole distance")
+    write_geom(os.path.join(tmp, "quad_coff.geom"), clen=ZDIST + 0.03, coffset=-0.03)
+    RUN[:] = make_run([9500.0] * 4, [9500.0] * 4, seed=303)
+    HAND[0] = 1.0
+    CHOSEN.clear()
+    code, chunks, log = run_main(tmp, "coffset", geom="quad_coff.geom")
+    want = indexed_events()
+    check(code == 0, f"glint_xtc.main exits 0 (got {code})")
+    check(sorted(chunks) == want, f"one integrated chunk per indexed event (events {sorted(chunks)}, want {want})")
+    frame_checks(chunks, want)
+
+
 def case_refusals(tmp):
     """A reader dict without per-event wavelengths (older reader, a mock, psana2's) and no
     --wavelength: pass 2 must refuse before re-reading the run, never predict at 0."""
@@ -521,6 +538,7 @@ def main():
         case_per_event_wavelength(tmp)
         case_other_hand(tmp)
         case_explicit_wavelength(tmp)
+        case_nonzero_coffset(tmp)
         case_refusals(tmp)
         case_predict_guard()
     print()

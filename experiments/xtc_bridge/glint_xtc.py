@@ -215,9 +215,21 @@ def integrate_and_write(results, args, out_path, report=True, lam_by_event=None)
     Without this the stream is orientation-only: `glint/stream.py` writes every reflection row as
     `h k l 0.00 0.00 ...`, so only the Miller indices are real and a merge of it produces zeros.
 
-    REQUIRES --geom. Prediction projects q onto named CrystFEL panels (corner, fs/ss basis, res,
-    coffset), and psana's per-pixel coordinates do not carry that panel model -- they are positions,
-    not a tiling. The frame is handed over reshaped to the (nseg*H, W) slab a .geom addresses.
+    REQUIRES --geom. Prediction projects q onto named CrystFEL panels (corner, fs/ss basis, res),
+    and psana's per-pixel coordinates do not carry that panel model -- they are positions, not a
+    tiling. The frame is handed over reshaped to the (nseg*H, W) slab a .geom addresses.
+
+    DISTANCE: --zdist is the WHOLE sample-detector distance, and both passes put the detector on
+    one plane at --zdist; the .geom's clen/coffset enters neither. Pass 1
+    (geom_coords.coords_from_geom) stamps -zdist on every pixel. project_q puts each panel at
+    clen_m + coffset, so pass 2 zeroes the parsed panels' coffset before handing it --zdist. It used
+    to keep it, which counted the offset twice: on mfxx49820 r0016 (r0016.geom coffset -0.1376 m,
+    --zdist 0.102973 m) the plane sat at z = -0.0346 m and every box landed at -0.336x its true lab
+    position, so 3% of btx's observed peaks had a box within 3 px, 20% with the offset dropped
+    (main's unconverted orientation: 4%). The panel corners and fs/ss vectors still come from two
+    different parsers: geom_coords.parse_geom in pass 1, glint.lute_bridge.parse_geom here. They
+    agree on r0016.geom, but lute_bridge._vec misreads exponent notation ('+1.2e-05y' -> -5.0),
+    so a .geom written that way gets different panel vectors in the two passes.
 
     WAVELENGTH: each event is predicted at the one pass 1 indexed it at -- `--wavelength` when given,
     else `lam_by_event[event]`, the per-event photon energy the reader returns. This used to be
@@ -246,6 +258,7 @@ def integrate_and_write(results, args, out_path, report=True, lam_by_event=None)
         sys.exit("--integrate is wired on the psana1 (xtc1) route only so far")
 
     panels, _glob = parse_geom(args.geom)
+    panels = [dict(p, coffset=0.0) for p in panels]    # one plane at --zdist, as pass 1 (DISTANCE)
     by_event = {int(r["event"]): r for r in results if r.get("M") is not None}
     if not by_event:
         return write_stream_integrated([], out_path, geom_text=open(args.geom).read())

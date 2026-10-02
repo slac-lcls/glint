@@ -413,6 +413,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_axis_standardizer.py
 
+      # The Miller-index box of every |q| <= qmax enumeration (predict._hkl_grid -> predict_spots,
+      # HKLGrid; theoretical_unique; multishot.reference_lattice; alias_gate.tightness) must hold the
+      # whole sphere for OBLIQUE cells. The box was bounded by qmax/|a*| instead of qmax*|a|, which
+      # clipped high-resolution rows on triclinic, monoclinic beta >~ 115, hexagonal and blind-primitive
+      # cells, and made the alias gate's node count basis-dependent. Checked against a brute-force
+      # sphere that shares no formula with the code. test_streamdriver_laue and test_axis_standardizer
+      # could not see it: both compare the box against itself. numpy-only.
+      - name: experiments/test_hkl_box.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_hkl_box.py
+
       # Not a test: it checks that run_ci_locally.py's STEPS still matches the steps above, so the
       # local "run it as poor as CI" harness cannot quietly fall behind this file and start
       # reporting ALL PASS over a step it no longer runs.

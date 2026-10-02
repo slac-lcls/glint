@@ -28,10 +28,21 @@ def recip_from_M(M):
     return np.linalg.inv(np.asarray(M, float))
 
 
+def _hkl_bounds(R, qmax):
+    """Per-axis Miller-index bounds (H, K, L) of a box holding every hkl with |hkl @ R| <= qmax.
+
+    h_i = q . a_i, where a_i is the i-th real-space axis (column i of inv(R)), so by Cauchy-Schwarz
+    |h_i| <= qmax * |a_i|. That bound holds for any cell. The old bound, qmax / |a*_i|, equals it only
+    when a_i is parallel to a*_i (an orthogonal axis); for oblique cells it is smaller by
+    cos(angle(a_i, a*_i)) and cut off part of the sphere (hexagonal/trigonal cells, monoclinic with
+    beta > ~110 deg, general triclinic cells, blind primitive bases of centred lattices)."""
+    A = np.linalg.inv(np.asarray(R, float))                # columns = real-space axes a, b, c (A)
+    return tuple(int(np.ceil(qmax * n)) + 1 for n in np.linalg.norm(A, axis=0))
+
+
 def _hkl_grid(R, qmax):
-    """All integer hkl with |hkl @ R| <= qmax, bounded per-axis by qmax / |row|."""
-    norms = np.linalg.norm(R, axis=1)
-    H, K, L = (int(np.ceil(qmax / n)) + 1 for n in norms)
+    """All integer hkl with |hkl @ R| <= qmax (box bounded per axis by qmax * |a_i|, see _hkl_bounds)."""
+    H, K, L = _hkl_bounds(R, qmax)
     h = np.arange(-H, H + 1); k = np.arange(-K, K + 1); l = np.arange(-L, L + 1)
     g = np.stack(np.meshgrid(h, k, l, indexing="ij"), -1).reshape(-1, 3)
     g = g[np.any(g != 0, axis=1)]                       # drop (0,0,0)

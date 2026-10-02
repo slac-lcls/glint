@@ -27,8 +27,7 @@ M_TRUE = np.diag([40.0, 55.0, 70.0])
 def _still_q(M, rng, n=120, qmax=0.30):
     """A sparse still: n peaks scattered over the many nodes inside |q| <= qmax (see test_alias_gate)."""
     Minv = np.linalg.inv(M)
-    rlen = np.sqrt((Minv ** 2).sum(1))
-    hb = np.ceil(qmax / np.maximum(rlen, 1e-12)).astype(int)
+    hb = np.ceil(qmax * np.linalg.norm(M, axis=0)).astype(int)    # |h_i| <= qmax*|M[:,i]|, any basis
     out = []
     while sum(len(o) for o in out) < n:
         H = np.column_stack([rng.integers(-hb[i], hb[i] + 1, 4 * n) for i in range(3)]).astype(float)

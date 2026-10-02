@@ -7,7 +7,7 @@ WHY THIS EXISTS. Two review findings, one mechanism:
   * s7-05: the --images route (lute_bridge.frames_from_cxi) kept the NaN row lute_bridge.peaks_to_q returns for
     a peak on no .geom panel. hybrid_index then got nothing from either search and the frame was dropped, with
     nothing on stderr. Every other front door dropped just that peak.
-The fix is one rule (glint.geom.q_rows_ok: all components finite and |q| > Q_FLOOR) applied where q enters an
+The fix is one rule (glint.geom.q_rows_ok: |q|^2 finite and |q| > Q_FLOOR) applied where q enters an
 indexer -- the blind and known-cell engines, CPU and torch, per-frame and batched; hybrid_index, dense_index,
 index_known_fast and gate_results; the CLI loader; frames_from_cxi; geom.peaks_to_q; StreamDriver's six front
 doors -- plus a zero weight below Q_FLOOR in the blind weight itself, for callers that build Q by hand.
@@ -15,7 +15,9 @@ doors -- plus a zero weight below Q_FLOOR in the blind weight itself, for caller
 WHAT IT CHECKS.
   numpy (always runs):
     1. the rule: which rows q_rows_ok keeps, and clean_q hands a clean frame back as the SAME object, which is
-       what keeps every clean frame bit-identical through every caller;
+       what keeps every clean frame bit-identical through every caller; clean_frames (the batch engines' one
+       check per batch) returns exactly what clean_q returns frame by frame, whatever the frames' dtype and
+       memory layout, rows within a few ulps of Q_FLOOR^2 included;
     2. the --peaks route (geom.peaks_to_q) drops a beam-centre peak as it drops an off-panel one;
     3. the --images route (frames_from_cxi, peakfinder='stored'; needs h5py, skips without it): no NaN or zero
        row reaches the caller, min_peaks counts usable rows, a clean frame is unchanged, the drop is reported
@@ -71,9 +73,12 @@ def guarded(title, fn):
 
 
 def bad_rows(q):
-    """How many rows of q an indexer must not see: non-finite, or |q| <= 1e-6 1/A."""
+    """How many rows of q an indexer must not see: |q|^2 not finite in float64 (a NaN or inf component, or a
+    finite row too large to square), or |q| <= 1e-6 1/A. glint.geom.q_rows_ok's rule, written out on its own."""
     q = np.asarray(q, float).reshape(-1, 3)
-    return int((~np.isfinite(q).all(1) | (np.linalg.norm(np.nan_to_num(q), axis=1) <= 1e-6)).sum())
+    with np.errstate(over="ignore"):
+        s = (q * q).sum(1)
+    return int((~(np.isfinite(s) & (s > 1e-6 * 1e-6))).sum())
 
 
 def frame_on(M, rng, n=40):
@@ -123,6 +128,81 @@ def part_rule():
     got = clean_q(np.vstack([f32, np.zeros((1, 3), np.float32)]))
     check("...and a filtered frame keeps its dtype", got.dtype == np.float32 and len(got) == 30, (got.dtype, len(got)))
     check("an empty frame passes through", clean_q(np.empty((0, 3))).shape == (0, 3))
+    check("q_rows_ok rejects a finite row too large to square (|q|^2 overflows)",
+          q_rows_ok(np.array([[1e200, 0, 0], [0.1, 0.2, 0.3]])).tolist() == [False, True])
+    qq = np.vstack([q, [[1e200, 0, 0]]])
+    check("this file's bad_rows counts exactly the rows q_rows_ok rejects",
+          bad_rows(qq) == int((~q_rows_ok(qq)).sum()) == 7, (bad_rows(qq), int((~q_rows_ok(qq)).sum())))
+
+    # Rows within a few ulps of Q_FLOOR^2. einsum adds the three squares in another order for a Fortran-order
+    # array, so these must get one verdict whatever the frame's layout, alone or stacked in a batch. The first
+    # is the review's row: |q|^2 = 1.0000000000000002e-12 from C-order rows, 1e-12 from Fortran-order (arm64).
+    rng = np.random.default_rng(1)
+    u = rng.normal(size=(256, 3))
+    u /= np.linalg.norm(u, axis=1)[:, None]
+    edge = np.vstack([[4.947971892216682e-07, 7.143888878451804e-07, 4.947971892216679e-07],
+                      u * (Q_FLOOR * (1 + rng.integers(-1, 2, (256, 1)) * 2.0 ** -52))])
+    near = u * (Q_FLOOR * (1 + 2.0 ** -52))            # |q|^2 about two ulps above Q_FLOOR^2: most rows pass
+    ok_c, ok_f = q_rows_ok(edge), q_rows_ok(np.asfortranarray(edge))
+    check("q_rows_ok gives a row within a few ulps of Q_FLOOR^2 the same verdict in C- and Fortran-order frames",
+          np.array_equal(ok_c, ok_f) and 0 < ok_c.sum() < len(edge), (int((ok_c != ok_f).sum()), int(ok_c.sum())))
+
+    from glint.geom import clean_frames
+
+    def same(a, b):        # what clean_q returned, frame by frame: the same object, or an equal new array
+        return a is b or (not isinstance(b, list) and isinstance(a, np.ndarray) and isinstance(b, np.ndarray)
+                          and a.dtype == b.dtype and np.array_equal(a, b))
+
+    def agree(fs):         # clean_frames(fs) vs [clean_q(f) for f in fs]; an exception counts by its type
+        try:
+            want = [clean_q(f) for f in fs]
+        except Exception as exc:                                           # noqa: BLE001
+            want = type(exc)
+        try:
+            got = clean_frames(iter(fs))
+        except Exception as exc:                                           # noqa: BLE001
+            got = type(exc)
+        if not (isinstance(want, list) and isinstance(got, list)):
+            return want is got, want
+        return len(got) == len(want) and all(same(g, w) for g, w in zip(got, want)), want
+
+    fr = [good, lst, f32[:5], np.empty((0, 3))]
+    out = clean_frames(fr)
+    check("clean_frames hands a clean batch back as the SAME objects, frame for frame",
+          len(out) == 4 and all(o is f for o, f in zip(out, fr)))
+    c = np.vstack([good, edge[:1]])
+    f = np.asfortranarray(c)
+    res = [agree(b)[0] for b in ([good, f], [f, good], [c, f], [f], [good.astype(object), f32], [c.astype(object)])]
+    check("clean_frames == clean_q with the review's row in a Fortran-order frame next to C-order ones, and on "
+          "object-dtype frames of floats", all(res), res)
+    bad = [np.zeros(3), [NAN, 0, 0], [0, INF, 0], [0, 0, -INF], [1e-7, 0, 0], [1e200, 0, 0]]
+    odd = [None, [], np.empty((0, 3)), np.zeros((0,)), [[0.1, 0.2, 0.3]] * 7, np.ones((4, 2)) * 0.1]
+    n_dirty = n_bad = n_raised = n_fort = n_obj = 0
+    for t in range(400):
+        fs = []
+        for _ in range(int(rng.integers(1, 9))):
+            f = rng.normal(size=(int(rng.integers(0, 40)), 3)) * 0.1
+            if rng.random() < 0.15 and len(f):
+                f[int(rng.integers(len(f)))] = bad[int(rng.integers(len(bad)))]
+            if rng.random() < 0.3 and len(f):
+                f[rng.integers(len(f), size=5)] = near[rng.integers(len(near), size=5)]
+            with np.errstate(over="ignore"):
+                f = f.astype(np.float32) if rng.random() < 0.2 else f
+            r = rng.random()
+            f = f.tolist() if r < 0.1 else np.asfortranarray(f) if r < 0.35 else f.astype(object) if r < 0.45 else f
+            n_fort += isinstance(f, np.ndarray) and f.ndim == 2 and len(f) > 1 and not f.flags.c_contiguous
+            n_obj += isinstance(f, np.ndarray) and f.dtype == object
+            fs.append(f)
+        if rng.random() < 0.1:
+            fs.insert(int(rng.integers(len(fs) + 1)), odd[int(rng.integers(len(odd)))])
+        ok, want_t = agree(fs)
+        n_bad += not ok
+        n_raised += not isinstance(want_t, list)
+        n_dirty += isinstance(want_t, list) and any(w is not f for w, f in zip(want_t, fs))
+    check("clean_frames == clean_q frame by frame, and neither raises (400 random batches: bad rows, rows within "
+          "a few ulps of Q_FLOOR^2, float32, C- and Fortran-order, object dtype, lists, empty / 1-D / 2-column / None "
+          "frames, an iterator)", n_bad == n_raised == 0 and n_dirty > 20 and n_fort > 100 and n_obj > 50,
+          dict(bad=n_bad, raised=n_raised, dirty=n_dirty, fortran=n_fort, object=n_obj))
 
 
 def part_peaks_route():

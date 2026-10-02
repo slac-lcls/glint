@@ -15,7 +15,7 @@ import numpy as np, torch
 from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, AXIS0_DEDUP_COS, _axes_from_cell,
                                _third_axis, _fib_halfsphere, _azimuth_grid, _depth)
 from glint.multishot import same_lattice
-from glint.geom import clean_q
+from glint.geom import clean_frames
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 PI = np.pi
@@ -244,7 +244,7 @@ def index_known_gpu_cell_batch(frames, Mc, topa=8, nc=None, full_grid=False):
     Padded into it, an empty frame comes back as an unrefined starting candidate, which is built from Mc's
     own metric and so passes same_lattice; alone, it raised. Batches without an empty frame take the
     unchanged single pass."""
-    frames = [clean_q(f) for f in frames]
+    frames = clean_frames(frames)
     live = [j for j, f in enumerate(frames) if len(f)]
     if len(live) == len(frames):
         return _cpu_stage(*_gpu_stage(frames, Mc, topa, nc, full_grid), Mc)
@@ -275,7 +275,7 @@ def index_known_deep_batch(frames, Mc, topa, nc, full_grid=True, budget=12000, r
     topa = _depth("topa", topa); nc = _depth("nc", nc)
     if isinstance(budget, (bool, np.bool_)) or not isinstance(budget, (int, np.integer)) or budget < 1:
         raise ValueError(f"budget must be an integer >= 1, got {budget!r}")
-    frames = [clean_q(np.asarray(f, float)) for f in frames]     # so the >= 6 rule counts usable rows
+    frames = clean_frames([np.asarray(f, float) for f in frames])     # so the >= 6 rule counts usable rows
     out = [None] * len(frames)
     err = [False] * len(frames)
     live = [j for j in range(len(frames)) if len(frames[j]) >= 6]
@@ -374,7 +374,7 @@ def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS):
     largest frame. Oversized frames (> max bucket) fall back to the eager path. cuSOLVER-free
     (analytic solve, ~1e-13 vs linalg). CPU / capture-unsupported -> eager. Rows glint.geom.q_rows_ok
     rejects are dropped first, and a frame left empty is a miss (None), as in index_known_gpu_cell_batch."""
-    frames = [clean_q(f) for f in frames]
+    frames = clean_frames(frames)
     if DEV != "cuda":
         return [M for i in range(0, len(frames), B) for M in index_known_gpu_cell_batch(frames[i:i + B], Mc)]
     P = _cell_params(Mc); cell = tuple(np.asarray(Mc, float).ravel().round(6))

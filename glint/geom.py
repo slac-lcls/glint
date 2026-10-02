@@ -199,26 +199,55 @@ Q_FLOOR = 1e-6
 _Q_FLOOR2 = Q_FLOOR * Q_FLOOR
 
 
+def _q2(a):
+    """|q|^2 of each row of a 2-D array, in float64 on C-order rows (a copy only when `a` is not already
+    C-order float64). q_rows_ok, clean_q and clean_frames all decide from this one function, so a row gets
+    the same verdict whatever the frame's dtype or memory layout and whether it is checked alone or
+    stacked in a batch. einsum adds the three squares in a different order for a Fortran-order array, and
+    np.concatenate of mixed frames is C-order: without the C-order rows, a row within a few ulps of Q_FLOOR^2
+    could pass in the batch and be dropped from its own frame."""
+    b = np.ascontiguousarray(a, dtype=float)
+    return np.einsum("ij,ij->i", b, b)
+
+
 def q_rows_ok(q):
-    """Boolean mask over the rows of an (n, 3) q array: True where all three components are finite
-    and |q| > Q_FLOOR. Everything that feeds q to an indexer filters with this, so the rule lives here
-    once instead of in each engine."""
-    q = np.asarray(q, float)
-    return np.isfinite(q).all(1) & (np.einsum("ij,ij->i", q, q) > _Q_FLOOR2)
+    """Boolean mask over the rows of an (n, 3) q array: True where |q|^2, computed in float64, is finite
+    and above Q_FLOOR^2. A NaN or inf component makes it non-finite, and so does a finite row too large to
+    square in float64 (|q| > ~1.3e154), which no indexer could use either. Frames of every dtype are judged
+    in float64. Everything that feeds q to an indexer filters with this, so the rule lives here once
+    instead of in each engine. One |q|^2 pass: this runs per frame at the StreamDriver doors."""
+    s = _q2(q)
+    return (s > _Q_FLOOR2) & (s < np.inf)
 
 
 def clean_q(q):
     """`q` without the rows `q_rows_ok` rejects. When every row passes, `q` itself is returned (the same
-    object, unconverted), so a clean frame goes through every caller exactly as before. That common case
-    costs one |q|^2 pass (a NaN or inf component makes it non-finite) and copies nothing."""
+    object, unconverted), so a clean frame goes through every caller exactly as before; a filtered frame
+    keeps its own dtype. That common case costs one |q|^2 pass and copies nothing for a C-order float64
+    frame."""
     a = np.asarray(q)
     if a.ndim != 2 or len(a) == 0:
         return q
-    s = np.einsum("ij,ij->i", a, a)
-    if np.isfinite(s).all() and (s > _Q_FLOOR2).all():
-        return q
     ok = q_rows_ok(a)
     return q if ok.all() else a[ok]
+
+
+def clean_frames(frames):
+    """[clean_q(f) for f in frames], checked once over the whole batch. When no row of any frame is
+    rejected (the common case) the frames come back as the same objects, for one |q|^2 pass over the
+    stacked rows instead of one per frame: per-frame clean_q costs ~9 us/frame on an S3DF host, 7 % of a
+    B=120 index_fused frame. A batch with a rejected row, or whose frames do not stack or convert, is
+    cleaned frame by frame. The batch check and clean_q both go through q_rows_ok, so every row gets the
+    same float64 |q|^2 (_q2) either way, and the result is that of clean_q for every numeric input,
+    whatever the frames' dtypes and layouts."""
+    frames = list(frames)
+    try:
+        A = np.concatenate(frames)
+        if A.ndim == 2 and len(A) and q_rows_ok(A).all():
+            return frames
+    except (ValueError, TypeError, OverflowError):           # do not stack, or do not convert to float
+        pass
+    return [clean_q(f) for f in frames]
 
 
 def _panel_z(name, p):

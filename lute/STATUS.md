@@ -646,6 +646,47 @@ verifies the committed JSON is current). The SNR and bank-edge figures are copie
 SUMMARY block, because the per-peak values were not logged. Re-running the measurement itself needs
 the psana2 env: `PYTHONPATH=../../glint python common_mode_ab.py 200`.
 
+### Before glint#219 goes multi-node: psana2-gpu GPU assignment (2026-10-02)
+
+None of this affects the first experiment (one reader, one GPU). It matters the first time the
+psana2-gpu route runs on more than one node.
+
+**What psana does today.** From Monarin Uervirojnangkoorn's (@monarin)
+[comment on glint#219](https://github.com/slac-lcls/glint/issues/219), tracked upstream as
+[lcls2#155](https://github.com/slac-lcls/lcls2/issues/155), based on reading the source and not yet
+validated in a launch:
+- psana2-gpu sizes each worker's GPU memory budget by counting peers in its event-builder (EB)
+  group, not the workers that actually share a physical GPU. One EB spanning several nodes therefore
+  shrinks every budget, and several EB groups sharing GPUs overcommit them.
+- Its device assignment **overwrites `CUDA_VISIBLE_DEVICES`**.
+
+Her suggested starting configuration:
+- one EB group: `PS_EB_NODES=1`, `PS_EB_NODE_LOCAL=0`;
+- an explicit per-worker `gpu_memory_budget_gb` in `DataSource`, at most (GPU capacity minus the
+  allowance for GLINT and CUDA) divided by the number of workers sharing that GPU;
+- `n_gpu_streams=1` and a small batch at first;
+- a log of hostname, rank and GPU UUID, to check placement before scaling up.
+
+**Where this collides with GLINT.**
+- **Device placement.** `experiments/xtc_bridge/glint_xtc_mpi.py` pins each rank by setting
+  `CUDA_VISIBLE_DEVICES` (`pin_gpu`) before it spawns the conda2 bridge worker. The point is that the
+  torch indexer and the bridged peak-find share one device. If psana's own assignment then rewrites
+  the variable inside the worker, the two can land on different physical GPUs, or several ranks can
+  pile onto one, and nothing reports it.
+- **Memory.** psana's quota does not cap GLINT's own allocations: the torch indexer, cupy
+  peak-finder scratch and the ring. The allowance in the formula above has to be measured for
+  GLINT at the batch size in use, not guessed.
+
+**So the first multi-node run should:**
+1. Log hostname, MPI rank and GPU UUID from **both** processes: the GLINT rank (torch) and the psana
+   worker (cupy). Treat any mismatch between them, or against the Slurm allocation, as a failure.
+2. Measure GLINT's peak device memory on one GPU before choosing `gpu_memory_budget_gb`.
+3. Size the budget from the measured number of workers per physical GPU.
+
+Not yet tested here. `PS_EB_NODE_LOCAL=1` (one EB group per node) makes psana's peer count closer to
+right, but that layout has not been validated for GPU runs, and she does not recommend it as the
+starting point.
+
 ---
 
 ## What is left

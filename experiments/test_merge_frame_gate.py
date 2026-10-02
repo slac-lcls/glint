@@ -7,6 +7,9 @@ the live gate, or a very weak real crystal -- got a huge scale and swamped the m
 lysozyme crystals (CrystFEL-integrated GLINT solutions) the live CC1/2 was 0.015; with the gate it is 0.33.
 glint.merge_scale.frame_scale is now the one rule: merge only if n > 5 and mean(I) > 3 sem(I); refused frames
 are counted in stats()["refused_frames"]. Frames that pass are merged exactly as before (same v and w).
+Finding s1-05, same lines: the default I/sigma bins started at 0 with a strict >, so every I <= 0 measurement was
+dropped -- a selection on the sign of I that biases weak reflections up and flatters Rsplit. The bins now start
+at -inf; stats(thr=0.0) still gives the I > 0 numbers.
 
   PYTHONPATH=. python experiments/test_merge_frame_gate.py      # exit 0 = all pass  (numpy only, ~5 s)
 """
@@ -122,6 +125,24 @@ with tempfile.TemporaryDirectory() as td:
     line = [ln for ln in out.stdout.splitlines() if "not merged" in ln]
     check("merge_stats.py drops the unmeasured frame", out.returncode == 0 and line and line[0].startswith("1/61"),
           line[0] if line else (out.stdout + out.stderr)[-300:])
+
+print("\n6. no measurement is dropped on the sign of I (review r2 s1-05): weak data, <T>/sigma = 0.5")
+acc_w = MergeAccumulator(ops=laue_ops_4mmm()); n_all = 0; Tw = rng.exponential(5.0, NU)
+for i in range(400):
+    j = rng.choice(NU, 250, replace=False); sig = np.full(250, 10.0)
+    I = Tw[j] + rng.normal(0, 1, 250) * sig
+    acc_w.add_frame(U[j], I, sig, i, values=I, weights=1 / sig ** 2)   # explicit v, w: scaling out of the picture
+    n_all += 250
+st = acc_w.stats()
+check("default stats() counts every measurement", st["measurements"] == n_all, f"{st['measurements']}/{n_all}")
+mk = acc_w.merged_by_key(); keys = np.array(list(mk)); est = np.array([mk[k] for k in keys])
+from glint.stream_driver import _asu_key  # noqa: E402
+truth = dict(zip(_asu_key(U, laue_ops_4mmm()).tolist(), Tw))
+bias = float(np.mean(est - np.array([truth[k] for k in keys.tolist()])))
+check("merged intensity unbiased (|bias| < 0.5 on <T> = 5)", abs(bias) < 0.5, f"bias {bias:+.2f}")
+s0 = acc_w.stats(thr=0.0)
+check("stats(thr=0.0) is the I > 0 selection", s0["unique"] <= st["unique"] and s0["redundancy"] < st["redundancy"],
+      f"redundancy {s0['redundancy']:.1f} (I>0) vs {st['redundancy']:.1f} (all)")
 
 print(f"\n{'FAILURES: ' + ', '.join(FAILS) if FAILS else 'ALL PASS'}")
 sys.exit(1 if FAILS else 0)

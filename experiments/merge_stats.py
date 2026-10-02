@@ -103,7 +103,7 @@ print(f"unique reflections (4/mmm) = {len(uk)};  redundancy = {cnt.mean():.1f}")
 snr = I / S
 odd = (frames % 2) == 1
 print(f"\n{'I/sig floor':>12}{'#meas':>10}{'#common':>9}{'CC1/2':>8}{'CC*':>8}{'Rsplit%':>9}")
-for thr in (0.0, 1.0, 2.0, 3.0, 5.0):
+for thr in (-np.inf, 0.0, 1.0, 2.0, 3.0, 5.0):          # -inf: no floor, I <= 0 kept (review r2 s1-05)
     sel = snr > thr
     k1, v1, _ = merge(sel & odd); k2, v2, _ = merge(sel & ~odd)
     common, i1, i2 = np.intersect1d(k1, k2, return_indices=True)

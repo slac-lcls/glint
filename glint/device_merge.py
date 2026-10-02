@@ -27,7 +27,7 @@ GPU.
 import os
 import numpy as np
 
-from glint.merge_scale import frame_scale
+from glint.merge_scale import MERGE_SNR_BINS, frame_scale
 
 try:
     import cupy as cp
@@ -65,7 +65,7 @@ class MergeAccumulatorDevice:
     """
     n_refused = 0                                            # frames not merged (frame_scale is None)
 
-    def __init__(self, snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), ops=None, cap=1 << 16):
+    def __init__(self, snr_bins=MERGE_SNR_BINS, ops=None, cap=1 << 16):
         if not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident merge")
         from glint.stream_driver import laue_ops_4mmm, _asu_key
@@ -189,7 +189,7 @@ class MergeAccumulatorDevice:
         self.sw = sw; self.swv = swv; self.cnt = cnt; self.n_rows = nr; self._uk = uk
         self._dirty = False
 
-    def stats(self, thr=0.0, n_theoretical=None):
+    def stats(self, thr=-np.inf, n_theoretical=None):
         from glint.stream_driver import MergeAccumulator
         self._drain()
         return MergeAccumulator.stats(self, thr=thr, n_theoretical=n_theoretical)

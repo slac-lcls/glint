@@ -50,7 +50,7 @@ except Exception:                                            # pragma: no cover 
     cp = None
     _HAVE_CP = False
 
-from glint.merge_scale import MERGE_MIN_FRAME_SNR, frame_scale  # noqa: F401  (re-exported)
+from glint.merge_scale import MERGE_MIN_FRAME_SNR, MERGE_SNR_BINS, frame_scale  # noqa: F401  (re-exported)
 from glint.lattice import LENGTH_ORDER_LAUE, UNIQUE_C_LAUE, cell_to_Ar, standardize_axes
 from glint.lute_bridge import peaks_to_q
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
@@ -477,7 +477,7 @@ class MergeAccumulator:
     measurements whose I/sigma falls in [thr_j, thr_{j+1})), so a threshold sweep is a suffix sum.
     """
 
-    def __init__(self, snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), ops=None):
+    def __init__(self, snr_bins=MERGE_SNR_BINS, ops=None):
         self.thr = np.asarray(snr_bins, float)
         self.nb = len(self.thr)
         self.ops = ops if ops is not None else laue_ops_4mmm()
@@ -535,7 +535,9 @@ class MergeAccumulator:
             w = 1.0 / sigma ** 2
         # bucket j holds measurements passing thr[j] but not thr[j+1], so summing j>=J reproduces
         # the batch selection `snr > thr[J]` EXACTLY. side="left" makes it strictly-greater, and
-        # bucket -1 (snr <= thr[0], e.g. negative intensities) is DROPPED rather than folded into 0.
+        # bucket -1 (snr <= thr[0]) is DROPPED rather than folded into 0. The default bins start at
+        # -inf, so nothing is dropped on the sign of I (review r2 s1-05); stats(thr=0.0) is the old
+        # I > 0 selection.
         b = np.searchsorted(self.thr, I / sigma, side="left") - 1
         keep = b >= 0
         if not keep.any():
@@ -563,7 +565,7 @@ class MergeAccumulator:
         self.n_meas += int(keep.sum())
         self.n_frames += 1
 
-    def merged_by_key(self, thr=0.0):
+    def merged_by_key(self, thr=-np.inf):
         """Merged intensity per asu key (both half-sets and all snr buckets >= thr
         combined). Returns {asu_key(int): I_merged(float)} -- used to score R_vs_truth
         against a KNOWN I_full on the synthetic experiment."""
@@ -576,8 +578,8 @@ class MergeAccumulator:
                 out[int(k)] = float(swv[r] / sw[r])
         return out
 
-    def stats(self, thr=0.0, n_theoretical=None):
-        """Figures of merit from the running sums, at an I/sigma floor."""
+    def stats(self, thr=-np.inf, n_theoretical=None):
+        """Figures of merit from the running sums, at an I/sigma floor (default: none, I <= 0 kept)."""
         j = int(np.searchsorted(self.thr, thr, side="left"))
         r = slice(0, self.n_rows)
         sw = self.sw[r, :, j:].sum(2); swv = self.swv[r, :, j:].sum(2); cnt = self.cnt[r, :, j:].sum(2)
@@ -844,7 +846,7 @@ class StreamDriver:
 
     def __init__(self, Mc, panels, clen_m, wavelength_A, shape, dtype=np.uint16, mask=None,
                  B=64, dmin=2.0, tol=0.002, half=3, gap=2, ring=3, min_peaks=6,
-                 snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
+                 snr_bins=MERGE_SNR_BINS, pf_kw=None, use_gpu=True,
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
                  adaptive_relock=False, min_inliers=0, min_inlier_frac=0.15,
                  warm_topk=32, warm_floor=1,   # 16 refused real MFX data; see warmup_batch()
@@ -2859,7 +2861,7 @@ class StreamDriver:
         self._pl_v = [None] * self.B
         self._rej = {}
 
-    def stats(self, thr=0.0):
+    def stats(self, thr=-np.inf):
         if self._blind:                                         # not yet locked -- warm-up in progress
             _, sup, lead = self._rc.verdict()
             # gate_refused belongs HERE most of all. `_gate_lock` runs only on the blind path

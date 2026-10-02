@@ -76,7 +76,7 @@ odd = (frames % 2) == 1
 print(f"{'I/sig':>6} | {'BATCH  uniq':>12}{'common':>8}{'CC1/2':>8}{'CC*':>8}{'Rsplit%':>9} "
       f"| {'STREAM uniq':>12}{'common':>8}{'CC1/2':>8}{'CC*':>8}{'Rsplit%':>9} | match")
 ok_all = True
-for thr in (0.0, 1.0, 2.0, 3.0, 5.0):
+for thr in (-np.inf, 0.0, 1.0, 2.0, 3.0, 5.0):          # -inf: no floor, I <= 0 kept (review r2 s1-05)
     sel = snr > thr
     uk_all, _, cnt_all = batch_merge(sel)
     k1, v1, _ = batch_merge(sel & odd); k2, v2, _ = batch_merge(sel & ~odd)

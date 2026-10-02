@@ -6,6 +6,10 @@ live MergeAccumulator / MergeAccumulatorDevice use, without importing the driver
 import numpy as np
 
 MERGE_MIN_FRAME_SNR = 3.0
+# I/sigma bucket floors of the running merges. The first is -inf so that no measurement is dropped on the
+# sign of I: selecting I > 0 biases weak reflections up and makes Rsplit look better than it is (review r2
+# s1-05; #130 removed the same selection from integration). stats(thr=0.0) still gives the I > 0 numbers.
+MERGE_SNR_BINS = (-np.inf, 0.0, 1.0, 2.0, 3.0, 5.0)
 
 
 def frame_scale(I, k=MERGE_MIN_FRAME_SNR):

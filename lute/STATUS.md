@@ -581,20 +581,22 @@ none either.**
 source in `xpp_drp_gpu_311` (Python 3.11.14; `psana` from the env's own `site-packages`, after
 `unset PYTHONPATH` — see item 2 under *What is left*), not from lcls2 `master`, which differs:
 `jungfrau.calib` calls the pure-Python `UtilsJungfrau.calib_jungfrau` (`cversion` defaults to 0
-here; on `master` it defaults to a C++ path), and the only assignment of the common-mode
-parameters is `self.cmps = self.kwa.get('cmpars', None)`. `xtc_qreader.py` passes no `cmpars`, so
-**no common-mode correction is applied**. Nor is there an experiment setting to pick up:
-`mfx101555026` r0013's `calibconst` holds `geometry, pedestals, pixel_gain, pixel_max, pixel_min,
-pixel_offset, pixel_rms, pixel_status` and **no `common_mode`**.
+here; on `master` and on psana2-gpu `9b32dda` it defaults to the C++ `cversion=3` kernel, which
+takes no common-mode parameters at all), and the only assignment of the common-mode parameters is
+`self.cmps = self.kwa.get('cmpars', None)`. `xtc_qreader.py` passes no `cmpars`, so **no common-mode
+correction is applied**. Nor is there an experiment setting to pick up: `mfx101555026` r0013's
+`calibconst` holds `geometry, pedestals, pixel_gain, pixel_max, pixel_min, pixel_offset, pixel_rms,
+pixel_status` and **no `common_mode`**.
 
 **What it would change if it were on.** First 200 events of `mfx101555026` r0013 (Jungfrau 16M,
 `(32, 512, 1024)`), arm A `det.raw.calib(evt)` against arm C `det.raw.calib(evt,
-cmpars=(7,3,200,10))` — psana's documented default (rows + columns per 256x64 bank, `cormax` 200
-ADU), since the experiment supplies none. Peaks from GLINT's `peakfinder_v4.py` (main `b91ce63`) on
-its **numpy** path, per panel, at the production settings from `xtc_core` (`min_pix` 3, `son_min`
-15, `thr_high` 10, `thr_low` 5) and the reader's `pixel_status == 0` mask. The same finder runs on
-both arms, so a difference is attributable to common mode; absolute counts will not equal the GPU
-fp32 kernel's. Peaks matched greedily within 1.5 px on the same panel.
+cmpars=(7,3,200,10))` — psana's documented opt-in parameters (rows + columns per 256x64 bank,
+`cormax` 200 ADU). They are not a default: on this path the effective default is no common mode, and
+the experiment supplies no parameters of its own. Peaks from GLINT's `peakfinder_v4.py` (main
+`b91ce63`) on its **numpy** path, per panel, at the production settings from `xtc_core` (`min_pix`
+3, `son_min` 15, `thr_high` 10, `thr_low` 5) and the reader's `pixel_status == 0` mask. The same
+finder runs on both arms, so a difference is attributable to common mode; absolute counts will not
+equal the GPU fp32 kernel's. Peaks matched greedily within 1.5 px on the same panel.
 
 - **The data does carry common-mode offsets.** Per event, a median **4.6%** of live pixels change
   (p10 3.5%, p90 22.4%), typically by **0.92 keV** (per-event median; p90 2.86 keV). The largest
@@ -625,67 +627,148 @@ calibration change. A Jungfrau GPU decode (*What is left*, item 1) needs no comm
 today's reader. If common mode is ever wanted, it goes into both arms and is costed separately:
 it is 12x the CPU calib time here, and the example does not implement it.
 
-**A trap that nearly made this a null gauge.** psana returns the **same** Detector object for
-repeated `run.Detector("jungfrau")` calls, and `calib_jungfrau` caches its kwargs on `det._odc` at
-first entry, then **ignores** different kwargs on later calls with only a logged warning. A naive
-A/B — two Detector objects, or one called with and without `cmpars` — compares the default against
-itself. The script caught it with an assertion (both arms had the same `raw` object), then kept one
-`_odc` per arm, swapped it in before each call, and asserted each cache held the expected `cmps` and
-kwargs.
+**Common mode is not the whole of calibration parity**
+([@monarin's review of PR #220](https://github.com/slac-lcls/glint/pull/220#pullrequestreview-5397712380)).
+r0013's `calibconst` has `pixel_offset`, and the psana2-gpu example defaults to `use_offset=False`.
+Offsets, masks and physical panel order have to be matched and checked against this CPU baseline
+too, before a timing comparison means anything. The no-common-mode conclusion above does not change.
+The CPU `det.raw.calib(evt)` measured here is glint#219's baseline arm and a correctness
+diagnostic. It must not stay inside the GPU route that #219 builds and times against it. That route
+uses psana2-gpu's public `GpuTask` path, with calibration feeding peak finding inside one callback
+and only the peak lists published
+([@monarin's scoping comment](https://github.com/slac-lcls/glint/pull/220#issuecomment-5963194556)).
+
+**A trap that nearly made this a null gauge.** Repeated detector lookup returns distinct wrappers
+sharing the same raw interface; the A/B test therefore keeps a separate calibration cache for each
+arm. In detail:
+- psana keeps one detector interface per detector and interface name in a process-wide registry
+  (`DetectorImpl.__new__`). Two `run.Detector("jungfrau")` calls share one `raw`: `a.raw is b.raw`.
+  That much was measured here, in `xpp_drp_gpu_311` (the same `id`). @monarin read the source of
+  lcls2's `features/psana2-gpu` branch (`9b32dda`). It does the same, and the outer wrappers are
+  distinct (`a is b` is false).
+- `calib_jungfrau` builds its calibration cache, `raw._odc`, at the first call. Later calls with
+  different kwargs **keep the first call's settings**, with only a logged `IGNORED ATTEMPT` warning.
+  Per the same source reading, a further lookup re-runs Jungfrau's initializer on the shared
+  interface. That resets `_odc` to `None`; it does not create an independent cache.
+- So a naive A/B (two lookups, or one detector called with and without `cmpars`) compares the first
+  call's settings against themselves.
+
+The first version of the script built one Detector per arm and asserted that their `raw` objects
+differed. The assertion failed: both arms had the same `raw`. The version that ran uses one
+detector, keeps one `_odc` per arm, swaps it in before each call, and asserts that each cache holds
+the expected `cmps` and kwargs. Upstream: [lcls2#161](https://github.com/slac-lcls/lcls2/issues/161)
+(@monarin, 2026-10-02) asks `calib()` to honour changed options. Until it is fixed, any A/B through
+`det.raw.calib` needs per-arm caches. On lcls2 `master` and psana2-gpu `9b32dda` that is not enough
+either. There `det.raw.calib` defaults to the C++ kernel (`cversion=3`), which takes no common-mode
+parameters, so `cmpars` is stored in the cache but never applied. The script's `cmps` assertion would
+still pass. On those builds, pass `cversion=0` in both arms, as the lcls2#161 reproducer does.
+`common_mode_ab.py` passes no `cversion`, so it reproduces the measurement only in an env like
+`xpp_drp_gpu_311`, where `det.raw.calib` calls the Python `calib_jungfrau`.
 
 Provenance, all in `experiments/xtc_bridge/`:
 [`common_mode_ab.py`](../experiments/xtc_bridge/common_mode_ab.py) is the script that made the
 measurement, committed verbatim (md5 `baa3c89e`), run interactively on `sdfiana027` in
 `xpp_drp_gpu_311`; it imported a copy of `glint/peakfinder_v4.py` that is byte-identical to the one
-in this repo. [`common_mode_ab_run200.log`](../experiments/xtc_bridge/common_mode_ab_run200.log) is
-its complete output (one JSON line per event plus the SUMMARY block). Every number above is
-regenerated from that log alone, with no psana or data, by
+in this repo. **Correction to its text:** the docstring's "separate Detector objects" is left over
+from the first version described above. The comment that psana returns "the SAME cached Detector"
+was written for the version that ran, as a reading of that failure, and is half right: it is the
+`raw` interface that is shared, not the Detector wrapper. The code that ran uses one detector, one
+shared `raw` and a separate `_odc` per arm. The file is kept byte for byte as run, so the correction
+is here and in `common_mode_ab_summary.py`'s docstring.
+[`common_mode_ab_run200.log`](../experiments/xtc_bridge/common_mode_ab_run200.log) is its complete
+output (one JSON line per event plus the SUMMARY block). Every number above is regenerated from that
+log alone, with no psana or data, by
 [`common_mode_ab_summary.py`](../experiments/xtc_bridge/common_mode_ab_summary.py), whose output is
 [`common_mode_ab_result.json`](../experiments/xtc_bridge/common_mode_ab_result.json) (`--check`
 verifies the committed JSON is current). The SNR and bank-edge figures are copied from the log's
 SUMMARY block, because the per-peak values were not logged. Re-running the measurement itself needs
 the psana2 env: `PYTHONPATH=../../glint python common_mode_ab.py 200`.
 
-### Before glint#219 goes multi-node: psana2-gpu GPU assignment (2026-10-02)
+### Before glint#219 uses native psana MPI (2026-10-02, revised 2026-10-03)
 
-None of this affects the first experiment (one reader, one GPU). It matters the first time the
-psana2-gpu route runs on more than one node.
+Device assignment and psana's MPI peer count do not affect the first experiment. An explicitly
+serial reader (`PS_PARALLEL=none`) does not enter psana's GPU-assignment path, however many readers
+or GPUs GLINT runs. The path matters once the psana2-gpu route runs under psana's native MPI. Within
+native MPI, one node with several GPUs or several EB groups is enough; it does not take several
+nodes. The *Memory* point below applies to the first experiment too. The boundary, read from lcls2
+`9b32dda` (`psexp/tools.py`, `datasource.py`, `psexp/mpi_ds.py`):
+- `PS_PARALLEL` defaults to `mpi`. `DataSource(exp=...)` then returns `MPIDataSource` only when MPI
+  reports more than one rank.
+- `MPIDataSource` calls `init_gpu_rank()` on GPU BD ranks.
+- `PS_PARALLEL=none` makes `DataSource(exp=...)` return `SerialDataSource` without asking MPI for
+  the world size. It does not keep MPI from starting: at `9b32dda`, `import psana` reaches
+  `detector/UtilsJungfrau.py`, which runs `from mpi4py import MPI` at module level.
 
-**What psana does today.** From Monarin Uervirojnangkoorn's (@monarin)
-[comment on glint#219](https://github.com/slac-lcls/glint/issues/219), tracked upstream as
-[lcls2#155](https://github.com/slac-lcls/lcls2/issues/155), based on reading the source and not yet
-validated in a launch:
-- psana2-gpu sizes each worker's GPU memory budget by counting peers in its event-builder (EB)
-  group, not the workers that actually share a physical GPU. One EB spanning several nodes therefore
-  shrinks every budget, and several EB groups sharing GPUs overcommit them.
-- Its device assignment **overwrites `CUDA_VISIBLE_DEVICES`**.
+GLINT's own MPI wrapper, `glint_xtc_mpi.py`, uses MPI for its own sharding in the conda1 process.
+Each rank spawns its own conda2 reader process for its shard. That child imports psana, so at
+`9b32dda` it initializes MPI too. What MPI does there, in a child of an `srun` rank that inherits
+the launcher's environment, has not been checked. The psana2-gpu reader should set
+`PS_PARALLEL=none` explicitly, as glint#219 proposes, and the first launch should check that each
+reader comes up serial.
 
-Her suggested starting configuration:
+**What psana does in that path today.** The source is @monarin's
+[comment on glint#219](https://github.com/slac-lcls/glint/issues/219#issuecomment-5943789718) and
+[review of PR #220](https://github.com/slac-lcls/glint/pull/220#pullrequestreview-5397712380). It is
+tracked upstream as P1 in [lcls2#155](https://github.com/slac-lcls/lcls2/issues/155), which includes
+[the GLINT case](https://github.com/slac-lcls/lcls2/issues/155#issuecomment-5963591248). It comes
+from reading the source and has not yet been validated in a launch.
+- **Memory budget.** psana2-gpu sizes each worker's GPU memory budget by the peers in its
+  event-builder (EB) group, not by the workers that actually share a physical GPU. Depending on the
+  topology it can overcount or undercount them:
+  - one EB group spanning several nodes overcounts, which shrinks every budget;
+  - several EB groups on one GPU undercount, which overcommits it.
+- **Device assignment.** The assignment **overwrites `CUDA_VISIBLE_DEVICES`** in GPU BD workers.
+  Separately, our own reading of `mpi_ds.py` at `9b32dda` is that it sets the variable to empty
+  for the CPU-role ranks (smd0, EB) of a GPU run.
+
+**Coming upstream, not in the reviewed branch.** lcls2#155 plans to:
+- preserve the launcher's or application's GPU visibility;
+- honour an inherited single-GPU assignment;
+- select only within each rank's allowed devices;
+- discover the actual GPU-sharing peers across EB groups for the budget.
+
+The serial GLINT integration does not have to wait for it.
+
+@monarin's suggested starting configuration for a native-MPI run:
 - one EB group: `PS_EB_NODES=1`, `PS_EB_NODE_LOCAL=0`;
-- an explicit per-worker `gpu_memory_budget_gb` in `DataSource`, at most (GPU capacity minus the
-  allowance for GLINT and CUDA) divided by the number of workers sharing that GPU;
+- an explicit per-worker `gpu_memory_budget_gb` in `DataSource`. It should be at most the GPU's
+  usable capacity, minus the external allocations of every process on that GPU (see *Memory* below),
+  divided by the number of psana workers sharing it;
 - `n_gpu_streams=1` and a small batch at first;
 - a log of hostname, rank and GPU UUID, to check placement before scaling up.
 
 **Where this collides with GLINT.**
-- **Device placement.** `experiments/xtc_bridge/glint_xtc_mpi.py` pins each rank by setting
-  `CUDA_VISIBLE_DEVICES` (`pin_gpu`) before it spawns the conda2 bridge worker. The point is that the
-  torch indexer and the bridged peak-find share one device. If psana's own assignment then rewrites
-  the variable inside the worker, the two can land on different physical GPUs, or several ranks can
-  pile onto one, and nothing reports it.
-- **Memory.** psana's quota does not cap GLINT's own allocations: the torch indexer, cupy
-  peak-finder scratch and the ring. The allowance in the formula above has to be measured for
-  GLINT at the batch size in use, not guessed.
+- **Device placement.** Each `glint_xtc_mpi.py` rank is meant to see exactly one GPU through
+  `CUDA_VISIBLE_DEVICES`:
+  - On the documented launch (`srun --gpus-per-task=1`), Slurm sets it and `pin_gpu` leaves it
+    alone.
+  - Otherwise `pin_gpu` sets it when `--gpus-per-node N` is given. The default, 0, leaves every GPU
+    visible.
 
-**So the first multi-node run should:**
+  The conda2 reader inherits that mask, so the torch indexer and the reader's peak-find share one
+  device. A reader on psana's native MPI GPU path can have the variable rewritten. If the new index
+  is visible and CUDA has not yet initialized, the two then land on different physical GPUs, or
+  several ranks pile onto one, and nothing reports it. Until lcls2#155 lands, keep the reader
+  serial.
+- **Memory.** psana's per-worker quota does not cap GLINT's own allocations: the torch indexer, cupy
+  peak-finder scratch and the ring. Neither psana's current EB-group count nor the peer discovery
+  planned in lcls2#155 can see GLINT's indexer processes or independent serial readers. This applies
+  to one serial reader too. With no `gpu_memory_budget_gb`, a serial reader's automatic budget is
+  the whole GPU (`9b32dda`, `gpu/gpu_events.py`, `gpu/gpu_budget.py`). The budget therefore has to
+  leave room for the **aggregate** external allocations of every process sharing each physical GPU,
+  measured for GLINT at the batch size in use, not guessed. A quota cannot repair a wrong placement.
+
+**So the first native-MPI or multi-GPU run should:**
 1. Log hostname, MPI rank and GPU UUID from **both** processes: the GLINT rank (torch) and the psana
    worker (cupy). Treat any mismatch between them, or against the Slurm allocation, as a failure.
 2. Measure GLINT's peak device memory on one GPU before choosing `gpu_memory_budget_gb`.
-3. Size the budget from the measured number of workers per physical GPU.
+3. Size the budget per physical GPU. First reserve the measured memory of every non-psana process
+   on it (GLINT indexers, any independent serial readers). Then divide the rest by the measured
+   number of psana workers there.
 
-Not yet tested here. `PS_EB_NODE_LOCAL=1` (one EB group per node) makes psana's peer count closer to
-right, but that layout has not been validated for GPU runs, and she does not recommend it as the
-starting point.
+Not yet tested here. `PS_EB_NODE_LOCAL=1` (one EB group per node) brings psana's peer count closer
+to right. That layout has not been validated for GPU runs, though, and @monarin does not recommend
+it as the starting point.
 
 ---
 
@@ -704,8 +787,9 @@ tests excluded as unhostable. Read the workflow for the current list rather than
    Jungfrau and epixHR need their own decode (`UtilsJungfrau` / `UtilsEpixHR`) before they get the
    4.1x — and this now matters more than when it was written: current SFX at MFX runs Jungfrau 16M
    on LCLS-II xtc2, where the psana1 route (and with it `gpu_calib`) does not apply at all.
-   A Jungfrau decode needs no common-mode step to match today's psana2 reader, which applies none
-   (see *Jungfrau common mode on the psana2 route*, above; glint#219).
+   A Jungfrau decode needs no common-mode step to match today's psana2 reader, which applies none.
+   It does need the pixel offsets, masks and panel order matched (see *Jungfrau common mode on the
+   psana2 route*, above; glint#219).
 2. **The psana2 route has no GPU-capable default environment**: the conda2 release lacks cupy, the
    one env with psana2+cupy (`xpp_drp_gpu_311`) lacks torch, and activating it under psconda.sh
    requires `unset PYTHONPATH` (the release psana is pinned ahead of the env). The item-6 ladder ran

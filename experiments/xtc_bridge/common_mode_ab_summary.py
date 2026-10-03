@@ -14,6 +14,24 @@ To re-run the measurement itself (psana2 env, S3DF; the script imports peakfinde
 glint/peakfinder_v4.py is the file it ran with, byte for byte):
 
     PYTHONPATH=../../glint python common_mode_ab.py 200 > common_mode_ab_run200.log
+
+Correction to common_mode_ab.py's text, which stays as run:
+- Its docstring says the arms use "separate Detector objects". That is left over from a first
+  version, which made one Detector per arm and failed its own assertion because the two arms shared
+  one `raw`.
+- The comment that psana returns "the SAME cached Detector" was written for the version that ran,
+  after that failure. It is half right: repeated lookup returns distinct wrappers around the same
+  raw interface (lcls2#161).
+- The code that ran uses one Detector, one shared `raw` and a separate calibration cache
+  (`raw._odc`) per arm, swapped in before each call.
+- It passes no `cversion`. That works where `det.raw.calib` is the Python `calib_jungfrau`
+  (xpp_drp_gpu_311). On lcls2 master and psana2-gpu 9b32dda the default is the C++ cversion=3
+  kernel, which ignores `cmpars`; there, pass cversion=0 in both arms.
+
+The log's SUMMARY block pools SNR and bank-edge values over every comparison arm, because
+common_mode_ab.py keeps one accumulator for all of them. The run here has exactly one arm, since the
+experiment has no `common_mode` constants. summarize() refuses a log with more than one arm rather
+than attribute pooled values to one arm.
 """
 import argparse
 import ast
@@ -65,6 +83,11 @@ def summarize(log_path):
                                "frac_within_4px_of_bank_edge": float(s.group(6))}
     if not rows:
         raise SystemExit(f"no per-event records in {log_path}")
+    arms = sorted({k for r in rows for k in r} - {"ev", "t_calibA", "nA", "t_total"})
+    if arms != [ARM]:
+        raise SystemExit(f"{log_path}: comparison arms {arms}, expected only {ARM!r}. The SUMMARY "
+                         "block pools SNR and bank-edge values over all arms, so it cannot be "
+                         f"attributed to {ARM!r}; log one arm per run")
     C = [r[ARM] for r in rows]
     frac = np.array([c["frac_px_changed"] for c in C])
     dmed = np.array([c["absdiff_median_changed"] for c in C])

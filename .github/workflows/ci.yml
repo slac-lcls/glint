@@ -55,6 +55,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_negative_intensities.py
 
+      # glint/__init__.py loads its public names lazily: numpy-only submodules (geom, predict) import with SciPy
+      # blocked, and every name in __all__ still resolves.
+      - name: experiments/test_lazy_exports.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_lazy_exports.py
+
       # The peaks-route integrator's event addressing (glint#136). It builds a 3-event .cxi and
       # checks the three frames integrate to three DIFFERENT intensities -- which is exactly what
       # the shipped code could not do, and nothing else here would have noticed.

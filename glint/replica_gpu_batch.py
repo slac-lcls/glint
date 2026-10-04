@@ -245,7 +245,7 @@ def index_known_gpu_cell_batch(frames, Mc, topa=8, nc=None, full_grid=False):
     own metric and so passes same_lattice; alone, it raised. Batches without an empty frame take the
     unchanged single pass."""
     frames = clean_frames(frames)
-    live = [j for j, f in enumerate(frames) if len(f)]
+    live = [j for j, f in enumerate(frames) if len(f) >= 6]
     if len(live) == len(frames):
         return _cpu_stage(*_gpu_stage(frames, Mc, topa, nc, full_grid), Mc)
     out = [None] * len(frames)

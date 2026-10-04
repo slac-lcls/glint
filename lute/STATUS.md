@@ -178,8 +178,9 @@ in z, so every box landed on the observed pattern inverted through the beam cent
 reproduced on synthetic data). Without `--wavelength` pass 2 also predicted at a wavelength of 0
 (s7-03; not this run, which cannot index without `--wavelength` because its EBeam energy is
 non-finite on every event). Both are fixed and covered by
-`experiments/test_xtc_integrate_wavelength.py` on synthetic data. The real-data check, overlaying
-the boxes on pass 1's peaks for this run, has not been done.
+`experiments/test_xtc_integrate_wavelength.py` on synthetic data. Real-data placement was subsequently
+verified on mfxx49820 r0016 in S3DF jobs 39742470/71/72: 35.1% of observed peaks had a box within
+3 px versus a 3.3% event-shuffled null (main: 2.6% versus 3.0%).
 
 **Requires `--geom`, and says so rather than guessing.** Prediction projects q onto named
 CrystFEL panels (corner, fs/ss basis, res, coffset); psana per-pixel coordinates are positions,

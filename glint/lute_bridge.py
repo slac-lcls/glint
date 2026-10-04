@@ -230,7 +230,7 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
                 else:
                     keep = np.arange(top_n)
                 x, y = x[keep], y[keep]
-            q = _q(x, y, i) if len(x) >= min_peaks else np.empty((0, 3))
+            q = _q(x, y, i) if len(x) else np.empty((0, 3))
             frames.append(q if len(q) >= min_peaks else np.empty((0, 3)))     # min_peaks counts usable rows
         _report_dropped()
         return frames, images

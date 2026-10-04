@@ -101,8 +101,8 @@ def part1_synthetic():
           res[1]["M"] is None and res[1]["hkl"] is None and np.array_equal(res[1]["q"], scr))
     check("a frame with fewer than GATE_MIN peaks is withdrawn even when they all match", res[2]["M"] is None)
     check("an unindexed frame is left alone", res[3]["M"] is None and res[3]["q"].shape == (5, 3))
-    check("GATES lists the choices the CLI offers", GATES == ("none", "strict"), GATES)
-    check("an unknown gate raises ValueError", raises(lambda: gate_results(fresh(), frames, "floor")))
+    check("GATES lists the choices the CLI offers", GATES == ("none", "strict", "floor"), GATES)
+    check("an unknown gate raises ValueError", raises(lambda: gate_results(fresh(), frames, "bogus")))
     check("misaligned results and frames raise ValueError", raises(lambda: gate_results(fresh(), frames[:3], "strict")))
 
 

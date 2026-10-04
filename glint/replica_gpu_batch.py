@@ -13,7 +13,7 @@ import os, sys, warnings
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("CDIRS", "16384")
 import numpy as np, torch
 from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, AXIS0_DEDUP_COS, _axes_from_cell,
-                               _third_axis, _fib_halfsphere, _azimuth_grid, _depth,
+                               _third_axis, _fib_halfsphere, _azimuth_grid, _depth, _canonical_laue,
                                _both_hands, _ref_setting, _ref_settings)
 from glint.multishot import same_lattice
 
@@ -244,6 +244,7 @@ def _cpu_stage(best, pol, mp, mainb, Mc):
 def index_known_gpu_cell_batch(frames, Mc, topa=8, nc=None, full_grid=False, laue=None):
     """Returns list of M (3x3 np) or None, one per frame -- single batched pass over all F.
     topa / nc / full_grid set the search depth (see _cell_params); the defaults are the shipped search."""
+    laue = _canonical_laue(laue)
     return _settle(_cpu_stage(*_gpu_stage(frames, Mc, topa, nc, full_grid, laue), Mc), Mc, laue)
 
 
@@ -269,6 +270,7 @@ def index_known_deep_batch(frames, Mc, topa, nc, full_grid=True, budget=12000, r
     same matched count as the per-frame replica_gpu.index_known_gpu_cell, fused 0.9-1.8 ms per search
     against about 20 ms per frame. The per-frame search is always fp64; this one runs at the module's
     working precision (KC_FP), so KC_FP=64 is the configuration that equivalence was measured in."""
+    laue = _canonical_laue(laue)
     topa = _depth("topa", topa); nc = _depth("nc", nc)
     if isinstance(budget, (bool, np.bool_)) or not isinstance(budget, (int, np.integer)) or budget < 1:
         raise ValueError(f"budget must be an integer >= 1, got {budget!r}")
@@ -374,6 +376,7 @@ def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS, laue=None):
     full-rate -- the sort just makes each graph's fixed Pmax tight instead of over-padding the
     largest frame. Oversized frames (> max bucket) fall back to the eager path. cuSOLVER-free
     (analytic solve, ~1e-13 vs linalg). CPU / capture-unsupported -> eager."""
+    laue = _canonical_laue(laue)
     if DEV != "cuda":
         return [M for i in range(0, len(frames), B)
                 for M in index_known_gpu_cell_batch(frames[i:i + B], Mc, laue=laue)]
@@ -452,6 +455,7 @@ def index_fused(frames, Mc, B=32, topa=8, nc=None, full_grid=False, laue=None):
     depth sweep on the cxidb-17 480 gave 308 / 341 / 365 / 379 frames at 0.15 / 0.27 / 0.40 / 0.94 ms per
     frame for (topa, nc) = (8, 16), (32, 16), (32, 32) and (128, 32) on the full grid, B=120, one A100
     (branch exp/batched-escalation)."""
+    laue = _canonical_laue(laue)
     if DEV != "cuda":
         return _unfused(frames, Mc, B, topa, nc, full_grid, laue)
     try:

@@ -288,6 +288,13 @@ def _both_hands(L2, c01, c02, c12, laue=None):
     return float(np.degrees(np.arcsin(min(inplane / L2, 1.0)))) > MIRROR_TOL_DEG
 
 
+def _canonical_laue(laue):
+    if laue is None:
+        return None
+    from glint.stream_driver import laue_name
+    return laue_name(laue)
+
+
 # Proper unimodular changes of basis with entries in {-1, 0, 1}: enough to reach every setting of a lattice
 # basis whose axes are sums or differences of the reference's (a+c for c, a swapped pair, ...).
 _UNIMOD = np.array(list(itertools.product((-1, 0, 1), repeat=9)), dtype=float).reshape(-1, 3, 3)
@@ -400,6 +407,7 @@ def index_known_gpu_cell(q, Mc, topa=8, nc=None, laue=None):
     topa (azimuths kept per anchor) and nc (anchor directions, default NC) set the search depth. The
     shipped rescue uses the defaults; the escalation arm runs topa=128, nc=32 (RESULTS_escalation.md's T2).
     Both must be integers >= 1 (ValueError otherwise, before any search)."""
+    laue = _canonical_laue(laue)
     topa = _depth("topa", topa)
     nc = None if nc is None else _depth("nc", nc)
     L, c01, c02, c12, sgn = _axes_from_cell(Mc)

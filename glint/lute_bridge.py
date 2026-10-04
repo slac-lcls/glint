@@ -259,7 +259,7 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
         if top_n and len(x) > top_n:                               # keep the strongest (guards over-finding)
             s = np.asarray(pk.get("intensity", pk.get("snr", np.zeros(len(x)))))
             keep = np.argsort(s)[::-1][:top_n]; x, y = x[keep], y[keep]
-        q = _q(x, y, i) if len(x) >= min_peaks else np.empty((0, 3))
+        q = _q(x, y, i) if len(x) else np.empty((0, 3))
         frames.append(q if len(q) >= min_peaks else np.empty((0, 3)))         # min_peaks counts usable rows
     _report_dropped()
     return frames, images

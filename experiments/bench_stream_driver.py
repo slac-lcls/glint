@@ -60,7 +60,7 @@ for fr in range(nf):
         scale[fr] = gmean * fs
 print(f"{int(np.isnan(scale).sum())}/{nf} frames not merged (mean(I) not measured)")
 _ok = np.isfinite(scale[frames])
-frames, H, I, S = frames[_ok], H[_ok], I[_ok], S[_ok]
+frames, H, I, S, key = frames[_ok], H[_ok], I[_ok], S[_ok], key[_ok]
 Is = I * scale[frames]
 
 

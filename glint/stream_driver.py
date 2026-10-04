@@ -521,6 +521,8 @@ class MergeAccumulator:
             good = good & np.isfinite(values) & np.isfinite(weights)
         I, sigma, hkl = I[good], sigma[good], np.asarray(hkl, int)[good]
         if I.size == 0:
+            if not _part:
+                self.n_refused += 1; self.n_frames += 1
             return
         if _part:
             v = values[good]

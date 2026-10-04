@@ -111,6 +111,7 @@ class MergeAccumulatorDevice:
         good = np.isfinite(I) & np.isfinite(sigma)
         I, sigma, hkl = I[good], sigma[good], np.asarray(hkl, int)[good]
         if I.size == 0:
+            self.n_refused += 1; self.n_frames += 1
             return
         scale = frame_scale(I)                               # host's rule: same gate, same scale
         if scale is None:

@@ -62,12 +62,15 @@ for line in open(stream):
             except ValueError:
                 continue
             frames.append(fi); H.append((h, k, l)); I.append(ii); S.append(ss)
-frames = np.array(frames); H = np.array(H); I = np.array(I); S = np.maximum(np.array(S), 1e-3)
+frames = np.array(frames); H = np.array(H); I = np.array(I); S = np.array(S)
 nf = frames.max() + 1
 print(f"{len(I)} measurements over {nf} indexed frames ({len(I)//max(nf,1)}/frame); "
       f"<I/sig>={np.mean(I/S):.2f}")
 
 # ---- per-frame linear scale to common mean (1 pass) ----
+good = np.isfinite(I) & np.isfinite(S)
+frames, H, I, S = frames[good], H[good], I[good], S[good]
+S = np.maximum(S, 1e-3)
 gmean = I[I > 0].mean()
 # frames whose mean intensity is not measured are dropped, the live merge's rule (frame_scale,
 # review r2 s1-01/s1-04); they used to stay in raw units with scale 1

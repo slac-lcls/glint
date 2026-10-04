@@ -88,6 +88,17 @@ b = acc.merged_by_key()
 check("merged intensities unchanged by the frame",
       max(abs(b[k] / a[k] - 1) for k in a) == 0.0)
 
+print("\n2a. empty default-merge frames are refused, explicit partiality frames are unchanged")
+acc = MergeAccumulator(ops=laue_ops_4mmm())
+acc.add_frame(np.ones((6, 3), int), np.full(6, np.nan), np.ones(6), 0)
+acc.add_frame(np.empty((0, 3), int), [], [], 1)
+check("empty and all-nonfinite default frames are refused",
+      acc.stats()["frames"] == 2 and acc.stats()["refused_frames"] == 2)
+acc = MergeAccumulator(ops=laue_ops_4mmm())
+acc.add_frame(np.empty((0, 3), int), [], [], 0, values=[], weights=[])
+check("empty explicit-values frame keeps existing accounting",
+      acc.stats()["frames"] == 0 and acc.stats()["refused_frames"] == 0)
+
 print("\n3. 5% lattice-free frames (mean(I) > 0 but not significant) do not collapse the live CC1/2")
 noisy = []
 for f in good:
@@ -115,6 +126,9 @@ print("\n5. the offline merge (experiments/merge_stats.py) uses the same rule")
 with tempfile.TemporaryDirectory() as td:
     path = os.path.join(td, "g.stream")
     frames = good[:60] + [nf]                       # nf: the last noise frame, refused by the gate
+    hkl0, I0, s0 = frames[0]
+    frames[0] = (np.vstack((hkl0, hkl0[:2])), np.r_[I0, np.nan, I0[1]],
+                 np.r_[s0, s0[0], np.nan])
     with open(path, "w") as fh:
         for hkl, I, s in frames:
             fh.write("----- Begin chunk -----\n--- Begin crystal\nReflections measured after indexing\n"

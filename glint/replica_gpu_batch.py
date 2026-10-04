@@ -132,9 +132,8 @@ def _orthogonal_L0(Mc):
     (twice in _gpu_stage) and once per index_fused call, and _orthogonal + _axes_from_cell cost ~45 us on a Mac
     each time. Uncached (153ecf8), that repeated work was 60-65 % of the host time index_fused added over main at
     B=32 and 32-38 % at B=120 (Mac, GPU work stubbed, the 120 cxidb-17 frames AG02b times); the rest was _frame_qmax,
-    run over every frame once per call and again per batch, now once per call. No GPU job has timed index_fused
-    with either change, so whether the +3-7 % the review-r2 GPU job (AG02b) measured on 153ecf8 is gone is not
-    known."""
+    run over every frame once per call and again per batch, now once per call. Review-r2 GPU rerun v3 on an A100
+    measured the cached version within the 1.03x + 0.005 ms limit at B=32/64/120 in both fp32 and fp64."""
     k = np.asarray(Mc, float).tobytes()
     if k not in _CELL_L0:
         if len(_CELL_L0) >= 256:                     # a relocking stream sees a handful of cells; never grow unbounded

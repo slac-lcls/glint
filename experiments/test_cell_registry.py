@@ -348,13 +348,12 @@ def test_default_config_stats_key_set_unchanged():
 
 def test_new_constructor_options_are_appended():
     params = list(inspect.signature(StreamDriver.__init__).parameters)
-    assert params[-14:] == ["roster", "events", "on_event", "cell_window",
+    assert params[-13:] == ["roster", "events", "on_event", "cell_window",
                             "assign", "assign_margin", "assign_margin_frac",
                             "per_lattice", "per_lattice_below",
                             "hits_only", "rescue_pixels", "effort",
-                            "null_floor", "per_panel_finder"], params[-15:]
+                            "null_floor"], params[-14:]
     sig = inspect.signature(StreamDriver.__init__).parameters
-    assert sig["per_panel_finder"].default is False
     assert sig["roster"].default is None and sig["events"].default is False
     assert sig["on_event"].default is None and sig["cell_window"].default == 200
     assert (sig["assign"].default, sig["assign_margin"].default, sig["assign_margin_frac"].default) == ("first", 8, 0.05)

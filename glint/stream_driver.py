@@ -45,10 +45,10 @@ except Exception:                                            # pragma: no cover 
     _HAVE_CP = False
 
 from glint.lattice import LENGTH_ORDER_LAUE, UNIQUE_C_LAUE, cell_to_Ar, standardize_axes
-from glint.lute_bridge import peaks_to_q, slab_rects
+from glint.lute_bridge import peaks_to_q
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
                            _hkl_grid, project_q)
-from glint.peakfinder_v4 import PeakFinderV4, PerPanelFinder
+from glint.peakfinder_v4 import PeakFinderV4
 from glint.running_consensus import RunningConsensus
 from glint.multishot import same_lattice
 from glint.multilattice import deflate_peaks
@@ -860,9 +860,7 @@ class StreamDriver:
                  # adaptive effort (off by default): the search depth follows the hit rate -- see _EffortPolicy
                  effort=None,
                  # a per-peak-count chance floor on the live gate (off by default) -- see min_inlier_frac
-                 null_floor=None,
-                 # one peak finder per panel rectangle of a multi-panel slab (off by default) -- see below
-                 per_panel_finder=False):
+                 null_floor=None):
         if use_gpu and not _HAVE_CP:
             raise RuntimeError("cupy required for the device-resident path")
         self.gpu = bool(use_gpu)
@@ -903,18 +901,7 @@ class StreamDriver:
         # built ONCE and reused; dtype=float32 is what enables the fused GPU stats kernel
         kw = dict(dtype=xp.float32) if self.gpu else {}
         kw.update(pf_kw or {})
-        # per_panel_finder: a multi-panel slab gets one finder per panel rectangle, so no ring, local-max
-        # window or labelling reaches across a panel seam into rows that are elsewhere in the lab
-        # (PerPanelFinder). OFF by default: on 64-panel CSPAD it costs ~1 ms per panel per frame on an
-        # A100 (end to end 73.0 vs 8.6 ms/frame, review-r2 GPU job 39724839) until the panels share one
-        # launch. One panel -- every synthetic and square-frame caller -- is unchanged either way.
-        self.per_panel_finder = bool(per_panel_finder)
-        rects = slab_rects(panels, self.shape) if self.per_panel_finder and len(self.shape) == 2 else None
-        if rects is None:
-            self.finder = PeakFinderV4(m, **kw)
-        else:
-            self.finder = PerPanelFinder([PeakFinderV4(m[a:b, c:d], **kw) for (a, b, c, d) in rects],
-                                         rects, self.shape)
+        self.finder = PeakFinderV4(m, **kw)
 
         # preallocated resident ring -- no per-frame device allocation
         self._ring = [xp.zeros(self.shape, self.dtype) for _ in range(self.B)]

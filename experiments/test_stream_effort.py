@@ -116,7 +116,7 @@ def test_off_by_default_and_options_validated():
     assert len(o.calls) == 2 and all(kw == {} for _, kw in o.calls), o.calls   # the shipped call, verbatim
     assert "effort" not in d.stats() and not _effort_events(d)
     params = inspect.signature(StreamDriver.__init__).parameters
-    assert list(params)[-3:] == ["effort", "null_floor", "per_panel_finder"] and params["effort"].default is None
+    assert list(params)[-2:] == ["effort", "null_floor"] and params["effort"].default is None
     assert params["null_floor"].default is None
     bad = [(5, "must be a dict"), ({}, "rate_hz"), (dict(rate_hz=0), "rate_hz"), (dict(rate_hz=-2.0), "rate_hz"),
            (dict(rate_hz=1e3, n_gpu=0), "n_gpu"), (dict(rate_hz=1e3, k_null=0), "k_null"),

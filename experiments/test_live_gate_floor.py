@@ -74,7 +74,7 @@ def test_fixture_sits_where_the_measurement_says():
 def test_signature_default_and_validation():
     import inspect
     sig = inspect.signature(StreamDriver.__init__).parameters
-    assert list(sig)[-2:] == ["null_floor", "per_panel_finder"] and sig["null_floor"].default is None, list(sig)[-3:]
+    assert list(sig)[-1] == "null_floor" and sig["null_floor"].default is None, list(sig)[-3:]
     for bad in ((0.1,), (0.1, 1.0, 2.0, 3.0), (float("nan"), 1.0), (0.1, float("inf")), "0.1,5", (True, 1.0),
                 {"a": 1, "b": 2}, 3.0, (0.1, "5"), {0.1, 5.0}, frozenset((0.02, 5.0, 1.2)),
                 (v for v in (0.1, 5.0)), np.array([[0.1, 5.0]])):

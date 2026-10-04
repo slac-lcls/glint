@@ -25,7 +25,7 @@ peakfinder9 (Gevorkov/CFEL). Authors of this GPU version: SLAC LCLS DRP team, wi
 import os
 import numpy as np
 
-__all__ = ["peakfinder_v4", "PeakFinderV4", "PerPanelFinder", "merge_panel_peaks"]
+__all__ = ["peakfinder_v4", "PeakFinderV4"]
 
 
 def _xp(a):
@@ -462,49 +462,3 @@ def peakfinder_v4(image, mask=None, **kw):
     if mask is None:
         mask = (image == image)
     return PeakFinderV4(mask, **kw).find(image)
-
-
-def merge_panel_peaks(peaks, rects):
-    """Concatenate per-panel peak dicts into one, in data-array coordinates: each panel's x (fs) is
-    shifted by its rect's fs0 and y (ss) by its ss0. `rects` are half-open (ss0, ss1, fs0, fs1)."""
-    xp = _xp(peaks[0]["x"])
-    out = {"x": xp.concatenate([pk["x"] + rc[2] for pk, rc in zip(peaks, rects)]),
-           "y": xp.concatenate([pk["y"] + rc[0] for pk, rc in zip(peaks, rects)])}
-    for k in ("intensity", "snr", "npix"):
-        out[k] = xp.concatenate([pk[k] for pk in peaks])
-    return out
-
-
-class PerPanelFinder:
-    """One local peak finder per detector panel of a panel-stacked data array, called as one finder.
-
-    A CrystFEL geometry lays its panels out as rectangles of one 2-D slab, and two panels that touch
-    in the ARRAY are in general not neighbours in the lab. A single v4/pf9 finder over the slab does not
-    know where a panel ends: its background ring, its local-max window and its connected-component
-    labelling all reach into the next panel's rows. Where the two panels' backgrounds differ, the
-    mixed ring inflates sigma and peaks within ~window_radius of the seam are lost; two spots on
-    either side of an unmasked seam merge into one peak with a centroid between them. Masking a
-    1-px panel border does not help, since the ring reaches r=4 px.
-
-    This runs one finder on each panel's own rectangle and shifts its peaks back into array
-    coordinates -- what experiments/xtc_bridge/xtc_core._PanelFinders does on the xtc route, and what
-    CrystFEL does per panel. Build it with one finder per rect, each on that rect's mask:
-
-        PerPanelFinder([PeakFinderV4(mask[a:b, c:d], **kw) for (a, b, c, d) in rects], rects, mask.shape)
-
-    `r`, `dt` and `p` are the first panel finder's, so code that reports the finder's settings still can.
-    """
-
-    def __init__(self, finders, rects, shape):
-        self.finders = list(finders)
-        self.rects = [tuple(int(v) for v in rc) for rc in rects]
-        if len(self.finders) != len(self.rects) or not self.finders:
-            raise ValueError("PerPanelFinder needs one finder per rect")
-        self.H, self.W = int(shape[0]), int(shape[1])
-        for k in ("r", "dt", "p", "_xp"):
-            if hasattr(self.finders[0], k):
-                setattr(self, k, getattr(self.finders[0], k))
-
-    def find(self, image):
-        return merge_panel_peaks([f.find(image[a:b, c:d])
-                                  for f, (a, b, c, d) in zip(self.finders, self.rects)], self.rects)

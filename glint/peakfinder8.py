@@ -307,11 +307,14 @@ class PeakFinder8:
         self._goodb_f[:] = g
         self._goodb_u8[:] = g
         if self._graph is None:
-            st = cupy.cuda.Stream(non_blocking=True)
-            with st:
-                self._loop_pre(); st.synchronize()
-                st.begin_capture(); self._loop_pre(); self._graph = st.end_capture()
-            self._gstream = st
+            self._gstream = cupy.cuda.Stream(non_blocking=True)
+            self._input_ready = cupy.cuda.Event()
+        self._input_ready.record()
+        self._gstream.wait_event(self._input_ready)
+        if self._graph is None:
+            with self._gstream:
+                self._loop_pre(); self._gstream.synchronize()
+                self._gstream.begin_capture(); self._loop_pre(); self._graph = self._gstream.end_capture()
         self._graph.launch(self._gstream); self._gstream.synchronize()
         return self._snr.reshape(self.H, self.W), self._bg
 

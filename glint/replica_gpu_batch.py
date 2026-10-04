@@ -378,8 +378,8 @@ def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS):
     if DEV != "cuda":
         return [M for i in range(0, len(frames), B) for M in index_known_gpu_cell_batch(frames[i:i + B], Mc)]
     P = _cell_params(Mc); cell = tuple(np.asarray(Mc, float).ravel().round(6))
-    order = sorted((i for i in range(len(frames)) if len(frames[i])),
-                   key=lambda i: len(frames[i]))   # size-homogeneous batches; an empty frame stays None
+    order = sorted((i for i in range(len(frames)) if len(frames[i]) >= 6),
+                   key=lambda i: len(frames[i]))   # size-homogeneous batches; a sparse frame stays None
     out = [None] * len(frames)
     for s in range(0, len(order), B):
         chunk = order[s:s + B]; fb = [frames[j] for j in chunk]; Fb = len(fb)

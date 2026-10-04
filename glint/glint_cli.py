@@ -109,12 +109,19 @@ def main():
                     help="sparse mode: which consensus-consistent candidate a frame keeps. first = the first N-best "
                          "cell, the known-cell search only if there is none (default); matched = the known-cell search "
                          "on every frame, keep whichever candidate matches the most peaks")
-    ap.add_argument("--gate", choices=("none", "strict"), default="none",
+    ap.add_argument("--gate", choices=("none", "strict", "floor"), default="none",
                     help="what a frame must satisfy to be WRITTEN as a crystal. none (default): every registration, "
                          "as before -- with --cell that is nearly every frame, since a known-cell search always "
                          "returns the asked-for cell. strict: >= 10 peaks and >= 25%% of the frame's peaks matched "
                          "(the paper's scoring bar); a failing frame is written as unindexed and is skipped by "
-                         "--integrate and --tofile. Not null-calibrated: ~5%% of dense lattice-free frames pass")
+                         "--integrate and --tofile. Not null-calibrated: on cxidb-17 it writes about 1 in 4 lattice-free "
+                         "frames below 60 peaks. "
+                         "floor: strict plus a per-peak-count chance floor (needs --floor)")
+    ap.add_argument("--floor", metavar="NAME|a,b[,c]",
+                    help="with --gate floor: keep a frame of n peaks only if its matched count is >= a*n + b + "
+                         "c*sqrt(n). NAME picks a calibration fitted on one dataset -- 'cxidb17' (cxidb-17 lysozyme, "
+                         "pf8 peaks, --cell 79 79 38 90 90 90) -- and is only valid for data like it; on other data "
+                         "re-fit with experiments/cli_gate_null.py and pass the numbers")
     ap.add_argument("--integrate", action="store_true",
                     help="native predict+integrate -> a stream with REAL I/sigma, self-contained (no CrystFEL). "
                          "With --images the frames are read straight from the stacked .cxi by event; with --peaks "
@@ -159,6 +166,10 @@ def main():
     args = ap.parse_args()
     if (args.peaks or args.images) and not args.geom:
         ap.error("--peaks/--images requires --geom")
+    if args.floor is not None and args.gate != "floor":
+        ap.error("--floor is used only with --gate floor")
+    if args.gate == "floor" and args.floor is None:
+        ap.error("--gate floor needs --floor NAME|a,b[,c] (the floor is dataset-specific; see --help)")
     if args.device == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
@@ -174,6 +185,14 @@ def main():
 
     from glint.hybrid_stream import hybrid_index, dense_index, _report   # torch import deferred to here
     from glint.stream import write_stream
+    gate_floor = None
+    if args.gate == "floor":                                     # checked before any frame is searched
+        from glint.hybrid_stream import resolve_floor
+        spec = args.floor.strip()
+        try:
+            gate_floor = resolve_floor(spec.split(",") if "," in spec else spec)
+        except ValueError as e:
+            ap.error(f"--floor: {e}")
     from glint.glint_fast import CLUSTER_MIN
     mode = args.mode
     if mode == "auto":
@@ -190,8 +209,10 @@ def main():
                                       escalate=args.escalate or None, select=args.select)
     if args.gate != "none":                                      # before --integrate / --tofile / the stream
         from glint.hybrid_stream import gate_results
-        stats["n_gated"] = gate_results(results, frames, args.gate)
+        stats["n_gated"] = gate_results(results, frames, args.gate, floor=gate_floor)
         stats["gate"] = args.gate
+        if gate_floor is not None:
+            stats["gate_floor"] = gate_floor
         stats["n_idx"] -= stats["n_gated"]
     if args.integrate:
         if not args.geom:

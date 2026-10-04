@@ -33,10 +33,49 @@ def _hkl(q, M):
     return r[inl].astype(int), q[inl], int(inl.sum())
 
 
-GATES = ("none", "strict")
+GATES = ("none", "strict", "floor")
+
+# Chance floors for gate "floor", (a, b, c): a registration is kept only if matched_strict >= a*n + b + c*sqrt(n)
+# for a frame of n peaks, on top of the strict bar. Each one is the 99th percentile of what glint_cli's --cell
+# route (hybrid_index: blind N-best, then the per-frame index_known_gpu_cell rescue) matches on azimuth-scrambled
+# copies of ONE dataset's frames. DATASET-SPECIFIC: the null moves with the cell, the peak finder, the detector
+# and the search depth, so on other data re-fit with experiments/cli_gate_null.py and pass the coefficients.
+#   cxidb17: cxidb-17 lysozyme, q480_fix.txt (480 frames, pf8 peaks), --cell 79.02 79.02 37.98 90 90 90,
+#            32 copies per frame, CPU torch: 0.26 % of the copies pass (1.0 % below 60 peaks), 344 of the 354 strict
+#            frames are kept; experiments/RESULTS_cli_gate_null.md. Not StreamDriver's NULL_FLOOR_CXIDB17, which
+#            was fitted for the driver's batched engine and count; the two come out close but were fitted apart.
+CLI_NULL_FLOORS = {"cxidb17": (0.0246, 5.39, 1.188)}
 
 
-def gate_results(results, frames, gate="none"):
+def resolve_floor(floor):
+    """A floor for gate "floor" -> (a, b) or (a, b, c) as floats. Accepts a name in CLI_NULL_FLOORS or an
+    ordered sequence of 2 or 3 finite numbers (a list, tuple or array; a set has no order and is refused, as are
+    NaN / inf, strings that are not a known name, and any other length)."""
+    if isinstance(floor, str):
+        if floor not in CLI_NULL_FLOORS:
+            raise ValueError(f"unknown floor name {floor!r}; known: {sorted(CLI_NULL_FLOORS)}, or give a, b[, c]")
+        return tuple(float(v) for v in CLI_NULL_FLOORS[floor])
+    if not isinstance(floor, (list, tuple, np.ndarray)) or np.ndim(floor) != 1:
+        raise ValueError(f"floor must be a name or an ordered (a, b[, c]), got {floor!r}")
+    if any(isinstance(v, (bool, np.bool_)) for v in floor):
+        raise ValueError(f"floor coefficients must be numbers, not booleans: {floor!r}")
+    try:
+        fl = tuple(float(v) for v in floor)
+    except (TypeError, ValueError):
+        raise ValueError(f"floor coefficients must be numbers, got {floor!r}") from None
+    if len(fl) not in (2, 3) or not all(np.isfinite(fl)):
+        raise ValueError(f"floor must be 2 or 3 finite numbers (a, b[, c]), got {floor!r}")
+    return fl
+
+
+def floor_value(n, floor):
+    """The chance floor at n peaks: a*n + b (+ c*sqrt(n)) for floor = (a, b[, c]) (see resolve_floor)."""
+    fl = resolve_floor(floor)
+    n = np.asarray(n, float)
+    return fl[0] * n + fl[1] + (fl[2] * np.sqrt(n) if len(fl) > 2 else 0.0)
+
+
+def gate_results(results, frames, gate="none", floor=None):
     """Withdraw, in place, the registration of every frame that fails `gate`; return how many were withdrawn.
 
     Without a gate (``"none"``, the default and the historical output) every registration the indexer returns
@@ -48,13 +87,26 @@ def gate_results(results, frames, gate="none"):
     ``"strict"`` applies the paper's scoring bar to what gets WRITTEN: at least GATE_MIN peaks matched and at
     least GATE_FRAC of the frame's peaks (matched_strict, |q @ M - round(q @ M)| < GATE_TOL). A withdrawn frame
     is written exactly as an unindexed one (M, hkl None; q the frame's peaks), so --integrate and --tofile skip
-    it too. The strict bar is not a null-calibrated one: on dense lattice-free frames it still passes about 5 %
-    (azimuth-scrambled cxidb-17, 26 / 480), so at a hit rate of a few percent most of what passes can still be
-    chance. A per-peak-count floor calibrated on a scrambled null is the follow-up."""
+    it too. The strict bar is not a null-calibrated one: on SPARSE lattice-free frames it passes often, because
+    the search maximises the matched count over many orientations and 25 % of a few dozen peaks is within reach
+    of chance. With --cell on cxidb-17 it writes 29 of 480 azimuth-scrambled frames (all at 38-60 peaks) and
+    23 % of scrambled copies below 60 peaks, none above 90 (experiments/RESULTS_cli_gate_null.md).
+
+    ``"floor"`` is strict plus a chance floor: matched_strict >= a*n + b (+ c*sqrt(n)) for a frame of n peaks,
+    `floor` a name in CLI_NULL_FLOORS or the coefficients (resolve_floor). Fitted at the 99th percentile of the
+    route's matched count on azimuth-scrambled frames, it holds chance accepts to at most about 1 % at every
+    peak count for the dataset it was fitted on; the constants are dataset-specific (see CLI_NULL_FLOORS). `floor` must be
+    given with gate "floor" and only with it, so a floor never goes silently unused."""
     if gate not in GATES:
         raise ValueError(f"gate must be one of {GATES}, got {gate!r}")
     if len(results) != len(frames):
         raise ValueError(f"results ({len(results)}) and frames ({len(frames)}) must align one to one")
+    if gate == "floor":
+        if floor is None:
+            raise ValueError('gate "floor" needs floor= (a name in CLI_NULL_FLOORS or a, b[, c])')
+        fl = resolve_floor(floor)
+    elif floor is not None:
+        raise ValueError(f'floor= is used only by gate "floor", not {gate!r}')
     if gate == "none":
         return 0
     n = 0
@@ -64,7 +116,7 @@ def gate_results(results, frames, gate="none"):
             continue
         q = np.asarray(q, float)
         m = matched_strict(np.asarray(M, float), q)
-        if m >= GATE_MIN and m >= GATE_FRAC * len(q):
+        if m >= GATE_MIN and m >= GATE_FRAC * len(q) and (gate == "strict" or m >= floor_value(len(q), fl)):
             continue
         r.update(M=None, hkl=None, q=q)
         n += 1
@@ -355,12 +407,20 @@ def dense_index(frames, images=None, warmup=True):
     return results, stats
 
 
+def _floor_note(stats):
+    fl = stats.get("gate_floor")
+    if fl is None:
+        return ""
+    return f"; floor {fl[0]:g} n + {fl[1]:g}" + (f" + {fl[2]:g} sqrt(n)" if len(fl) > 2 else "")
+
+
 def _report(stats, out):
     n = max(stats["n"], 1)
     if stats.get("mode") == "dense":
         print(f"=== GLINT dense/rotation (local-cluster FFT), N={stats['n']} ===")
         if "n_gated" in stats:
-            print(f"  gate ({stats['gate']})      : {stats['n_gated']} registrations withdrawn (written as unindexed)")
+            print(f"  gate ({stats['gate']})      : {stats['n_gated']} registrations withdrawn (written as unindexed)"
+                  + _floor_note(stats))
         print(f"  indexed            : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
         return
     print(f"=== GLINT hybrid (blind+consensus+general-rescue), N={stats['n']} ===")
@@ -388,7 +448,8 @@ def _report(stats, out):
         print(f"  escalated          : {stats['n_escalated']} of {c} gate-failing frames "
               f"(deep search + scrambled null, {stats['escalation_searches'] / max(c, 1):.1f} searches each)")
     if "n_gated" in stats:
-        print(f"  gate ({stats['gate']})      : {stats['n_gated']} registrations withdrawn (written as unindexed)")
+        print(f"  gate ({stats['gate']})      : {stats['n_gated']} registrations withdrawn (written as unindexed)"
+              + _floor_note(stats))
     print(f"  FINAL indexed      : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
 
 

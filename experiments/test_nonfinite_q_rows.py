@@ -32,7 +32,8 @@ WHAT IT CHECKS.
     7. index_blind_fast, index_blind_nbest and glint_index.index_blind on simulated frames with a zero, NaN or
        inf row return EXACTLY what they return on the clean frame (and the clean frame does index);
     8. index_known_gpu_cell, index_known_gpu_cell_batch and hybrid_index(Mc_known=...) likewise, and a batch
-       frame whose every row is bad is a miss (None), not a NaN or a starting-candidate matrix;
+       frame whose every row is bad is a miss (None), not a NaN or a starting-candidate matrix -- and so
+       is a frame left with 1-5 usable rows, as in the scalar index_known_gpu_cell (fewer than 6 is a miss);
     9. glint_cli._load_frames --qframes drops the rows before --min-peaks counts them.
 
   PYTHONPATH=. python experiments/test_nonfinite_q_rows.py      # exit 0 = all pass
@@ -449,6 +450,10 @@ def torch_parts():
         check("index_known_gpu_cell_batch: frames with a q = 0 / NaN row -> EXACTLY the clean batch's answers",
               ref[0] is not None and same(ref[0], got[0]) and same(ref[1], got[1]), got[:2])
         check("index_known_gpu_cell_batch: a frame whose every row is NaN is a miss (None)", got[2] is None, got[2])
+        sparse = np.vstack([q1[:3], [[NAN, NAN, NAN]] * 4])          # 7 rows, 3 usable: below the six-row floor
+        got = index_known_gpu_cell_batch([q1, sparse], Mc)
+        check("index_known_gpu_cell_batch: a frame left with 3 usable rows is a miss, like the scalar engine",
+              got[1] is None and index_known_gpu_cell(q1[:3], Mc) is None and same(got[0], ref[1]), got[1])
         real_nb = hs.index_blind_nbest
         hs.index_blind_nbest = lambda q, k: []      # the blind engine is covered above; this is the rescue path
         try:
@@ -467,7 +472,8 @@ def torch_parts():
             p = os.path.join(d, "frames.txt")
             with open(p, "w") as fh:
                 for i, q in enumerate(rows):
-                    fh.write(f"FRAME {i} {len(q)}\n" + "".join(f"{x!r} {y!r} {z!r}\n" for x, y, z in q))
+                    # .tolist(): plain floats. Under numpy >= 2 repr(np.float64) is 'np.float64(...)'.
+                    fh.write(f"FRAME {i} {len(q)}\n" + "".join(f"{x!r} {y!r} {z!r}\n" for x, y, z in q.tolist()))
             a = argparse.Namespace(qframes=p, images=None, geom=None, wavelength=None, N=0, min_peaks=6)
             fr, im = _load_frames(a)
         check("glint_cli._load_frames --qframes: bad rows dropped, then --min-peaks (frame 1: 5 usable) applied",

@@ -240,9 +240,10 @@ def index_known_gpu_cell_batch(frames, Mc, topa=8, nc=None, full_grid=False):
     topa / nc / full_grid set the search depth (see _cell_params); the defaults are the shipped search.
 
     Each frame first loses the rows glint.geom.q_rows_ok rejects (NaN/inf, |q| ~ 0): a NaN row used to
-    turn that frame's M into NaN. A frame left with NO rows is returned as None without entering the batch.
-    Padded into it, an empty frame comes back as an unrefined starting candidate, which is built from Mc's
-    own metric and so passes same_lattice; alone, it raised. Batches without an empty frame take the
+    turn that frame's M into NaN. A frame left with fewer than 6 rows is returned as None without entering
+    the batch, the same floor as the scalar index_known_gpu_cell. Padded into it, an empty or very sparse
+    frame can come back as an unrefined starting candidate, which is built from Mc's own metric and so
+    passes same_lattice; an empty one alone raised. Batches whose frames all have 6 or more rows take the
     unchanged single pass."""
     frames = clean_frames(frames)
     live = [j for j, f in enumerate(frames) if len(f) >= 6]
@@ -373,7 +374,8 @@ def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS):
     full-rate -- the sort just makes each graph's fixed Pmax tight instead of over-padding the
     largest frame. Oversized frames (> max bucket) fall back to the eager path. cuSOLVER-free
     (analytic solve, ~1e-13 vs linalg). CPU / capture-unsupported -> eager. Rows glint.geom.q_rows_ok
-    rejects are dropped first, and a frame left empty is a miss (None), as in index_known_gpu_cell_batch."""
+    rejects are dropped first, and a frame left with fewer than 6 rows is a miss (None), as in
+    index_known_gpu_cell_batch."""
     frames = clean_frames(frames)
     if DEV != "cuda":
         return [M for i in range(0, len(frames), B) for M in index_known_gpu_cell_batch(frames[i:i + B], Mc)]

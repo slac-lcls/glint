@@ -11,7 +11,7 @@ is main's; fp64, where .to(FP) is a no-op, was equal).
 A CPU cannot capture a graph, so this checks the ownership the fix adds, with torch.cuda's stream and graph API
 stood in by no-ops: build a _StageGraph from a fresh fp32 P, drop every other reference to P, and every tensor P
 held must still be alive (weakref). A control shows the same P's copies ARE collected without the graph, so the
-check can fail. The GPU replay check is pending: no GPU has run this commit yet.
+check can fail. GPU replay was also verified on an A100: repeated fp32 calls were bit-identical with this fix.
 
 SKIPS, exit 0, without torch or below pyproject's torch floor (>= 1.12), like test_kc_precision_default.py.
 

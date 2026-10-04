@@ -307,11 +307,11 @@ glint_xtc.read_qframes = _keep_out
 
 # ---------------------------------------------------------------- running + reading the stream
 def read_stream(path):
-    """-> {event: {photon_eV, recip (3,3) 1/A or None, rows (n,9) h k l I sig peak bg fs ss}}."""
+    """-> {event: {photon_eV, recip (3,3) 1/A or None, rows (n,9) h k l I sig peak bg fs ss, panels [name]}}."""
     chunks, cur, inref = {}, None, False
     for line in open(path):
         if line.startswith("----- Begin chunk"):
-            cur = {"photon_eV": None, "recip": [], "rows": []}
+            cur = {"photon_eV": None, "recip": [], "rows": [], "panels": []}
         elif line.startswith("Event:") and cur is not None:
             chunks[int(re.findall(r"\d+", line)[-1])] = cur
         elif line.startswith("photon_energy_eV") and cur is not None:
@@ -324,6 +324,7 @@ def read_stream(path):
             inref = False
         elif inref:
             cur["rows"].append([float(v) for v in line.split()[:9]])
+            cur["panels"].append(line.split()[9] if len(line.split()) > 9 else "")
     for c in chunks.values():
         c["rows"] = np.array(c["rows"]).reshape(-1, 9)
         c["recip"] = np.array(c["recip"]) if len(c["recip"]) == 3 else None
@@ -354,11 +355,11 @@ def indexed_events():
 def frame_checks(chunks, want):
     """s7-01: the WRITTEN rows sit on the true spots, carry the true hkl, integrate real signal, and
     the chunk's cell is the true right-handed basis in CrystFEL's frame."""
-    on, inv, lab, isig, cell = {}, {}, {}, {}, {}
+    on, inv, lab, isig, cell, pname = {}, {}, {}, {}, {}, {}
     for e in want:
         c, t = chunks.get(e), RUN[e]
         if c is None or not len(c["rows"]):
-            on[e] = inv[e] = lab[e] = isig[e] = float("nan"); cell[e] = False
+            on[e] = inv[e] = lab[e] = isig[e] = pname[e] = float("nan"); cell[e] = False
             continue
         rows = c["rows"]
         truth = np.stack([t["fs"], t["ss"]], 1)
@@ -378,6 +379,8 @@ def frame_checks(chunks, want):
         lab[e] = float(np.mean(np.all(rows[hit, :3] == t["hkl"][near[hit]], axis=1))) if hit.any() else 0.0
         isig[e] = float(np.median(rows[:, 3] / np.where(rows[:, 4] > 0, rows[:, 4], np.inf)))
         cell[e] = c["recip"] is not None and np.allclose(c["recip"], np.linalg.inv(t["M"]), atol=1e-6)
+        # each row names the .geom panel it lies on (q0..q3, by its slab ss), not a fallback 'p0'
+        pname[e] = float(np.mean([n == f"q{int(s // H)}" for n, s in zip(c["panels"], rows[:, 8])]))
     fmt = lambda dct: {e: round(v, 3) for e, v in dct.items()}       # noqa: E731
     check(all(v >= 0.9 for v in on.values()),
           f"written rows within 2 px of a true spot, per chunk {fmt(on)} (>= 0.9; on the "
@@ -386,6 +389,8 @@ def frame_checks(chunks, want):
           f"those rows carry the true hkl, per chunk {fmt(lab)} (>= 0.95)")
     check(all(v >= 10.0 for v in isig.values()), f"median I/sigma per chunk {fmt(isig)} (>= 10)")
     check(all(cell.values()), f"each chunk's astar/bstar/cstar is the true right-handed basis ({cell})")
+    check(all(v == 1.0 for v in pname.values()),
+          f"every row names the .geom panel it lies on, per chunk {fmt(pname)} (== 1)")
 
 
 # ---------------------------------------------------------------- cases

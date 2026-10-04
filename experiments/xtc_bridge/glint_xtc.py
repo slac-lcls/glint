@@ -298,8 +298,11 @@ def integrate_and_write(results, args, out_path, report=True, lam_by_event=None)
 
     # Every chunk carries its own photon_eV; this run-level value is only the writer's fallback.
     lam_run = args.wavelength or float(np.median(list(lams.values())))
+    # predict_spots tags each reflection with its index into `panels`; the writer names the row by it
+    # (partialator keys per-panel geometry off that column). Without the map every row says 'p0'.
     n = write_stream_integrated(out, out_path, geom_text=open(args.geom).read(),
-                                clen_m=args.zdist, photon_eV=xtc_core.HC_EV_A / lam_run)
+                                clen_m=args.zdist, photon_eV=xtc_core.HC_EV_A / lam_run,
+                                panel_names=[p["name"] for p in panels])
     if report:
         print(f"  wrote {n} integrated chunks -> {out_path}", flush=True)
     return n

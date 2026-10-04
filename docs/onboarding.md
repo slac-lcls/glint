@@ -369,8 +369,9 @@ python -m glint.glint_cli --qframes frames.txt -o indexed.stream
 
 Useful flags: `--cell "a b c al be ga"` (known cell) · `--nbest N` (consensus hypotheses) ·
 `--mode auto|sparse|dense` · `--escalate` (a deep known-cell search on the frames that still fail the gate,
-accepted only against the frame's own scrambled copies; glint#208) · `--gate none|strict` (write a frame as a
-crystal only if it passes the paper's scoring bar; glint#216) · `--cascade <driver>` (external fallback) ·
+accepted only against the frame's own scrambled copies; glint#208) · `--gate none|strict|floor` (write a frame as a
+crystal only if it passes the paper's scoring bar, glint#216; `floor` adds a per-peak-count chance floor
+fitted on scrambled frames, named or given with `--floor`, dataset-specific) · `--cascade <driver>` (external fallback) ·
 `--integrate` (real I/σ) · `--tofile <sol>` (hand orientations to CrystFEL for the refined merge) ·
 `--device cpu|auto`. `--images raw.cxi --geom detector.geom` runs GLINT's own peak finder on the pixels
 instead of reading a peak stream.

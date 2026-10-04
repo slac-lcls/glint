@@ -463,6 +463,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cli_gate.py
 
+      # glint_cli --gate floor: strict plus a per-peak-count chance floor fitted on azimuth-scrambled frames for the
+      # CLI's own --cell route (experiments/cli_gate_null.py). Synthetic frames with exact counts; the committed 120's
+      # sparse frames and their scrambled copies through the route (strict writes many copies, floor almost none,
+      # floor keeps the real frames); the CLI end to end, incl. the default stream == --gate none. Self-skips without torch.
+      - name: experiments/test_cli_gate_floor.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_cli_gate_floor.py
+
       # Review r2 s4-02: the batched known-cell engine's coarse 4096-direction anchor grid is used only where it is
       # safe -- orthogonal cell AND L0 * (the frame's largest |q|) <= KC_ADAPT_L0Q (25). Lysozyme / cxidb-17 stays on
       # it; 100x120x150 A at 1.8 A gets the full grid (7/16 orientation-correct on 149370e, >= 14/16 required). Also a

@@ -40,6 +40,10 @@ _EXPORTS = {
 }
 
 
+def __dir__():
+    return sorted(set(globals()) | set(_EXPORTS))
+
+
 def __getattr__(name):
     if name not in _EXPORTS:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

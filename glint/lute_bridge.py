@@ -74,6 +74,42 @@ def parse_geom(path):
     return out, glob
 
 
+def slab_rects(panels, shape):
+    """Each panel's rectangle in a 2-D data array, as half-open (ss0, ss1, fs0, fs1), when the geometry
+    tiles that array with MORE than one panel -- the case where a local peak finder (v4/pf9) has to run
+    per panel, or its ring, local-max window and labelling reach across a panel seam into rows that
+    are somewhere else in the lab. See peakfinder_v4.PerPanelFinder.
+
+    None means "one finder over the whole array", exactly as before, for:
+      * one panel, or panels that all share one rectangle;
+      * a 3-D/4-D layout, i.e. a panel with an integer dimN key (its slab is on a leading axis, which
+        a 2-D frame does not have);
+      * a rectangle that does not fit inside `shape`, rectangles that overlap, or panels without the
+        min/max_fs/ss keys -- geometries this cannot split honestly, so they are left alone."""
+    H, W = int(shape[0]), int(shape[1])
+    rects = []
+    try:
+        for p in panels:
+            for k in ("dim0", "dim1", "dim2", "dim3"):
+                v = p.get(k)
+                if v is not None and not isinstance(v, str) and float(v).is_integer():
+                    return None
+            rc = (int(p["min_ss"]), int(p["max_ss"]) + 1, int(p["min_fs"]), int(p["max_fs"]) + 1)
+            if not (0 <= rc[0] < rc[1] <= H and 0 <= rc[2] < rc[3] <= W):
+                return None
+            if rc not in rects:
+                rects.append(rc)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if len(rects) < 2:
+        return None
+    for i, a in enumerate(rects):
+        for b in rects[i + 1:]:
+            if a[0] < b[1] and b[0] < a[1] and a[2] < b[3] and b[2] < a[3]:
+                return None
+    return rects
+
+
 def panel_of(fs, ss, panels):
     fi, si = int(np.floor(fs)), int(np.floor(ss))   # fractional peak -> the pixel it lands in
     for i, p in enumerate(panels):
@@ -135,7 +171,7 @@ def _get_finder(name):
 
 
 def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, data_key=None,
-                    clen_scale=None, peakfinder="v4", top_n=0, ring_focus=None, **pf_kw):
+                    clen_scale=None, peakfinder="v4", top_n=0, ring_focus=None, per_panel=False, **pf_kw):
     """Self-contained GLINT front end: read a .cxi and bridge detector peaks to reciprocal q-vectors -- no
     CrystFEL peak-search stream in between. Returns (frames [(N,3) q in 1/A], images [{image,event}]).
 
@@ -143,6 +179,8 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
     -> REUSE the .cxi's own peakfinder8/Cheetah peaks in /entry_1/result_1 (no redundant peak-find -- the
     efficient path when FindPeaksSFX/Cheetah already stored them); 'pf8' -> not yet vendored (needs a q-map).
     top_n: keep only the N strongest peaks per frame (0 = all; guards a finder that over-finds on background).
+    per_panel: on a multi-panel slab, run the finder once per panel rectangle (slab_rects), so nothing it
+    computes reaches across a panel seam. Off by default: one finder per panel costs a fixed overhead per panel.
     clen/photon_energy may be per-event h5 paths; clen_scale converts encoder units to metres (auto: >10 => mm).
 
     cxi_path may also be a CrystFEL .list/.lst of .cxi files (FindPeaksSFX's result); frames from all listed
@@ -155,7 +193,7 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
             remaining = (n - len(frames)) if n else 0   # pass the REMAINING budget so we don't read whole files
             fr, im = frames_from_cxi(pth, geom_path, wavelength_A=wavelength_A, n=remaining, min_peaks=min_peaks,
                                      data_key=data_key, clen_scale=clen_scale, peakfinder=peakfinder,
-                                     top_n=top_n, **pf_kw)
+                                     top_n=top_n, per_panel=per_panel, **pf_kw)
             frames += fr; images += im
             if n and len(frames) >= n:
                 break
@@ -233,9 +271,18 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
         rmask = ring_qmask(panels, c0 * sc + coff, wl0, cell6, (data.shape[-2], data.shape[-1]), qlow=qlow)
         cmask = rmask if cmask is None else (cmask & rmask)
     finder = _get_finder(peakfinder)
+    # per_panel on a multi-panel slab: one finder per panel rectangle, so no background ring, local-max
+    # window or component reaches across a panel seam (peakfinder_v4.PerPanelFinder). One panel: unchanged.
+    rects = slab_rects(panels, (data.shape[-2], data.shape[-1])) if per_panel and data.ndim in (2, 3) else None
+    if rects is not None:
+        from glint.peakfinder_v4 import merge_panel_peaks
     for i in range(nfr):
         img = np.asarray(data[i] if data.ndim >= 3 else data, np.float32)
-        pk = finder(img, mask=cmask, **pf_kw)
+        if rects is None:
+            pk = finder(img, mask=cmask, **pf_kw)
+        else:
+            pk = merge_panel_peaks([finder(img[a:b, c:d], mask=None if cmask is None else cmask[a:b, c:d],
+                                           **pf_kw) for (a, b, c, d) in rects], rects)
         images.append({"image": cxi_path, "event": i})
         x, y = np.asarray(pk["x"]), np.asarray(pk["y"])
         if top_n and len(x) > top_n:                               # keep the strongest (guards over-finding)

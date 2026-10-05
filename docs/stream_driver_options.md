@@ -59,6 +59,7 @@ Columns: the option and its default; what it does; where it was measured (a pull
 | `mask` | `None` | good-pixel mask for the peak finder (`True` = good) | #19 | `--mask`, `--edge-mask N` |
 | `use_gpu` | `True` | CuPy device path; `False` is the numpy path the CI tests run | #19 | `--cupy` turns it on |
 | `pf_kw` | `None` | settings of the device peak finder (`glint.peakfinder_v4.PeakFinderV4`), e.g. `abs_thr`, `son_min`, `min_pix` | #19 | `--pf-kw JSON` |
+| `per_panel_finder` | `False` | on a multi-panel slab, one peak finder per panel rectangle (`glint.peakfinder_v4.PerPanelFinder`), so no background ring, local-max window or label reaches across a panel seam into rows that are elsewhere in the lab. Off because each panel costs ~1 ms per frame on an A100: 64-panel CSPAD end to end 73.0 against 8.6 ms/frame | review r2 s6-04; GPU job 39724839 | `--per-panel-finder` |
 | `min_peaks` | `6` | a frame with fewer peaks is a `blank`: counted, never indexed | #19 | — |
 | `B` | `64` | ring size and index batch: frames are indexed when `B` are queued. Not a saturation point — the fused known-cell engine costs 0.17 ms/hit at B=120 (fp64, one A100) and more per hit at smaller batches | #19; #165 | `--B` (the replays use 20) |
 | `hits_only` | `False` | a frame with too few peaks gives its ring slot straight back, so `B` counts hits and the batch is the size the engine was timed at | #212 | — |

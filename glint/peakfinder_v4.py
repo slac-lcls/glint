@@ -25,7 +25,7 @@ peakfinder9 (Gevorkov/CFEL). Authors of this GPU version: SLAC LCLS DRP team, wi
 import os
 import numpy as np
 
-__all__ = ["peakfinder_v4", "PeakFinderV4"]
+__all__ = ["peakfinder_v4", "PeakFinderV4", "PerPanelFinder", "merge_panel_peaks"]
 
 
 def _xp(a):
@@ -73,20 +73,25 @@ def _scatter_max(xp, rows, values, n):
 # the remaining lever. Default stays fp64 until it has run on real detector frames.
 FP32_RING = os.environ.get("PFV4_FP32", "0") == "1"
 
-_PFV4 = {}
-def _pfv4_kernel(fp32=None):
-    """One fused fp32 kernel: per pixel, border-ring mu/sigma + (2lmr+1) local-max, then the two SNR
-    thresholds -> snr, (I-bg), sigma^2, grow-flag (snr>thr_low), seed-flag (snr>thr_high & local max).
+# A pixel takes part in the ring, the local-max test and `valid` only if the mask keeps it AND its value
+# is a finite number -- the kernel twin of PeakFinderV4._usable. Written as two comparisons rather than
+# isfinite(): both are false for NaN and for +-inf, and the kernel needs no math header under NVRTC.
+FINITE_MACRO = "#define GLINT_FINITE(v) ((v) <= 3.402823466e+38f && (v) >= -3.402823466e+38f)\n"
 
-    `fp32` (default: the PFV4_FP32 env knob) switches the ring accumulator to the shifted fp32 form."""
-    fp32 = FP32_RING if fp32 is None else bool(fp32)
-    if fp32 not in _PFV4:
-        import cupy
-        acc, val = ("float", "(g>0 ? (haveK ? I[j]-K : (K=I[j], haveK=1, 0.0f)) : 0.0f)") if fp32 else ("double", "I[j]")
-        shift = "float K=0.0f; int haveK=0;" if fp32 else ""
-        unshift = " + K" if fp32 else ""
-        variance = "mbar*mbar" if fp32 else "(double)mu*mu"
-        _PFV4[fp32] = cupy.RawKernel(r"""
+
+def _pfv4_source(fp32):
+    """CUDA source of the fused stats kernel, ring accumulator in fp64 or (fp32=True) shifted fp32.
+    Kept separate from the RawKernel so the arithmetic can be compiled and checked off a GPU
+    (experiments/test_peakfinder_mask.py builds it as plain C++)."""
+    # The ring weight g is 0 for a masked or non-finite pixel, and its value v is then 0 as well:
+    # g*v with g=0 is NaN when v is NaN or inf, so in the fp64 form a masked NaN used to spoil every
+    # ring it sat in (the shifted fp32 form already gated v on g>0).
+    acc, val = (("float", "(g>0 ? (haveK ? I[j]-K : (K=I[j], haveK=1, 0.0f)) : 0.0f)") if fp32
+                else ("double", "(g>0 ? (double)I[j] : 0.0)"))
+    shift = "float K=0.0f; int haveK=0;" if fp32 else ""
+    unshift = " + K" if fp32 else ""
+    variance = "mbar*mbar" if fp32 else "(double)mu*mu"
+    return FINITE_MACRO + r"""
         extern "C" __global__ void pfv4_stats(const float* I, const float* good, int H, int W, int r, int lmr,
             float thr_low, float thr_high, float min_sig, float abs_thr, float sig_floor,
             float* snr, float* sub, float* var, unsigned char* grow, unsigned char* seed){
@@ -98,28 +103,40 @@ def _pfv4_kernel(fp32=None):
             int y=yy+dy; if(y<0||y>=H) continue;
             if(dy==-r || dy==r){
               for(int dx=-r; dx<=r; ++dx){ int x=xx+dx; if(x<0||x>=W) continue;
-                int j=y*W+x; __ACC__ g=good[j], v=__VAL__; s+=g*v; sq+=g*v*v; nn+=g; }
+                int j=y*W+x; __ACC__ g=__G__, v=__VAL__; s+=g*v; sq+=g*v*v; nn+=g; }
             } else {
-              int x=xx-r; if(x>=0){ int j=y*W+x; __ACC__ g=good[j], v=__VAL__; s+=g*v; sq+=g*v*v; nn+=g; }
-              x=xx+r; if(x<W){ int j=y*W+x; __ACC__ g=good[j], v=__VAL__; s+=g*v; sq+=g*v*v; nn+=g; }
+              int x=xx-r; if(x>=0){ int j=y*W+x; __ACC__ g=__G__, v=__VAL__; s+=g*v; sq+=g*v*v; nn+=g; }
+              x=xx+r; if(x<W){ int j=y*W+x; __ACC__ g=__G__, v=__VAL__; s+=g*v; sq+=g*v*v; nn+=g; }
             }
           }
           __ACC__ mbar = nn>0.5 ? s/nn : 0;
           float mu = nn>0.5 ? (float)(mbar__UNSHIFT__) : 0.0f;
           float vv = nn>0.5 ? (float)(sq/nn - __MEAN_SQ__) : 0.0f; if(vv<0.0f) vv=0.0f;
-          float sg = sqrtf(vv); int valid = (good[idx]>0.5f) && (nn>0.5) && (sg>min_sig);
+          float sg = sqrtf(vv); int valid = (good[idx]>0.5f) && GLINT_FINITE(Ic) && (nn>0.5) && (sg>min_sig);
           float sgf = sg > sig_floor ? sg : sig_floor;                 // noise floor for the SNR denominator
           float sb = Ic - mu; float sn = valid ? sb/(sgf+1e-12f) : 0.0f;
-          int islm = 1;                                        // local maximum over the (2*lmr+1) neighbourhood
+          int islm = 1;                 // local max over the GOOD, finite pixels of the (2*lmr+1) neighbourhood
           for(int dy=-lmr; dy<=lmr && islm; ++dy){ int y=yy+dy; if(y<0||y>=H) continue;
             for(int dx=-lmr; dx<=lmr; ++dx){ int x=xx+dx; if(x<0||x>=W) continue;
-              if(I[y*W+x] > Ic){ islm=0; break; } } }
+              int j=y*W+x; if(good[j]>0.5f && GLINT_FINITE(I[j]) && I[j] > Ic){ islm=0; break; } } }
           snr[idx]=sn; sub[idx]= sb>0.0f? sb:0.0f; var[idx]=vv;
           grow[idx] = (valid && sn > thr_low) ? 1 : 0;
           seed[idx] = (valid && sn > thr_high && islm && sb > abs_thr) ? 1 : 0;
-        }""".replace("__ACC__", acc).replace("__VAL__", val)
-             .replace("__SHIFT__", shift).replace("__UNSHIFT__", unshift)
-             .replace("__MEAN_SQ__", variance), "pfv4_stats")
+        }""".replace("__ACC__", acc).replace("__G__", "(GLINT_FINITE(I[j]) ? good[j] : 0.0f)") \
+            .replace("__VAL__", val).replace("__SHIFT__", shift).replace("__UNSHIFT__", unshift) \
+            .replace("__MEAN_SQ__", variance)
+
+
+_PFV4 = {}
+def _pfv4_kernel(fp32=None):
+    """One fused fp32 kernel: per pixel, border-ring mu/sigma + (2lmr+1) local-max, then the two SNR
+    thresholds -> snr, (I-bg), sigma^2, grow-flag (snr>thr_low), seed-flag (snr>thr_high & local max).
+
+    `fp32` (default: the PFV4_FP32 env knob) switches the ring accumulator to the shifted fp32 form."""
+    fp32 = FP32_RING if fp32 is None else bool(fp32)
+    if fp32 not in _PFV4:
+        import cupy
+        _PFV4[fp32] = cupy.RawKernel(_pfv4_source(fp32), "pfv4_stats")
     return _PFV4[fp32]
 
 
@@ -295,20 +312,37 @@ class PeakFinderV4:
         if not self._fused_gpu:
             self.yy, self.xx = (g.astype(xp.float64) for g in xp.mgrid[0:self.H, 0:self.W])
 
-    def _ring_bg(self, I):
-        """Portable adaptive local mu/sigma from the border ring (box-filter differences), CPU/fp64 path."""
-        xp = self._xp; ndi = self._ndi; r = self.r; goodf = self._goodf
+    def _usable(self, I):
+        """Per-frame usable pixels: the mask keeps them AND their value is finite. A NaN or inf pixel is
+        treated as a bad pixel whatever the mask says -- it cannot be a background sample, a local-max
+        competitor or a peak pixel. On a finite frame this is exactly `self.good`."""
+        return self.good & self._xp.isfinite(I)
+
+    def _ring_bg(self, I, good=None):
+        """Portable adaptive local mu/sigma from the border ring (box-filter differences), CPU/fp64 path.
+        `good` is the frame's usable-pixel mask (default ``_usable(I)``)."""
+        xp = self._xp; ndi = self._ndi; r = self.r
+        g = self._usable(I) if good is None else good
+        goodf = g.astype(self.dt)
         w, wi = 2 * r + 1, 2 * r - 1
         bs = lambda a, s: ndi.uniform_filter(a, size=s, mode="constant") * float(s * s)
-        Ig = I * goodf
-        ring_sum = bs(Ig, w) - bs(Ig, wi); ring_sq = bs(Ig * I, w) - bs(Ig * I, wi)
+        # Bad pixels are ZEROED with where(), never multiplied by a 0.0 weight: NaN*0 and inf*0 are NaN,
+        # and uniform_filter's running sum carries one NaN to the rest of its row and then, in the second
+        # separable pass, down every later row -- one masked NaN blanked the frame below and to the right
+        # of it. Bit-identical to the old `I * goodf` / `(I * goodf) * I` on a finite frame.
+        Ig = xp.where(g, I, 0.0); Ig2 = xp.where(g, I * I, 0.0)
+        ring_sum = bs(Ig, w) - bs(Ig, wi); ring_sq = bs(Ig2, w) - bs(Ig2, wi)
         ring_n = bs(goodf, w) - bs(goodf, wi); nz = ring_n > 0.5
         den = xp.where(nz, ring_n, 1.0); mu = ring_sum / den
         sig = xp.sqrt(xp.clip(ring_sq / den - mu * mu, 0.0, None))
         return mu, sig, nz
 
     def _stats(self, I):
-        """-> snr, sub(=clip(I-bg)), var(=sigma^2), grow (dual-thresh low), seed (dual-thresh high + local max)."""
+        """-> snr, sub(=clip(I-bg)), var(=sigma^2), grow (dual-thresh low), seed (dual-thresh high + local max).
+
+        Masked and non-finite pixels take no part in any of it: not the ring, not `valid`, and not the
+        local-max test -- a masked hot pixel next to a peak used to stop every pixel of the peak from
+        being a local maximum, so the peak had no seed and was dropped. The fused kernel does the same."""
         xp = self._xp; ndi = self._ndi; p = self.p; H, W = self.H, self.W
         if self._fused_gpu:
             Ic = xp.ascontiguousarray(I.ravel(), dtype=xp.float32)
@@ -319,12 +353,13 @@ class PeakFinderV4:
                         self._snr, self._sub, self._var, self._grow, self._seed))
             return (self._snr.reshape(H, W), self._sub.reshape(H, W), self._var.reshape(H, W),
                     self._grow.reshape(H, W), self._seed.reshape(H, W))
-        mu, sig, nz = self._ring_bg(I); sub = I - mu
-        valid = self.good & nz & (sig > p["min_sig"])
+        g = self._usable(I)
+        mu, sig, nz = self._ring_bg(I, g); sub = I - mu
+        valid = g & nz & (sig > p["min_sig"])
         sgf = xp.maximum(sig, p["sig_floor"]) if p["sig_floor"] > 0 else sig
         snr = xp.where(valid, sub / (sgf + 1e-12), 0.0)
         lm = 2 * p["local_max_radius"] + 1
-        islm = I >= ndi.maximum_filter(I, size=lm)
+        islm = I >= ndi.maximum_filter(xp.where(g, I, -xp.inf), size=lm)
         grow = valid & (snr > p["thr_low"])
         seed = valid & (snr > p["thr_high"]) & islm
         if p["abs_thr"] > 0:
@@ -427,3 +462,49 @@ def peakfinder_v4(image, mask=None, **kw):
     if mask is None:
         mask = (image == image)
     return PeakFinderV4(mask, **kw).find(image)
+
+
+def merge_panel_peaks(peaks, rects):
+    """Concatenate per-panel peak dicts into one, in data-array coordinates: each panel's x (fs) is
+    shifted by its rect's fs0 and y (ss) by its ss0. `rects` are half-open (ss0, ss1, fs0, fs1)."""
+    xp = _xp(peaks[0]["x"])
+    out = {"x": xp.concatenate([pk["x"] + rc[2] for pk, rc in zip(peaks, rects)]),
+           "y": xp.concatenate([pk["y"] + rc[0] for pk, rc in zip(peaks, rects)])}
+    for k in ("intensity", "snr", "npix"):
+        out[k] = xp.concatenate([pk[k] for pk in peaks])
+    return out
+
+
+class PerPanelFinder:
+    """One local peak finder per detector panel of a panel-stacked data array, called as one finder.
+
+    A CrystFEL geometry lays its panels out as rectangles of one 2-D slab, and two panels that touch
+    in the ARRAY are in general not neighbours in the lab. A single v4/pf9 finder over the slab does not
+    know where a panel ends: its background ring, its local-max window and its connected-component
+    labelling all reach into the next panel's rows. Where the two panels' backgrounds differ, the
+    mixed ring inflates sigma and peaks within ~window_radius of the seam are lost; two spots on
+    either side of an unmasked seam merge into one peak with a centroid between them. Masking a
+    1-px panel border does not help, since the ring reaches r=4 px.
+
+    This runs one finder on each panel's own rectangle and shifts its peaks back into array
+    coordinates -- what experiments/xtc_bridge/xtc_core._PanelFinders does on the xtc route, and what
+    CrystFEL does per panel. Build it with one finder per rect, each on that rect's mask:
+
+        PerPanelFinder([PeakFinderV4(mask[a:b, c:d], **kw) for (a, b, c, d) in rects], rects, mask.shape)
+
+    `r`, `dt` and `p` are the first panel finder's, so code that reports the finder's settings still can.
+    """
+
+    def __init__(self, finders, rects, shape):
+        self.finders = list(finders)
+        self.rects = [tuple(int(v) for v in rc) for rc in rects]
+        if len(self.finders) != len(self.rects) or not self.finders:
+            raise ValueError("PerPanelFinder needs one finder per rect")
+        self.H, self.W = int(shape[0]), int(shape[1])
+        for k in ("r", "dt", "p", "_xp"):
+            if hasattr(self.finders[0], k):
+                setattr(self, k, getattr(self.finders[0], k))
+
+    def find(self, image):
+        return merge_panel_peaks([f.find(image[a:b, c:d])
+                                  for f, (a, b, c, d) in zip(self.finders, self.rects)], self.rects)

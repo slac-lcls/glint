@@ -380,6 +380,8 @@ def main(argv=None):
     ap.add_argument("--clen", type=float, default=None, help="override the geometry's clen (m)")
     ap.add_argument("--pf-kw", default=None, help="JSON of PeakFinderV4 settings for pixel inputs")
     ap.add_argument("--edge-mask", type=int, default=0, help="mask this many pixels along every panel border")
+    ap.add_argument("--per-panel-finder", action="store_true",
+                    help="pixel inputs on a multi-panel slab: one peak finder per panel rectangle (StreamDriver per_panel_finder)")
     ap.add_argument("--mask", default=None, help=".npy bool array (True = good pixel), ANDed with the edge mask")
     ap.add_argument("--geom-refine", action="store_true", help="run the diagnostic geometry refiner (pixel or peaks input)")
     ap.add_argument("--effort", default=None, metavar="JSON",
@@ -492,6 +494,8 @@ def main(argv=None):
         pf_kw = json.loads(a.pf_kw) if a.pf_kw else None
         if pf_kw:
             kw["pf_kw"] = pf_kw
+        if a.per_panel_finder:
+            kw["per_panel_finder"] = True
         if a.stream_out:
             kw["stream_geom_text"] = open(os.path.expanduser(a.geom)).read()
         geom_meta = dict(path=os.path.expanduser(a.geom), md5=hashlib.md5(open(os.path.expanduser(a.geom), "rb").read()).hexdigest()[:8],

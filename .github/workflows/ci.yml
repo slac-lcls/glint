@@ -51,6 +51,31 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_asic_seam_mask.py
 
+      # The peak finders must not depend on what a MASKED pixel holds (NaN, inf, a hot value) and must treat a
+      # non-finite pixel as bad: v4, pf9 and pf8 on CPU, and the v4/pf9 CUDA stats kernels compiled as plain C++
+      # with the runner's g++ (not a GPU run; skips without a compiler). The pre-fix tree fails 37 checks.
+      - name: experiments/test_peakfinder_mask.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_peakfinder_mask.py
+
+      # PeakFinder8's CUDA-graph path reused over frames whose NaN/Inf pixels move (Copilot review on #231):
+      # equals the eager path on every frame; a stale-mask replay is caught. Needs a GPU: SKIPs here (exit 0).
+      # Last run on an A100 (S3DF job 39892525): ALL PASS, graph vs eager within 3e-8 px / 4e-8 relative.
+      - name: experiments/test_pf8_graph_masks.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_pf8_graph_masks.py
+
+      # Per-panel peak search, OPT-IN (StreamDriver(per_panel_finder=True), frames_from_cxi(per_panel=True),
+      # glint --per-panel-finder): one finder per panel rectangle (lute_bridge.slab_rects + PerPanelFinder), so no
+      # ring, local-max window or component reaches across a panel seam. On two stacked panels of different
+      # background it checks the opt-in path, that the default stays one finder over the slab, bit for bit, and
+      # that the option reaches the finder through a .list of .cxi files and glint_cli. Builds .cxi files with h5py
+      # (installed above). fix/peakfinder-mask (fcc03df), the tree before the per-panel change, fails 5 checks:
+      # each of the five parts stops on API that tree lacks.
+      - name: experiments/test_peakfinder_per_panel.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_peakfinder_per_panel.py
+
       - name: experiments/test_negative_intensities.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_negative_intensities.py

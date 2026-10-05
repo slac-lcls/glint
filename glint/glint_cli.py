@@ -51,7 +51,8 @@ def _load_frames(args):
             rf = ([float(v) for v in cv[:6]], args.ring_qlow)
         frames, images = frames_from_cxi(args.images, args.geom, wavelength_A=args.wavelength,
                                          n=args.N, min_peaks=args.min_peaks, data_key=args.data_path,
-                                         peakfinder=args.peakfinder, top_n=args.top_peaks, ring_focus=rf)
+                                         peakfinder=args.peakfinder, top_n=args.top_peaks, ring_focus=rf,
+                                         per_panel=getattr(args, "per_panel_finder", False))
     else:
         geom = parse_geom(args.geom)
         if geom["wavelength_A"] is None and args.wavelength is None:
@@ -90,6 +91,10 @@ def main():
                          "peakfinder8/Cheetah peaks (/entry_1/result_1, no redundant peak-find); 'pf8' TBD")
     ap.add_argument("--top-peaks", type=int, default=0,
                     help="with --images: keep only the N strongest peaks/frame (0=all; guards over-finding)")
+    ap.add_argument("--per-panel-finder", action="store_true",
+                    help="with --images on a multi-panel slab: one peak finder per panel rectangle, so no "
+                         "background ring or local-max window reaches across a panel seam (slower: a fixed "
+                         "cost per panel)")
     ap.add_argument("--ring-focus", action="store_true",
                     help="with --images + --cell: search only the cell's powder-ring annuli (low-order shells, "
                          "|q|<=--ring-qlow) -- a known-cell scan / blank-veto throughput lever")

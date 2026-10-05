@@ -39,6 +39,7 @@ STEPS = [
     "experiments/test_asic_seam_mask.py",
     "experiments/test_negative_intensities.py",
     "experiments/test_lazy_exports.py",
+    "experiments/test_xtc_integrate_wavelength.py",
     "experiments/test_integrate_event.py",
     "experiments/test_device_selection.py",
     "experiments/test_panel_stack_integrate.py",
@@ -62,6 +63,7 @@ STEPS = [
     "experiments/test_select_matched.py",
     "experiments/test_solution_file.py",
     "experiments/test_cell_registry.py",
+    "experiments/test_record_stream_event_id.py",
     "experiments/test_per_lattice.py",
     "experiments/test_live_gate_floor.py",           # also in the torch-CPU job, where its real-frame half runs
     "experiments/test_stream_hit_ring.py",

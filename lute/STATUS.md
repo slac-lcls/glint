@@ -684,7 +684,7 @@ verifies the committed JSON is current). The SNR and bank-edge figures are copie
 SUMMARY block, because the per-peak values were not logged. Re-running the measurement itself needs
 the psana2 env: `PYTHONPATH=../../glint python common_mode_ab.py 200`.
 
-### Before glint#219 uses native psana MPI (2026-10-02, revised 2026-10-03)
+### Before glint#219 uses native psana MPI (2026-10-02, revised 2026-10-03, measured 2026-10-04)
 
 Device assignment and psana's MPI peer count do not affect the first experiment. An explicitly
 serial reader (`PS_PARALLEL=none`) does not enter psana's GPU-assignment path, however many readers
@@ -696,15 +696,41 @@ nodes. The *Memory* point below applies to the first experiment too. The boundar
   reports more than one rank.
 - `MPIDataSource` calls `init_gpu_rank()` on GPU BD ranks.
 - `PS_PARALLEL=none` makes `DataSource(exp=...)` return `SerialDataSource` without asking MPI for
-  the world size. It does not keep MPI from starting: at `9b32dda`, `import psana` reaches
-  `detector/UtilsJungfrau.py`, which runs `from mpi4py import MPI` at module level.
+  the world size. It did not keep MPI from starting: at `9b32dda`, `import psana` reaches
+  `detector/UtilsJungfrau.py`, which ran `from mpi4py import MPI` at module level.
+  [lcls2#163](https://github.com/slac-lcls/lcls2/pull/163) removed that import (merged into lcls2
+  `master` 2026-10-04).
 
 GLINT's own MPI wrapper, `glint_xtc_mpi.py`, uses MPI for its own sharding in the conda1 process.
-Each rank spawns its own conda2 reader process for its shard. That child imports psana, so at
-`9b32dda` it initializes MPI too. What MPI does there, in a child of an `srun` rank that inherits
-the launcher's environment, has not been checked. The psana2-gpu reader should set
-`PS_PARALLEL=none` explicitly, as glint#219 proposes, and the first launch should check that each
-reader comes up serial.
+Each rank spawns its own conda2 reader process for its shard, and that child imports psana.
+
+**Measured (S3DF job 39876333, `sdfampere033`, 2026-10-04).** The setup:
+- `srun --mpi=pmix`, 2 ranks with one GPU each;
+- each rank spawns a serial child with `PS_PARALLEL=none`, which imports psana and calibrates 3
+  r0013 events;
+- the release `lcls2_091526` runs as-is, then with lcls2#163's 5-line deletion overlaid on a copy
+  of its `psana/`.
+
+| step | child loads `mpi4py.MPI` | child | parent `MPI.Finalize()` |
+|---|---|---|---|
+| no child (control) | — | — | 0.08 s |
+| release as-is | yes | rc 0, correct calib | **hangs** (killed at 300 s) |
+| release + lcls2#163 | no | rc 0, identical calib sums | 0.09 s |
+
+`CUDA_VISIBLE_DEVICES` was preserved in every case. Without `--mpi=pmix` the ranks come up as
+singletons and nothing hangs, so the hang shows only under a real multi-rank launch.
+
+What this means for which env runs the reader. Checked 2026-10-04 with a serial `import psana` and
+`PS_PARALLEL=none` on `sdfiana027`:
+- **`lcls2_091526`, the psconda default, still loads MPI.** No release includes lcls2#163 yet. Do not
+  use it as the reader env under `srun --mpi=pmix` until one does.
+- **`xpp_drp_gpu_311`, the env today's reader uses, does not load MPI.** Its `UtilsJungfrau.py` has no
+  `mpi4py` import.
+
+Not run yet: GLINT's actual reader, `xtc_qreader` under `glint_xtc_mpi.py`, on a full build of
+lcls2 `master`. That waits for the combined env glint#219 needs. The psana2-gpu reader should still
+set `PS_PARALLEL=none` explicitly, and the first launch should check that each reader comes up
+serial.
 
 **What psana does in that path today.** The source is @monarin's
 [comment on glint#219](https://github.com/slac-lcls/glint/issues/219#issuecomment-5943789718) and

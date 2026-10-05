@@ -26,6 +26,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np
 import torch
 from glint.lattice import buerger_reduce
+from glint.geom import Q_FLOOR, clean_q
 
 PI = np.pi
 # cuda -> cpu, with NO mps rung -- but NOT for this module's own dtype: glint_index computes in
@@ -129,7 +130,19 @@ def sample(n_dir=2200, lengths=None):
 # ---- M2: objective (SWAP POINT: weight w) ---------------------------------------
 def invq_weight(Q):
     """xgandalf Stage-1 weight 1/|q| (suppress high-res spurious maxima)."""
-    return 1.0 / Q.norm(dim=1)
+    return qpow_weight(Q, 1.0)
+
+
+def qpow_weight(Q, qpow=1.0):
+    """w_i = |q_i|^-qpow (1/|q_i| exactly at qpow = 1), and 0 -- not inf, not a huge finite number -- for a
+    row with |q| <= Q_FLOOR. One inf weight made every M3 start NaN and lost the frame (glint review s4-05);
+    a huge finite one adds a constant to f that swamps its ranking. The indexing entry points drop such rows
+    before they get here (glint.geom.clean_q); this covers callers that build Q themselves. Rows above the
+    floor get exactly the weight they always did."""
+    n = Q.norm(dim=1)
+    nc = n.clamp_min(Q_FLOOR)
+    w = 1.0 / nc if qpow == 1.0 else nc ** (-qpow)
+    return torch.where(n > Q_FLOOR, w, torch.zeros_like(w))
 
 def ones_weight(Q):
     return torch.ones(Q.shape[0], device=Q.device, dtype=Q.dtype)
@@ -601,7 +614,7 @@ def score_defect(M, Q, inl_tol=0.15, cover=0.30):
 # ---- M4 + pipeline --------------------------------------------------------------
 def index_blind(q, weight_fn=invq_weight, scorer=score_defect, n_top=30, starts=None):
     """Blind index: M1->M3 (ascend) -> rank by f -> M4 triplets -> M5 anneal -> M6 score."""
-    q = np.asarray(q, float)
+    q = clean_q(np.asarray(q, float))          # drop NaN/inf and zero-length rows: one would lose the frame (glint.geom.q_rows_ok)
     if len(q) < 6:
         return None
     Q = torch.as_tensor(q, dtype=torch.float32, device=DEV)

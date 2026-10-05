@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import glint.replica_gpu as rg
 from glint.replica_gpu import index_known_gpu_cell
 from glint.multishot import same_lattice
-from experiments.azimuth_coverage import cell_to_A, rand_rot, rlps, still, gate, set_grid, ARMS
+from experiments.azimuth_coverage import cell_to_A, rand_rot, rlps, still, gate, set_grid, restore_grid, ARMS
 
 NCELL = int(sys.argv[1]) if len(sys.argv) > 1 else 24
 NTRIAL = int(sys.argv[2]) if len(sys.argv) > 2 else 60
@@ -79,11 +79,14 @@ def run(regime):
         if not frames:
             continue
         ok = {}
-        for aname, full, mult in ARMS:
-            set_grid(full, mult)
-            index_known_gpu_cell(frames[0], Mcs[0])
-            res = [index_known_gpu_cell(q, Mc) for q, Mc in zip(frames, Mcs)]
-            ok[aname] = sum(gate(M, q, Mc) for M, q, Mc in zip(res, frames, Mcs)) / len(frames)
+        try:
+            for aname, full, mult in ARMS:
+                set_grid(full, mult)
+                index_known_gpu_cell(frames[0], Mcs[0])
+                res = [index_known_gpu_cell(q, Mc) for q, Mc in zip(frames, Mcs)]
+                ok[aname] = sum(gate(M, q, Mc) for M, q, Mc in zip(res, frames, Mcs)) / len(frames)
+        finally:
+            restore_grid()                                     # never leave an arm's grid patched in replica_gpu
         rows.append((abs(c01), ok, len(frames)))
         print(f"  |c01|={abs(c01):.4f}  n={len(frames):3d}  " +
               "  ".join(f"{a[0]}={100*ok[a[0]]:5.1f}%" for a in ARMS), flush=True)
@@ -102,5 +105,6 @@ def run(regime):
               f"{100*(m['full']-m['half']):+10.1f}")
 
 
-for r in (["dense", "still"] if REGIME == "both" else [REGIME]):
-    run(r)
+if __name__ == "__main__":                    # importing this module must not run (or patch) anything
+    for r in (["dense", "still"] if REGIME == "both" else [REGIME]):
+        run(r)

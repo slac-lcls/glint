@@ -166,6 +166,11 @@ of that run's events).
   from the geometry's refined distance (e.g. a `.poni` `Distance:`).
 * coords are the **PSANA frame** (cframe=0), correctly handed for GLINT's blind indexing but **not**
   CrystFEL's lab frame — don't feed these orientations to `indexamajig --indexing=file` unfixed.
+  With `--geom`, X/Y are CrystFEL's but Z keeps psana's sign, so pass 1's q is CrystFEL's mirrored in
+  z. `--integrate` converts each orientation (`geom_coords.orientation_to_crystfel`) before it
+  predicts, and its stream's cell lines are the converted ones; before that fix (review s7-01) every
+  box landed on the observed pattern inverted through the beam centre. The orientation-only stream
+  is still in the pass-1 frame.
 * **handedness/chirality** is mirror-invariant in both `|q|` and cell params, so a powder/geometry check
   cannot catch a global mirror — confirm chirality once on a real crystal (for blind indexing it is just
   the enantiomorph, resolvable downstream).

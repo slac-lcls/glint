@@ -16,6 +16,7 @@ import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("STEPS", "8")
 import numpy as np
+from functools import partial
 from glint.glint_fast import GATE_FRAC, GATE_MIN, index_blind_fast, index_blind_nbest, load, matched_strict
 from glint.replica_gpu import index_known_gpu_cell
 from glint.multishot import consensus_cell, group_medoid, same_lattice
@@ -25,6 +26,7 @@ from glint.multishot import consensus_cell, group_medoid, same_lattice
 # hybrid_index reads THIS module's globals at call time, so that still works).
 from glint.multishot import CONSENSUS_MIN_FRAC, CONSENSUS_MIN_LEAD   # noqa: F401  (re-export)
 from glint.stream import write_stream
+from glint.geom import clean_frames, clean_q
 
 
 def _hkl(q, M):
@@ -32,10 +34,49 @@ def _hkl(q, M):
     return r[inl].astype(int), q[inl], int(inl.sum())
 
 
-GATES = ("none", "strict")
+GATES = ("none", "strict", "floor")
+
+# Chance floors for gate "floor", (a, b, c): a registration is kept only if matched_strict >= a*n + b + c*sqrt(n)
+# for a frame of n peaks, on top of the strict bar. Each one is the 99th percentile of what glint_cli's --cell
+# route (hybrid_index: blind N-best, then the per-frame index_known_gpu_cell rescue) matches on azimuth-scrambled
+# copies of ONE dataset's frames. DATASET-SPECIFIC: the null moves with the cell, the peak finder, the detector
+# and the search depth, so on other data re-fit with experiments/cli_gate_null.py and pass the coefficients.
+#   cxidb17: cxidb-17 lysozyme, q480_fix.txt (480 frames, pf8 peaks), --cell 79.02 79.02 37.98 90 90 90,
+#            32 copies per frame, CPU torch: 0.26 % of the copies pass (1.0 % below 60 peaks), 344 of the 354 strict
+#            frames are kept; experiments/RESULTS_cli_gate_null.md. Not StreamDriver's NULL_FLOOR_CXIDB17, which
+#            was fitted for the driver's batched engine and count; the two come out close but were fitted apart.
+CLI_NULL_FLOORS = {"cxidb17": (0.0246, 5.39, 1.188)}
 
 
-def gate_results(results, frames, gate="none"):
+def resolve_floor(floor):
+    """A floor for gate "floor" -> (a, b) or (a, b, c) as floats. Accepts a name in CLI_NULL_FLOORS or an
+    ordered sequence of 2 or 3 finite numbers (a list, tuple or array; a set has no order and is refused, as are
+    NaN / inf, strings that are not a known name, and any other length)."""
+    if isinstance(floor, str):
+        if floor not in CLI_NULL_FLOORS:
+            raise ValueError(f"unknown floor name {floor!r}; known: {sorted(CLI_NULL_FLOORS)}, or give a, b[, c]")
+        return tuple(float(v) for v in CLI_NULL_FLOORS[floor])
+    if not isinstance(floor, (list, tuple, np.ndarray)) or np.ndim(floor) != 1:
+        raise ValueError(f"floor must be a name or an ordered (a, b[, c]), got {floor!r}")
+    if any(isinstance(v, (bool, np.bool_)) for v in floor):
+        raise ValueError(f"floor coefficients must be numbers, not booleans: {floor!r}")
+    try:
+        fl = tuple(float(v) for v in floor)
+    except (TypeError, ValueError):
+        raise ValueError(f"floor coefficients must be numbers, got {floor!r}") from None
+    if len(fl) not in (2, 3) or not all(np.isfinite(fl)):
+        raise ValueError(f"floor must be 2 or 3 finite numbers (a, b[, c]), got {floor!r}")
+    return fl
+
+
+def floor_value(n, floor):
+    """The chance floor at n peaks: a*n + b (+ c*sqrt(n)) for floor = (a, b[, c]) (see resolve_floor)."""
+    fl = resolve_floor(floor)
+    n = np.asarray(n, float)
+    return fl[0] * n + fl[1] + (fl[2] * np.sqrt(n) if len(fl) > 2 else 0.0)
+
+
+def gate_results(results, frames, gate="none", floor=None):
     """Withdraw, in place, the registration of every frame that fails `gate`; return how many were withdrawn.
 
     Without a gate (``"none"``, the default and the historical output) every registration the indexer returns
@@ -47,13 +88,26 @@ def gate_results(results, frames, gate="none"):
     ``"strict"`` applies the paper's scoring bar to what gets WRITTEN: at least GATE_MIN peaks matched and at
     least GATE_FRAC of the frame's peaks (matched_strict, |q @ M - round(q @ M)| < GATE_TOL). A withdrawn frame
     is written exactly as an unindexed one (M, hkl None; q the frame's peaks), so --integrate and --tofile skip
-    it too. The strict bar is not a null-calibrated one: on dense lattice-free frames it still passes about 5 %
-    (azimuth-scrambled cxidb-17, 26 / 480), so at a hit rate of a few percent most of what passes can still be
-    chance. A per-peak-count floor calibrated on a scrambled null is the follow-up."""
+    it too. The strict bar is not a null-calibrated one: on SPARSE lattice-free frames it passes often, because
+    the search maximises the matched count over many orientations and 25 % of a few dozen peaks is within reach
+    of chance. With --cell on cxidb-17 it writes 29 of 480 azimuth-scrambled frames (all at 38-60 peaks) and
+    23 % of scrambled copies below 60 peaks, none above 90 (experiments/RESULTS_cli_gate_null.md).
+
+    ``"floor"`` is strict plus a chance floor: matched_strict >= a*n + b (+ c*sqrt(n)) for a frame of n peaks,
+    `floor` a name in CLI_NULL_FLOORS or the coefficients (resolve_floor). Fitted at the 99th percentile of the
+    route's matched count on azimuth-scrambled frames, it holds chance accepts to at most about 1 % at every
+    peak count for the dataset it was fitted on; the constants are dataset-specific (see CLI_NULL_FLOORS). `floor` must be
+    given with gate "floor" and only with it, so a floor never goes silently unused."""
     if gate not in GATES:
         raise ValueError(f"gate must be one of {GATES}, got {gate!r}")
     if len(results) != len(frames):
         raise ValueError(f"results ({len(results)}) and frames ({len(frames)}) must align one to one")
+    if gate == "floor":
+        if floor is None:
+            raise ValueError('gate "floor" needs floor= (a name in CLI_NULL_FLOORS or a, b[, c])')
+        fl = resolve_floor(floor)
+    elif floor is not None:
+        raise ValueError(f'floor= is used only by gate "floor", not {gate!r}')
     if gate == "none":
         return 0
     n = 0
@@ -61,9 +115,9 @@ def gate_results(results, frames, gate="none"):
         M = r.get("M")
         if M is None:
             continue
-        q = np.asarray(q, float)
+        q = clean_q(np.asarray(q, float))                       # the rows hybrid_index indexed (glint.geom.q_rows_ok)
         m = matched_strict(np.asarray(M, float), q)
-        if m >= GATE_MIN and m >= GATE_FRAC * len(q):
+        if m >= GATE_MIN and m >= GATE_FRAC * len(q) and (gate == "strict" or m >= floor_value(len(q), fl)):
             continue
         r.update(M=None, hkl=None, q=q)
         n += 1
@@ -110,7 +164,7 @@ def _escalation_config(escalate):
     return cfg
 
 def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, cascade=None,
-                 alias_gate=None, triage_topk=None, escalate=None, select="first"):
+                 alias_gate=None, triage_topk=None, escalate=None, select="first", laue=None):
     """Fully-blind hybrid. (1) N-BEST blind-index every frame (top-`nbest` distinct cells, not just
     argmax). (2) consensus over the POOLED N-best hypotheses (aliases scatter, truth clusters ->
     sturdier cell). (3) per frame pick the highest-scored N-best cell consistent with the consensus
@@ -144,6 +198,12 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     if select not in SELECTS:
         raise ValueError(f"hybrid_index(select=...): one of {SELECTS}, got {select!r}")
     esc_cfg = _escalation_config(escalate)
+    # Drop NaN/inf and zero-length rows (glint.geom.q_rows_ok) once, here, so the N-best, the rescue, the
+    # gates and the written peaks all see the same rows. One NaN row (a peak on no .geom panel, kept by the
+    # --images route) used to make both searches return nothing and the frame was dropped without a word
+    # (glint review s7-05). A clean frame is passed through as the same object.
+    frames = clean_frames(frames)
+    kc = {} if laue is None else {"laue": laue}             # known-cell engines: see replica_gpu._both_hands
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
     if warmup and n:
@@ -237,7 +297,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
         if Mc is not None and select == "matched":              # best-matching consistent candidate, KC included
             cands = [c for c, _ in nb if same_lattice(c, Mc)]
             nblind = len(cands)
-            Mr = index_known_gpu_cell(q, Mc); n_kc += 1
+            Mr = index_known_gpu_cell(q, Mc, **kc); n_kc += 1
             if Mr is not None and same_lattice(Mr, Mc):
                 cands.append(Mr)
             if cands:
@@ -255,7 +315,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
                     n_nb += (c is not t1)                        # recovered via a non-top-1 hypothesis
                     break
         if M is None and Mc is not None and select == "first":   # cell-general GPU known-cell rescue (ffbidx-style)
-            Mr = index_known_gpu_cell(q, Mc); n_kc += 1
+            Mr = index_known_gpu_cell(q, Mc, **kc); n_kc += 1
             if Mr is not None and same_lattice(Mr, Mc):
                 M = Mr; n_resc += 1
         if M is None and Mc is None:                             # no consensus formed -> top-1 fallback
@@ -295,14 +355,15 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
             from glint.retry_cascade import escalate_batch
 
             def _search(qs, Mcell):
-                return index_known_deep_batch(qs, Mcell, esc_cfg["topa"], esc_cfg["nc"], return_errors=True)
+                return index_known_deep_batch(qs, Mcell, esc_cfg["topa"], esc_cfg["nc"], return_errors=True, **kc)
             Ms, recs = escalate_batch(qm, Mc, _search, matched_strict, _gate,
                                       seeds=[[esc_cfg["seed"], i] for i in misses], k_null=esc_cfg["k_null"],
                                       round_copies=esc_cfg["round_copies"])
         else:
             Ms, recs = [], []
             for i, q in zip(misses, qm):
-                M, rec = arm_known_deep(q, Mc, index_known_gpu_cell, matched_strict, _gate,
+                M, rec = arm_known_deep(q, Mc, partial(index_known_gpu_cell, **kc) if kc else index_known_gpu_cell,
+                                        matched_strict, _gate,
                                         seed=[esc_cfg["seed"], i], topa=esc_cfg["topa"], nc=esc_cfg["nc"],
                                         k_null=esc_cfg["k_null"])
                 Ms.append(M); recs.append(rec)
@@ -335,6 +396,7 @@ def dense_index(frames, images=None, warmup=True):
     3D-complete. Below CLUSTER_MIN rlps the front end auto-falls-back to the Fibonacci grid, so this is
     safe on mixed data; the CLI picks this path only when the median rlp count is dense."""
     from glint.glint_fast import index_blind_cluster_seeded
+    frames = clean_frames(frames)                               # as in hybrid_index
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
     if warmup and n:
@@ -352,12 +414,20 @@ def dense_index(frames, images=None, warmup=True):
     return results, stats
 
 
+def _floor_note(stats):
+    fl = stats.get("gate_floor")
+    if fl is None:
+        return ""
+    return f"; floor {fl[0]:g} n + {fl[1]:g}" + (f" + {fl[2]:g} sqrt(n)" if len(fl) > 2 else "")
+
+
 def _report(stats, out):
     n = max(stats["n"], 1)
     if stats.get("mode") == "dense":
         print(f"=== GLINT dense/rotation (local-cluster FFT), N={stats['n']} ===")
         if "n_gated" in stats:
-            print(f"  gate ({stats['gate']})      : {stats['n_gated']} registrations withdrawn (written as unindexed)")
+            print(f"  gate ({stats['gate']})      : {stats['n_gated']} registrations withdrawn (written as unindexed)"
+                  + _floor_note(stats))
         print(f"  indexed            : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
         return
     print(f"=== GLINT hybrid (blind+consensus+general-rescue), N={stats['n']} ===")
@@ -385,7 +455,8 @@ def _report(stats, out):
         print(f"  escalated          : {stats['n_escalated']} of {c} gate-failing frames "
               f"(deep search + scrambled null, {stats['escalation_searches'] / max(c, 1):.1f} searches each)")
     if "n_gated" in stats:
-        print(f"  gate ({stats['gate']})      : {stats['n_gated']} registrations withdrawn (written as unindexed)")
+        print(f"  gate ({stats['gate']})      : {stats['n_gated']} registrations withdrawn (written as unindexed)"
+              + _floor_note(stats))
     print(f"  FINAL indexed      : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
 
 
@@ -401,18 +472,19 @@ if __name__ == "__main__":
     _report(stats, out)
 
 
-def index_known_fast(frames, Mc, batch=32, images=None):
+def index_known_fast(frames, Mc, batch=32, images=None, laue=None):
     """Throughput-critical KNOWN-CELL steady state: batch the known-cell engine across frames
     (glint.replica_gpu_batch), skipping the blind N-best pass entirely -- use once consensus (or a
     supplied prior) fixes the cell. ~7x faster than per-frame index_known_gpu_cell rescue and
     self-contained (no ffbidx handoff). Returns (results, stats) in the same shape as hybrid_index;
     for max known-cell ACCURACY use hybrid_index(..., Mc_known=Mc) instead (runs the N-best pass)."""
     from glint.replica_gpu_batch import index_known_gpu_cell_batch
+    frames = clean_frames(frames)                               # as in hybrid_index
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
     Ms = []
     for i in range(0, n, batch):
-        Ms += index_known_gpu_cell_batch(frames[i:i + batch], Mc)
+        Ms += index_known_gpu_cell_batch(frames[i:i + batch], Mc, **({} if laue is None else {"laue": laue}))
     Mcn = np.asarray(Mc, float)
     results = []; n_idx = 0
     for M, q, meta in zip(Ms, frames, images):

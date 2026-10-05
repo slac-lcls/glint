@@ -102,12 +102,29 @@ def set_grid(full, mult):
 
 
 rg.NANG_BASE = rg.NANG
+_PROD_GRID = (rg.NANG, rg.CA, rg.SA, rg.CA2, rg.SA2)
+
+
+def restore_grid():
+    """Put replica_gpu's production azimuth grid back. set_grid patches module globals, so without this every
+    later caller in the process -- including anything that merely imports a script that ran an arm -- runs the
+    last arm's grid (review r2 s4-01: azimuth_oblique left the 'full2' grid in place)."""
+    rg.NANG, rg.CA, rg.SA, rg.CA2, rg.SA2 = _PROD_GRID
+
+
 ARMS = [("half", False, 1), ("full", True, 1), ("full2", True, 2)]
 
 
 def gate(M, q, Mc):
-    """repo Table-1 gate: correct lattice AND >=25% of spots indexed AND >=10 reflections."""
+    """repo Table-1 gate: correct lattice AND >=25% of spots indexed AND >=10 reflections, plus a ground-truth
+    check. Mc here is the frame's TRUE oriented basis, so M must be a basis of that lattice: T = inv(Mc) @ M
+    integral and unimodular. same_lattice compares metrics only, and before review r2 s4-01 the known-cell
+    engine returned mirrored, non-lattice bases with the reference metric that also cleared 25 % -- this gate
+    passed them, which inflated the triclinic rates these scripts reported (docs/onboarding.md)."""
     if M is None or not same_lattice(np.asarray(M, float), Mc):
+        return 0
+    T = np.linalg.solve(np.asarray(Mc, float), np.asarray(M, float))
+    if np.abs(T - np.rint(T)).max() > 0.05 or abs(round(np.linalg.det(np.rint(T)))) != 1:
         return 0
     r = np.asarray(q) @ M
     m = int((np.abs(r - np.rint(r)).max(1) < 0.15).sum())
@@ -134,18 +151,21 @@ def run(regime):
             if len(q) >= 10:
                 frames.append(q); Mcs.append(Ar)
         okc, msc = {}, {}
-        for aname, full, mult in ARMS:
-            set_grid(full, mult)
-            index_known_gpu_cell(frames[0], Mcs[0])                      # warmup for this grid
-            if rg.DEV == "cuda":
-                torch.cuda.synchronize()
-            t0 = time.perf_counter()
-            res = [index_known_gpu_cell(q, Mc) for q, Mc in zip(frames, Mcs)]
-            if rg.DEV == "cuda":
-                torch.cuda.synchronize()
-            msc[aname] = 1e3 * (time.perf_counter() - t0) / len(frames)
-            okc[aname] = sum(gate(M, q, Mc) for M, q, Mc in zip(res, frames, Mcs))
-            tot[aname] += okc[aname]
+        try:
+            for aname, full, mult in ARMS:
+                set_grid(full, mult)
+                index_known_gpu_cell(frames[0], Mcs[0])                      # warmup for this grid
+                if rg.DEV == "cuda":
+                    torch.cuda.synchronize()
+                t0 = time.perf_counter()
+                res = [index_known_gpu_cell(q, Mc) for q, Mc in zip(frames, Mcs)]
+                if rg.DEV == "cuda":
+                    torch.cuda.synchronize()
+                msc[aname] = 1e3 * (time.perf_counter() - t0) / len(frames)
+                okc[aname] = sum(gate(M, q, Mc) for M, q, Mc in zip(res, frames, Mcs))
+                tot[aname] += okc[aname]
+        finally:
+            restore_grid()
         ntot += len(frames)
         n = len(frames); med = int(np.median([len(f) for f in frames]))
         print(f"{name:<11}{c01:+8.4f}{med:7d} |" +

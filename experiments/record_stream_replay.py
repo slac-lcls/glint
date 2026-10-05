@@ -134,6 +134,11 @@ class PixelPool:
         path, ev = self.resolve(i)
         with h5py.File(path, "r") as f:
             d = f[data_key]
+            if ev is None and d.ndim == 3 and d.shape[0] != 1:     # N > 1: N events, or ONE event's N panels
+                raise SystemExit(f"{path}: {data_key} has shape {tuple(d.shape)} but the source names no event (an "
+                                 "empty CrystFEL id or a bare list line). This replay reads one 2-D frame per item: "
+                                 "for a stack of events, give the frame index (`file //N`); a single-event panel "
+                                 "stack (a slab-mapped .geom, pN/dim0) is not supported by this replay")
             arr = d[ev] if (ev is not None and d.ndim == 3) else d[()]
         return np.ascontiguousarray(np.asarray(arr, dtype))
 
@@ -201,7 +206,13 @@ def load_pixel_list(path, root=None, order=None):
 
 
 def _event_index(tok):
-    """CrystFEL event id -> frame index: '//12' -> 12, 'entry_1//7' -> 7 (the trailing numeric field)."""
+    """CrystFEL event id -> frame index: '//12' -> 12, 'entry_1//7' -> 7 (the trailing numeric field).
+    An EMPTY id ('//', or nothing) -> None: indexamajig 0.10+ writes `Event: //` on every chunk of a
+    one-image-per-file source (xg480_blind.stream: 480/480 chunks), and there is no frame index to read --
+    the same None a list line without an event gets. Any other non-numeric id still refuses rather than
+    guess a frame of a stacked file."""
+    if not tok.strip().strip("/"):
+        return None
     tail = tok.strip().strip("/").rsplit("/", 1)[-1]
     try:
         return int(tail)

@@ -6,11 +6,12 @@ The numpy replica is ~127 ms/frame; this targets a few ms on the A100.
 
   python replica_gpu.py [frames.txt] [N]
 """
-import os, sys, time
+import itertools, os, sys, time
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
 from glint.glint_fast import anneal_batch_t, matched_strict, GATE_FRAC, GATE_MIN
-from glint.lattice import cell_to_Ar
+from glint.lattice import LOW_LAUE, cell_to_Ar
+from glint.geom import clean_q
 from glint.multishot import same_lattice
 
 # cuda -> cpu, with NO mps rung. Apple's MPS backend does not implement float64, and this module
@@ -135,7 +136,8 @@ def c_candidates_t(Q):
 
 
 def index_known_gpu(q, topa=8):
-    Q = torch.as_tensor(np.asarray(q, float), dtype=torch.float64, device=DEV)
+    q = clean_q(np.asarray(q, float))          # drop NaN/inf and zero-length rows: a NaN row loses the frame
+    Q = torch.as_tensor(q, dtype=torch.float64, device=DEV)
     if len(Q) < 6:
         return None
     C = c_candidates_t(Q)                                  # (NC,3)
@@ -248,16 +250,171 @@ def _third_axis(a0, a1, L2, c02, c12, sgn):
     return torch.where(feas[:, None], a2, torch.zeros_like(a2))
 
 
-def index_known_gpu_cell(q, Mc, topa=8, nc=None):
+MIRROR_TOL_DEG = float(os.environ.get("KC_MIRROR_TOL_DEG", "1.0"))   # see _both_hands
+
+
+def _both_hands(L2, c01, c02, c12, laue=None):
+    """True when a2 must be seeded at BOTH gamma signs (review r2 s4-01).
+
+    The anchor pool is a half-sphere (DIRS), so on a frame whose true shortest axis points to z<0 the anchor
+    is -v0; the axis-1 sweep then finds -v1, and the lattice's own third axis is -v2, whose handedness is the
+    OPPOSITE of the reference's. _third_axis at the reference's sign then builds the mirror image of -v2
+    through the (v0, v1) plane, which is +v2 displaced by twice a2's in-plane component. When a2 is
+    perpendicular to both that displacement is 0 and the seed IS a lattice vector. Otherwise the anneal can
+    return a basis with the reference metric that indexes ~40 % of the spots (triclinic, and monoclinic with
+    the unique axis shortest or in the middle), and same_lattice and the live gate both pass it. Seeding the
+    other sign too gives (-v0, -v1, -v2), which is negated back to the reference hand after the pick.
+
+    Which cells take this path depends on what is known about the crystal's symmetry:
+    - `laue` is a low-symmetry class (glint.lattice.LOW_LAUE: -1, a 2/m setting, or a rhombohedral-axes class):
+      always. No rotation of the class makes the mirror seed a lattice vector, however close to 90 deg the
+      angles are; and only this
+      path runs _ref_setting, which is what puts a near-orthogonal cell (triclinic 50/60/70/89.5/90/90.2) in
+      the reference setting instead of a 2-fold sign-flipped one (review of #225).
+    - Otherwise (a higher class, or no class): when a2 tilts more than KC_MIRROR_TOL_DEG (1 deg) from the
+      (v0, v1) plane's normal. A consensus or lock cell of an orthogonal lattice is skewed -- StreamDriver's
+      GPU lock on cxidb-17 lysozyme is 78.71/78.79/37.81 at 89.81/90.08/90.19 deg, a 0.27 deg tilt -- and its
+      2-fold makes either seed valid, so the second seed only reshuffles marginal frames (333 -> 334 strict on
+      the 480-frame replay when this gate was 0.2 A). Such cells keep exactly the code they ran before. Every
+      clearly oblique cell (triclinic, monoclinic at beta >~ 91 deg) takes the path with or without a class.
+    A near-orthogonal low-symmetry cell with NO class given stays on the one-handed path: the metric alone
+    cannot tell it from the skewed lock cell of an orthogonal lattice. Its frames are then a lattice basis in
+    a possibly sign-flipped setting (not a non-lattice basis). Callers that know the class pass it:
+    StreamDriver (its laue=, or the class derived from stream_symmetry) and hybrid_index(laue=)."""
+    if laue is not None and str(laue).strip() in LOW_LAUE:
+        return True
+    g = c01
+    alpha = L2 * (c02 - g * c12) / (1.0 - g * g)
+    beta = L2 * (c12 - g * c02) / (1.0 - g * g)
+    inplane = np.sqrt(max(alpha * alpha + beta * beta + 2.0 * alpha * beta * g, 0.0))
+    return float(np.degrees(np.arcsin(min(inplane / L2, 1.0)))) > MIRROR_TOL_DEG
+
+
+def _canonical_laue(laue):
+    if laue is None:
+        return None
+    from glint.stream_driver import laue_name
+    return laue_name(laue)
+
+
+# Proper unimodular changes of basis with entries in {-1, 0, 1}: enough to reach every setting of a lattice
+# basis whose axes are sums or differences of the reference's (a+c for c, a swapped pair, ...).
+_UNIMOD = np.array(list(itertools.product((-1, 0, 1), repeat=9)), dtype=float).reshape(-1, 3, 3)
+_UNIMOD = _UNIMOD[np.rint(np.linalg.det(_UNIMOD)) == 1]                     # 3480 of them
+SETTING_TOL = float(os.environ.get("KC_SETTING_TOL", "0.01"))   # relative metric deviation counted as "off"
+
+
+# The four proper 2-fold sign flips of a basis, identity first: (a,b,c) -> (+-a, +-b, +-c) with det +1.
+_FLIPS = np.array([np.diag(d) for d in ((1., 1., 1.), (-1., -1., 1.), (-1., 1., -1.), (1., -1., -1.))])
+_FLIP_SIGN = np.array([[d[0] * d[1], d[0] * d[2], d[1] * d[2]] for d in np.diagonal(_FLIPS, axis1=1, axis2=2)])
+# Only the reference's cosines whose sign a flip changes by at least 2 sin(KC_FLIP_MIN_DEG) -- angles at least
+# this far from 90 deg -- take part in the sign-flip step. Closer to 90 the choice would follow rounding (an exact
+# 90 deg has cos ~6e-17) or per-frame noise: on real mfx101343025 r199 (beta 90.07 deg, per-frame DIALS beta
+# 88.5-91.7) it only reshuffled frames at chance. The price: a genuine 0-0.1 deg skew is not corrected.
+FLIP_MIN = 2.0 * np.sin(np.radians(float(os.environ.get("KC_FLIP_MIN_DEG", "0.1"))))
+
+
+def _cosines(M):
+    """cos(a,b), cos(a,c), cos(b,c) of the basis columns: the scale-free part of the metric."""
+    G = M.T @ M
+    d = np.sqrt(np.diag(G))
+    return np.array([G[0, 1] / (d[0] * d[1]), G[0, 2] / (d[0] * d[2]), G[1, 2] / (d[1] * d[2])])
+
+
+def _ref_setting(M, Mc):
+    """The engines' output basis, moved to the setting of the same lattice whose metric is closest to the
+    reference's (review r2 s4-01, the INEQUIV half).
+
+    The engines return the frame's axes shortest-first, and StreamDriver's _relabel_like undoes only that sort.
+    On an oblique cell the anneal sometimes converges to another basis of the right lattice: (-a, -c, -b) on a
+    triclinic HEWL cell (metric 13 % off), or (a, -b, -a-c) on a monoclinic one (3 % off). Every spot is
+    indexed, same_lattice passes, and hkl come out in a setting that is not Laue-equivalent to the grid's.
+    The metric shows it: such a basis is moved to M @ U, U the proper {-1,0,1} change of basis that brings
+    M.T M closest to the reference's shortest-first metric. Left alone unless M's own metric is more than
+    SETTING_TOL off AND U at least halves the deviation, so frames already in the reference setting and
+    pseudo-symmetric ties (|a+c| ~ |a|, where geometry cannot decide) are returned unchanged.
+
+    Then the 2-fold sign flips (#225 review). A near-orthogonal triclinic or monoclinic frame can come back as
+    (+-a, +-b, +-c): the same lengths, and cosines that differ from the reference's only in sign -- 0.4-0.5 % of
+    max|G| at 89.5 deg, under SETTING_TOL. Only the reference's resolvable cosines count (an angle at least
+    KC_FLIP_MIN_DEG from 90): among the proper flips that change one of them, the one whose resolvable cosines
+    are closest to the reference's (summed absolute error) is taken if it is strictly closer than the identity. Cosines only, so a length or scale error in the reference cannot pull
+    the choice; a flip the reference cannot resolve (an angle within KC_FLIP_MIN_DEG of 90) is never taken, and
+    a clearly oblique frame never prefers one (a flip changes a large cosine's sign). A non-finite or singular
+    basis is returned untouched."""
+    return _ref_settings([M], Mc)[0]
+
+
+# vec(G) -> the 6 unique entries of U^T G U for all 3480 U in one product: a shortlist for _closest_setting.
+_IU = np.triu_indices(3)
+_UPROJ = np.einsum('kji,klm->kimjl', _UNIMOD, _UNIMOD)[:, _IU[0], _IU[1]].reshape(-1, 9)
+
+
+def _closest_setting(G, G0, nrm):
+    """(k, dev[k]) for k = argmin over the 3480 U of max|U^T G U - G0| / nrm, EXACTLY as the full einsum gives it
+    (same values, the first index among exact ties), at a fraction of its cost: one product over the 6 unique
+    entries shortlists every U within a rounding margin of the minimum, and only those are evaluated with the
+    original einsum (whose per-U arithmetic does not depend on how many U it is handed)."""
+    approx = np.abs((_UPROJ @ G.ravel()).reshape(-1, 6) - G0[_IU]).max(1) / nrm
+    c = np.flatnonzero(approx <= approx.min() + 1e-9)
+    dev = np.abs(np.einsum('kji,jl,klm->kim', _UNIMOD[c], G, _UNIMOD[c]) - G0).max((1, 2)) / nrm
+    j = int(np.argmin(dev))
+    return int(c[j]), dev[j]
+
+
+def _ref_settings(Ms, Mc):
+    """_ref_setting for a batch of frames against one reference: the same result per frame, with the per-frame
+    host work cut to one 3x3 product (the guard, the cosines and the sign-flip choice run on the whole batch)."""
+    out = list(Ms)
+    idx = [i for i, M in enumerate(Ms) if M is not None]
+    if not idx:
+        return out
+    A = np.asarray(Mc, float)
+    S = A[:, np.argsort(np.linalg.norm(A, axis=0))]            # the order _axes_from_cell anchors in
+    G0 = S.T @ S; nrm = np.abs(G0).max()
+    F = np.stack([np.asarray(Ms[i], float) for i in idx])
+    good = np.isfinite(F).all((1, 2))
+    if good.any():
+        gi = np.flatnonzero(good)
+        good[gi] = np.abs(np.linalg.det(F[gi])) > 1e-9 * np.prod(np.linalg.norm(F[gi], axis=1), axis=1)
+    keep = [j for j in range(len(idx)) if good[j]]
+    if not keep:
+        return out
+    Fk = [F[j] for j in keep]; Mk = [Ms[idx[j]] for j in keep]
+    G = np.stack([f.T @ f for f in Fk])
+    dev0 = np.abs(G - G0).max((1, 2)) / nrm
+    for t in np.flatnonzero(dev0 > SETTING_TOL):              # the step of review r2 s4-01, unchanged
+        k, dk = _closest_setting(G[t], G0, nrm)
+        if dk < 0.5 * dev0[t]:
+            Fk[t] = Fk[t] @ _UNIMOD[k]; Mk[t] = Fk[t]; G[t] = Fk[t].T @ Fk[t]
+    cS = _cosines(S)
+    res = 2.0 * np.abs(cS) >= FLIP_MIN * (1.0 - 1e-9)          # cosines a sign flip visibly changes (89.9 counts)
+    if res.any():
+        d = np.sqrt(np.diagonal(G, axis1=1, axis2=2))
+        cM = np.stack([G[:, 0, 1] / (d[:, 0] * d[:, 1]), G[:, 0, 2] / (d[:, 0] * d[:, 2]),
+                       G[:, 1, 2] / (d[:, 1] * d[:, 2])], 1)
+        err = (np.abs(_FLIP_SIGN[None] * cM[:, None, :] - cS) * res).sum(2)   # unresolvable cosines cannot tie-break
+        err[:, 1:][:, ~((_FLIP_SIGN[1:] < 0) & res).any(1)] = np.inf          # a flip that changes no resolvable one
+        kf = np.argmin(err, 1)                                # identity first: a tie keeps the frame as is
+        for t in np.flatnonzero((kf > 0) & (err[np.arange(len(kf)), kf] < err[:, 0])):
+            Mk[t] = Fk[t] @ _FLIPS[kf[t]]
+    for j, m in zip(keep, Mk):
+        out[idx[j]] = m
+    return out
+
+
+def index_known_gpu_cell(q, Mc, topa=8, nc=None, laue=None):
     """GPU known-cell rescue against an ARBITRARY consensus cell Mc (3x3 real-space cols).
 
     topa (azimuths kept per anchor) and nc (anchor directions, default NC) set the search depth. The
     shipped rescue uses the defaults; the escalation arm runs topa=128, nc=32 (RESULTS_escalation.md's T2).
     Both must be integers >= 1 (ValueError otherwise, before any search)."""
+    laue = _canonical_laue(laue)
     topa = _depth("topa", topa)
     nc = None if nc is None else _depth("nc", nc)
     L, c01, c02, c12, sgn = _axes_from_cell(Mc)
-    Q = torch.as_tensor(np.asarray(q, float), dtype=torch.float64, device=DEV)
+    q = clean_q(np.asarray(q, float))          # drop NaN/inf and zero-length rows: a NaN row loses the frame
+    Q = torch.as_tensor(q, dtype=torch.float64, device=DEV)
     if len(Q) < 6:
         return None
     C = axis_candidates_t(Q, float(L[0]), nc=nc)            # anchor = shortest axis
@@ -280,6 +437,10 @@ def index_known_gpu_cell(q, Mc, topa=8, nc=None):
     a0s = torch.gather(a0, 1, topi[:, :, None].expand(-1, -1, 3)).reshape(-1, 3)
     a1s = torch.gather(a1, 1, topi[:, :, None].expand(-1, -1, 3)).reshape(-1, 3)
     a2s = _third_axis(a0s, a1s, float(L[2]), c02, c12, sgn)
+    both = _both_hands(float(L[2]), c01, c02, c12, laue)
+    if both:                                                # s4-01: the -v0 anchor's seed has the other hand
+        a2s = torch.cat([a2s, _third_axis(a0s, a1s, float(L[2]), c02, c12, -sgn)])
+        a0s = torch.cat([a0s, a0s]); a1s = torch.cat([a1s, a1s])
     M0 = torch.stack([a0s, a1s, a2s], dim=2)                # cols = anchor, axis1, axis2
     det = torch.abs(torch.linalg.det(M0))
     M0 = M0[det >= 1e3]
@@ -291,6 +452,8 @@ def index_known_gpu_cell(q, Mc, topa=8, nc=None):
     sub = torch.log2(torch.clamp(dd, TRIML, TRIMH) + DELTA).mean((1, 2))
     key = main.double() * 1000.0 - sub
     b = int(torch.argmax(key)); best = Mt[b]
+    if both and float(torch.linalg.det(best)) * sgn < 0:   # -M indexes the same spots, as hkl -> -hkl (a Friedel
+        best = -best                                       # mate; -1 is in every Laue group): reference hand
     # GUARDED gate-matched polish: the winner was annealed tight (min_thr 0.02) and over-fits a few spots;
     # re-anneal it to the 0.15 gate tolerance so it indexes MORE spots (completeness). Accept the looser
     # refit ONLY if it indexes at least as many 0.15-inliers (reverts on drift -> never loses the lattice
@@ -299,8 +462,10 @@ def index_known_gpu_cell(q, Mc, topa=8, nc=None):
     Hp = Q @ pol; mp = int((torch.abs(Hp - torch.round(Hp)).amax(1) < 0.15).sum())
     poln = pol.cpu().numpy()
     if mp >= int(main[b]) and same_lattice(poln, np.asarray(Mc, float)):    # more spots AND still the known cell
-        return poln
-    return best.cpu().numpy()
+        out = poln
+    else:
+        out = best.cpu().numpy()
+    return _ref_setting(out, Mc) if both else out
 
 
 def load(p):

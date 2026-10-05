@@ -21,7 +21,7 @@ import sys
 
 import numpy as np
 
-from glint.geom import _q_from_panels   # one geometry core, two panel schemas -- see geom.py
+from glint.geom import Q_FLOOR, _q_from_panels, clean_q   # one geometry core, two panel schemas -- see geom.py
 
 HC_EV_A = 12398.419843320026     # h*c in eV*Angstrom -> lambda[A] = HC/E[eV]
 
@@ -125,8 +125,9 @@ def peaks_to_q(fs_arr, ss_arr, panels, clen_m, wavelength_A):
 
     Peaks that land on no panel come back as NaN rows, and so do NON-FINITE inputs (NaN/inf
     fs or ss) -- they match no panel rather than raising, which the per-peak predecessor did
-    via int(np.floor(x)). Callers are expected to filter, as stream_driver does with
-    q[np.isfinite(q).all(1)]; a bad coordinate is dropped exactly like an off-panel peak.
+    via int(np.floor(x)). Callers are expected to filter, as stream_driver and frames_from_cxi do
+    with glint.geom.q_rows_ok (which also drops a beam-centre row, |q| ~ 0); a bad coordinate is
+    dropped exactly like an off-panel peak.
     """
     # Geometry lives in glint.geom._q_from_panels, shared with geom.peaks_to_q -- the two used to
     # carry independent copies and drifted (see that function). This wrapper only adapts the schema:
@@ -204,6 +205,7 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
     clen_spec, en_spec, mask_key = glob.get("clen"), glob.get("photon_energy"), glob.get("mask")
     coff = float(glob.get("coffset", 0.0))
     f = h5py.File(cxi_path, "r")
+    dropped = [0, 0]                                                # rows dropped by _q, frames they were in
 
     def _q(xarr, yarr, i):                                          # (fs,ss) peaks -> q for event i
         clen = _meta(clen_spec, f, i, 0.1)
@@ -215,7 +217,21 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
             wl = lambda_from_eV(eV) if eV else None
         if wl is None:
             raise SystemExit("frames_from_cxi: no wavelength (geom photon_energy path or --wavelength)")
-        return peaks_to_q(np.asarray(xarr, float), np.asarray(yarr, float), panels, clen, wl)
+        # peaks_to_q keeps a NaN row for a peak on no panel (its streaming caller needs the positions);
+        # these frames have no positional use for it, and handed on, ONE such row made hybrid_index drop
+        # the whole frame without a word (glint review s7-05). Drop it here, with a beam-centre row
+        # (|q| <= Q_FLOOR), by the same rule every indexer applies (glint.geom.q_rows_ok).
+        q = peaks_to_q(np.asarray(xarr, float), np.asarray(yarr, float), panels, clen, wl)
+        kept = clean_q(q)
+        if len(kept) < len(q):
+            dropped[0] += len(q) - len(kept); dropped[1] += 1
+        return kept
+
+    def _report_dropped():
+        if dropped[0]:                                              # a .geom that does not tile the data array
+            sys.stderr.write(
+                f"glint: {cxi_path}: dropped {dropped[0]} peak(s) in {dropped[1]} frame(s) that fall on no "
+                f".geom panel or at |q| <= {Q_FLOOR:g} 1/A (the beam centre); the rest of each frame is kept.\n")
 
     frames, images = [], []
     if peakfinder == "stored":                                     # reuse the .cxi's own peakfinder8/Cheetah peaks
@@ -252,7 +268,9 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
                 else:
                     keep = np.arange(top_n)
                 x, y = x[keep], y[keep]
-            frames.append(_q(x, y, i) if len(x) >= min_peaks else np.empty((0, 3)))
+            q = _q(x, y, i) if len(x) >= min_peaks else np.empty((0, 3))
+            frames.append(q if len(q) >= min_peaks else np.empty((0, 3)))     # min_peaks counts usable rows
+        _report_dropped()
         return frames, images
 
     data = f[data_key]
@@ -288,5 +306,7 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
         if top_n and len(x) > top_n:                               # keep the strongest (guards over-finding)
             s = np.asarray(pk.get("intensity", pk.get("snr", np.zeros(len(x)))))
             keep = np.argsort(s)[::-1][:top_n]; x, y = x[keep], y[keep]
-        frames.append(_q(x, y, i) if len(x) >= min_peaks else np.empty((0, 3)))
+        q = _q(x, y, i) if len(x) else np.empty((0, 3))
+        frames.append(q if len(q) >= min_peaks else np.empty((0, 3)))         # min_peaks counts usable rows
+    _report_dropped()
     return frames, images

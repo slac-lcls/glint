@@ -456,6 +456,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_kc_precision_default.py
 
+      # A captured known-cell CUDA graph holds the cell parameters it reads by address (fp32 azimuth copies that
+      # only P referenced were freed under a cached graph); graph/stream API stood in on CPU; self-skips without torch.
+      - name: experiments/test_stage_graph_keeps_params.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_stage_graph_keeps_params.py
+
       # The known-cell search depth (replica_gpu: topa, nc) is CHECKED, not coerced: nc=0 used to keep one
       # anchor direction and a float was truncated (Copilot review of #208). Argument checks plus a real-frame
       # nc=1 / nc=3 run on CPU torch; self-skips without torch or below the 1.12 floor.

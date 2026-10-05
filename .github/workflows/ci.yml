@@ -463,6 +463,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_known_depth_args.py
 
+      # Review r2 s4-01: the known-cell engines returned triclinic / monoclinic frames as a mirrored, non-lattice
+      # basis (half-sphere anchors + a forced handedness) or in an inequivalent setting, and StreamDriver
+      # integrated them. Per-frame, batched and the real StreamDriver path on simulated stills; orthogonal-a2
+      # cells (incl. lysozyme and its consensus cells) must not take the new path, and near-orthogonal triclinic
+      # / monoclinic cells take it when their Laue class is given (laue=). Self-skips below 1.12.
+      - name: experiments/test_kc_setting.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_kc_setting.py
+
       # The live gate's chance floor on REAL frames: the committed 120 cxidb-17 frames and four azimuth-scrambled
       # copies each, searched with the lysozyme cell by index_fused on CPU torch. The live gate accepts about half
       # of the copies, the floor under 2.5%, and it keeps >= 90% of the strict-gate frames. Self-skips below 1.12.

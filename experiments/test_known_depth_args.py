@@ -54,7 +54,7 @@ import numpy as np                                                         # noq
 import glint.replica_gpu_batch as rgb                                      # noqa: E402
 from glint.glint_fast import load                                          # noqa: E402
 from glint.lattice import cell_to_Ar                                       # noqa: E402
-from glint.replica_gpu import DEV, axis_candidates_t, index_known_gpu_cell  # noqa: E402
+from glint.replica_gpu import DEV, _canonical_laue, axis_candidates_t, index_known_gpu_cell  # noqa: E402
 
 CELL = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
 fails = []
@@ -96,6 +96,18 @@ print("RESULT " + json.dumps(out))
 
 def main():
     few = np.zeros((3, 3))                          # < 6 peaks: a valid call returns None before searching
+    check("shared Laue alias resolves to its canonical key", _canonical_laue("2/m") == "2/m_uab")
+    invalid_laue = "2/m_uabx"
+    check("index_known_gpu_cell rejects an unknown Laue before search",
+          raises(lambda: index_known_gpu_cell(few, CELL, laue=invalid_laue)))
+    check("index_known_gpu_cell_batch rejects an unknown Laue before search",
+          raises(lambda: rgb.index_known_gpu_cell_batch([few], CELL, laue=invalid_laue)))
+    check("index_known_deep_batch rejects an unknown Laue before search",
+          raises(lambda: rgb.index_known_deep_batch([], CELL, 2, 1, laue=invalid_laue)))
+    check("index_all_graph rejects an unknown Laue before search",
+          raises(lambda: rgb.index_all_graph([], CELL, laue=invalid_laue)))
+    check("index_fused rejects an unknown Laue before search",
+          raises(lambda: rgb.index_fused([], CELL, laue=invalid_laue)))
     for name in ("nc", "topa"):
         for bad in (0, -1, 1.5, 32.0, True):
             check(f"index_known_gpu_cell({name}={bad!r}) raises ValueError",

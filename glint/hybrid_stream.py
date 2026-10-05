@@ -16,6 +16,7 @@ import os, sys
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("STEPS", "8")
 import numpy as np
+from functools import partial
 from glint.glint_fast import GATE_FRAC, GATE_MIN, index_blind_fast, index_blind_nbest, load, matched_strict
 from glint.replica_gpu import index_known_gpu_cell
 from glint.multishot import consensus_cell, group_medoid, same_lattice
@@ -162,7 +163,7 @@ def _escalation_config(escalate):
     return cfg
 
 def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, cascade=None,
-                 alias_gate=None, triage_topk=None, escalate=None, select="first"):
+                 alias_gate=None, triage_topk=None, escalate=None, select="first", laue=None):
     """Fully-blind hybrid. (1) N-BEST blind-index every frame (top-`nbest` distinct cells, not just
     argmax). (2) consensus over the POOLED N-best hypotheses (aliases scatter, truth clusters ->
     sturdier cell). (3) per frame pick the highest-scored N-best cell consistent with the consensus
@@ -196,6 +197,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     if select not in SELECTS:
         raise ValueError(f"hybrid_index(select=...): one of {SELECTS}, got {select!r}")
     esc_cfg = _escalation_config(escalate)
+    kc = {} if laue is None else {"laue": laue}             # known-cell engines: see replica_gpu._both_hands
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
     if warmup and n:
@@ -289,7 +291,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
         if Mc is not None and select == "matched":              # best-matching consistent candidate, KC included
             cands = [c for c, _ in nb if same_lattice(c, Mc)]
             nblind = len(cands)
-            Mr = index_known_gpu_cell(q, Mc); n_kc += 1
+            Mr = index_known_gpu_cell(q, Mc, **kc); n_kc += 1
             if Mr is not None and same_lattice(Mr, Mc):
                 cands.append(Mr)
             if cands:
@@ -307,7 +309,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
                     n_nb += (c is not t1)                        # recovered via a non-top-1 hypothesis
                     break
         if M is None and Mc is not None and select == "first":   # cell-general GPU known-cell rescue (ffbidx-style)
-            Mr = index_known_gpu_cell(q, Mc); n_kc += 1
+            Mr = index_known_gpu_cell(q, Mc, **kc); n_kc += 1
             if Mr is not None and same_lattice(Mr, Mc):
                 M = Mr; n_resc += 1
         if M is None and Mc is None:                             # no consensus formed -> top-1 fallback
@@ -347,14 +349,15 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
             from glint.retry_cascade import escalate_batch
 
             def _search(qs, Mcell):
-                return index_known_deep_batch(qs, Mcell, esc_cfg["topa"], esc_cfg["nc"], return_errors=True)
+                return index_known_deep_batch(qs, Mcell, esc_cfg["topa"], esc_cfg["nc"], return_errors=True, **kc)
             Ms, recs = escalate_batch(qm, Mc, _search, matched_strict, _gate,
                                       seeds=[[esc_cfg["seed"], i] for i in misses], k_null=esc_cfg["k_null"],
                                       round_copies=esc_cfg["round_copies"])
         else:
             Ms, recs = [], []
             for i, q in zip(misses, qm):
-                M, rec = arm_known_deep(q, Mc, index_known_gpu_cell, matched_strict, _gate,
+                M, rec = arm_known_deep(q, Mc, partial(index_known_gpu_cell, **kc) if kc else index_known_gpu_cell,
+                                        matched_strict, _gate,
                                         seed=[esc_cfg["seed"], i], topa=esc_cfg["topa"], nc=esc_cfg["nc"],
                                         k_null=esc_cfg["k_null"])
                 Ms.append(M); recs.append(rec)
@@ -462,7 +465,7 @@ if __name__ == "__main__":
     _report(stats, out)
 
 
-def index_known_fast(frames, Mc, batch=32, images=None):
+def index_known_fast(frames, Mc, batch=32, images=None, laue=None):
     """Throughput-critical KNOWN-CELL steady state: batch the known-cell engine across frames
     (glint.replica_gpu_batch), skipping the blind N-best pass entirely -- use once consensus (or a
     supplied prior) fixes the cell. ~7x faster than per-frame index_known_gpu_cell rescue and
@@ -473,7 +476,7 @@ def index_known_fast(frames, Mc, batch=32, images=None):
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
     Ms = []
     for i in range(0, n, batch):
-        Ms += index_known_gpu_cell_batch(frames[i:i + batch], Mc)
+        Ms += index_known_gpu_cell_batch(frames[i:i + batch], Mc, **({} if laue is None else {"laue": laue}))
     Mcn = np.asarray(Mc, float)
     results = []; n_idx = 0
     for M, q, meta in zip(Ms, frames, images):

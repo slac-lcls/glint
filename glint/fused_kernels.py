@@ -315,13 +315,13 @@ def unpatch():
     _STOCK.clear()
 
 
-def run_fused(frames, Mc, B=32):
+def run_fused(frames, Mc, B=32, laue=None):
     """Fully-fused known-cell indexing: swap in the fused anneal/obj/refine kernels + the on-device
     cpu_stage for the duration of a batched pass, then restore.  Output is IDENTICAL (bit-exact fp64)
     to looping index_known_gpu_cell_batch with the stock ops."""
     patch(anneal=True, obj=True, refine=True, cpu=True)
     try:
         return [M for i in range(0, len(frames), B)
-                for M in rgb.index_known_gpu_cell_batch(frames[i:i + B], Mc)]
+                for M in rgb.index_known_gpu_cell_batch(frames[i:i + B], Mc, laue=laue)]
     finally:
         unpatch()

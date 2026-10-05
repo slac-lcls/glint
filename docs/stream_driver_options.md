@@ -145,7 +145,7 @@ stays byte-identical.
 | `gap` | `2` | gap between the box and the background annulus, px | #19 | — |
 | `ring` | `3` | annulus width, px | #19 | — |
 | `bg_mode` | `"clipmean"` | annulus background estimator: `clipmean`, `median`, `mean` | commit ea9a7b9 (#142 review) | — |
-| `snr_bins` | `(0, 1, 2, 3, 5)` | I/σ floors the running merge is bucketed at | #19 | — |
+| `snr_bins` | `(-inf, 0, 1, 2, 3, 5)` | I/σ floors the running merge is bucketed at; the first is −inf so I ≤ 0 is kept (on the same merged frames, `stats(thr=0.0)` gives the old I > 0 CC½, CC*, R_split — to a few ulp, rows are created in a different order — and unique, redundancy and completeness exactly; `measurements` is not thresholded and counts every merged row, the I > 0 count is unique × redundancy at `thr=0.0`) | #19; −inf floor: review r2 s1-05 | — |
 | `laue` | `None` | Laue class the running merge (completeness, CC½, CC*, R_split) is accumulated under; derived from `stream_symmetry` when unset, else `4/mmm` | #186 | `--laue` |
 | `ops` | `None` | explicit operator list instead of `laue` | #186 | — |
 | `geom_refine` | `False` | pool predicted-vs-observed residuals into a running (clen, beam-shift) correction, reported in `stats()["geom_correction"]`. Diagnostic: it is not fed back into indexing | #55 | `--geom-refine` |

@@ -1,14 +1,18 @@
 """Self-contained SFX merge + half-set statistics from a GLINT .stream (no CrystFEL needed).
 
 Parse (frame, h,k,l, I, sigma) rows, reduce hkl to the 4/mmm asymmetric unit, Monte-Carlo merge
-(per-frame linear scale to the common mean, then inverse-variance mean per unique reflection), and
+(per-frame linear scale to the common mean, frames whose mean(I) is not measured dropped, then a
+1/sigma^2-weighted mean per unique reflection), and
 report CC1/2, CC*, Rsplit, redundancy, <I/sigma>, #unique -- the standard real-data figures of merit.
 Same math as process_hkl (no partiality model). 4/mmm = ProK / lysozyme Laue group.
 
   python merge_stats.py [stream] [SYM=4/mmm]
 """
-import sys, re
+import os, sys, re
 import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from glint.merge_scale import frame_scale      # noqa: E402  the live merge's per-frame scale + gate
 
 stream = sys.argv[1] if len(sys.argv) > 1 else "/pscratch/sd/s/smarches/glint_real/prok_glint.stream"
 
@@ -58,18 +62,27 @@ for line in open(stream):
             except ValueError:
                 continue
             frames.append(fi); H.append((h, k, l)); I.append(ii); S.append(ss)
-frames = np.array(frames); H = np.array(H); I = np.array(I); S = np.maximum(np.array(S), 1e-3)
+frames = np.array(frames); H = np.array(H); I = np.array(I); S = np.array(S)
 nf = frames.max() + 1
 print(f"{len(I)} measurements over {nf} indexed frames ({len(I)//max(nf,1)}/frame); "
       f"<I/sig>={np.mean(I/S):.2f}")
 
 # ---- per-frame linear scale to common mean (1 pass) ----
+good = np.isfinite(I) & np.isfinite(S)
+frames, H, I, S = frames[good], H[good], I[good], S[good]
+S = np.maximum(S, 1e-3)
 gmean = I[I > 0].mean()
-scale = np.ones(nf)
+# frames whose mean intensity is not measured are dropped, the live merge's rule (frame_scale,
+# review r2 s1-01/s1-04); they used to stay in raw units with scale 1
+scale = np.full(nf, np.nan)
 for fr in range(nf):
     m = frames == fr
-    if m.sum() > 5 and I[m].mean() > 0:
-        scale[fr] = gmean / I[m].mean()
+    fs = frame_scale(I[m])
+    if fs is not None:
+        scale[fr] = gmean * fs
+print(f"{int(np.isnan(scale).sum())}/{nf} frames not merged (mean(I) not measured)")
+_ok = np.isfinite(scale[frames])
+frames, H, I, S = frames[_ok], H[_ok], I[_ok], S[_ok]
 Is = I * scale[frames]
 
 # ---- asu key ----
@@ -93,7 +106,7 @@ print(f"unique reflections (4/mmm) = {len(uk)};  redundancy = {cnt.mean():.1f}")
 snr = I / S
 odd = (frames % 2) == 1
 print(f"\n{'I/sig floor':>12}{'#meas':>10}{'#common':>9}{'CC1/2':>8}{'CC*':>8}{'Rsplit%':>9}")
-for thr in (0.0, 1.0, 2.0, 3.0, 5.0):
+for thr in (-np.inf, 0.0, 1.0, 2.0, 3.0, 5.0):          # -inf: no floor, I <= 0 kept (review r2 s1-05)
     sel = snr > thr
     k1, v1, _ = merge(sel & odd); k2, v2, _ = merge(sel & ~odd)
     common, i1, i2 = np.intersect1d(k1, k2, return_indices=True)

@@ -50,11 +50,17 @@ ch = sd.canon(H, OPS)
 key = ch[:, 0].astype(np.int64) * 10 ** 8 + ch[:, 1] * 10 ** 4 + ch[:, 2]
 gmean = I[I > 0].mean()
 nf = frames.max() + 1
-scale = np.ones(nf)
+# frames whose mean intensity is not measured are dropped, the live merge's rule (frame_scale,
+# review r2 s1-01/s1-04); they used to stay in raw units with scale 1
+scale = np.full(nf, np.nan)
 for fr in range(nf):
     m = frames == fr
-    if m.sum() > 5 and I[m].mean() > 0:
-        scale[fr] = gmean / I[m].mean()
+    fs = sd.frame_scale(I[m])
+    if fs is not None:
+        scale[fr] = gmean * fs
+print(f"{int(np.isnan(scale).sum())}/{nf} frames not merged (mean(I) not measured)")
+_ok = np.isfinite(scale[frames])
+frames, H, I, S, key = frames[_ok], H[_ok], I[_ok], S[_ok], key[_ok]
 Is = I * scale[frames]
 
 
@@ -70,7 +76,7 @@ odd = (frames % 2) == 1
 print(f"{'I/sig':>6} | {'BATCH  uniq':>12}{'common':>8}{'CC1/2':>8}{'CC*':>8}{'Rsplit%':>9} "
       f"| {'STREAM uniq':>12}{'common':>8}{'CC1/2':>8}{'CC*':>8}{'Rsplit%':>9} | match")
 ok_all = True
-for thr in (0.0, 1.0, 2.0, 3.0, 5.0):
+for thr in (-np.inf, 0.0, 1.0, 2.0, 3.0, 5.0):          # -inf: no floor, I <= 0 kept (review r2 s1-05)
     sel = snr > thr
     uk_all, _, cnt_all = batch_merge(sel)
     k1, v1, _ = batch_merge(sel & odd); k2, v2, _ = batch_merge(sel & ~odd)

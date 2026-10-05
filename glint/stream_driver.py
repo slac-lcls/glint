@@ -31,6 +31,12 @@ live "we have enough data, stop collecting" signal.
 
 Numbers reported are on an arbitrary common intensity scale (the batch path's global gmean is
 dropped as it cancels); this affects nothing that is reported, all of which are ratios.
+
+A frame is merged only when its mean intensity is measured: more than 5 measurements and
+mean(I) > MERGE_MIN_FRAME_SNR * sem(I) (`frame_scale`). Without that gate the 1/mean(I) scale is
+unbounded, and one weak, lattice-free or wrong-orientation frame swamps the live CC1/2 (review r2
+s1-01; on 793 real cxidb-17 lysozyme crystals the ungated merge gave CC1/2 0.015, gated 0.33).
+Refused frames are counted in stats()["refused_frames"].
 """
 import os
 import warnings
@@ -44,6 +50,7 @@ except Exception:                                            # pragma: no cover 
     cp = None
     _HAVE_CP = False
 
+from glint.merge_scale import MERGE_MIN_FRAME_SNR, MERGE_SNR_BINS, frame_scale  # noqa: F401  (re-exported)
 from glint.lattice import LENGTH_ORDER_LAUE, LOW_LAUE, UNIQUE_C_LAUE, cell_to_Ar, standardize_axes
 from glint.lute_bridge import peaks_to_q
 from glint.geom import q_rows_ok      # drops NaN/inf (off-panel) and |q| ~ 0 (beam-centre) rows at every front door
@@ -471,7 +478,7 @@ class MergeAccumulator:
     measurements whose I/sigma falls in [thr_j, thr_{j+1})), so a threshold sweep is a suffix sum.
     """
 
-    def __init__(self, snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), ops=None):
+    def __init__(self, snr_bins=MERGE_SNR_BINS, ops=None):
         self.thr = np.asarray(snr_bins, float)
         self.nb = len(self.thr)
         self.ops = ops if ops is not None else laue_ops_4mmm()
@@ -482,6 +489,7 @@ class MergeAccumulator:
         self.n_rows = 0
         self.n_meas = 0
         self.n_frames = 0
+        self.n_refused = 0          # frames not merged: mean(I) not measured (frame_scale is None)
 
     def _grow(self, need):
         cap = self.sw.shape[0]
@@ -497,11 +505,15 @@ class MergeAccumulator:
     def add_frame(self, hkl, I, sigma, frame_index, values=None, weights=None):
         """Fold one indexed+integrated frame in. hkl (n,3) int; I, sigma (n,) float.
 
-        Default (values=weights=None): per-frame 1/mean(I) scale + inverse-variance
-        weight -- the original behaviour, BIT-IDENTICAL. If ``values`` AND ``weights``
-        are supplied (the partiality path, ``glint.partiality.PartialityScaler``) they
-        are used as the merged value v and weight w directly (v = I/(G*p),
-        w = p^2/sigma^2); the I/sigma snr bucketing is unchanged."""
+        Default (values=weights=None): v = I/mean(I) with weight w = 1/sigma^2. A frame whose
+        mean intensity is not measured (`frame_scale` returns None) is counted in n_refused and
+        NOT merged. w is the inverse variance of I, not of v (that would be mean(I)^2/sigma^2): on
+        real cxidb-17 lysozyme (793 crystals) and mfx100848724 r51 (303) the gated 1/sigma^2
+        merge gave the higher CC1/2 (0.33 vs 0.31, 0.071 vs 0.059), because per-frame errors other
+        than counting (partiality, scale) dominate; the gate is what removes the collapse.
+        If ``values`` AND ``weights`` are supplied (the partiality path,
+        ``glint.partiality.PartialityScaler``) they are used as the merged value v and weight w
+        directly (v = I/(G*p), w = p^2/sigma^2), with no gate; the I/sigma snr bucketing is unchanged."""
         I = np.asarray(I, float); sigma = np.maximum(np.asarray(sigma, float), 1e-3)
         good = np.isfinite(I) & np.isfinite(sigma)
         _part = values is not None and weights is not None
@@ -510,20 +522,25 @@ class MergeAccumulator:
             good = good & np.isfinite(values) & np.isfinite(weights)
         I, sigma, hkl = I[good], sigma[good], np.asarray(hkl, int)[good]
         if I.size == 0:
+            if not _part:
+                self.n_refused += 1; self.n_frames += 1
             return
         if _part:
             v = values[good]
             w = weights[good]
         else:
             # per-frame scale to the frame mean; the batch path's global gmean cancels in every ratio
-            scale = 1.0
-            if I.size > 5 and I.mean() > 0:
-                scale = 1.0 / I.mean()
+            scale = frame_scale(I)
+            if scale is None:
+                self.n_refused += 1; self.n_frames += 1
+                return
             v = I * scale
             w = 1.0 / sigma ** 2
         # bucket j holds measurements passing thr[j] but not thr[j+1], so summing j>=J reproduces
         # the batch selection `snr > thr[J]` EXACTLY. side="left" makes it strictly-greater, and
-        # bucket -1 (snr <= thr[0], e.g. negative intensities) is DROPPED rather than folded into 0.
+        # bucket -1 (snr <= thr[0]) is DROPPED rather than folded into 0. The default bins start at
+        # -inf, so nothing is dropped on the sign of I (review r2 s1-05); stats(thr=0.0) sums the old
+        # I > 0 selection. n_meas counts every kept row and is not thresholded.
         b = np.searchsorted(self.thr, I / sigma, side="left") - 1
         keep = b >= 0
         if not keep.any():
@@ -551,7 +568,7 @@ class MergeAccumulator:
         self.n_meas += int(keep.sum())
         self.n_frames += 1
 
-    def merged_by_key(self, thr=0.0):
+    def merged_by_key(self, thr=-np.inf):
         """Merged intensity per asu key (both half-sets and all snr buckets >= thr
         combined). Returns {asu_key(int): I_merged(float)} -- used to score R_vs_truth
         against a KNOWN I_full on the synthetic experiment."""
@@ -564,14 +581,18 @@ class MergeAccumulator:
                 out[int(k)] = float(swv[r] / sw[r])
         return out
 
-    def stats(self, thr=0.0, n_theoretical=None):
-        """Figures of merit from the running sums, at an I/sigma floor."""
+    def stats(self, thr=-np.inf, n_theoretical=None):
+        """Figures of merit from the running sums, at an I/sigma floor (default: none, I <= 0 kept).
+
+        "measurements" is n_meas, every row merged, whatever thr is; the count above the floor is
+        unique * redundancy (the old I > 0 count at thr=0.0)."""
         j = int(np.searchsorted(self.thr, thr, side="left"))
         r = slice(0, self.n_rows)
         sw = self.sw[r, :, j:].sum(2); swv = self.swv[r, :, j:].sum(2); cnt = self.cnt[r, :, j:].sum(2)
         tot = cnt.sum(1)
         obs = tot > 0
-        out = {"frames": self.n_frames, "measurements": int(self.n_meas),
+        out = {"frames": self.n_frames, "refused_frames": int(getattr(self, "n_refused", 0)),
+               "measurements": int(self.n_meas),
                "unique": int(obs.sum()),
                "redundancy": float(tot[obs].mean()) if obs.any() else 0.0,
                "cc_half": float("nan"), "cc_star": float("nan"), "rsplit": float("nan"),
@@ -838,7 +859,7 @@ class StreamDriver:
 
     def __init__(self, Mc, panels, clen_m, wavelength_A, shape, dtype=np.uint16, mask=None,
                  B=64, dmin=2.0, tol=0.002, half=3, gap=2, ring=3, min_peaks=6,
-                 snr_bins=(0.0, 1.0, 2.0, 3.0, 5.0), pf_kw=None, use_gpu=True,
+                 snr_bins=MERGE_SNR_BINS, pf_kw=None, use_gpu=True,
                  lock_support=3, lock_gap=2, adaptive_gap=True, warmup_nbest=3,
                  adaptive_relock=False, min_inliers=0, min_inlier_frac=0.15,
                  warm_topk=32, warm_floor=1,   # 16 refused real MFX data; see warmup_batch()
@@ -2896,7 +2917,7 @@ class StreamDriver:
         self._pl_v = [None] * self.B
         self._rej = {}
 
-    def stats(self, thr=0.0):
+    def stats(self, thr=-np.inf):
         if self._blind:                                         # not yet locked -- warm-up in progress
             _, sup, lead = self._rc.verdict()
             # gate_refused belongs HERE most of all. `_gate_lock` runs only on the blind path

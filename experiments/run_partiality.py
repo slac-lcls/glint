@@ -20,7 +20,7 @@ import numpy as np
 
 from glint.predict import recip_from_M
 from glint.refine_sym import refine_bravais
-from glint.stream_driver import MergeAccumulator, laue_ops_4mmm, _asu_key
+from glint.stream_driver import MergeAccumulator, laue_ops_4mmm, _asu_key, frame_scale
 from glint.partiality import PartialityScaler
 import glint.synth_sfx as ss
 
@@ -63,7 +63,9 @@ def merge_default(stills, use_refine, ops, sym_tol=0.02):
         I = np.asarray(st["I_obs"], float); sigma = np.maximum(st["sigma"], 1e-3)
         acc.add_frame(hkl, I, sigma, fi)
         good = np.isfinite(I) & np.isfinite(sigma)
-        scale = 1.0 / I[good].mean() if (good.sum() > 5 and I[good].mean() > 0) else 1.0
+        scale = frame_scale(I[good])                     # add_frame's rule: an unmeasured frame is not merged
+        if scale is None:
+            continue
         keep = good & (I > 0)
         Kk.append(_asu_key(hkl[keep], ops)); Vv.append((I * scale)[keep])
         Ww.append((1.0 / sigma ** 2)[keep]); Cc.append(np.full(int(keep.sum()), fi))

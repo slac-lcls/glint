@@ -1948,13 +1948,31 @@ class StreamDriver:
         header), None if it is only the 4/mmm merge fallback -- then misorientation_deg infers it."""
         return self.laue if getattr(self, "_laue_known", False) else None
 
+    def _kc_laue(self):
+        """A known-cell handedness class, including a low-symmetry class identified by explicit operators.
+
+        Unlike the double-hit gate, known-cell indexing can use the exact operator set to distinguish
+        low-symmetry settings even when `_laue_known` is false.
+        """
+        lk = self._sl_laue()
+        if lk in LOW_LAUE:
+            return lk
+        if not self._ops_explicit:
+            return None
+        ops = _op_set(self.ops)
+        for candidate in LOW_LAUE:
+            key = laue_name(candidate)
+            if ops == _op_set(laue_ops(key)):
+                return key
+        return None
+
     def _kc_kw(self, Mc=None):
         """laue= for the known-cell engines (replica_gpu._both_hands): the GIVEN class when it is one that
         seeds both hands (LOW_LAUE), else nothing -- the engines' tilt gate, the exact call made before.
         Only for the primary cell (Mc None, or equal to self.Mc; before the lock, the cell being locked): the
         class describes the sample the driver was configured for, not a relocked extra cell, which may be
         another lattice (the lysozyme lock cell must not be forced two-handed by a triclinic primary)."""
-        lk = self._sl_laue()
+        lk = self._kc_laue()
         if lk not in LOW_LAUE:
             return {}
         prim = getattr(self, "Mc", None)

@@ -6,14 +6,19 @@ Keeps replica_gpu (per-frame) and the ffbidx handoff as the other two options.
 index_all_graph() captures the whole GPU stage as a CUDA graph (one replay per batch instead of
 thousands of host kernel dispatches -- the engine is host-dispatch-bound). It needs a fixed shape,
 so it sorts frames by peak count and routes each batch to the smallest of a few Pmax buckets; this
-is BIT-IDENTICAL to index_known_gpu_cell_batch (per-frame independence + masked padding) and ~1.3x
-faster on real cxidb / ~1.5x at deployment peak-caps. Enabled by the analytic solve/det (cuSOLVER
-is uncapturable and forces a stream sync)."""
+is ~1.3x faster than index_known_gpu_cell_batch on real cxidb / ~1.5x at deployment peak-caps, and
+in fp64 (KC_FP=64) BIT-IDENTICAL to it (per-frame independence + masked padding). In fp32 the two
+can pick a different setting of the same lattice on near-ties (A100 job 39730411; fp64 equal on
+every frame): 10/120 lysozyme-lock frames, symmetry-equivalent under 4/mmm, and 8/87 r199 frames,
+a 2-fold about a that its 2/m class does not contain (the beta = 90.07 deg cell's pseudo-orthorhombic
+indexing ambiguity). Enabled by the
+analytic solve/det (cuSOLVER is uncapturable and forces a stream sync)."""
 import os, sys, warnings
 os.environ.setdefault("OMP_NUM_THREADS", "1"); os.environ.setdefault("CDIRS", "16384")
 import numpy as np, torch
 from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, AXIS0_DEDUP_COS, _axes_from_cell,
-                               _third_axis, _fib_halfsphere, _azimuth_grid, _depth)
+                               _third_axis, _fib_halfsphere, _azimuth_grid, _depth, _canonical_laue,
+                               _both_hands, _ref_setting, _ref_settings)
 from glint.multishot import same_lattice
 from glint.geom import clean_frames
 
@@ -87,24 +92,79 @@ def _arange(F):
         a = _ARANGE[F] = torch.arange(F, device=DEV)
     return a
 
-# --- adaptive orientation-grid density (cross-cell-validated 2026-07-17) ---
-# 4096 dirs is rate-neutral for orthogonal cells (all angles ~90: cubic/tet/ortho, incl. the
-# anisotropic long-axis case) at ~1.3x speed, but regresses triclinic ~8pts. So: coarse grid for
-# all-90 cells, full CDIRS grid for oblique (mono/tricl/rhomb). KC_ADAPTIVE_DIRS=0 forces full.
+# --- adaptive orientation-grid density ---
+# The anchor (shortest axis, length L0) is searched on a Fibonacci half-sphere and then refined, so the grid only
+# has to land inside the anchor's angular basin. That basin narrows as 1/(L0*qmax): an anchor dtheta off moves a
+# peak at |q| by L0*|q|*dtheta in index. 4096 directions (~2.2 deg spacing, ~1.3x faster than 16384) are
+# rate-neutral on orthogonal cells while L0*qmax <= ~25 (lysozyme on cxidb-17: 38 A x at most 0.61 1/A = 23, where
+# the grid was validated 2026-07-17), but on synthetic stills they lose about half the correct indexings once
+# L0*qmax > ~33 (review r2 s4-02: 26/60 vs 55/60 on 100x120x150 A at 1.8 A), and ~8 pts on triclinic cells at any
+# resolution. So the coarse grid is used for a FRAME only when the cell is orthogonal (all angles within 2 deg of
+# 90) AND L0 * (that frame's largest |q|) <= KC_ADAPT_L0Q (default 25); otherwise the full CDIRS grid. The choice
+# is per frame, from its own peaks, so a frame's answer does not depend on which frames share its batch.
+# KC_ADAPTIVE_DIRS=0 forces the full grid everywhere.
 _ADAPT = os.environ.get("KC_ADAPTIVE_DIRS", "1") != "0"
+_ADAPT_L0Q = float(os.environ.get("KC_ADAPT_L0Q", "25"))
 _DIRS_LO = torch.as_tensor(_fib_halfsphere(min(4096, int(os.environ.get("CDIRS", "16384")))), dtype=FP, device=DEV)
 
 
-def _adaptive_dirs(Mc):
-    """Coarse (4096) Fibonacci half-sphere for orthogonal known cells; full grid for oblique."""
-    if not _ADAPT:
-        return _DIRS
+def _orthogonal(Mc):
+    """All three cell angles within 2 degrees of 90."""
     M = np.asarray(Mc, float); a, b, c = M[:, 0], M[:, 1], M[:, 2]
 
     def _ang(u, v):
         return np.degrees(np.arccos(np.clip(u @ v / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-12), -1.0, 1.0)))
-    orthogonal = all(abs(x - 90.0) < 2.0 for x in (_ang(b, c), _ang(a, c), _ang(a, b)))
-    return _DIRS_LO if orthogonal else _DIRS
+    return all(abs(x - 90.0) < 2.0 for x in (_ang(b, c), _ang(a, c), _ang(a, b)))
+
+
+def _frame_qmax(frames):
+    """Each frame's largest |q| (1/A; 0.0 for a frame without peaks), as a float64 array. Host-side numpy, one
+    vectorised pass over all frames."""
+    n = np.fromiter((len(f) for f in frames), dtype=np.int64, count=len(frames))
+    out = np.zeros(len(frames))
+    nz = n > 0
+    if nz.any():
+        q = np.concatenate([np.asarray(f, float).reshape(-1, 3) for f, k in zip(frames, n) if k])
+        q2 = np.einsum("ij,ij->i", q, q)
+        out[nz] = np.sqrt(np.maximum.reduceat(q2, np.concatenate(([0], np.cumsum(n[nz])[:-1]))))
+    return out
+
+
+_CELL_L0 = {}
+
+
+def _orthogonal_L0(Mc):
+    """L0 (the shortest axis) if cell Mc is orthogonal, else None; cached per cell. _coarse_ok runs on every batch
+    (twice in _gpu_stage) and once per index_fused call, and _orthogonal + _axes_from_cell cost ~45 us on a Mac
+    each time. Uncached (153ecf8), that repeated work was 60-65 % of the host time index_fused added over main at
+    B=32 and 32-38 % at B=120 (Mac, GPU work stubbed, the 120 cxidb-17 frames AG02b times); the rest was _frame_qmax,
+    run over every frame once per call and again per batch, now once per call. Review-r2 GPU rerun v3 on an A100
+    measured the cached version within the 1.03x + 0.005 ms limit at B=32/64/120 in both fp32 and fp64."""
+    k = np.asarray(Mc, float).tobytes()
+    if k not in _CELL_L0:
+        if len(_CELL_L0) >= 256:                     # a relocking stream sees a handful of cells; never grow unbounded
+            _CELL_L0.clear()
+        _CELL_L0[k] = float(_axes_from_cell(Mc)[0][0]) if _orthogonal(Mc) else None
+    return _CELL_L0[k]
+
+
+def _coarse_ok(Mc, qmax):
+    """Where the coarse 4096 grid is safe for cell Mc at largest |q| qmax (scalar or per-frame array): adaptive
+    grid on, orthogonal cell, and L0 * qmax <= _ADAPT_L0Q (L0 = the shortest axis, the anchor). A NaN qmax is
+    not safe (full grid)."""
+    q = np.asarray(qmax, float)
+    L0 = _orthogonal_L0(Mc) if _ADAPT else None
+    if L0 is None:
+        return np.zeros(q.shape, bool)
+    return L0 * q <= _ADAPT_L0Q
+
+
+def _adaptive_dirs(Mc, qmax):
+    """The anchor grid for cell Mc and frames whose largest |q| is qmax: the coarse (4096) Fibonacci half-sphere
+    where _coarse_ok, else the full CDIRS grid. qmax=None (not known) gets the full grid."""
+    if qmax is None:
+        return _DIRS
+    return _DIRS_LO if bool(_coarse_ok(Mc, qmax)) else _DIRS
 
 
 def pad(frames, Pmax):
@@ -147,13 +207,15 @@ def anneal_b(M0, Q, m, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02):
     return M
 
 
-def _cell_params(Mc, topa=8, nc=None, full_grid=False):
+def _cell_params(Mc, topa=8, nc=None, full_grid=False, qmax=None, laue=None):
     """Host-side cell geometry (numpy) + the orientation grid, hoisted out of the compute so _stage_compute
     is pure-torch (and CUDA-graph capturable for a fixed cell). The search depth rides along in P: topa
     (azimuths kept per anchor), nc (anchor directions kept; default the module's NC) and the grid -- the
-    adaptive one (4096 directions for orthogonal cells) unless full_grid, which is the CDIRS grid the
-    per-frame search uses (the escalation's deep search needs it: the adaptive grid changes which misses
-    it recovers, exp/batched-escalation RESULTS_batched_deep.md)."""
+    adaptive one (_adaptive_dirs: 4096 directions only for an orthogonal cell with L0 * qmax <= KC_ADAPT_L0Q,
+    qmax the largest |q| of the frames P will run on; None = not known = the full grid) unless full_grid, which
+    is the CDIRS grid the per-frame search uses (the escalation's deep search needs it: the adaptive grid
+    changes which misses it recovers, exp/batched-escalation RESULTS_batched_deep.md). laue: the declared Laue
+    class; with the cell it fixes the handedness branch (replica_gpu._both_hands), carried in P[-2]."""
     topa = _depth("topa", topa)
     # nc is capped at the pool: the per-frame search cannot keep more anchors than the pool has, and past it
     # the dedup loop below would only fill copies of the first anchor (argmax of an all-false row is 0)
@@ -161,15 +223,16 @@ def _cell_params(Mc, topa=8, nc=None, full_grid=False):
     nc = min(NC if nc is None else _depth("nc", nc), ANCHOR_POOL)
     L, c01, c02, c12, sgn = _axes_from_cell(Mc)
     ca, sa = _azimuth_grid(c01)                     # half turn iff perpendicular (see replica_gpu)
+    both = _both_hands(float(L[2]), c01, c02, c12, laue)    # host bool: graph capture bakes it in
     return (float(L[0]), float(L[1]), float(L[2]), c01, c02, c12, sgn,
-            _DIRS if full_grid else _adaptive_dirs(Mc), topa, ca.to(FP), sa.to(FP), nc)
+            _DIRS if full_grid else _adaptive_dirs(Mc, qmax), topa, ca.to(FP), sa.to(FP), both, nc)
 
 
 def _stage_compute(Q, m, P):
     """Pure-torch known-cell compute on padded (F,Pmax,3) Q + (F,Pmax) m; returns GPU tensors
     (best, pol, mp, mainb). No cuSOLVER (analytic solve/det) and static-shape => CUDA-graph
     capturable, which collapses the ~thousands of host kernel dispatches (the dominant cost)."""
-    L0, L1, L2, c01, c02, c12, sgn, dirs, topa, _ca, _sa, nc = P
+    L0, L1, L2, c01, c02, c12, sgn, dirs, topa, _ca, _sa, both, nc = P
     F = Q.shape[0]
     # --- anchor search (shortest axis) + greedy dedup to nc ---
     V0 = (L0 * dirs)[None].expand(F, -1, -1)
@@ -199,6 +262,9 @@ def _stage_compute(Q, m, P):
     a0s = torch.gather(a0, 2, topi[..., None].expand(-1, -1, -1, 3)).reshape(F, nc * ta, 3)
     a1s = torch.gather(a1, 2, topi[..., None].expand(-1, -1, -1, 3)).reshape(F, nc * ta, 3)
     a2s = _third_axis(a0s.reshape(-1, 3), a1s.reshape(-1, 3), L2, c02, c12, sgn).reshape(F, nc * ta, 3)
+    if both:                                           # s4-01: seed the other hand too (see replica_gpu._both_hands)
+        a2m = _third_axis(a0s.reshape(-1, 3), a1s.reshape(-1, 3), L2, c02, c12, -sgn).reshape(F, nc * ta, 3)
+        a0s = torch.cat([a0s, a0s], 1); a1s = torch.cat([a1s, a1s], 1); a2s = torch.cat([a2s, a2m], 1)
     M0 = torch.stack([a0s, a1s, a2s], dim=3)
     det = torch.abs(det3(M0) if _ANALYTIC else torch.linalg.det(M0)); validM = det >= 1e3
     M0 = torch.where(validM[..., None, None], M0, _EYE3[None, None])
@@ -208,15 +274,33 @@ def _stage_compute(Q, m, P):
     subm = (torch.log2(torch.clamp(dd, TRIML, TRIMH) + DELTA).mean(3) * m[:, None, :]).sum(2) / m.sum(1, keepdim=True).clamp(min=1)
     key = torch.where(validM, main.double() * 1000 - subm, torch.full_like(main.double(), -1e18))
     bidx = key.argmax(1); best = Mt[ar, bidx]; mainb = main[ar, bidx]
+    if both:                                           # back to the reference hand: -M is hkl -> -hkl, same spots
+        best = torch.where((det3(best) * sgn < 0)[:, None, None], -best, best)
     # --- guarded polish, batched ---
     pol = anneal_b(best[:, None], Q, m, thr0=0.30, contract=0.85, max_iter=10, min_thr=0.15)[:, 0]
     Hp = torch.einsum('fpc,fcd->fpd', Q, pol); mp = ((torch.abs(Hp - torch.round(Hp)).amax(2) < 0.15) & m).sum(1)
     return best, pol, mp, mainb
 
 
-def _gpu_stage(frames, Mc, topa=8, nc=None, full_grid=False):
-    """Eager wrapper: pad this batch then run the pure-torch stage compute."""
-    P = _cell_params(Mc, topa, nc, full_grid)        # validates the depth before any GPU work
+def _gpu_stage(frames, Mc, topa=8, nc=None, full_grid=False, laue=None, qf=None):
+    """Eager wrapper: pad this batch then run the pure-torch stage compute. The anchor grid is chosen per frame
+    (_coarse_ok on the frame's own largest |q|); a batch that needs both grids runs as two sub-batches whose
+    outputs are put back in frame order, so no frame's grid depends on the frames batched with it.
+    laue: the declared Laue class, for the handedness branch (replica_gpu._both_hands; it rides in P).
+    qf: these frames' _frame_qmax, when the caller already has it (index_fused); computed here otherwise. The
+    full grid does not read it, so with full_grid it is never computed."""
+    qmax = None
+    if not full_grid:
+        if qf is None:
+            qf = _frame_qmax(frames)
+        ok = _coarse_ok(Mc, qf)
+        if ok.any() and not ok.all():
+            parts = [np.flatnonzero(ok), np.flatnonzero(~ok)]
+            res = [_gpu_stage([frames[j] for j in p], Mc, topa, nc, laue=laue, qf=qf[p]) for p in parts]
+            inv = torch.as_tensor(np.argsort(np.concatenate(parts)), device=DEV)
+            return tuple(torch.cat(t)[inv] for t in zip(*res))
+        qmax = float(qf.max()) if len(qf) else 0.0
+    P = _cell_params(Mc, topa, nc, full_grid, qmax=qmax, laue=laue)   # validates the depth before any GPU work
     Pmax = max(len(f) for f in frames)
     Q, m = pad(frames, Pmax)
     return _stage_compute(Q, m, P)
@@ -235,8 +319,8 @@ def _cpu_stage(best, pol, mp, mainb, Mc):
     return out
 
 
-def index_known_gpu_cell_batch(frames, Mc, topa=8, nc=None, full_grid=False):
-    """Returns list of M (3x3 np) or None, one per frame -- single batched pass over all F.
+def index_known_gpu_cell_batch(frames, Mc, topa=8, nc=None, full_grid=False, laue=None):
+    """Returns list of M (3x3 np) or None, one per frame -- one batched pass (two if the frames need both grids).
     topa / nc / full_grid set the search depth (see _cell_params); the defaults are the shipped search.
 
     Each frame first loses the rows glint.geom.q_rows_ok rejects (NaN/inf, |q| ~ 0): a NaN row used to
@@ -245,20 +329,29 @@ def index_known_gpu_cell_batch(frames, Mc, topa=8, nc=None, full_grid=False):
     frame can come back as an unrefined starting candidate, which is built from Mc's own metric and so
     passes same_lattice; an empty one alone raised. Batches whose frames all have 6 or more rows take the
     unchanged single pass."""
+    laue = _canonical_laue(laue)
     frames = clean_frames(frames)
     live = [j for j, f in enumerate(frames) if len(f) >= 6]
     if len(live) == len(frames):
-        return _cpu_stage(*_gpu_stage(frames, Mc, topa, nc, full_grid), Mc)
+        return _settle(_cpu_stage(*_gpu_stage(frames, Mc, topa, nc, full_grid, laue), Mc), Mc, laue)
     out = [None] * len(frames)
     if not live:
-        _cell_params(Mc, topa, nc, full_grid)       # still reject a bad depth, as the batched pass would
+        _cell_params(Mc, topa, nc, full_grid, laue=laue)   # still reject a bad depth, as the batched pass would
         return out
-    for j, M in zip(live, _cpu_stage(*_gpu_stage([frames[j] for j in live], Mc, topa, nc, full_grid), Mc)):
+    sub = [frames[j] for j in live]
+    for j, M in zip(live, _settle(_cpu_stage(*_gpu_stage(sub, Mc, topa, nc, full_grid, laue), Mc), Mc, laue)):
         out[j] = M
     return out
 
 
-def index_known_deep_batch(frames, Mc, topa, nc, full_grid=True, budget=12000, return_errors=False):
+def _settle(res, Mc, laue=None):
+    """replica_gpu._ref_setting on every frame, for the cells that take the two-handed seed (s4-01). Applied
+    after _cpu_stage, which the fused kernels replace with their own (fused_kernels.patch(cpu=True))."""
+    L, c01, c02, c12, _ = _axes_from_cell(Mc)
+    return _ref_settings(res, Mc) if _both_hands(float(L[2]), c01, c02, c12, laue) else res
+
+
+def index_known_deep_batch(frames, Mc, topa, nc, full_grid=True, budget=12000, return_errors=False, laue=None):
     """The escalation's deep known-cell search, batched: frames sorted by peak count and chunked so that
     frames x Pmax <= budget, each chunk one index_known_gpu_cell_batch call at the given depth, on the full
     CDIRS grid by default. On a GPU with cupy the fused kernels are patched in, as index_fused does; frames
@@ -273,6 +366,7 @@ def index_known_deep_batch(frames, Mc, topa, nc, full_grid=True, budget=12000, r
     same matched count as the per-frame replica_gpu.index_known_gpu_cell, fused 0.9-1.8 ms per search
     against about 20 ms per frame. The per-frame search is always fp64; this one runs at the module's
     working precision (KC_FP), so KC_FP=64 is the configuration that equivalence was measured in."""
+    laue = _canonical_laue(laue)
     topa = _depth("topa", topa); nc = _depth("nc", nc)
     if isinstance(budget, (bool, np.bool_)) or not isinstance(budget, (int, np.integer)) or budget < 1:
         raise ValueError(f"budget must be an integer >= 1, got {budget!r}")
@@ -300,7 +394,7 @@ def index_known_deep_batch(frames, Mc, topa, nc, full_grid=True, budget=12000, r
                 e += 1
             chunk = fits[s:e]
             try:
-                res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc, topa, nc, full_grid)
+                res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc, topa, nc, full_grid, laue)
             except Exception as ex:                # noqa: BLE001 -- a miss, not a death
                 warnings.warn(f"index_known_deep_batch: a chunk of {len(chunk)} frames failed "
                               f"({type(ex).__name__}: {ex}); returning them as misses", RuntimeWarning)
@@ -315,7 +409,7 @@ def index_known_deep_batch(frames, Mc, topa, nc, full_grid=True, budget=12000, r
             fk.unpatch()
     for j in over:                                 # the stock ops, one frame at a time (as index_fused)
         try:
-            out[j] = index_known_gpu_cell_batch([frames[j]], Mc, topa, nc, full_grid)[0]
+            out[j] = index_known_gpu_cell_batch([frames[j]], Mc, topa, nc, full_grid, laue)[0]
         except Exception as ex:                    # noqa: BLE001
             err[j] = True
             warnings.warn(f"index_known_deep_batch: frame with {len(frames[j])} peaks failed on the "
@@ -349,6 +443,13 @@ class _StageGraph:
         self.g = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self.g):
             self.out = _stage_compute(self.Q, self.m, P)
+        # The capture reads P's tensors by address: keep them alive as long as the graph. In fp32 _cell_params
+        # makes fresh copies of the azimuth grid (ca, sa = CA.to(FP)) that nothing else holds, so a graph cached
+        # in _GRAPHS and replayed by a LATER index_all_graph call read freed, reused memory: a second fp32 call over
+        # the same 480 lysozyme frames differed on 437-448 of them (A100, review-r2 GPU job 39724840; fp64 equal),
+        # on the nonfinite-q-rows tree f9c2e3d, whose graph code is main's: 448 in its dirty-rows check (clean_q
+        # reduces the dirty list to the same frames), 437 in its timing check's identity-vs-real clean_q pass.
+        self.P = P
 
     def run(self, Q, m):
         self.Q.copy_(Q); self.m.copy_(m); self.g.replay()
@@ -366,34 +467,45 @@ def _bucket(p, buckets):
     return None                                           # oversized -> eager fallback (no cap)
 
 
-def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS):
-    """Graphed known-cell indexer. Sorts frames by peak count and routes each B-batch to the
-    smallest Pmax bucket that fits, replaying a per-bucket captured stage graph (host kernel
+def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS, laue=None):
+    """Graphed known-cell indexer. Sorts frames by anchor grid, then peak count, and routes each B-batch to the
+    smallest Pmax bucket that fits, replaying a per-(bucket, grid, handedness) captured stage graph (host kernel
     dispatch collapsed). Because each frame indexes INDEPENDENTLY (known cell, no cross-frame
-    coupling) and padding is masked out, this is BIT-IDENTICAL to index_known_gpu_cell_batch and
-    full-rate -- the sort just makes each graph's fixed Pmax tight instead of over-padding the
-    largest frame. Oversized frames (> max bucket) fall back to the eager path. cuSOLVER-free
+    coupling) and padding is masked out, this is full-rate and, in fp64, BIT-IDENTICAL to
+    index_known_gpu_cell_batch -- the sort just makes each graph's fixed Pmax tight instead of
+    over-padding the largest frame. In fp32 (the default) the two can pick a different setting of
+    the same lattice on near-ties: 10/120 lysozyme-lock frames (symmetry-equivalent) and 8/87 r199
+    frames (its pseudo-orthorhombic indexing ambiguity), A100 job 39730411; fp64 equal on every
+    frame. _StageGraph holding P does not change that. Oversized frames (> max bucket) fall back to the eager path. cuSOLVER-free
     (analytic solve, ~1e-13 vs linalg). CPU / capture-unsupported -> eager. Rows glint.geom.q_rows_ok
     rejects are dropped first, and a frame left with fewer than 6 rows is a miss (None), as in
     index_known_gpu_cell_batch."""
+    laue = _canonical_laue(laue)
     frames = clean_frames(frames)
     if DEV != "cuda":
-        return [M for i in range(0, len(frames), B) for M in index_known_gpu_cell_batch(frames[i:i + B], Mc)]
-    P = _cell_params(Mc); cell = tuple(np.asarray(Mc, float).ravel().round(6))
-    order = sorted((i for i in range(len(frames)) if len(frames[i]) >= 6),
-                   key=lambda i: len(frames[i]))   # size-homogeneous batches; a sparse frame stays None
+        return [M for i in range(0, len(frames), B)
+                for M in index_known_gpu_cell_batch(frames[i:i + B], Mc, laue=laue)]
+    live = [i for i in range(len(frames)) if len(frames[i]) >= 6]          # a sparse frame stays None
+    qf = _frame_qmax(frames); ok = _coarse_ok(Mc, qf)    # each frame's anchor grid (see _gpu_stage)
+    Ps = {g: _cell_params(Mc, qmax=float(qf[[i for i in live if ok[i] == g]].max()), laue=laue)
+          for g in set(ok[live].tolist())}
+    cell = tuple(np.asarray(Mc, float).ravel().round(6))
+    order = sorted(live, key=lambda i: (not ok[i], len(frames[i])))   # by grid, then size-homogeneous
     out = [None] * len(frames)
     for s in range(0, len(order), B):
         chunk = order[s:s + B]; fb = [frames[j] for j in chunk]; Fb = len(fb)
         bkt = _bucket(max(len(f) for f in fb), buckets)
-        if bkt is None:                                   # frame(s) bigger than any bucket
-            res = index_known_gpu_cell_batch(fb, Mc)
+        grids = set(ok[chunk].tolist())
+        if bkt is None or len(grids) > 1:                 # frame(s) bigger than any bucket, or the chunk on both grids
+            res = index_known_gpu_cell_batch(fb, Mc, laue=laue)
         else:
-            G = _GRAPHS.get((cell, B, bkt))
+            P = Ps[grids.pop()]
+            key = (cell, P[-2], B, bkt, len(P[7]))        # handedness and grid are baked into a captured graph
+            G = _GRAPHS.get(key)
             if G is None:
-                G = _GRAPHS[(cell, B, bkt)] = _StageGraph(P, B, bkt)
+                G = _GRAPHS[key] = _StageGraph(P, B, bkt)
             best, pol, mp, mainb = G.run(*_pad_fixed(fb, B, bkt))
-            res = _cpu_stage(best[:Fb], pol[:Fb], mp[:Fb], mainb[:Fb], Mc)
+            res = _settle(_cpu_stage(best[:Fb], pol[:Fb], mp[:Fb], mainb[:Fb], Mc), Mc, laue)
         for j, r in zip(chunk, res):
             out[j] = r
     return out
@@ -402,31 +514,31 @@ def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS):
 index_batch = index_known_gpu_cell_batch   # alias
 
 
-def _unfused(frames, Mc, B, topa, nc, full_grid):
+def _unfused(frames, Mc, B, topa, nc, full_grid, laue=None):
     """index_fused without the fused kernels (CPU, or no cupy): the CUDA-graph path at the shipped depth, as
     before; at any other depth the graph is not built for it, so the torch batch path runs in B-sized chunks
     (sorted by peak count, as the fused path pads) at the depth asked for -- slower, same answer."""
     if topa == 8 and (nc is None or int(nc) == NC) and not full_grid:   # the shipped depth, written out or not
-        return index_all_graph(frames, Mc, B)
+        return index_all_graph(frames, Mc, B, laue=laue)
     order = sorted(range(len(frames)), key=lambda i: len(frames[i]))
     out = [None] * len(frames)
     for s in range(0, len(order), B):
         chunk = order[s:s + B]
-        res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc, topa, nc, full_grid)
+        res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc, topa, nc, full_grid, laue)
         for j, r in zip(chunk, res):
             out[j] = r
     return out
 
 
-def index_fused(frames, Mc, B=32, topa=8, nc=None, full_grid=False):
+def index_fused(frames, Mc, B=32, topa=8, nc=None, full_grid=False, laue=None):
     """Fully-fused known-cell indexer: custom fused CUDA kernels (cupy RawKernel, nvrtc-JIT) for the
     anneal/obj/refine per-candidate hot loops + an on-device cpu_stage (batched buerger same_lattice),
     replacing the many small per-stage torch kernels AND the host tail. At B=32 on one A100: 0.31
     ms/frame fp32 / 0.33 fp64 -- 6.6x (fp32) / 4.3x (fp64) over index_all_graph -- with per-frame output
     numerically equivalent in fp64 (max|ΔM| 1.42e-13; rate + lattice identical in both precisions,
     80/115 on 120 cxidb) to the stock engine.
-    Sorts frames by peak count so each batch pads to its own tight Pmax. Requires cupy on a GPU; falls
-    back to index_all_graph (graph path) when cupy is unavailable or on CPU.
+    Sorts frames by anchor grid (see _gpu_stage), then by peak count so each batch pads to its own tight Pmax.
+    Requires cupy on a GPU; falls back to index_all_graph (graph path) when cupy is unavailable or on CPU.
 
     Throughput scales with the batch B: anneal and refine give each frame one thread-block, so B
     still sets their occupancy (obj splits its candidates across blockIdx.y since #165, but that did
@@ -454,29 +566,40 @@ def index_fused(frames, Mc, B=32, topa=8, nc=None, full_grid=False):
     depth sweep on the cxidb-17 480 gave 308 / 341 / 365 / 379 frames at 0.15 / 0.27 / 0.40 / 0.94 ms per
     frame for (topa, nc) = (8, 16), (32, 16), (32, 32) and (128, 32) on the full grid, B=120, one A100
     (branch exp/batched-escalation)."""
+    laue = _canonical_laue(laue)
     if DEV != "cuda":
-        return _unfused(frames, Mc, B, topa, nc, full_grid)
+        return _unfused(frames, Mc, B, topa, nc, full_grid, laue)
     try:
         from glint import fused_kernels as _fk
     except Exception:
-        return _unfused(frames, Mc, B, topa, nc, full_grid)
+        return _unfused(frames, Mc, B, topa, nc, full_grid, laue)
     cap = _fk.max_peaks()
-    order = sorted(range(len(frames)), key=lambda i: len(frames[i]))   # tight per-batch Pmax
+    # batch() below skips index_known_gpu_cell_batch to reuse each frame's qmax, so the row cleaning and the
+    # six-row floor it applies are applied here: a NaN row would also make that frame's qmax NaN
+    frames = clean_frames(frames)
+    live = [i for i in range(len(frames)) if len(frames[i]) >= 6]          # a sparse frame stays None
+    qf = None if full_grid else _frame_qmax(frames)          # once per call; each batch takes its slice
+    ok = np.ones(len(frames), bool) if full_grid else _coarse_ok(Mc, qf)
+    order = sorted(live, key=lambda i: (not ok[i], len(frames[i])))   # by grid, tight per-batch Pmax
     fits = [j for j in order if len(frames[j]) <= cap]
     over = [j for j in order if len(frames[j]) > cap]
     out = [None] * len(frames)
+
+    def batch(js):                     # index_known_gpu_cell_batch on frames js, without recomputing their qmax
+        return _settle(_cpu_stage(*_gpu_stage([frames[j] for j in js], Mc, topa, nc, full_grid, laue,
+                                              qf=None if qf is None else qf[js]), Mc), Mc, laue)
     _fk.patch(anneal=True, obj=True, refine=True, cpu=True)
     try:
         for s in range(0, len(fits), B):
             chunk = fits[s:s + B]
-            res = index_known_gpu_cell_batch([frames[j] for j in chunk], Mc, topa, nc, full_grid)
+            res = batch(chunk)
             for j, r in zip(chunk, res):
                 out[j] = r
     finally:
         _fk.unpatch()
     for j in over:                     # unpatched: the stock ops, one frame at a time. The stock
         try:                           # path materialises (F, NC*NANG, Pmax) tensors, so at these
-            out[j] = index_known_gpu_cell_batch([frames[j]], Mc, topa, nc, full_grid)[0]   # peak counts F must stay 1.
+            out[j] = batch([j])[0]     # peak counts F must stay 1.
         except Exception as e:                                        # OOM, etc: a miss, not a death
             warnings.warn(f"index_fused: frame with {len(frames[j])} peaks failed on the non-fused "
                           f"fallback ({type(e).__name__}: {e}); returning it as a miss", RuntimeWarning)

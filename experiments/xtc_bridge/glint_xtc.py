@@ -45,7 +45,8 @@ def build_parser():
     ap.add_argument("--det", default="jungfrau", help="psana detector name")
     ap.add_argument("--zdist", type=float, required=True,
                     help="sample-detector distance in m (REQUIRED: psana per-pixel Z is nominal)")
-    ap.add_argument("--wavelength", type=float, default=0.0, help="A; else per-event photon energy")
+    ap.add_argument("--wavelength", type=float, default=0.0,
+                    help="A; else per-event photon energy, which --integrate also predicts with")
     ap.add_argument("--energy-det", default="ebeamh")
     ap.add_argument("--min-peaks", type=int, default=6)
     ap.add_argument("--max-events", type=int, default=0, help="0 = all (global cap across ranks)")
@@ -108,6 +109,8 @@ def build_parser():
         "I=0/sigma=0 and a merge of it produces zeros. --integrate adds a SECOND PASS that re-reads "
         "the indexed events, predicts their reflections from the recovered orientation and "
         "box-integrates, giving a stream partialator can merge. Needs --geom for the panel model. "
+        "Each event is predicted at the wavelength pass 1 indexed it at (--wavelength, else that "
+        "event's photon energy), and each chunk's photon_energy_eV records it. "
         "Costs roughly n_events*0.9ms + n_indexed*146ms, since only wanted events are calibrated.")
     ig.add_argument("--integrate", action="store_true",
                     help="second pass: predict + box-integrate, writing real I/sigma")
@@ -127,8 +130,8 @@ def build_parser():
 
 def read_qframes(args, rank=0, nranks=1, verbose=True):
     """Read + peak-find one event shard (rank of nranks; default the whole run) -> the reader's dict
-    {qframes, events, n_events, n_sent, n_skipped_wl}. Dispatches xtc1 in-process vs xtc2 over the
-    bridge; identical q-core either way."""
+    {qframes, events, n_events, n_sent, n_skipped_wl}, plus the per-frame wavelengths `lams` on the
+    psana1 route. Dispatches xtc1 in-process vs xtc2 over the bridge; identical q-core either way."""
     pf_kw = dict(min_pix=args.min_pix, son_min=args.son_min, pf8_min_snr=args.pf8_min_snr,
                  thr_high=args.thr_high, thr_low=args.thr_low, peakfinder=args.peakfinder)
     if args.psana == "1":
@@ -190,7 +193,14 @@ def index_and_write(out, args, out_path, report=True):
     images = [{"image": f"xtc://{args.exp}_r{args.run}", "event": e} for e in out["events"]]
     results, stats = hybrid_index(frames, images, Mc_known=Mc_known, nbest=args.nbest)
     if getattr(args, "integrate", False):
-        n_idx = integrate_and_write(results, args, out_path, report=report)
+        # Pass 2 must predict each event at the wavelength pass 1 built its q with. The psana1 reader
+        # returns those as `lams`, aligned with `events`; a reader without them leaves the map empty
+        # and integrate_and_write then needs --wavelength (it refuses rather than predict at 0).
+        lams = out.get("lams")
+        if lams is not None and len(lams) != len(out["events"]):
+            raise ValueError(f"reader returned {len(lams)} wavelengths for {len(out['events'])} events")
+        lam_by_event = dict(zip((int(e) for e in out["events"]), lams or ()))
+        n_idx = integrate_and_write(results, args, out_path, report=report, lam_by_event=lam_by_event)
     else:
         n_idx = write_stream(results, out_path, geom_text=geom_text)
     if report:
@@ -198,19 +208,46 @@ def index_and_write(out, args, out_path, report=True):
     return results, stats, n_idx
 
 
-def integrate_and_write(results, args, out_path, report=True):
+def integrate_and_write(results, args, out_path, report=True, lam_by_event=None):
     """PASS 2: re-read the indexed events, predict their reflections and box-integrate, then write a
     stream with REAL I/sigma that partialator can merge.
 
     Without this the stream is orientation-only: `glint/stream.py` writes every reflection row as
     `h k l 0.00 0.00 ...`, so only the Miller indices are real and a merge of it produces zeros.
 
-    REQUIRES --geom. Prediction projects q onto named CrystFEL panels (corner, fs/ss basis, res,
-    coffset), and psana's per-pixel coordinates do not carry that panel model -- they are positions,
-    not a tiling. The frame is handed over reshaped to the (nseg*H, W) slab a .geom addresses.
+    REQUIRES --geom. Prediction projects q onto named CrystFEL panels (corner, fs/ss basis, res),
+    and psana's per-pixel coordinates do not carry that panel model -- they are positions, not a
+    tiling. The frame is handed over reshaped to the (nseg*H, W) slab a .geom addresses.
+
+    DISTANCE: --zdist is the WHOLE sample-detector distance, and both passes put the detector on
+    one plane at --zdist; the .geom's clen/coffset enters neither. Pass 1
+    (geom_coords.coords_from_geom) stamps -zdist on every pixel. project_q puts each panel at
+    clen_m + coffset, so pass 2 zeroes the parsed panels' coffset before handing it --zdist. It used
+    to keep it, which counted the offset twice: on mfxx49820 r0016 (r0016.geom coffset -0.1376 m,
+    --zdist 0.102973 m) the plane sat at z = -0.0346 m and every box landed at -0.336x its true lab
+    position, so 3% of btx's observed peaks had a box within 3 px, 20% with the offset dropped
+    (main's unconverted orientation: 4%). The panel corners and fs/ss vectors still come from two
+    different parsers: geom_coords.parse_geom in pass 1, glint.lute_bridge.parse_geom here. They
+    agree on r0016.geom, but lute_bridge._vec misreads exponent notation ('+1.2e-05y' -> -5.0),
+    so a .geom written that way gets different panel vectors in the two passes.
+
+    WAVELENGTH: each event is predicted at the one pass 1 indexed it at -- `--wavelength` when given,
+    else `lam_by_event[event]`, the per-event photon energy the reader returns. This used to be
+    `args.wavelength` alone, whose default is 0.0: predict_spots then gated on a plane instead of
+    the Ewald sphere and projected every reflection onto the beam centre, so a central-hole detector
+    got a header-only stream and a beam-covering one got every row on the direct beam, both with
+    exit 0 (review finding s7-03). An indexed event with no wavelength now stops the run before the
+    re-read. Each chunk's photon_energy_eV is that event's own value.
+
+    FRAME: pass 1 indexed q built with psana's Z sign (detector and beam along -z), which is
+    CrystFEL's frame mirrored in z; predict_spots works in CrystFEL's (+z). Each orientation goes
+    through geom_coords.orientation_to_crystfel first, and that converted basis is also what the
+    chunk's cell lines carry, so they agree with its fs/ss. Unconverted, every box landed on the
+    observed pattern inverted through the beam centre and integrated background (review s7-01).
     """
     from glint.lute_bridge import parse_geom
     from glint.predict import predict_spots, integrate_spots, write_stream_integrated
+    import geom_coords
     import xtc_qreader_psana1 as rd
 
     if not args.geom:
@@ -221,30 +258,51 @@ def integrate_and_write(results, args, out_path, report=True):
         sys.exit("--integrate is wired on the psana1 (xtc1) route only so far")
 
     panels, _glob = parse_geom(args.geom)
+    panels = [dict(p, coffset=0.0) for p in panels]    # one plane at --zdist, as pass 1 (DISTANCE)
     by_event = {int(r["event"]): r for r in results if r.get("M") is not None}
     if not by_event:
         return write_stream_integrated([], out_path, geom_text=open(args.geom).read())
 
+    # The same precedence pass 1 used (xtc_qreader_psana1: `wavelength or per-event`), checked for
+    # every indexed event BEFORE the re-read, so a missing one costs nothing and is never a 0.0.
+    lam_by_event = lam_by_event or {}
+    lams = {}
+    for ev in by_event:
+        lam = args.wavelength or lam_by_event.get(ev)
+        lams[ev] = float(lam) if lam is not None and np.isfinite(lam) and lam > 0 else None
+    missing = sorted(ev for ev, lam in lams.items() if lam is None)
+    if missing:
+        sys.exit(f"--integrate: no wavelength for {len(missing)} of {len(by_event)} indexed events "
+                 f"(first: {missing[:5]}). Pass 2 predicts each event at the wavelength pass 1 "
+                 f"indexed it at -- --wavelength, else that event's photon energy -- and none reached "
+                 f"pass 2 for these. Pass --wavelength, or use a reader that returns per-event 'lams'.")
+
     if report:
         print(f"  integrating {len(by_event)} indexed frames (pass 2: re-read + predict + box-sum)",
               flush=True)
-    lam = args.wavelength
     out = []
     for ev, frame in rd.frames_for_events(args.exp, args.run, args.det, by_event,
                                           calib_dir=args.calib_dir, max_events=args.max_events,
                                           gpu_calib=args.gpu_calib):
         r = by_event[ev]
-        pred = predict_spots(r["M"], panels, args.zdist, lam,
+        lam = lams[ev]
+        M = geom_coords.orientation_to_crystfel(r["M"])     # pass-1 frame -> CrystFEL's (s7-01)
+        pred = predict_spots(M, panels, args.zdist, lam,
                              dmin=args.int_dmin, tol=args.int_tol)
         if not len(pred):
             continue
         I, sig, peak, bg = integrate_spots(frame, pred, bg_mode=args.bg_mode)
-        out.append({"image": r["image"], "event": ev, "M": r["M"],
-                    "pred": pred, "I": I, "sigma": sig, "peak": peak, "bg": bg})
+        out.append({"image": r["image"], "event": ev, "M": M,
+                    "pred": pred, "I": I, "sigma": sig, "peak": peak, "bg": bg,
+                    "photon_eV": xtc_core.HC_EV_A / lam})
 
+    # Every chunk carries its own photon_eV; this run-level value is only the writer's fallback.
+    lam_run = args.wavelength or float(np.median(list(lams.values())))
+    # predict_spots tags each reflection with its index into `panels`; the writer names the row by it
+    # (partialator keys per-panel geometry off that column). Without the map every row says 'p0'.
     n = write_stream_integrated(out, out_path, geom_text=open(args.geom).read(),
-                                clen_m=args.zdist,
-                                photon_eV=(12398.419843320026 / lam) if lam else 9392.7)
+                                clen_m=args.zdist, photon_eV=xtc_core.HC_EV_A / lam_run,
+                                panel_names=[p["name"] for p in panels])
     if report:
         print(f"  wrote {n} integrated chunks -> {out_path}", flush=True)
     return n

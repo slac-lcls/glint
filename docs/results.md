@@ -98,7 +98,10 @@ until issue #5 closed via PRs #14 / #15 / #16:
 Against pipelined ffbidx (3.1 ms) that is ~**18× faster**, not 4× slower. `KC_FP=32` (#15) gives
 0.14 ms at B=120, rate-neutral. The table's rows are fp64 (`KC_FP=64`); fp32 has been the default since
 26 Sep 2026 (re-measured rate-identical on the 120 and the 480 on exclusive A100s), so set `KC_FP=64` to
-reproduce them.
+reproduce them. All of these are lysozyme on the 4,096-direction anchor grid. A cell whose frames have
+L0·qmax > 25 (shortest axis × largest |q|) runs the 16,384 grid since review r2 (s4-02) and costs more per
+hit: the adaptive-grid commit (#14) measured 2.4 vs 1.85 ms/frame, before the fused kernels; not
+re-measured since.
 
 The last two rows moved on 2026-08-27 (#165): `obj_fused` runs at K=4096/5760 against a 128-thread
 block, so one block per frame made each thread walk 32-45 candidates serially. Splitting the

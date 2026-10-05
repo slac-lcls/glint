@@ -229,6 +229,24 @@ det filter leaves **~1,200** to actually anneal and score; the rescue explores *
 one of its three axes is never searched at all — `_third_axis()` places it analytically from the metric
 constraints `a2·e0 = L2·c02`, `a2·e1 = L2·c12`, `|a2| = L2`, with handedness inherited from the reference
 cell (`sign(det)` of Mc's columns *after* they are sorted shortest-first, in `_axes_from_cell`).
+That inherited handedness is only right when the anchor is +v0: the anchor grid is a half-sphere, so on a
+frame whose shortest axis points to z<0 the anchor is −v0, the lattice's third axis is −v2 with the opposite
+handedness, and the reference-handed seed is the mirror image of −v2. Unless a2 is perpendicular to the
+(v0, v1) plane that mirror is not a lattice vector (review r2, s4-01: 10–15 of 24 triclinic and monoclinic
+frames came back as non-lattice bases that passed every gate). So `_both_hands` seeds both handednesses (256
+bases) for a cell whose Laue class is given as −1, a 2/m setting or a rhombohedral-axes class (`laue=`:
+StreamDriver passes its class for its own cell, `hybrid_index` takes one), and otherwise for a cell whose a2
+tilts more than `MIRROR_TOL_DEG` = 1° from the (v0, v1) plane's normal. The winner is negated back to the
+reference hand (−M indexes the same spots as hkl → −hkl), and `_ref_setting` moves a basis that annealed into
+another setting of the right lattice to the reference's: the {−1, 0, 1} change of basis with the closest metric
+when the metric is more than 1 % off, then the 2-fold sign flip (±a, ±b, ±c) whose cosines are closest to the
+reference's, among the flips the reference itself can resolve (an angle at least `KC_FLIP_MIN_DEG` = 0.1° from
+90°). The second step is what places near-orthogonal triclinic and monoclinic frames, whose settings differ only
+by the sign of a cosine, in the reference setting; comparing cosines only, it cannot be pulled by a length error
+in the reference. Orthogonal-a2 cells, lysozyme and its consensus and lock cells (skewed ~0.3°) included, run
+the 128-basis path unchanged when no low-symmetry class is given: the metric alone cannot tell such a lock cell
+from a near-orthogonal triclinic one, so without a class a near-orthogonal low-symmetry cell stays on that path
+too (its frames are a lattice basis, possibly in a sign-flipped setting).
 
 Two scoping notes that bite if you skip them:
 
@@ -240,10 +258,18 @@ Two scoping notes that bite if you skip them:
   costs nothing (23.9 vs 24.0 ms/frame) — it trades 0.5° → 1° step for the missing half, which the
   annealer absorbs. Sweeping half a cone on oblique cells was a real bug, worth 28–37 points; see the
   resolved entry under "Good first tasks".
-- The 16,384 → 4,096 adaptive anchor grid (`_adaptive_dirs`, angles within 2° of 90°; rate-neutral on
-  orthogonal cells, ~8 pts worse on triclinic, `KC_ADAPTIVE_DIRS=0` forces full) lives in
-  **`replica_gpu_batch.py`** and applies to the batched family only. The per-frame rescue in
-  `replica_gpu.py` always sweeps the full 16,384-dir grid.
+- The 16,384 → 4,096 adaptive anchor grid (`_adaptive_dirs`) lives in **`replica_gpu_batch.py`** and applies
+  to the batched family only. The per-frame rescue in `replica_gpu.py` always sweeps the full 16,384-dir grid.
+  A frame gets the coarse grid only when the cell's angles are all within 2° of 90° **and** L0 × (that frame's
+  largest |q|) ≤ `KC_ADAPT_L0Q` (default 25; L0 = the shortest axis, the anchor). The anchor's angular basin
+  narrows as 1/(L0·qmax), so the coarse grid is rate-neutral only while L0·qmax is small. Lysozyme on cxidb-17
+  (L0·qmax ≤ 23), where it was validated, stays on it: the 120 committed frames give bit-identical output on
+  CPU torch. Before review r2 (s4-02) every orthogonal cell got it, and on synthetic stills that lost about
+  half the correct indexings once L0·qmax passed ~33 (26/60 vs 55/60 on 100×120×150 Å at 1.8 Å through
+  `StreamDriver`). Triclinic cells lose ~8 pts on it at any resolution, so oblique cells always get the full
+  grid. The choice is per frame, from its own peaks: a batch that needs both grids runs as two sub-batches,
+  so a frame's answer does not depend on its batch-mates, and the CUDA-graph cache is keyed on the grid.
+  `KC_ADAPTIVE_DIRS=0` forces the full grid everywhere.
 
 **Why the rescue recovers frames the blind pass missed.** It is *not* a smarter search. It shares the
 blind pass's annealer routine (`anneal_batch_t`, imported from `glint_fast`) but runs it on a longer
@@ -435,6 +461,13 @@ instead of reading a peak stream.
   | 0.05–0.10 | 70.0% → 98.9% | 92.1% → 99.6% |
   | 0.10–0.20 | 66.3% → 100% | 89.2% → 97.3% |
   | 0.20–1.00 | 62.7% → 99.8% | 88.3% → 95.0% |
+
+  **Re-scored 2026-10-01 (review r2, s4-01): this table overstates correct indexing by ~40 points.** Its gate
+  (`same_lattice` + ≥25 % + ≥10) passed the mirrored, non-lattice bases described under the known-cell rescue in §3. Re-run on CPU
+  (`experiments/azimuth_oblique_rescore_s4-01/`) with a ground-truth check, on the production ("full") grid:
+  main ef6d068 finds the true lattice on **52–60 %** of frames (dense and still, every `|c01|` bin), the fix
+  (#225) on **99.4–100 %**. The half → full lesson stands: under the truth gate the full turn still adds
+  25–45 points. The old-gate run reproduces the table above to within a few points (CPU vs A100).
 
   Even ~1° of obliquity costs ~28 points. Fixed by `_azimuth_grid(c01)` (half turn iff perpendicular,
   else full turn at the *same* sample count — cost-neutral; doubling `NANG` instead buys nothing).

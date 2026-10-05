@@ -172,6 +172,17 @@ event and skipped events cost only the stream walk.
 Verified on real data, S3DF job 34274599 (mfxx49820 r0016, 200 events, `--int-dmin 2.5`):
 50 integrated chunks with real `I`, `sigma(I)`, `peak`, `background` and real `fs/ss` — every
 one of which was `0.00` before.
+That run counted non-zero values; it did not check that the boxes sit on peaks. By the code
+path they could not have: pass 2 predicted the pass-1 orientation unconverted, in a frame mirrored
+in z, so every box landed on the observed pattern inverted through the beam centre (review s7-01,
+reproduced on synthetic data). Without `--wavelength` pass 2 also predicted at a wavelength of 0
+(s7-03; not this run, which cannot index without `--wavelength` because its EBeam energy is
+non-finite on every event). Both are fixed and covered by
+`experiments/test_xtc_integrate_wavelength.py` on synthetic data. Real-data placement was checked
+afterwards on this run's 50 integrated events (streams from review-r2 GPU job 39742471, scored offline
+against btx CrystFEL's observed peaks for 43 of the events): 35.1% of those peaks have a box within
+3 px on the same panel, against 3.3% with the boxes of other events (main: 2.6% against 3.0%, i.e.
+at chance). The streams carry no pass-1 peak list, so the overlay is on btx's peaks, not pass 1's.
 
 **Requires `--geom`, and says so rather than guessing.** Prediction projects q onto named
 CrystFEL panels (corner, fs/ss basis, res, coffset); psana per-pixel coordinates are positions,

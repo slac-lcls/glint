@@ -93,6 +93,7 @@ STEPS = [
     "experiments/test_kc_setting.py",
     "experiments/test_cli_gate.py",
     "experiments/test_cli_gate_floor.py",
+    "experiments/test_adaptive_grid_basin.py",      # torch-CPU job too: SKIPs here
 ]
 
 # Runs in the child via `python -c`, with the target script passed as argv[1] -- embedding the

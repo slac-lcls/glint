@@ -13,14 +13,6 @@ permission.
 
 See the COPYRIGHT file at the repository root.
 """
-from .dataset import make_dataset
-from .detector import LearnedPeakFinder
-from .features import peak_features
-from .index import index_shot, IndexResult
-from .metrics import score
-from .simulate import simulate_shot, Shot
-from .transform import central_rays, fft_volume
-
 __all__ = [
     "simulate_shot",
     "Shot",
@@ -33,3 +25,31 @@ __all__ = [
     "peak_features",
     "LearnedPeakFinder",
 ]
+
+_EXPORTS = {
+    "make_dataset": (".dataset", "make_dataset"),
+    "LearnedPeakFinder": (".detector", "LearnedPeakFinder"),
+    "peak_features": (".features", "peak_features"),
+    "index_shot": (".index", "index_shot"),
+    "IndexResult": (".index", "IndexResult"),
+    "score": (".metrics", "score"),
+    "simulate_shot": (".simulate", "simulate_shot"),
+    "Shot": (".simulate", "Shot"),
+    "central_rays": (".transform", "central_rays"),
+    "fft_volume": (".transform", "fft_volume"),
+}
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_EXPORTS))
+
+
+def __getattr__(name):
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+
+    module_name, attribute = _EXPORTS[name]
+    value = getattr(import_module(module_name, __name__), attribute)
+    globals()[name] = value
+    return value

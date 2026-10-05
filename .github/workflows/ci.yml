@@ -23,9 +23,12 @@ jobs:
         # numpy is all the xtc_bridge scripts need; pytest + pydantic are what
         # lute/test_glint_index.py needs (it calls pytest.importorskip("pydantic"),
         # so without pydantic it would silently skip instead of testing anything).
-        # scipy is what importing the glint package itself needs -- cupy and numba
-        # are both guarded by try/except, but scipy is a hard import in multishot,
-        # seed and localize, so without it none of the glint/ tests below can run.
+        # scipy is a hard import in multishot, seed and localize (cupy and numba are
+        # both guarded by try/except), and the package's public names (index_shot,
+        # simulate_shot, ...) reach it when first used, so most glint/ tests below
+        # need it. Importing `glint` itself no longer does: __init__ loads its names
+        # lazily, so NumPy-only submodules (geom, predict) import without scipy,
+        # which test_lazy_exports.py checks with scipy blocked.
         # h5py is needed by test_integrate_event.py, which has to WRITE a stacked
         # multi-event .cxi to test that integration reads the right event out of it
         # (glint#136). That test skips and exits 0 without h5py, so leaving it out

@@ -15,7 +15,7 @@ import glint.replica_gpu_batch as rgb
 frames = [q for q in load(os.path.join(HERE, "frames_cxidb_clean.txt")) if len(q) >= 6]; n = len(frames)
 npk = np.array([len(f) for f in frames])
 print(f"host {os.uname().nodename}  n={n}  peaks/frame med {int(np.median(npk))} max {npk.max()}  "
-      f"adaptive_dirs {len(rgb._adaptive_dirs(LYSO))}", flush=True)
+      f"adaptive_dirs {len(rgb._adaptive_dirs(LYSO, float(rgb._frame_qmax(frames).max())))}", flush=True)
 
 
 def loop(B=32):

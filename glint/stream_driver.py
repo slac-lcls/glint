@@ -51,7 +51,7 @@ except Exception:                                            # pragma: no cover 
     _HAVE_CP = False
 
 from glint.merge_scale import MERGE_MIN_FRAME_SNR, MERGE_SNR_BINS, frame_scale  # noqa: F401  (re-exported)
-from glint.lattice import LENGTH_ORDER_LAUE, UNIQUE_C_LAUE, cell_to_Ar, standardize_axes
+from glint.lattice import LENGTH_ORDER_LAUE, LOW_LAUE, UNIQUE_C_LAUE, cell_to_Ar, standardize_axes
 from glint.lute_bridge import peaks_to_q
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
                            _hkl_grid, project_q)
@@ -623,7 +623,14 @@ def _relabel_like(M, ref):
     that axis wherever its length puts it.
 
     Undoing the sort is exact, because it IS the permutation the indexer applied: column k of the
-    returned basis is the reference's column `argsort(lengths)[k]`. Length ties are broken the same
+    returned basis is the reference's column `argsort(lengths)[k]`. That premise is the ENGINE's to
+    keep, not this function's: it only permutes columns, so a basis in another setting of the same
+    lattice -- or a mirrored, non-lattice basis with the reference metric -- passes through unrepaired.
+    Before review r2 s4-01 the known-cell engines returned such bases on ~half of triclinic and most
+    monoclinic frames; replica_gpu._both_hands and _ref_setting now return the reference setting when
+    its metric distinguishes that setting -- for a near-orthogonal triclinic / monoclinic cell only when
+    its Laue class is given (laue=). Pseudo-symmetric ties may remain in an inequivalent setting;
+    experiments/test_kc_setting.py requires only lattice membership for those cases. Length ties are broken the same
     way at both ends (`kind="stable"`), so the round trip is the identity when the reference is
     already shortest-first."""
     M = np.asarray(M, float)
@@ -1193,7 +1200,9 @@ class StreamDriver:
         if self.retry_cascade:
             try:
                 from glint.replica_gpu import index_known_gpu_cell
-                self._known_perframe = index_known_gpu_cell
+                self._known_perframe = (                     # the given class, for the primary cell only
+                    (lambda q, Mc, **k: index_known_gpu_cell(q, Mc, **self._kc_kw(Mc), **k))
+                    if self._kc_kw() else index_known_gpu_cell)
             except Exception:                                # pragma: no cover - CPU-only unit env (no torch)
                 self._known_perframe = None                  # tests inject a fake via the seam
 
@@ -1213,7 +1222,9 @@ class StreamDriver:
         self.n_rescued = 0
         self._missbuf = (deque(maxlen=int(rescue_buffer))
                          if self.adaptive_relock and rescue_buffer > 0 else None)
-        self._known_index = rgb.index_fused if rgb is not None else None   # q-only batch indexer (test seam)
+        self._known_index = (((lambda qs, Mc, B=32, **k: rgb.index_fused(qs, Mc, B=B, **self._kc_kw(Mc), **k))
+                              if self._kc_kw() else rgb.index_fused)
+                             if rgb is not None else None)                 # q-only batch indexer (test seam)
         self._fanout = fanout or (lambda Q, k: [self._blind_index(q, k) for q in Q])
         # Opt-in lock-time alias gate (glint.alias_gate.AliasGate): a deterministic Occam-tightness
         # confirmation over the leader's small-index derivative lattices, run on the observed q of the
@@ -1436,7 +1447,10 @@ class StreamDriver:
         For the classes it leaves alone there IS no canonical setting to land in, so a reference is
         used instead when one is given: the known-cell indexer returns its axes shortest-first
         whatever order the reference was written in, and `_relabel_like` undoes exactly that
-        permutation (glint#186 review). The two halves compose -- the class fixes the setting where
+        permutation (glint#186 review). That is exact only because the engine returns the reference's
+        setting in the first place (replica_gpu._both_hands / _ref_setting, review r2 s4-01), when its
+        metric distinguishes that setting; pseudo-symmetric ties can remain inequivalent. A basis in
+        another setting of the lattice is not a permutation away and no relabel repairs it. The two halves compose -- the class fixes the setting where
         one exists, the reference supplies it where none does.
 
         With explicit `ops` this is the identity: `laue` is then a reporting label only, and using it
@@ -1955,6 +1969,38 @@ class StreamDriver:
         header), None if it is only the 4/mmm merge fallback -- then misorientation_deg infers it."""
         return self.laue if getattr(self, "_laue_known", False) else None
 
+    def _kc_laue(self):
+        """A known-cell handedness class, including a low-symmetry class identified by explicit operators.
+
+        Unlike the double-hit gate, known-cell indexing can use the exact operator set to distinguish
+        low-symmetry settings even when `_laue_known` is false.
+        """
+        lk = self._sl_laue()
+        if lk in LOW_LAUE:
+            return lk
+        if not self._ops_explicit:
+            return None
+        ops = _op_set(self.ops)
+        for candidate in LOW_LAUE:
+            key = laue_name(candidate)
+            if ops == _op_set(laue_ops(key)):
+                return key
+        return None
+
+    def _kc_kw(self, Mc=None):
+        """laue= for the known-cell engines (replica_gpu._both_hands): the GIVEN class when it is one that
+        seeds both hands (LOW_LAUE), else nothing -- the engines' tilt gate, the exact call made before.
+        Only for the primary cell (Mc None, or equal to self.Mc; before the lock, the cell being locked): the
+        class describes the sample the driver was configured for, not a relocked extra cell, which may be
+        another lattice (the lysozyme lock cell must not be forced two-handed by a triclinic primary)."""
+        lk = self._kc_laue()
+        if lk not in LOW_LAUE:
+            return {}
+        prim = getattr(self, "Mc", None)
+        if Mc is not None and prim is not None and not np.array_equal(np.asarray(Mc, float), np.asarray(prim, float)):
+            return {}
+        return {"laue": lk}
+
     def _sl_index(self):
         """The blind indexer the second-lattice search uses (index_blind_nbest), resolved lazily."""
         if getattr(self, "_dh_index", None) is None:
@@ -2084,7 +2130,11 @@ class StreamDriver:
         # rule the docstring states for Mc itself.
         # `known_cell` says the matrix came from the known-cell indexer, whose output order is a
         # length-sort permutation of the reference's columns and can therefore be relabelled back
-        # exactly. A BLIND candidate cannot: it arrives through primitivize(buerger_reduce(...)) and
+        # exactly. That holds because the engines guarantee it: until review r2 s4-01 they did not on
+        # triclinic and most monoclinic cells (a mirrored, non-lattice basis on ~half the frames, or
+        # another setting of the right lattice), and no relabel could repair that; replica_gpu's
+        # _both_hands / _ref_setting now return the reference setting when its metric distinguishes that
+        # setting; pseudo-symmetric ties can remain inequivalent. A BLIND candidate cannot: it arrives through primitivize(buerger_reduce(...)) and
         # may differ from the reference by a general integer change of basis, not a permutation, so
         # undoing a sort would be a guess (glint#186 review). Those paths keep the canonical-setting
         # behaviour only -- see glint#188.
@@ -2303,7 +2353,7 @@ class StreamDriver:
 
         cell_id just labels which active cell this is, for per-chunk stream provenance."""
         qs = [self._q[i] for i in slots]
-        Ms = rgb.index_fused(qs, Mc, B=max(len(qs), 1), **self._depth_kw())
+        Ms = rgb.index_fused(qs, Mc, B=max(len(qs), 1), **self._depth_kw(), **self._kc_kw(Mc))
         missed = []
         for i, M in zip(slots, Ms):
             M = np.asarray(M, float) if M is not None else None
@@ -2342,7 +2392,7 @@ class StreamDriver:
 
         def search(qs, Mcell):
             return rgb.index_known_deep_batch(qs, Mcell, topa, nc, full_grid=full_grid, budget=eff.deep_budget,
-                                              return_errors=True)
+                                              return_errors=True, **self._kc_kw(Mcell))
 
         def count(M, q):
             return self._inliers(q, M)
@@ -2395,7 +2445,7 @@ class StreamDriver:
         cells = self._all_cells()
         fits = []                                              # fits[k][j] = (M or None, n_inliers) for cell k, slot j
         for Mk in cells:
-            Ms = rgb.index_fused(qs, Mk, B=max(len(qs), 1), **self._depth_kw())
+            Ms = rgb.index_fused(qs, Mk, B=max(len(qs), 1), **self._depth_kw(), **self._kc_kw(Mk))
             row = []
             for i, M in zip(slots, Ms):
                 M = np.asarray(M, float) if M is not None else None

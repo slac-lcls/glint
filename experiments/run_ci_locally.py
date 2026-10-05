@@ -29,7 +29,8 @@ ROOT = Path(__file__).resolve().parent.parent
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 
 # The `experiments/` steps of the CPU job, plus the experiments/ steps of the torch-CPU job
-# (test_nbest_prefix.py, test_kc_precision_default.py, test_known_depth_args.py, test_cli_gate.py, which self-skip here because torch is blocked --
+# (test_nbest_prefix.py, test_kc_precision_default.py, test_stage_graph_keeps_params.py, test_known_depth_args.py,
+# test_kc_setting.py, test_cli_gate.py, test_cli_gate_floor.py, which self-skip here because torch is blocked --
 # the skip path is what this harness covers). The xtc_bridge ones run from their own directory and are left to CI; lute/
 # needs pytest+pydantic and is likewise CI's business.
 STEPS = [
@@ -37,6 +38,7 @@ STEPS = [
     "experiments/test_pf8_thr_adu.py",
     "experiments/test_asic_seam_mask.py",
     "experiments/test_negative_intensities.py",
+    "experiments/test_xtc_integrate_wavelength.py",
     "experiments/test_integrate_event.py",
     "experiments/test_device_selection.py",
     "experiments/test_panel_stack_integrate.py",
@@ -61,6 +63,7 @@ STEPS = [
     "experiments/test_select_matched.py",
     "experiments/test_solution_file.py",
     "experiments/test_cell_registry.py",
+    "experiments/test_record_stream_event_id.py",
     "experiments/test_per_lattice.py",
     "experiments/test_live_gate_floor.py",           # also in the torch-CPU job, where its real-frame half runs
     "experiments/test_stream_hit_ring.py",
@@ -86,8 +89,12 @@ STEPS = [
     # torch-CPU job: runs for real there (CPU torch), SKIPs here with torch blocked.
     "experiments/test_nbest_prefix.py",
     "experiments/test_kc_precision_default.py",
+    "experiments/test_stage_graph_keeps_params.py",
     "experiments/test_known_depth_args.py",
+    "experiments/test_kc_setting.py",
     "experiments/test_cli_gate.py",
+    "experiments/test_cli_gate_floor.py",
+    "experiments/test_adaptive_grid_basin.py",      # torch-CPU job too: SKIPs here
 ]
 
 # Runs in the child via `python -c`, with the target script passed as argv[1] -- embedding the

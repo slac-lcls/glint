@@ -73,7 +73,17 @@ def predict_spots(M_or_R, panels, clen_m, wavelength_A, dmin=2.0, tol=0.006, is_
     dmin [A]: resolution limit (qmax = 1/dmin). tol [1/A]: half-width of the Ewald excitation-error
     gate (stills partiality window; ~mosaicity+bandwidth+1/size). Returns a structured array with
     fields h,k,l,fs,ss,panel,exc,res (res = 1/|q|, the d-spacing).
+
+    Raises ValueError unless wavelength_A is a finite positive number. At 0 the gate below is a
+    plane through the origin rather than the Ewald sphere, and project_q sends every reflection to
+    the beam centre: an answer that looks like output and is not (review finding s7-03).
     """
+    try:
+        lam_ok = np.isfinite(float(wavelength_A)) and float(wavelength_A) > 0
+    except (TypeError, ValueError):
+        lam_ok = False
+    if not lam_ok:
+        raise ValueError(f"predict_spots needs a finite positive wavelength in A, got {wavelength_A!r}")
     R = np.asarray(M_or_R, float) if is_recip else recip_from_M(M_or_R)
     qmax = 1.0 / dmin
     hkl, q = _hkl_grid(R, qmax)
@@ -331,6 +341,7 @@ def _write_chunk(f, serial, r, panel_name="p0", photon_eV=9392.7, clen_m=0.15, p
     absent (so existing callers are byte-identical):
       det_shift_mm  (x, y) mm  -> predict_refine/det_shift   [was hardcoded 0.000/0.000]
       clen_m        m          -> average_camera_length      [was the run-level kwarg]
+      photon_eV     eV         -> photon_energy_eV           [was the run-level kwarg]
       lattice_type/centering/unique_axis                     [were hardcoded triclinic/P/*]
     GLINT-specific provenance that has no CrystFEL field is emitted under a ``glint/`` prefix, the same
     convention CrystFEL uses for its own namespaced keys (``predict_refine/...``); readers skip
@@ -341,12 +352,14 @@ def _write_chunk(f, serial, r, panel_name="p0", photon_eV=9392.7, clen_m=0.15, p
     f.write("----- Begin chunk -----\n")
     f.write(f"Image filename: {r.get('image', 'glint.cxi')}\n")
     ev = r.get('event', 0)
-    if ev is not None:                       # None = a one-image-per-file source: CrystFEL writes no Event line
+    # None = a one-image-per-file source: no Event line (indexamajig 0.10+ writes `Event: //` there
+    # instead; record_stream_replay reads both as no event)
+    if ev is not None:
         f.write(f"Event: //{ev}\n")
     f.write(f"Image serial number: {serial}\n")
     f.write("hit = 1\n")
     f.write(f"indexed_by = {'file' if valid else 'none'}\n")   # 'file' = externally-supplied orientation
-    f.write(f"photon_energy_eV = {photon_eV:.2f}\n")
+    f.write(f"photon_energy_eV = {float(r.get('photon_eV', photon_eV)):.2f}\n")
     f.write("beam_divergence = 0.00e+00 rad\nbeam_bandwidth = 1.00e-08 %\n")
     f.write(f"average_camera_length = {float(r.get('clen_m', clen_m)):.6f} m\n")
     # OBSERVED peaks. Optional, but it is what makes a chunk re-indexable downstream: the reflection

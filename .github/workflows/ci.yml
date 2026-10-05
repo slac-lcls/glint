@@ -55,6 +55,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_negative_intensities.py
 
+      # The xtc route's --integrate pass predicts each event at the wavelength (review s7-03) and in
+      # the frame (s7-01) pass 1 indexed it in: without --wavelength it used to predict at 0.0, which
+      # puts every reflection on the beam centre, and the unconverted pass-1 orientation put every box
+      # on the observed pattern inverted through the beam centre. Runs glint_xtc.main end to end with
+      # psana, cupy, PeakFinderV4 and the torch indexer mocked, and checks the written .stream against
+      # an independent CrystFEL-frame forward model; also the refusal when no wavelength reaches
+      # pass 2, and predict_spots refusing a non-positive wavelength. numpy + scipy only.
+      - name: experiments/test_xtc_integrate_wavelength.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_xtc_integrate_wavelength.py
+
       # The peaks-route integrator's event addressing (glint#136). It builds a 3-event .cxi and
       # checks the three frames integrate to three DIFFERENT intensities -- which is exactly what
       # the shipped code could not do, and nothing else here would have noticed.
@@ -205,6 +216,9 @@ jobs:
       - name: experiments/test_cell_registry.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cell_registry.py
+      - name: experiments/test_record_stream_event_id.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_record_stream_event_id.py
 
       - name: experiments/test_per_lattice.py
         if: ${{ !cancelled() }}
@@ -449,12 +463,27 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_kc_precision_default.py
 
+      # A captured known-cell CUDA graph holds the cell parameters it reads by address (fp32 azimuth copies that
+      # only P referenced were freed under a cached graph); graph/stream API stood in on CPU; self-skips without torch.
+      - name: experiments/test_stage_graph_keeps_params.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_stage_graph_keeps_params.py
+
       # The known-cell search depth (replica_gpu: topa, nc) is CHECKED, not coerced: nc=0 used to keep one
       # anchor direction and a float was truncated (Copilot review of #208). Argument checks plus a real-frame
       # nc=1 / nc=3 run on CPU torch; self-skips without torch or below the 1.12 floor.
       - name: experiments/test_known_depth_args.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_known_depth_args.py
+
+      # Review r2 s4-01: the known-cell engines returned triclinic / monoclinic frames as a mirrored, non-lattice
+      # basis (half-sphere anchors + a forced handedness) or in an inequivalent setting, and StreamDriver
+      # integrated them. Per-frame, batched and the real StreamDriver path on simulated stills; orthogonal-a2
+      # cells (incl. lysozyme and its consensus cells) must not take the new path, and near-orthogonal triclinic
+      # / monoclinic cells take it when their Laue class is given (laue=). Self-skips below 1.12.
+      - name: experiments/test_kc_setting.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_kc_setting.py
 
       # The live gate's chance floor on REAL frames: the committed 120 cxidb-17 frames and four azimuth-scrambled
       # copies each, searched with the lysozyme cell by index_fused on CPU torch. The live gate accepts about half
@@ -469,3 +498,19 @@ jobs:
       - name: experiments/test_cli_gate.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cli_gate.py
+
+      # glint_cli --gate floor: strict plus a per-peak-count chance floor fitted on azimuth-scrambled frames for the
+      # CLI's own --cell route (experiments/cli_gate_null.py). Synthetic frames with exact counts; the committed 120's
+      # sparse frames and their scrambled copies through the route (strict writes many copies, floor almost none,
+      # floor keeps the real frames); the CLI end to end, incl. the default stream == --gate none. Self-skips without torch.
+      - name: experiments/test_cli_gate_floor.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_cli_gate_floor.py
+
+      # Review r2 s4-02: the batched known-cell engine's coarse 4096-direction anchor grid is used only where it is
+      # safe -- orthogonal cell AND L0 * (the frame's largest |q|) <= KC_ADAPT_L0Q (25). Lysozyme / cxidb-17 stays on
+      # it; 100x120x150 A at 1.8 A gets the full grid (7/16 orientation-correct on 149370e, >= 14/16 required). Also a
+      # mixed-grid batch and the CUDA-graph path's grid-keyed cache (stand-in graph on CPU). Self-skips below 1.12.
+      - name: experiments/test_adaptive_grid_basin.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_adaptive_grid_basin.py

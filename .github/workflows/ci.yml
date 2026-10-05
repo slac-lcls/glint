@@ -55,6 +55,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_negative_intensities.py
 
+      # The xtc route's --integrate pass predicts each event at the wavelength (review s7-03) and in
+      # the frame (s7-01) pass 1 indexed it in: without --wavelength it used to predict at 0.0, which
+      # puts every reflection on the beam centre, and the unconverted pass-1 orientation put every box
+      # on the observed pattern inverted through the beam centre. Runs glint_xtc.main end to end with
+      # psana, cupy, PeakFinderV4 and the torch indexer mocked, and checks the written .stream against
+      # an independent CrystFEL-frame forward model; also the refusal when no wavelength reaches
+      # pass 2, and predict_spots refusing a non-positive wavelength. numpy + scipy only.
+      - name: experiments/test_xtc_integrate_wavelength.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_xtc_integrate_wavelength.py
+
       # The peaks-route integrator's event addressing (glint#136). It builds a 3-event .cxi and
       # checks the three frames integrate to three DIFFERENT intensities -- which is exactly what
       # the shipped code could not do, and nothing else here would have noticed.
@@ -198,6 +209,9 @@ jobs:
       - name: experiments/test_cell_registry.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cell_registry.py
+      - name: experiments/test_record_stream_event_id.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_record_stream_event_id.py
 
       - name: experiments/test_per_lattice.py
         if: ${{ !cancelled() }}
@@ -454,6 +468,15 @@ jobs:
       - name: experiments/test_known_depth_args.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_known_depth_args.py
+
+      # Review r2 s4-01: the known-cell engines returned triclinic / monoclinic frames as a mirrored, non-lattice
+      # basis (half-sphere anchors + a forced handedness) or in an inequivalent setting, and StreamDriver
+      # integrated them. Per-frame, batched and the real StreamDriver path on simulated stills; orthogonal-a2
+      # cells (incl. lysozyme and its consensus cells) must not take the new path, and near-orthogonal triclinic
+      # / monoclinic cells take it when their Laue class is given (laue=). Self-skips below 1.12.
+      - name: experiments/test_kc_setting.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_kc_setting.py
 
       # The live gate's chance floor on REAL frames: the committed 120 cxidb-17 frames and four azimuth-scrambled
       # copies each, searched with the lysozyme cell by index_fused on CPU torch. The live gate accepts about half

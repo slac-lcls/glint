@@ -198,6 +198,18 @@ def test_double_hit_gate_gets_a_class_only_when_one_was_given():
     assert _driver(ORTHO, ops=laue_ops("mmm"), laue="mmm")._sl_laue() is None  # a label only reports
 
 
+def test_known_cell_handedness_uses_explicit_low_symmetry_operators():
+    M = cell_to_Ar(50.0, 60.0, 70.0, 89.5, 90.0, 90.0)
+    ops = laue_ops("-1")
+    d = _driver(M, ops=ops)
+    assert d._sl_laue() is None                 # explicit operators remain unknown to double-hit
+    assert d._kc_kw() == {"laue": "-1"}        # but known-cell indexing can infer the exact class
+    labeled = _driver(M, ops=ops, laue="-1")
+    assert labeled._sl_laue() is None
+    assert labeled._kc_kw() == {"laue": "-1"}
+    assert _driver(M, ops=laue_ops("mmm"))._kc_kw() == {}
+
+
 def test_explicit_laue_wins_over_stream_symmetry_with_a_warning():
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")

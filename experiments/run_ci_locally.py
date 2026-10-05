@@ -69,6 +69,7 @@ STEPS = [
     "experiments/test_stream_effort.py",
     "experiments/test_stream_driver_options_doc.py",
     "experiments/test_geom_bridge.py",
+    "experiments/test_nonfinite_q_rows.py",          # also in the torch-CPU job, where its engine half runs
     "experiments/test_cli_smoke.py",
     "experiments/test_geom_refine.py",
     # Skips without a GPU and exits 0 (glint#123). Running it here is still worth the second it

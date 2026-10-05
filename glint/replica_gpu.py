@@ -11,6 +11,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 import numpy as np, torch
 from glint.glint_fast import anneal_batch_t, matched_strict, GATE_FRAC, GATE_MIN
 from glint.lattice import LOW_LAUE, cell_to_Ar
+from glint.geom import clean_q
 from glint.multishot import same_lattice
 
 # cuda -> cpu, with NO mps rung. Apple's MPS backend does not implement float64, and this module
@@ -135,7 +136,8 @@ def c_candidates_t(Q):
 
 
 def index_known_gpu(q, topa=8):
-    Q = torch.as_tensor(np.asarray(q, float), dtype=torch.float64, device=DEV)
+    q = clean_q(np.asarray(q, float))          # drop NaN/inf and zero-length rows: a NaN row loses the frame
+    Q = torch.as_tensor(q, dtype=torch.float64, device=DEV)
     if len(Q) < 6:
         return None
     C = c_candidates_t(Q)                                  # (NC,3)
@@ -411,7 +413,8 @@ def index_known_gpu_cell(q, Mc, topa=8, nc=None, laue=None):
     topa = _depth("topa", topa)
     nc = None if nc is None else _depth("nc", nc)
     L, c01, c02, c12, sgn = _axes_from_cell(Mc)
-    Q = torch.as_tensor(np.asarray(q, float), dtype=torch.float64, device=DEV)
+    q = clean_q(np.asarray(q, float))          # drop NaN/inf and zero-length rows: a NaN row loses the frame
+    Q = torch.as_tensor(q, dtype=torch.float64, device=DEV)
     if len(Q) < 6:
         return None
     C = axis_candidates_t(Q, float(L[0]), nc=nc)            # anchor = shortest axis

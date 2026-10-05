@@ -20,6 +20,7 @@ from glint.replica_gpu import (DIRS, TRIML, TRIMH, DELTA, NC, NANG, AXIS0_DEDUP_
                                _third_axis, _fib_halfsphere, _azimuth_grid, _depth, _canonical_laue,
                                _both_hands, _ref_setting, _ref_settings)
 from glint.multishot import same_lattice
+from glint.geom import clean_frames
 
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 PI = np.pi
@@ -320,9 +321,27 @@ def _cpu_stage(best, pol, mp, mainb, Mc):
 
 def index_known_gpu_cell_batch(frames, Mc, topa=8, nc=None, full_grid=False, laue=None):
     """Returns list of M (3x3 np) or None, one per frame -- one batched pass (two if the frames need both grids).
-    topa / nc / full_grid set the search depth (see _cell_params); the defaults are the shipped search."""
+    topa / nc / full_grid set the search depth (see _cell_params); the defaults are the shipped search.
+
+    Each frame first loses the rows glint.geom.q_rows_ok rejects (NaN/inf, |q| ~ 0): a NaN row used to
+    turn that frame's M into NaN. A frame left with fewer than 6 rows is returned as None without entering
+    the batch, the same floor as the scalar index_known_gpu_cell. Padded into it, an empty or very sparse
+    frame can come back as an unrefined starting candidate, which is built from Mc's own metric and so
+    passes same_lattice; an empty one alone raised. Batches whose frames all have 6 or more rows take the
+    unchanged single pass."""
     laue = _canonical_laue(laue)
-    return _settle(_cpu_stage(*_gpu_stage(frames, Mc, topa, nc, full_grid, laue), Mc), Mc, laue)
+    frames = clean_frames(frames)
+    live = [j for j, f in enumerate(frames) if len(f) >= 6]
+    if len(live) == len(frames):
+        return _settle(_cpu_stage(*_gpu_stage(frames, Mc, topa, nc, full_grid, laue), Mc), Mc, laue)
+    out = [None] * len(frames)
+    if not live:
+        _cell_params(Mc, topa, nc, full_grid, laue=laue)   # still reject a bad depth, as the batched pass would
+        return out
+    sub = [frames[j] for j in live]
+    for j, M in zip(live, _settle(_cpu_stage(*_gpu_stage(sub, Mc, topa, nc, full_grid, laue), Mc), Mc, laue)):
+        out[j] = M
+    return out
 
 
 def _settle(res, Mc, laue=None):
@@ -351,7 +370,7 @@ def index_known_deep_batch(frames, Mc, topa, nc, full_grid=True, budget=12000, r
     topa = _depth("topa", topa); nc = _depth("nc", nc)
     if isinstance(budget, (bool, np.bool_)) or not isinstance(budget, (int, np.integer)) or budget < 1:
         raise ValueError(f"budget must be an integer >= 1, got {budget!r}")
-    frames = [np.asarray(f, float) for f in frames]
+    frames = clean_frames([np.asarray(f, float) for f in frames])     # so the >= 6 rule counts usable rows
     out = [None] * len(frames)
     err = [False] * len(frames)
     live = [j for j in range(len(frames)) if len(frames[j]) >= 6]
@@ -458,15 +477,20 @@ def index_all_graph(frames, Mc, B=32, buckets=_BUCKETS, laue=None):
     the same lattice on near-ties: 10/120 lysozyme-lock frames (symmetry-equivalent) and 8/87 r199
     frames (its pseudo-orthorhombic indexing ambiguity), A100 job 39730411; fp64 equal on every
     frame. _StageGraph holding P does not change that. Oversized frames (> max bucket) fall back to the eager path. cuSOLVER-free
-    (analytic solve, ~1e-13 vs linalg). CPU / capture-unsupported -> eager."""
+    (analytic solve, ~1e-13 vs linalg). CPU / capture-unsupported -> eager. Rows glint.geom.q_rows_ok
+    rejects are dropped first, and a frame left with fewer than 6 rows is a miss (None), as in
+    index_known_gpu_cell_batch."""
     laue = _canonical_laue(laue)
+    frames = clean_frames(frames)
     if DEV != "cuda":
         return [M for i in range(0, len(frames), B)
                 for M in index_known_gpu_cell_batch(frames[i:i + B], Mc, laue=laue)]
+    live = [i for i in range(len(frames)) if len(frames[i]) >= 6]          # a sparse frame stays None
     qf = _frame_qmax(frames); ok = _coarse_ok(Mc, qf)    # each frame's anchor grid (see _gpu_stage)
-    Ps = {g: _cell_params(Mc, qmax=float(qf[ok == g].max()), laue=laue) for g in set(ok.tolist())}
+    Ps = {g: _cell_params(Mc, qmax=float(qf[[i for i in live if ok[i] == g]].max()), laue=laue)
+          for g in set(ok[live].tolist())}
     cell = tuple(np.asarray(Mc, float).ravel().round(6))
-    order = sorted(range(len(frames)), key=lambda i: (not ok[i], len(frames[i])))   # by grid, then size-homogeneous
+    order = sorted(live, key=lambda i: (not ok[i], len(frames[i])))   # by grid, then size-homogeneous
     out = [None] * len(frames)
     for s in range(0, len(order), B):
         chunk = order[s:s + B]; fb = [frames[j] for j in chunk]; Fb = len(fb)
@@ -550,9 +574,13 @@ def index_fused(frames, Mc, B=32, topa=8, nc=None, full_grid=False, laue=None):
     except Exception:
         return _unfused(frames, Mc, B, topa, nc, full_grid, laue)
     cap = _fk.max_peaks()
+    # batch() below skips index_known_gpu_cell_batch to reuse each frame's qmax, so the row cleaning and the
+    # six-row floor it applies are applied here: a NaN row would also make that frame's qmax NaN
+    frames = clean_frames(frames)
+    live = [i for i in range(len(frames)) if len(frames[i]) >= 6]          # a sparse frame stays None
     qf = None if full_grid else _frame_qmax(frames)          # once per call; each batch takes its slice
     ok = np.ones(len(frames), bool) if full_grid else _coarse_ok(Mc, qf)
-    order = sorted(range(len(frames)), key=lambda i: (not ok[i], len(frames[i])))   # by grid, tight per-batch Pmax
+    order = sorted(live, key=lambda i: (not ok[i], len(frames[i])))   # by grid, tight per-batch Pmax
     fits = [j for j in order if len(frames[j]) <= cap]
     over = [j for j in order if len(frames[j]) > cap]
     out = [None] * len(frames)

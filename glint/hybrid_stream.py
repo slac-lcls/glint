@@ -26,6 +26,7 @@ from glint.multishot import consensus_cell, group_medoid, same_lattice
 # hybrid_index reads THIS module's globals at call time, so that still works).
 from glint.multishot import CONSENSUS_MIN_FRAC, CONSENSUS_MIN_LEAD   # noqa: F401  (re-export)
 from glint.stream import write_stream
+from glint.geom import clean_frames, clean_q
 
 
 def _hkl(q, M):
@@ -114,7 +115,7 @@ def gate_results(results, frames, gate="none", floor=None):
         M = r.get("M")
         if M is None:
             continue
-        q = np.asarray(q, float)
+        q = clean_q(np.asarray(q, float))                       # the rows hybrid_index indexed (glint.geom.q_rows_ok)
         m = matched_strict(np.asarray(M, float), q)
         if m >= GATE_MIN and m >= GATE_FRAC * len(q) and (gate == "strict" or m >= floor_value(len(q), fl)):
             continue
@@ -197,6 +198,11 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     if select not in SELECTS:
         raise ValueError(f"hybrid_index(select=...): one of {SELECTS}, got {select!r}")
     esc_cfg = _escalation_config(escalate)
+    # Drop NaN/inf and zero-length rows (glint.geom.q_rows_ok) once, here, so the N-best, the rescue, the
+    # gates and the written peaks all see the same rows. One NaN row (a peak on no .geom panel, kept by the
+    # --images route) used to make both searches return nothing and the frame was dropped without a word
+    # (glint review s7-05). A clean frame is passed through as the same object.
+    frames = clean_frames(frames)
     kc = {} if laue is None else {"laue": laue}             # known-cell engines: see replica_gpu._both_hands
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
@@ -390,6 +396,7 @@ def dense_index(frames, images=None, warmup=True):
     3D-complete. Below CLUSTER_MIN rlps the front end auto-falls-back to the Fibonacci grid, so this is
     safe on mixed data; the CLI picks this path only when the median rlp count is dense."""
     from glint.glint_fast import index_blind_cluster_seeded
+    frames = clean_frames(frames)                               # as in hybrid_index
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
     if warmup and n:
@@ -472,6 +479,7 @@ def index_known_fast(frames, Mc, batch=32, images=None, laue=None):
     self-contained (no ffbidx handoff). Returns (results, stats) in the same shape as hybrid_index;
     for max known-cell ACCURACY use hybrid_index(..., Mc_known=Mc) instead (runs the N-best pass)."""
     from glint.replica_gpu_batch import index_known_gpu_cell_batch
+    frames = clean_frames(frames)                               # as in hybrid_index
     n = len(frames)
     images = images or [{"image": "glint.cxi", "event": i} for i in range(n)]
     Ms = []

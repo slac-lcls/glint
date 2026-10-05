@@ -185,6 +185,71 @@ def _q_from_panels(fs_arr, ss_arr, specs, wavelength_A):
     return (s_hat - np.array([0.0, 0.0, 1.0])) / wavelength_A
 
 
+# The one rule for which q rows an indexer may see. Two kinds of row reach the indexers today and each
+# loses the WHOLE frame, not just the row:
+#   * non-finite (NaN/inf): a peak on no panel comes back from lute_bridge.peaks_to_q as a NaN row, and
+#     the --images route kept it (glint review s7-05); the known-cell and blind searches then return
+#     nothing for that frame.
+#   * zero length: a peak exactly on the beam centre maps to q = [0, 0, 0] (the geometry above returns
+#     that exactly when r_x = r_y = 0). The blind weight 1/|q| is then inf, every M3 start goes NaN, and
+#     the frame indexes to None / [] (glint review s4-05). Such a row carries no lattice information.
+# Q_FLOOR is in 1/A and sits far below anything physical: a peak one pixel from the beam is ~5.8e-4,
+# and the smallest |q| among the 172,624 real peaks in this repo's data sets is 0.0248.
+Q_FLOOR = 1e-6
+_Q_FLOOR2 = Q_FLOOR * Q_FLOOR
+
+
+def _q2(a):
+    """|q|^2 of each row of a 2-D array, in float64 on C-order rows (a copy only when `a` is not already
+    C-order float64). q_rows_ok, clean_q and clean_frames all decide from this one function, so a row gets
+    the same verdict whatever the frame's dtype or memory layout and whether it is checked alone or
+    stacked in a batch. einsum adds the three squares in a different order for a Fortran-order array, and
+    np.concatenate of mixed frames is C-order: without the C-order rows, a row within a few ulps of Q_FLOOR^2
+    could pass in the batch and be dropped from its own frame."""
+    b = np.ascontiguousarray(a, dtype=float)
+    return np.einsum("ij,ij->i", b, b)
+
+
+def q_rows_ok(q):
+    """Boolean mask over the rows of an (n, 3) q array: True where |q|^2, computed in float64, is finite
+    and above Q_FLOOR^2. A NaN or inf component makes it non-finite, and so does a finite row too large to
+    square in float64 (|q| > ~1.3e154), which no indexer could use either. Frames of every dtype are judged
+    in float64. Everything that feeds q to an indexer filters with this, so the rule lives here once
+    instead of in each engine. One |q|^2 pass: this runs per frame at the StreamDriver doors."""
+    s = _q2(q)
+    return (s > _Q_FLOOR2) & (s < np.inf)
+
+
+def clean_q(q):
+    """`q` without the rows `q_rows_ok` rejects. When every row passes, `q` itself is returned (the same
+    object, unconverted), so a clean frame goes through every caller exactly as before; a filtered frame
+    keeps its own dtype. That common case costs one |q|^2 pass and copies nothing for a C-order float64
+    frame."""
+    a = np.asarray(q)
+    if a.ndim != 2 or len(a) == 0:
+        return q
+    ok = q_rows_ok(a)
+    return q if ok.all() else a[ok]
+
+
+def clean_frames(frames):
+    """[clean_q(f) for f in frames], checked once over the whole batch. When no row of any frame is
+    rejected (the common case) the frames come back as the same objects, for one |q|^2 pass over the
+    stacked rows instead of one per frame: per-frame clean_q costs ~9 us/frame on an S3DF host, 7 % of a
+    B=120 index_fused frame. A batch with a rejected row, or whose frames do not stack or convert, is
+    cleaned frame by frame. The batch check and clean_q both go through q_rows_ok, so every row gets the
+    same float64 |q|^2 (_q2) either way, and the result is that of clean_q for every numeric input,
+    whatever the frames' dtypes and layouts."""
+    frames = list(frames)
+    try:
+        A = np.concatenate(frames)
+        if A.ndim == 2 and len(A) and q_rows_ok(A).all():
+            return frames
+    except (ValueError, TypeError, OverflowError):           # do not stack, or do not convert to float
+        pass
+    return [clean_q(f) for f in frames]
+
+
 def _panel_z(name, p):
     """clen + coffset [m], insisting BOTH are literals.
 
@@ -219,10 +284,11 @@ def _specs_from_geom_panels(panels):
 def peaks_to_q(peaks, geom, wavelength_A=None):
     """peaks: (N,2) [fs, ss] in data-array coords (single panel ok). Returns (M,3) q in 1/A.
 
-    Peaks outside every panel are DROPPED, so M <= N and rows do not correspond positionally to the
-    input. That is this entry point's contract; `lute_bridge.peaks_to_q` shares the same geometry
-    (via `_q_from_panels`) but keeps NaN rows instead, because its streaming caller needs the
-    correspondence. Pick by which contract you want, not by which import is closer to hand.
+    Peaks outside every panel are DROPPED, and so is a peak on the beam centre (|q| <= Q_FLOOR, see
+    q_rows_ok), so M <= N and rows do not correspond positionally to the input. That is this entry
+    point's contract; `lute_bridge.peaks_to_q` shares the same geometry (via `_q_from_panels`) but
+    keeps NaN rows instead, because its streaming caller needs the correspondence. Pick by which
+    contract you want, not by which import is closer to hand.
     """
     peaks = np.asarray(peaks, float).reshape(-1, 2)
     panels = geom["panels"] if isinstance(geom, dict) and "panels" in geom else geom
@@ -232,4 +298,4 @@ def peaks_to_q(peaks, geom, wavelength_A=None):
     if len(peaks) == 0:
         return np.empty((0, 3))
     q = _q_from_panels(peaks[:, 0], peaks[:, 1], _specs_from_geom_panels(panels), lam)
-    return q[np.isfinite(q).all(1)]
+    return q[q_rows_ok(q)]

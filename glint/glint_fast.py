@@ -13,9 +13,10 @@ import numpy as np, torch
 from glint.glint_index import (objective, refine_vec, refine_vec_newton, refine_vec_cg, refine_vec_bb,
                          refine_vec_lm, refine_vec_ls, refine_vec_raar, refine_vec_so2d, refine_vec_admm,
                          distinct_maxima, distinct_maxima_gpu, distinct_cells_gpu, anneal, score_defect,
-                         invq_weight, buerger_reduce, primitivize, STARTS, DEV, index_blind)
+                         invq_weight, qpow_weight, buerger_reduce, primitivize, STARTS, DEV, index_blind)
 
 from glint.glint_index import refine_vec_adapt
+from glint.geom import clean_q
 _REFINERS = {"adapt": refine_vec_adapt, "cg": refine_vec_cg, "bb": refine_vec_bb, "lm": refine_vec_lm, "ls": refine_vec_ls,
              "raar": refine_vec_raar, "so2d": refine_vec_so2d, "admm": refine_vec_admm}
 
@@ -246,12 +247,12 @@ def score_batch_t(M, Q, inl_tol=0.15, cover=0.30):
 
 
 def index_blind_fast(q, acc=None, starts=None):
-    q = np.asarray(q, float)
+    q = clean_q(np.asarray(q, float))          # drop NaN/inf and zero-length rows: one would lose the frame (glint.geom.q_rows_ok)
     if len(q) < 6:
         return None
     Q = torch.as_tensor(q, dtype=torch.float32, device=DEV)
     qmax = float(Q.norm(dim=1).max())
-    w = invq_weight(Q) if QPOW == 1.0 else Q.norm(dim=1).clamp_min(1e-9) ** (-QPOW)
+    w = qpow_weight(Q, QPOW)                                # 1/|q| at the default QPOW = 1; 0 below Q_FLOOR
     if QHI > 0 or QLO > 0:
         w = w * qband_apod(Q.norm(dim=1), qmax)
     sync = (DEV == "cuda")
@@ -414,7 +415,7 @@ def _cluster_fft_seeds_coherent(q, n_clusters=28, cpts=300, n_grid=96, fov=200.0
 def index_blind_cluster_seeded(q, acc=None):
     """Index using LOCAL-CLUSTER FFT seeds -> GLINT refine/M4 (scales flat with rlp density). Below
     CLUSTER_MIN rlps the autocorrelation is starved (thin slice) -> fall back to the Fibonacci grid."""
-    q = np.asarray(q, float)
+    q = clean_q(np.asarray(q, float))          # drop NaN/inf and zero-length rows before the FFT seeds too (glint.geom.q_rows_ok)
     if len(q) < 6:
         return None
     if len(q) < CLUSTER_MIN:
@@ -455,7 +456,7 @@ def index_blind_fft_seeded(q, also_fib=False, acc=None):
     back to the Fibonacci grid (also_fib unions both). The seed FFT runs on CPU (one cheap FFT/frame);
     the expensive refine + GPU M4 assembly are unchanged -- so the old method's CPU basis-search blowup
     on dense data is avoided (M4 is the batched-GPU 220x replacement)."""
-    q = np.asarray(q, float)
+    q = clean_q(np.asarray(q, float))          # drop NaN/inf and zero-length rows before the FFT seeds too (glint.geom.q_rows_ok)
     if len(q) < 6:
         return None
     qmax = float(np.linalg.norm(q, axis=1).max())
@@ -488,12 +489,12 @@ def index_blind_nbest(q, N=5):
     indexing is rank-deficient (orientation ambiguous about the unobserved axis), so the true cell
     is often a reachable-but-not-top-1 hypothesis that single-pass discards as wrong_cell/sel_miss.
     Keep them (score-tagged) and let cross-frame consensus arbitrate (aliases don't recur)."""
-    q = np.asarray(q, float)
+    q = clean_q(np.asarray(q, float))          # drop NaN/inf and zero-length rows: one would lose the frame (glint.geom.q_rows_ok)
     if len(q) < 6:
         return []
     Q = torch.as_tensor(q, dtype=torch.float32, device=DEV)
     qmax = float(Q.norm(dim=1).max())
-    w = invq_weight(Q) if QPOW == 1.0 else Q.norm(dim=1).clamp_min(1e-9) ** (-QPOW)
+    w = qpow_weight(Q, QPOW)                                # 1/|q| at the default QPOW = 1; 0 below Q_FLOOR
     if QHI > 0 or QLO > 0:
         w = w * qband_apod(Q.norm(dim=1), qmax)
     T = _refine(STARTS.clone(), Q, w, qmax)                   # M3 (grad | cg | newton via REFINER)

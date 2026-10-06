@@ -228,4 +228,4 @@ grep -q "from .glint_index import" "$LUTE/lute/io/models/__init__.py" || \
 grep -q "IndexGLINT" "$LUTE/lute/managed_tasks.py" || \
   echo 'GLINTIndexer: Executor = Executor("IndexGLINT")' >> "$LUTE/lute/managed_tasks.py"
 chmod +x "$HERE/glint_launch.sh"
-echo "installed IndexGLINT into $LUTE (model + export + executor); default executable $HERE/glint_launch.sh. Re-run this script if the GLINT checkout moves."
+echo "installed IndexGLINT into $LUTE (model + export + executor); default executable $HERE/glint_launch.sh. If the GLINT checkout moves, inspect the generated path change and re-run this script with --force."

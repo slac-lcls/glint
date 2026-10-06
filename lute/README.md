@@ -58,8 +58,8 @@ after. Setting both is an error.)
     ./install_into_lute.sh [/path/to/lute_new/lute]     # default ~/git/lute_new/lute
 Copies `glint_index.py` -> `lute/io/models/`, exports it, and registers
 `GLINTIndexer = Executor("IndexGLINT")` in `managed_tasks.py`. The installed copy's default
-`executable` is this checkout's `glint_launch.sh`; re-run the installer if the checkout moves, or set
-`executable` in the config. The repo copy has no default, so a copy made by hand fails validation
+`executable` is this checkout's `glint_launch.sh`; if the checkout moves, inspect the generated
+path change and re-run the installer with `--force`, or set `executable` in the config. The repo copy has no default, so a copy made by hand fails validation
 until `executable` is set. GLINTIndexer runs on a **GPU partition** (see
 `glint_dag.yaml`) and the launcher activates the GLINT torch env.
 

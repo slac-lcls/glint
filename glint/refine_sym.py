@@ -450,6 +450,35 @@ def conventional_settings(M, system, max_groups=3):
     if not ok.any():
         return []
     cand = np.flatnonzero(ok)
+    # Centering compatibility is decided here, before the axis groups: a group's score cutoff is set
+    # by its best member, and an incompatible cell (an A-centred candidate for a monoclinic request)
+    # scoring best would otherwise set a cutoff that excludes every compatible cell of its axis and
+    # take the whole axis group with it (Copilot review of #247). The sublattice, hence the
+    # centering, depends only on which three lattice vectors are used, not on their order or signs.
+    def _setting(t):
+        """Integer P of triple ``t`` in the setting ``_project`` expects (unique axis last, or b for
+        monoclinic; signs fixed), or None if it is not a lattice basis of its index or its centering
+        is not one the system has. The centering translations in ``_CENTERINGS`` are written for that
+        setting (R obverse, C for monoclinic), so the order matters here."""
+        s = int(s_best[t])
+        tri = [int(x) for x in _TRI[t]]
+        if system in ("tetragonal", "hexagonal", "monoclinic"):
+            p, q = sorted((x for x in range(3) if x != s), key=lambda x: l3[t, x])
+            order = [tri[p], tri[q], tri[s]] if system != "monoclinic" else [tri[p], tri[s], tri[q]]
+        else:
+            order = [tri[x] for x in np.argsort(l3[t], kind="stable")]
+        Mc = _fix_signs(V[:, order].copy(), system, near90_guard=False)
+        P = np.linalg.solve(M, Mc)
+        Pi = np.rint(P)
+        index = int(round(abs(np.linalg.det(Pi))))
+        if (np.abs(P - Pi).max() < 1e-6 and index == int(_TRI_IDX[t])
+                and _centering_compatible(Pi, system, index)):
+            return Pi
+        return None
+    settings = {int(t): _setting(t) for t in cand}
+    cand = np.array([t for t in cand if settings[int(t)] is not None], int)
+    if cand.size == 0:
+        return []
     sig = _axis_signature(V, l3, c3, cand, s_best[cand], system)      # (n, m, 3) unit axes
     out, left = [], np.arange(len(cand))
     while left.size and len(out) < max_groups:
@@ -458,23 +487,10 @@ def conventional_settings(M, system, max_groups=3):
         same = (dots.max(2) >= np.cos(np.radians(_AXIS_TOL))).all(1)
         grp = cand[left[same & (score[cand[left]] <= _SCORE_RATIO * score[cand[b]] + _SCORE_SLACK)]]
         left = left[~same]
-        ordered = grp[np.lexsort((score[grp], _TRI_IDX[grp], l3[grp].sum(1)))]
-        for t in ordered:
-            s = int(s_best[t])
-            tri = [int(x) for x in _TRI[t]]
-            if system in ("tetragonal", "hexagonal", "monoclinic"):
-                p, q = sorted((x for x in range(3) if x != s), key=lambda x: l3[t, x])
-                order = [tri[p], tri[q], tri[s]] if system != "monoclinic" else [tri[p], tri[s], tri[q]]
-            else:
-                order = [tri[x] for x in np.argsort(l3[t], kind="stable")]
-            Mc = _fix_signs(V[:, order].copy(), system, near90_guard=False)
-            P = np.linalg.solve(M, Mc)
-            Pi = np.rint(P)
-            index = int(round(abs(np.linalg.det(Pi))))
-            if (np.abs(P - Pi).max() < 1e-6 and index == int(_TRI_IDX[t])
-                    and _centering_compatible(Pi, system, index)):
-                out.append(Pi)
-                break
+        # every member of grp has a valid setting (filtered above): the group's shortest cell, then
+        # smallest index, then best score
+        t = grp[np.lexsort((score[grp], _TRI_IDX[grp], l3[grp].sum(1)))[0]]
+        out.append(settings[int(t)])
     return out
 
 
@@ -655,17 +671,33 @@ def refine_bravais(g, M, system, tol_abs, n_iter=5, refine_cell=True,
     return _with_basis(g, M_in.copy(), tol_abs)
 
 
+def _assign(g, M):
+    """Miller indices of the spots ``g`` in the basis ``M``, each spot given the lattice node nearest
+    to it. Rounding ``g @ M`` component by component finds that node only in a reduced basis: in a
+    sheared one (``30*[[-1,1,1],[1,-1,1],[1,1,-1]]`` with its first column added 50 times to the
+    second) the spot at the node (1, 50, 0) rounds to (1, 49, 0), a node 0.024/A away instead of
+    0.0004/A, and is rejected at tol_abs 0.02 (Copilot review of #247). So the assignment is made in
+    the reduced basis ``Mr`` (``M = Mr @ U``, U integer unimodular) and carried into M's setting as
+    ``h_M = h_r @ U``. The residual |g - C h| is the same in either basis."""
+    Mr = _reduced(M)
+    U = np.linalg.solve(Mr, M)
+    Ui = np.rint(U)
+    if np.abs(U - Ui).max() > 1e-6 or abs(round(np.linalg.det(Ui))) != 1:
+        return np.rint(g @ M)                           # not a basis of the same lattice: as before
+    return np.rint(g @ Mr) @ Ui
+
+
 def _with_basis(g, M, tol_abs):
-    """(M, C, hkl, inliers) of the basis M as it stands."""
+    """(M, C, hkl, inliers) of the basis M as it stands; hkl from ``_assign``."""
     C = np.linalg.inv(M).T
-    hkl = np.rint(g @ M)
+    hkl = _assign(g, M)
     return M, C, hkl, np.linalg.norm(g - hkl @ C.T, axis=1) < tol_abs
 
 
 def _median_resid(g, M):
-    """Median over the spots of |g - C h|, h = round(M.T g): how well the lattice of M fits them."""
+    """Median over the spots of |g - C h|, h from ``_assign``: how well the lattice of M fits them."""
     C = np.linalg.inv(M).T
-    return float(np.median(np.linalg.norm(g - np.rint(g @ M) @ C.T, axis=1)))
+    return float(np.median(np.linalg.norm(g - _assign(g, M) @ C.T, axis=1)))
 
 
 def _refine_from(g, M, system, tol_abs, n_iter, refine_cell, min_inliers):

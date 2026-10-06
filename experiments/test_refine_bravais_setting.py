@@ -209,6 +209,30 @@ def reduction_and_centering():
           f"warned={warned} unchanged={np.array_equal(M_out, M)}")
 
 
+def sheared_assignment():
+    """hkl are assigned in the reduced basis and carried into M's setting: a strongly sheared start
+    must keep the spots a reduced one keeps (Copilot review of #247)."""
+    Mp = 30.0 * np.array([[-1., 1, 1], [1, -1, 1], [1, 1, -1]])          # a primitive (I-like) cell
+    M = Mp @ np.array([[1., 50, 0], [0, 1, 0], [0, 0, 1]])                # the same lattice, sheared
+    g = np.array([[0.0004, 1 / 60, 1 / 60]])                              # 0.0004/A off the node (1, 50, 0)_M
+    _, _, hkl, inl = refine_sym._with_basis(g, M, TOL_ABS)
+    check("sheared basis: the spot is assigned to its nearest node (1, 50, 0) and kept",
+          hkl.tolist() == [[1.0, 50.0, 0.0]] and bool(inl[0]), (hkl.tolist(), inl.tolist()))
+    r_m, r_p = refine_sym._median_resid(g, M), refine_sym._median_resid(g, Mp)
+    check("the median residual does not depend on the basis the lattice is given in",
+          abs(r_m - r_p) < 1e-12 and r_m < 1e-3, (r_m, r_p))
+    # every setting conventional_settings returns has a centering the system has (the compatibility
+    # filter runs before the axis groups and their score cutoffs)
+    M1 = np.array([[0., 75, 75], [50, 70.5, 26.5], [0, 0, 100]])
+    bad = []
+    for system in ("monoclinic", "orthorhombic", "tetragonal", "hexagonal", "cubic"):
+        for P in refine_sym.conventional_settings(M1, system):
+            index = int(round(abs(np.linalg.det(P))))
+            if not refine_sym._centering_compatible(P, system, index):
+                bad.append((system, index))
+    check("every returned setting has a centering its system allows", not bad, bad)
+
+
 def search_sweep(n=8):
     """conventional_setting alone on random EXACT cells (no refine): the true conventional cell, every
     type, from the reduced cell, a non-reduced basis and a relabelled one."""
@@ -262,6 +286,8 @@ def main():
     refusals()
     print("reduction and centering")
     reduction_and_centering()
+    print("sheared start, centering filter")
+    sheared_assignment()
     print("conventional_setting sweep")
     search_sweep()
     print()

@@ -184,6 +184,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_streamdriver_laue.py
 
+      # ...and that the class derived from the header reads the CENTERING: hexagonal + H/R (a
+      # rhombohedral lattice on hexagonal axes) is -3m1, not 6/mmm, whose extra operators merge
+      # allowed reflections with absent ones. Every other input is pinned against a verbatim copy
+      # of the pre-fix function.
+      - name: experiments/test_laue_centering.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_laue_centering.py
+
       # The live merge refuses frames whose mean intensity is not measured (n <= 5, or mean(I) <= 3 sem)
       # instead of scaling them by an unbounded 1/mean(I) or leaving them in raw units (review r2 s1-01,
       # s1-04); measured frames merge exactly as before; merge_stats.py applies the same rule.

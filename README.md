@@ -98,9 +98,10 @@ for `CrystFELIndexer` in the LCLS SFX workflow:
 
     PeakFinderSFX -> [GLINTIndexer] -> StreamFileConcatenator -> PartialatorMerger -> HKLManipulator
 
-The reason it exists: none of LUTE's bundled CrystFEL builds are compiled with FFBIDX support, so
-`indexamajig --indexing=ffbidx` fails and GPU fast-feedback-style indexing is unavailable in LUTE
-today. GLINT fills that gap, emitting a CrystFEL `.stream` the downstream stages already understand.
+The reason it exists: the CrystFEL builds LUTE runs (0.10.2 by default) lack FFBIDX support, so
+`indexamajig --indexing=ffbidx` fails there; S3DF's separate fast-feedback build is not one LUTE
+uses. GLINT adds GPU blind indexing to LUTE, emitting a CrystFEL `.stream` the downstream stages
+already understand.
 
 **Pick a merge route.** GLINT's default stream carries the cell and the per-frame orientation, with
 placeholder `I=0.00` intensities — everything a *refiner* needs and nothing a *merger* does. One of

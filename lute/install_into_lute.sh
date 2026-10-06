@@ -61,9 +61,14 @@ TARGET="$LUTE/lute/io/models/glint_index.py"
 [ -d "$LUTE/lute/io/models" ] || { echo "not a LUTE repo: $LUTE"; exit 1; }
 
 _installed_content() {
+    # The repo copy has no default `executable` (an empty one fails validation); the installed copy
+    # defaults to THIS checkout's launcher. The second expression handles versions committed before
+    # that, whose default was one user's checkout: the provenance guard below re-derives the installed
+    # content of every committed version, so it must still recognise copies installed from those.
     local here_sed
     here_sed="$(printf '%s' "$HERE" | sed 's/[\\&#]/\\&/g')"
-    sed 's#"/sdf/home/s/smarches/git/glint/lute/glint_launch.sh"#"'"$here_sed"'/glint_launch.sh"#'
+    sed -e '/^    executable: str = Field($/,/^    )$/ s#^        "",$#        "'"$here_sed"'/glint_launch.sh",#' \
+        -e 's#"/sdf/home/s/smarches/git/glint/lute/glint_launch.sh"#"'"$here_sed"'/glint_launch.sh"#'
 }
 
 EXPECTED="$(mktemp)"
@@ -223,4 +228,4 @@ grep -q "from .glint_index import" "$LUTE/lute/io/models/__init__.py" || \
 grep -q "IndexGLINT" "$LUTE/lute/managed_tasks.py" || \
   echo 'GLINTIndexer: Executor = Executor("IndexGLINT")' >> "$LUTE/lute/managed_tasks.py"
 chmod +x "$HERE/glint_launch.sh"
-echo "installed IndexGLINT into $LUTE (model + export + executor). Edit executable path in glint_index.py if the GLINT repo moved."
+echo "installed IndexGLINT into $LUTE (model + export + executor); default executable $HERE/glint_launch.sh. Re-run this script if the GLINT checkout moves."

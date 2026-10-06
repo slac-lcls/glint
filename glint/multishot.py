@@ -44,7 +44,9 @@ CONSENSUS_MIN_LEAD = float(os.environ.get("GLINT_CONSENSUS_MIN_LEAD", "1.5"))
 def reference_lattice(M_ref, qmax):
     """All reciprocal-lattice vectors of cell M_ref within |g| <= qmax (one orientation)."""
     B = np.linalg.inv(np.asarray(M_ref, float)).T
-    hmax = int(np.ceil(qmax / np.min(np.linalg.norm(B, axis=0)))) + 1
+    # |h_i| = |g . a_i| <= qmax*|a_i| (a_i = real axes, columns of M_ref) bounds the box for any cell;
+    # qmax/min|a*_i| is that bound only for orthogonal cells and clips the sphere for oblique ones.
+    hmax = int(np.ceil(qmax * np.max(np.linalg.norm(np.asarray(M_ref, float), axis=0)))) + 1
     r = np.arange(-hmax, hmax + 1)
     H = np.array(np.meshgrid(r, r, r, indexing="ij")).reshape(3, -1).T
     H = H[np.any(H != 0, axis=1)]

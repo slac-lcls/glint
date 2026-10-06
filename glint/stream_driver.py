@@ -55,7 +55,7 @@ from glint.lattice import LENGTH_ORDER_LAUE, LOW_LAUE, UNIQUE_C_LAUE, cell_to_Ar
 from glint.lute_bridge import peaks_to_q, slab_rects
 from glint.geom import q_rows_ok      # drops NaN/inf (off-panel) and |q| ~ 0 (beam-centre) rows at every front door
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
-                           _hkl_grid, project_q)
+                           _hkl_bounds, _hkl_grid, project_q)
 from glint.peakfinder_v4 import PeakFinderV4, PerPanelFinder
 from glint.running_consensus import RunningConsensus
 from glint.multishot import same_lattice
@@ -363,6 +363,9 @@ TETRAGONAL_LAUE = ("4/m", "4/mmm")
 # Lattice type (CrystFEL stream vocabulary, plus "trigonal") -> holohedry, the Laue class ASSUMED when
 # only the lattice is known. A crystal of lower symmetry on the same lattice (4/m on tetragonal, -3 or
 # -3m on hexagonal P, 6/m, m-3) has to name its class through `laue=` -- the lattice cannot tell.
+# The holohedry depends on the CENTERING too, which this table does not carry: "hexagonal" with
+# centering H or R is a rhombohedral (hR) lattice on hexagonal triple-cell axes, whose holohedry is
+# -3m (-3m1 on those axes), not 6/mmm. laue_from_symmetry applies that case.
 _HOLOHEDRY = {
     "triclinic": "-1", "monoclinic": "2/m", "orthorhombic": "mmm", "tetragonal": "4/mmm",
     "trigonal": "-3m", "rhombohedral": "-3m_R", "hexagonal": "6/mmm", "cubic": "m-3m",
@@ -422,8 +425,13 @@ def _is_subgroup(sub, sup):
 def laue_from_symmetry(sym):
     """Laue class implied by a CrystFEL-style symmetry record {lattice_type, centering, unique_axis}
     -- the one StreamDriver(stream_symmetry=...) stamps on every chunk -- or None when it names no
-    lattice_type. Assumes the HOLOHEDRY (see _HOLOHEDRY): the header carries the lattice, not the
-    point group, so this is the most the record can support; a lower class is `laue=`'s job.
+    lattice_type. Assumes the HOLOHEDRY of the LATTICE, which is lattice_type plus centering (see
+    _HOLOHEDRY): the header carries the lattice, not the point group, so this is the most the record
+    can support; a lower class is `laue=`'s job.
+    Hexagonal with centering H or R is a rhombohedral lattice on hexagonal (triple-cell) axes, the
+    usual R3/R32 setting: its holohedry is -3m ('-3m', i.e. -3m1 on those axes), not 6/mmm, whose
+    extra operators send obverse-allowed reflections (-h+k+l = 3n) onto absent nodes. Every other
+    centering leaves the class to lattice_type alone.
     Monoclinic honours unique_axis (a/b/c; '*' or absent means b). The c-unique classes warn when the
     record says the unique axis is elsewhere, because the operator set assumes c and cannot follow."""
     sym = dict(sym or {})
@@ -439,10 +447,12 @@ def laue_from_symmetry(sym):
             return f"2/m_ua{ua}"
         if ua != "*":
             raise ValueError(f"unknown monoclinic unique_axis {ua!r}; known: *, a, b, c")
+    cen = str(sym.get("centering") or "P").strip().upper()
+    cls = "-3m" if (lt == "hexagonal" and cen in ("H", "R")) else _HOLOHEDRY[lt]
     if lt in ("tetragonal", "trigonal", "hexagonal") and ua not in ("*", "c"):
-        warnings.warn(f"lattice_type {lt} with unique_axis {ua!r}: the {_HOLOHEDRY[lt]} operator set "
+        warnings.warn(f"lattice_type {lt} with unique_axis {ua!r}: the {cls} operator set "
                       "assumes the unique axis in c; the live merge will use c (glint#180)")
-    return _HOLOHEDRY[lt]
+    return cls
 
 
 def canon(hkl, ops):
@@ -458,11 +468,15 @@ def _asu_key(hkl, ops):
 
 
 def theoretical_unique(Mc, dmin, ops):
-    """Number of unique reflections to `dmin` for the reference cell -- the completeness denominator."""
+    """Number of unique reflections to `dmin` for the reference cell -- the completeness denominator.
+
+    The box is _hkl_bounds, the one _hkl_grid / HKLGrid use, so oblique cells are no longer clipped.
+    The cut stays `norm(q) <= qmax` rather than _hkl_grid's `q.q <= qmax^2`: the two disagree only on
+    exact |q| == qmax ties, but that is enough to move an orthogonal count (P212121 40/60/80 at 2.0 A:
+    13573 vs 13572), and orthogonal cells are meant to be unchanged by the box fix."""
     R = recip_from_M(np.asarray(Mc, float))
     qmax = 1.0 / dmin
-    n = np.linalg.norm(R, axis=1)
-    H, K, L = (int(np.ceil(qmax / x)) + 1 for x in n)
+    H, K, L = _hkl_bounds(R, qmax)                     # the same box _hkl_grid / HKLGrid use
     g = np.mgrid[-H:H + 1, -K:K + 1, -L:L + 1].reshape(3, -1).T.astype(int)
     g = g[np.any(g != 0, axis=1)]
     q = g @ R
@@ -870,10 +884,11 @@ class StreamDriver:
     Merge symmetry: `laue` names the Laue class the running merge (completeness, CC*, Rsplit and
     the theoretical-unique denominator) is accumulated under -- one of LAUE_CLASSES or a setting such
     as "2/m_uac" / "-31m" (see laue_ops) -- or `ops` supplies the operator list outright. Left unset
-    it follows `stream_symmetry`'s lattice_type (its holohedry; laue_from_symmetry), and without
-    that it is "4/mmm", the historical default. Blind locks are put in the tetragonal conventional
-    setting (4-fold axis in c) only for the tetragonal classes; other classes are merged in the
-    setting the cell arrives in, so a known cell must be given in the setting its class assumes.
+    it follows `stream_symmetry`'s lattice (the holohedry of its lattice_type and centering;
+    laue_from_symmetry), and without that it is "4/mmm", the historical default. Blind locks are
+    put in the tetragonal conventional setting (4-fold axis in c) only for the tetragonal classes;
+    other classes are merged in the setting the cell arrives in, so a known cell must be given in
+    the setting its class assumes.
 
     Ring dtype: `dtype` (uint16 by default, for raw ADU) must hold the pushed frames losslessly; use
     dtype=np.float32 for calibrated frames (det.calib). push() raises TypeError on a frame the ring
@@ -995,8 +1010,8 @@ class StreamDriver:
         #   ops              an explicit operator list, used verbatim (laue is then only a label;
         #                    None unless given, so no tetragonal standardization is applied);
         #   laue             a Laue-class name (laue_ops); aliases/settings resolve to laue_name();
-        #   stream_symmetry  the holohedry of its lattice_type (laue_from_symmetry), so the header an
-        #                    offline merger reads and the live merge cannot disagree;
+        #   stream_symmetry  the holohedry of its lattice_type + centering (laue_from_symmetry), so
+        #                    the header an offline merger reads and the live merge cannot disagree;
         #   "4/mmm"          the historical default -- bit-identical to before for every caller that
         #                    passes neither.
         # An explicit laue that contradicts stream_symmetry WARNS rather than fails: the operator is
@@ -1053,6 +1068,7 @@ class StreamDriver:
             self.acc = MergeAccumulator(snr_bins, self.ops)
         self.n_pushed = self.n_indexed = self.n_integrated = 0
         self.n_gate_rejected = 0            # refused at ingest with no other cell to try (see _index_integrate)
+        self.n_flush_errors = self.n_flush_error_frames = 0     # flush() batches that raised (s2-03)
 
         # Live geometry refinement (opt-in, DIAGNOSTIC-only): pool per-frame predicted-vs-observed
         # residuals into a running (clen, beam-shift) correction, reported in stats()["geom_correction"].
@@ -2268,10 +2284,13 @@ class StreamDriver:
                     self.n_low_confidence += 1
                     self.low_conf_frames.append((self._frame_no, qc))
             acc.add_frame(hkl[keep], I[keep], sig[keep], self._frame_no)
+            # Counted and numbered the moment it is merged, BEFORE the chunk is written: a write that
+            # raises (full disk) leaves the frame merged, so the next frame must not reuse its number
+            # and stats()["integrated"] must still count it (review of #242).
+            self.n_integrated += 1; self._frame_no += 1
             if self._writer is not None:
                 self._writer.write(self._stream_record(i, Mcan, pred, I, sig, pkI, bg, keep,
                                                        cell_id, frac, low_conf))
-            self.n_integrated += 1; self._frame_no += 1
             if self._events_on:                             # marker, not a terminal outcome: the frame's
                 rec = self._event_base(self._idx[i], "integrated", cell_id)      # `indexed` record precedes it
                 rec.update(slot=(None if retro else int(i)), n_pred=int(len(pred)), n_refl=int(keep.sum()),
@@ -2339,7 +2358,8 @@ class StreamDriver:
         if pred is None:                                    # index-only chunk (push_peaks/push_q): crystal, no reflections
             rows = dict(pred=None, I=None, sigma=None, peak=None, bg=None); fno = None
         else:
-            rows = dict(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep]); fno = self._frame_no
+            rows = dict(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep])
+            fno = self._frame_no - 1                        # advanced when the frame was merged, just before this
         src = self._src[i]
         if src is None:
             image, event = self.stream_image, self._idx[i]
@@ -2884,9 +2904,28 @@ class StreamDriver:
         self._watch = RunningConsensus(min_support=3, gap=2, adaptive=False)    # reset for the next change
 
     def flush(self):
-        """Index the resident batch, integrate each frame against its still-resident pixels."""
+        """Index the resident batch, integrate each frame against its still-resident pixels.
+
+        Exception-safe (review r2 s2-03): the ring is emptied even when the batch raises part-way (a
+        StreamWriter.write on a full disk, an on_event hook, an integrator error). Before, `_n` stayed at
+        B, so every later push() raised IndexError and a retried flush()/close() merged the prefix that
+        was already in `acc` a second time. Now the frames of the failed batch that were already merged
+        stay merged once, the rest of that batch is dropped, the failure is counted in
+        stats()["flush_errors"] and ["flush_error_frames"] (frames resident in a batch that raised), and
+        the exception propagates."""
         if self._blind or self._n == 0:                         # nothing to integrate without a cell
             return
+        n0 = self._n
+        try:
+            self._flush_batch()
+        except BaseException:
+            self.n_flush_errors += 1
+            self.n_flush_error_frames += n0       # resident in the batch that raised; some may be merged
+            raise
+        finally:
+            self._reset_ring()
+
+    def _flush_batch(self):
         slots = [i for i in range(self._n) if self._q[i] is not None]
         eff = self._eff
         if eff is not None:                                     # adaptive effort: (tier, deep) for THIS flush
@@ -2952,6 +2991,8 @@ class StreamDriver:
                     self._buffer_misses(remaining)
                 # hand over the cascade's blind solves so these frames are not indexed a second time
                 self._watchdog(remaining, cached_nbest)
+
+    def _reset_ring(self):
         self._n = 0
         self._q = [None] * self.B
         self._pk = [None] * self.B
@@ -2993,6 +3034,8 @@ class StreamDriver:
                  # must never be silent, and a rising count is the signal that the cell has drifted
                  # away from the sample (or that min_inlier_frac is set too high for this run).
                  gate_rejected=self.n_gate_rejected,
+                 flush_errors=getattr(self, "n_flush_errors", 0),          # flush() batches that raised (s2-03)
+                 flush_error_frames=getattr(self, "n_flush_error_frames", 0),
                  # alias-gate REFUSALS, in the broad sense: proposed locks that were NOT
                  # committed. Counted since glint#83 but never reported, so the one diagnostic
                  # that says "a cell was proposed and turned down" was invisible to anyone

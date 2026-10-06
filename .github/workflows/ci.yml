@@ -138,6 +138,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_geom_data_key.py
 
+      # --integrate predicts at the wavelength the frames were INDEXED at (--wavelength over the .geom)
+      # and stamps that energy as photon_energy_eV. The --peaks route ignored --wavelength: a path-valued
+      # .geom photon_energy crashed after indexing, and a literal one was integrated off the spots. The
+      # CLI runs in-process with an oracle indexer in place of glint.hybrid_stream, so h5py + numpy only.
+      - name: experiments/test_integrate_wavelength.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_integrate_wavelength.py
+
       - name: experiments/test_consensus_degenerate.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_consensus_degenerate.py
@@ -183,6 +191,14 @@ jobs:
       - name: experiments/test_streamdriver_laue.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_streamdriver_laue.py
+
+      # ...and that the class derived from the header reads the CENTERING: hexagonal + H/R (a
+      # rhombohedral lattice on hexagonal axes) is -3m1, not 6/mmm, whose extra operators merge
+      # allowed reflections with absent ones. Every other input is pinned against a verbatim copy
+      # of the pre-fix function.
+      - name: experiments/test_laue_centering.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_laue_centering.py
 
       # The live merge refuses frames whose mean intensity is not measured (n <= 5, or mean(I) <= 3 sem)
       # instead of scaling them by an unbounded 1/mean(I) or leaving them in raw units (review r2 s1-01,
@@ -281,6 +297,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_ring_dtype.py
 
+      # flush() empties the ring even when a batch raises part-way (hook, writer, integrator): later
+      # pushes keep working and a retried flush()/close() does not merge a frame twice (review r2 s2-03).
+      - name: experiments/test_flush_exception_safe.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_flush_exception_safe.py
+
       # StreamDriver effort= (adaptive effort): the known-cell depth follows the hit rate, the spare budget buys
       # the chance-controlled deep search on the misses, decisions at flush boundaries only and logged; off by
       # default and byte-identical off. q-list frames, fit-oracle indexers, numpy only.
@@ -310,6 +332,16 @@ jobs:
       - name: experiments/test_cli_smoke.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cli_smoke.py
+
+      # Can CrystFEL read the DEFAULT stream (glint/stream.py::write_stream, glint_cli without --integrate)?
+      # The only CI step asserting on that writer's bytes: geometry block, `--- Begin crystal`, `indexed_by =
+      # file` (not `glint`, which CrystFEL 0.10.2 rejects), panel names that exist in the .geom. With
+      # stream.py reverted to `indexed_by = glint` every other step here stays green. Its second layer runs
+      # process_hkl on the output; this runner has no CrystFEL, so that layer prints SKIP and the structural
+      # layer is what CI checks. numpy only.
+      - name: experiments/test_stream_crystfel.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_stream_crystfel.py
 
       # ~50s, by far the slowest step here: it refines over 540 synthetic frames. Kept because
       # it is the only cover of the geometry-refinement solver, but it is the first candidate
@@ -421,6 +453,26 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_axis_standardizer.py
 
+      # `import fftindex` (the back-compat alias) must hand control back (review s7-04). The shim imports every
+      # glint submodule and catches only Exception; glint/test_first_index_per_group.py called sys.exit at module
+      # scope, so with torch installed the import ended the caller's program with status 0. On this torch-less
+      # runner that module fails on `import torch` first, so what catches the defect HERE is the source scan: no
+      # glint/ or fftindex/ module may exit at import time. The runtime layers run again in the torch-CPU job.
+      - name: experiments/test_import_alias.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_import_alias.py
+
+      # The Miller-index box of every |q| <= qmax enumeration (predict._hkl_grid -> predict_spots,
+      # HKLGrid; theoretical_unique; multishot.reference_lattice; alias_gate.tightness) must hold the
+      # whole sphere for OBLIQUE cells. The box was bounded by qmax/|a*| instead of qmax*|a|, which
+      # clipped high-resolution rows on triclinic, monoclinic beta >~ 115, hexagonal and blind-primitive
+      # cells, and made the alias gate's node count basis-dependent. Checked against a brute-force
+      # sphere that shares no formula with the code. test_streamdriver_laue and test_axis_standardizer
+      # could not see it: both compare the box against itself. numpy-only.
+      - name: experiments/test_hkl_box.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_hkl_box.py
+
       # Not a test: it checks that run_ci_locally.py's STEPS still matches the steps above, so the
       # local "run it as poor as CI" harness cannot quietly fall behind this file and start
       # reporting ALL PASS over a step it no longer runs.
@@ -495,6 +547,13 @@ jobs:
       # crash, it silently changes WHICH candidates survive (glint_index.py::_first_index_per_group).
       - name: glint/test_first_index_per_group.py
         run: python -m glint.test_first_index_per_group
+
+      # ...and with torch present, importing that module (directly, or through `import fftindex`, which imports
+      # every glint submodule) must NOT run it: it once ended the importing program with status 0 (review s7-04).
+      # Also in the CPU job, where only the source-scan layer can see the defect.
+      - name: experiments/test_import_alias.py (torch installed)
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_import_alias.py
 
       # The N-best PREFIX contract -- index_blind_nbest(q, 10)[:3] == index_blind_nbest(q, 3), the
       # promise #145's cascade reuses one N-best call on -- checked on 3 real cxidb frames. It is

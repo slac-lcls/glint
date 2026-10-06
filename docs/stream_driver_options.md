@@ -204,7 +204,8 @@ reached at those budgets (it is a rare-miss feature under the default tiers). De
 `n_null_floor_refused` (registration attempts, so one frame may count more than once); the rescues (`n_warmup_rescued`, `n_watchdog_rescued`, `n_rescued`, `n_cascade_retried`,
 `n_cascade_rescued`, `n_cascade_by_arm`, `n_per_lattice_*`); the cells (`n_cells`, `cells`, `extra_cells`,
 `n_relock`, `lock_z`); the diagnostics (`geom_correction`, `n_low_confidence`, `double_hit_rate`, the null rates);
-the stream (`stream_out`, `stream_chunks`, `stream_indexed`); the ring (`pixels_held`, `pixels_evicted`); and
+the stream (`stream_out`, `stream_chunks`, `stream_indexed`); the ring (`pixels_held`, `pixels_evicted`); failed
+flushes (`flush_errors`, and `flush_error_frames`: frames resident in a batch that raised, some of them already merged); and
 `effort` (tier in force, budget, estimates, `fast_by_tier`, deep-search counts, the log).
 
 ## Running it

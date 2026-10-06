@@ -4,11 +4,11 @@ A drop-in alternative to `CrystFELIndexer` in the LUTE SFX DAG:
 
     PeakFinderSFX -> [GLINTIndexer] -> StreamFileConcatenator -> PartialatorMerger -> HKLManipulator
 
-**Why GLINT in LUTE.** None of LUTE's bundled CrystFEL builds (0.10.2 default ... 0.12.0) are compiled
-with FFBIDX -- `indexamajig --indexing=ffbidx` errors "compiled without FFBIDX support". So GPU
-fast-feedback-style indexing is simply *unavailable* in LUTE today. GLINT fills that gap: GPU blind
-indexing + cross-frame consensus, ~10^2-10^3x faster, emitting the same CrystFEL `.stream` format the
-rest of the DAG consumes.
+**Why GLINT in LUTE.** The CrystFEL builds LUTE runs lack FFBIDX: 0.10.2 (LUTE's default) predates
+it, and 0.12.0 and 0.13.0 report "compiled without FFBIDX support". S3DF's separate fast-feedback build
+(`/sdf/group/lcls/ds/tools/crystfel-fast-feedback-indexer`) is not one LUTE's tasks use. GLINT adds GPU
+blind indexing + cross-frame consensus, ~10^2-10^3x faster, emitting the same CrystFEL `.stream` format
+the rest of the DAG consumes.
 
 ## What is validated
 
@@ -46,19 +46,35 @@ intensities: what a refiner needs, not what a merger needs. Set one of:
 * **`tofile:`** — hand the orientations to `indexamajig --indexing=file` (below), so CrystFEL's
   prediction refinement imposes the lattice symmetry.
 
-Which of the two merges *better* is **unresolved**: the only head-to-head
-([glint#129](https://github.com/slac-lcls/glint/issues/129)) ran them at unmatched integration
-settings, and matching those closed the CC\* gap. Choose on dependencies.
+Which of the two merges *better* depends on the data. On cxidb-17 the routes matched once their
+integration settings were matched ([glint#129](https://github.com/slac-lcls/glint/issues/129)). On
+mfx100848724 r51 (LUTE validation, 29 Sep 2026) they did not: on the 171 frames both indexers indexed,
+CrystFEL's integration merged to CC½ 0.27, GLINT's own to 0.08, and GLINT's orientations handed to CrystFEL
+to 0.27. For a merge, prefer `tofile:`; `integrate: true` is for pipelines without CrystFEL.
 
 Both are configured below. (`tofile:` was once called `fromfile:`; the old name is still accepted
 and maps to it, because GLINT *writes* that file while CrystFEL's reader flag is what it was named
 after. Setting both is an error.)
 
+## With a known cell, set `gate: strict`
+
+Unset, `gate` is the CLI default `none`: every frame the indexer registers is written as a crystal.
+With `cell` that is nearly every frame, because a known-cell search returns the cell it was asked
+for. LUTE's SFX test runs wrote 28% of mfx100848724 r51 as crystals where CrystFEL and cctbx index
+about 1%, and 98% of mfxl1038923 r58. `gate: "strict"` writes only frames with at least 10 peaks
+and at least 25% of their peaks matched; the rest are written as unindexed, and `integrate` and
+`tofile` skip them. It is not null-calibrated: in the cxidb-17 null, 6% pass overall and
+22.8% of copies below 60 peaks pass, so it reduces chance crystals rather than removing them. It
+applies to `peaks` and `images` only; the
+raw-xtc route has no gate, and the model rejects `gate` with `exp`.
+
 ## Install
     ./install_into_lute.sh [/path/to/lute_new/lute]     # default ~/git/lute_new/lute
 Copies `glint_index.py` -> `lute/io/models/`, exports it, and registers
-`GLINTIndexer = Executor("IndexGLINT")` in `managed_tasks.py`. Edit `executable` in `glint_index.py`
-(or `glint_launch.sh`) if the GLINT repo path differs. GLINTIndexer runs on a **GPU partition** (see
+`GLINTIndexer = Executor("IndexGLINT")` in `managed_tasks.py`. The installed copy's default
+`executable` is this checkout's `glint_launch.sh`; if the checkout moves, inspect the generated
+path change and re-run the installer with `--force`, or set `executable` in the config. The repo copy has no default, so a copy made by hand fails validation
+until `executable` is set. GLINTIndexer runs on a **GPU partition** (see
 `glint_dag.yaml`) and the launcher activates the GLINT torch env.
 
 ## Run (mirrors the standard SFX functional test)
@@ -103,8 +119,10 @@ Copies `glint_index.py` -> `lute/io/models/`, exports it, and registers
 Set `tofile:` (+ `lattice: tPc` for tetragonal) in the `IndexGLINT` config; GLINT emits a
 `--indexing=file` solution, then:
     indexamajig --indexing=file --fromfile-input-file=glint.sol --tolerance=10,10,10,3 ...
-CrystFEL's refiner imposes the lattice symmetry, which GLINT's own integrator does not. That is the
-concrete thing this route buys; it is not established that the merge comes out better (glint#129).
+CrystFEL's refiner imposes the lattice symmetry, which GLINT's own integrator does not, and it refines the
+cell per frame against the reference (GLINT writes each frame's cell as indexed). On mfx100848724 r51 this route
+merged to CC½ 0.27 against 0.08 for GLINT's own integration on the same frames; on cxidb-17 the two matched
+(glint#129).
 
 `lattice:` applies **only** to the `--tofile` solution file. The GLINT stream header always reports
 `lattice_type = triclinic / centering = P`, so set partialator's point group explicitly (`-y`) in the

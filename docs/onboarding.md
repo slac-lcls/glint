@@ -83,7 +83,7 @@ issue numbers. Questions already settled (and the levers that did not pay) are i
 
 ## 1. Repository & sync model
 
-**GitHub is the source of truth:** `git@github.com:slac-lcls/glint.git` (private, in the `slac-lcls` org).
+**GitHub is the source of truth:** `https://github.com/slac-lcls/glint` (the `slac-lcls` org).
 Everyone — laptops, S3DF, NERSC — clones from and pushes to GitHub. There is no other "canonical" copy.
 
 ```bash
@@ -394,7 +394,8 @@ consensus-consistent candidate a frame keeps; `matched` runs the known-cell sear
 candidate matching the most peaks, glint#215) · `--cascade <driver>` (external fallback) ·
 `--integrate` (real I/σ) · `--tofile <sol>` (hand orientations to CrystFEL for the refined merge) ·
 `--device cpu|auto`. `--images raw.cxi --geom detector.geom` runs GLINT's own peak finder on the pixels
-instead of reading a peak stream; `--per-panel-finder` runs it per panel of a multi-panel slab (glint#232).
+instead of reading a peak stream; `--per-panel-finder` runs it per panel of a multi-panel slab (glint#232);
+`--event-axis event|panel` settles a 3-D stack whose leading axis the file cannot name (glint#244).
 
 ## 5. Validate before you push ("definition of done")
 

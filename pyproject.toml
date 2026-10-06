@@ -27,6 +27,11 @@ dependencies = [
     "h5py>=3",              # imported unguarded by the shipped HDF5/CXI paths (--images, --integrate)
 ]
 
+[project.urls]
+Repository = "https://github.com/slac-lcls/glint"
+Changelog = "https://github.com/slac-lcls/glint/blob/main/CHANGELOG.md"
+Paper = "https://arxiv.org/abs/2609.07722"
+
 [project.scripts]
 glint = "glint.glint_cli:main"
 

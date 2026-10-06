@@ -489,5 +489,8 @@ instead of reading a peak stream; `--per-panel-finder` runs it per panel of a mu
 
 ## 8. The paper
 
-The write-up (IUCr Acta A style) lives separately (LaTeX → Overleaf). Ask for access if you want to
-contribute text/figures; the code repo and the paper are kept in step but are different repositories.
+The method paper is *Real-time blind indexing by cross-frame consensus*, arXiv:2609.07722, submitted to
+*J. Appl. Cryst.*; `CITATION.cff` gives the citation. Its LaTeX source is a separate repository kept in step
+with this one: `REPRODUCING.md` maps every table and figure to what regenerates it, and
+`experiments/check_numbers.py` guards the numbers in the manuscript and in these pages alike. Ask for access to
+the manuscript repository if you want to contribute text or figures.

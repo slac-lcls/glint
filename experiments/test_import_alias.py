@@ -83,7 +83,10 @@ def import_time_exits(src, filename):
             for a in node.names:
                 if a.name in ("exit", "_exit"):
                     bare.add(a.asname or a.name)
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     found = []
+    visited_functions = set()
 
     def visit(node):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
@@ -99,6 +102,10 @@ def import_time_exits(src, filename):
                 found.append((node.lineno, f"{f.value.id}.{f.attr}(...)"))
             elif isinstance(f, ast.Name) and f.id in bare:
                 found.append((node.lineno, f"{f.id}(...)"))
+            elif isinstance(f, ast.Name) and f.id in functions and f.id not in visited_functions:
+                visited_functions.add(f.id)
+                for statement in functions[f.id].body:
+                    visit(statement)
         if isinstance(node, ast.Raise) and node.exc is not None:
             e = node.exc.func if isinstance(node.exc, ast.Call) else node.exc
             if isinstance(e, ast.Name) and e.id == "SystemExit":
@@ -114,9 +121,10 @@ print("STATIC: no import-time exit anywhere in glint/ or fftindex/")
 # The detector has to be able to fail, or a pass means nothing.
 _probe = ("import sys as _s\nfrom os import _exit\nX = 1\nfor i in range(1):\n    _s.exit(0)\n"
           "def f():\n    _s.exit(1)\nclass C:\n    raise SystemExit\n"
-          "if __name__ == '__main__':\n    _s.exit(2)\nelse:\n    _exit(3)\n")
-check("detector sees exits in a loop, a class body and a main-guard else, not in a def or the guard",
-      [ln for ln, _ in import_time_exits(_probe, "<probe>")] == [5, 9, 13],
+          "if __name__ == '__main__':\n    _s.exit(2)\nelse:\n    _exit(3)\n"
+          "def main():\n    _s.exit(4)\nmain()\n")
+check("detector sees exits in a loop, class body, main-guard else and called main, not an uncalled def or the guard",
+      [ln for ln, _ in import_time_exits(_probe, "<probe>")] == [5, 9, 13, 15],
       str(import_time_exits(_probe, "<probe>")))
 n_files = 0
 for pkg in ("glint", "fftindex"):

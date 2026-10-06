@@ -239,7 +239,7 @@ class IndexGLINTParameters(ThirdPartyParameters):
         None, description="Optional external cell-given indexer binary (ffbidx driver) as a fallback.",
         flag_type="--", rename_param="cascade",
     )
-    gate: Optional[Literal["none", "strict"]] = Field(
+    gate: Optional[Literal["none", "strict", "floor"]] = Field(
         None,
         description="What a frame must satisfy to be WRITTEN as a crystal (glint_cli --gate). Unset = "
                     "the CLI default `none`: every registration is written, and with `cell` that is "
@@ -248,10 +248,16 @@ class IndexGLINTParameters(ThirdPartyParameters):
                     "CrystFEL and cctbx index about 1%, and 98% of mfxl1038923 r58. `strict` = at "
                     "least 10 peaks and at least 25% of the frame's peaks matched (the paper's "
                     "scoring bar); a frame that fails is written as unindexed and is skipped by "
-                    "`integrate` and `tofile`. Not null-calibrated: about 5% of dense lattice-free "
-                    "frames still pass. `peaks` / `images` only: the raw-xtc program has no gate, "
+                    "`integrate` and `tofile`. `floor` adds a per-peak-count chance floor using "
+                    "the required `floor` field. `peaks` / `images` only: the raw-xtc program has no gate, "
                     "so `gate` is REJECTED with `exp`.",
         flag_type="--", rename_param="gate",
+    )
+    floor: Optional[str] = Field(
+        None,
+        description="With `gate: floor`, a calibration name or `a,b[,c]` coefficients passed as "
+                    "--floor to glint_cli. Required for that gate and invalid with other gate choices.",
+        flag_type="--", rename_param="floor",
     )
 
     # ---- integration: emit REAL I/sigma so the stream goes straight to partialator ----------------
@@ -423,6 +429,15 @@ class IndexGLINTParameters(ThirdPartyParameters):
             raise ValueError("`gate` applies only to the `peaks` / `images` sources: the raw-xtc "
                              "program (glint_xtc.py) has no gate, and the launcher would drop --gate")
         return gate
+
+    @validator("floor", always=True)
+    def _floor_matches_gate(cls, floor: Optional[str], values: Dict[str, Any]) -> Optional[str]:
+        """Keep the dataset-specific floor paired with the CLI's `--gate floor` mode."""
+        if floor not in (None, "") and values.get("gate") != "floor":
+            raise ValueError("`floor` is used only with `gate: floor`")
+        if values.get("gate") == "floor" and floor in (None, ""):
+            raise ValueError("`gate: floor` requires `floor` (NAME|a,b[,c])")
+        return floor
 
     @validator("out", always=True)
     def _out_required(cls, out: str) -> str:

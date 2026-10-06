@@ -22,8 +22,9 @@ Run GLINT blind on real SFX datasets and judge output against established indexe
   "when to reach for GLINT" table.
 
 ## 2. Productization (LCLS)  *(suggested lead: Mona / Stefano)*
-- **[#3]** Wire the LUTE `GLINTIndexer` task (`lute/`) into a real SFX DAG — it fills the gap that
-  LUTE's CrystFEL builds lack (none is compiled with FFBIDX).
+- **[#3]** Wire the LUTE `GLINTIndexer` task (`lute/`) into a real SFX DAG — it adds GPU blind indexing,
+  which LUTE's CrystFEL builds do not offer (they lack FFBIDX; S3DF's separate fast-feedback build is not one
+  LUTE's tasks use).
 - **Landed since August:** the `--integrate` path and the `--images` front end are exposed and smoke-tested;
   the streaming driver has a named cell registry and a per-frame event trace (#199), pixel and peaks-in replay
   under a CrystFEL geometry (#200, #203), a merge class chosen per sample (#186), an opt-in chance floor on the
@@ -36,23 +37,13 @@ Run GLINT blind on real SFX datasets and judge output against established indexe
   at (#213 checked the mechanism at B=20); deployment recipes for `effort=` per beamline rate. The option map
   is [`docs/stream_driver_options.md`](docs/stream_driver_options.md).
 
-## 3. CBXD — blind convergent-beam  *(flagship; suggested lead: Yuan)*
-Convergent-Beam X-ray Diffraction (Chapman group, arXiv:2602.14402): a cone of incident directions, so
-each reflection is a Kossel-circle **streak** rather than a point — and the streak's curvature carries
-the out-of-plane information a single still lacks. Known-cell indexing is solved; **blind** orientation
-+ cell is walled by per-streak precision. The idea: pool streaks into a **generalized-Hough / joint
-fit** — the convergent-beam analog of the direct-sum objective + consensus. This is the figure kept in
-the paper's *Outlook*.
-
-- **[#6]** C1 — reproduce the streak sim + probe the blind streak-precision wall.
-- **[#9]** Add the `ridge_moments` tangent as a per-streak vote weight in the accumulator.
-- **[#11]** C3 — blind solvability phase diagram (NA × streak precision).
-- **[#12]** C4 — does cross-frame consensus stack with cross-streak pooling?
-- **[PR #10]** GPU arc-Hough accumulator (draft).
-- **Landed — two-color step 1** (PR #13, [`experiments/CBXD_TWOCOLOR_STEP1.md`](experiments/CBXD_TWOCOLOR_STEP1.md)).
-  A second colour gives a second Ewald sphere; scoring against both roughly **doubles the truth tower**
-  (27 → 56 votes) for ~**2× the capture radius**, and in the low-NA regime where a single colour starves
-  it recovers **10/12 vs 6/12** blind, with 100% correct λ-labels.
+## 3. CBXD — blind convergent-beam  *(suggested lead: Yuan)*
+Convergent-beam X-ray diffraction (Chapman group, arXiv:2602.14402) turns each reflection into a Kossel-circle
+streak whose curvature carries the out-of-plane information a single still lacks; blind orientation and cell
+recovery there is the figure kept in the paper's *Outlook*. The scripts, data and results for it are developed
+in a separate private repository with Yuan Ni until the companion paper is out
+(`slac-lcls/glint-cbxd`, issues #1–7); the merged pull requests #10, #13, #61,
+#115 and #149 remain the record of that work here.
 
 ## 4. Throughput & the optimizer  *(suggested lead: Yuan)*
 Background: the paper's *Architecture*, *Accuracy-ceiling* and *Throughput* sections. The M3 refiner

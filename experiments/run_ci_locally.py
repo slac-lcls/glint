@@ -80,6 +80,7 @@ STEPS = [
     "experiments/test_stream_columns.py",
     "experiments/test_cli_smoke.py",
     "experiments/test_cli_dense_flags.py",
+    "experiments/test_stream_crystfel.py",           # its process_hkl layer SKIPs without CrystFEL
     "experiments/test_geom_refine.py",
     # Skips without a GPU and exits 0 (glint#123). Running it here is still worth the second it
     # costs: the module body resolves HKLGrid/_panel_geom/recip_from_M/cell_to_Ar at import, so a
@@ -94,6 +95,8 @@ STEPS = [
     "experiments/test_same_lattice_symmetry.py",
     "experiments/test_gate_project.py",
     "experiments/test_axis_standardizer.py",
+    "experiments/test_import_alias.py",              # also in the torch-CPU job; its child processes are
+                                                     # not under the block here, so they see local torch
     "experiments/test_hkl_box.py",
     "experiments/bench_integrate_fused.py",
     # torch-CPU job: runs for real there (CPU torch), SKIPs here with torch blocked.

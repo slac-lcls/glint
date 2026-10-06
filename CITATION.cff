@@ -1,0 +1,59 @@
+# Citation metadata for GLINT (Citation File Format 1.2.0). GitHub reads this file for "Cite this repository";
+# DOE CODE and Zenodo read the same fields. Keep `version` equal to pyproject.toml's and fill `doi` and
+# `date-released` when the DOE CODE record is announced at the tagged release.
+cff-version: 1.2.0
+message: "If you use GLINT, please cite the method paper below and this software record."
+type: software
+title: "GLINT: a fast GPU-native blind crystallography indexer"
+abstract: >-
+  GLINT indexes sparse single-shot serial-crystallography diffraction blind, with no unit cell supplied, on the
+  GPU: candidate lattices are generated per frame from a gridless objective, the weak but recurrent hypotheses
+  are pooled across frames to identify a shared unit cell by cross-frame consensus, and each frame is then
+  registered against that cell with a batched known-cell engine. It ingests what a CrystFEL or LUTE peak search
+  emits and writes a CrystFEL stream, and it ships a device-resident streaming driver that discovers the cell
+  while the data arrive.
+authors:
+  - family-names: Marchesini
+    given-names: Stefano
+    affiliation: "SLAC National Accelerator Laboratory"
+    email: smarches@slac.stanford.edu
+  - family-names: Ni
+    given-names: Yuan
+    affiliation: "SLAC National Accelerator Laboratory"
+version: 0.1.0
+# date-released: YYYY-MM-DD   (the tag date)
+# doi: 10.11578/dc.XXXXXXXX  (the DOE CODE DOI, when announced)
+repository-code: "https://github.com/slac-lcls/glint"
+# LICENSE.md is BSD-3-Clause plus the SLAC/DOE enhancements grant-back; no single SPDX identifier names that
+# text exactly, so the file is referenced rather than an identifier asserted.
+license-url: "https://github.com/slac-lcls/glint/blob/main/LICENSE.md"
+keywords:
+  - crystallography
+  - serial crystallography
+  - SFX
+  - indexing
+  - blind indexing
+  - unit cell
+  - consensus
+  - GPU
+  - CUDA
+  - diffraction
+  - LCLS
+  - XFEL
+  - CrystFEL
+preferred-citation:
+  type: article
+  title: "Real-time blind indexing by cross-frame consensus"
+  authors:
+    - family-names: Marchesini
+      given-names: Stefano
+    - family-names: Ni
+      given-names: Yuan
+  year: 2026
+  journal: "arXiv preprint"
+  identifiers:
+    - type: other
+      value: "arXiv:2609.07722"
+      description: "arXiv identifier"
+  url: "https://arxiv.org/abs/2609.07722"
+  notes: "Submitted to Journal of Applied Crystallography; replace with the journal reference when published."

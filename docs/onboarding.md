@@ -389,10 +389,12 @@ Useful flags: `--cell "a b c al be ga"` (known cell) · `--nbest N` (consensus h
 `--mode auto|sparse|dense` · `--escalate` (a deep known-cell search on the frames that still fail the gate,
 accepted only against the frame's own scrambled copies; glint#208) · `--gate none|strict|floor` (write a frame as a
 crystal only if it passes the paper's scoring bar, glint#216; `floor` adds a per-peak-count chance floor
-fitted on scrambled frames, named or given with `--floor`, dataset-specific) · `--cascade <driver>` (external fallback) ·
+fitted on scrambled frames, named or given with `--floor`, dataset-specific) · `--select first|matched` (which
+consensus-consistent candidate a frame keeps; `matched` runs the known-cell search on every frame and keeps the
+candidate matching the most peaks, glint#215) · `--cascade <driver>` (external fallback) ·
 `--integrate` (real I/σ) · `--tofile <sol>` (hand orientations to CrystFEL for the refined merge) ·
 `--device cpu|auto`. `--images raw.cxi --geom detector.geom` runs GLINT's own peak finder on the pixels
-instead of reading a peak stream.
+instead of reading a peak stream; `--per-panel-finder` runs it per panel of a multi-panel slab (glint#232).
 
 ## 5. Validate before you push ("definition of done")
 
@@ -432,7 +434,8 @@ instead of reading a peak stream.
 **Crystallography / real data**
 - Run GLINT blind on a real SFX dataset you know and sanity-check the cell + merge vs cctbx.xfel/DIALS.
 - Extend the `--fromfile` → CrystFEL-refine → `partialator` merge to more proteins beyond ProK/lysozyme.
-- Exercise the LUTE `GLINTIndexer` task in a real SFX DAG (`lute/`), where LUTE's CrystFEL builds lack FFBIDX.
+- Exercise the LUTE `GLINTIndexer` task in a real SFX DAG (`lute/`); LUTE's CrystFEL builds lack FFBIDX, and
+  GLINT also indexes blind, which FFBIDX does not.
 
 **Streaming driver** (§3, the fourth path)
 - Measure `tiers=` for `effort=` at another batch size or another GPU (the shipped table is B=120 on an A100)

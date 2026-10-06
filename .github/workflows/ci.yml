@@ -335,6 +335,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cli_dense_flags.py
 
+      # Can CrystFEL read the DEFAULT stream (glint/stream.py::write_stream, glint_cli without --integrate)?
+      # The only CI step asserting on that writer's bytes: geometry block, `--- Begin crystal`, `indexed_by =
+      # file` (not `glint`, which CrystFEL 0.10.2 rejects), panel names that exist in the .geom. With
+      # stream.py reverted to `indexed_by = glint` every other step here stays green. Its second layer runs
+      # process_hkl on the output; this runner has no CrystFEL, so that layer prints SKIP and the structural
+      # layer is what CI checks. numpy only.
+      - name: experiments/test_stream_crystfel.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_stream_crystfel.py
+
       # ~50s, by far the slowest step here: it refines over 540 synthetic frames. Kept because
       # it is the only cover of the geometry-refinement solver, but it is the first candidate
       # to trim if this job gets tight.
@@ -445,6 +455,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_axis_standardizer.py
 
+      # `import fftindex` (the back-compat alias) must hand control back (review s7-04). The shim imports every
+      # glint submodule and catches only Exception; glint/test_first_index_per_group.py called sys.exit at module
+      # scope, so with torch installed the import ended the caller's program with status 0. On this torch-less
+      # runner that module fails on `import torch` first, so what catches the defect HERE is the source scan: no
+      # glint/ or fftindex/ module may exit at import time. The runtime layers run again in the torch-CPU job.
+      - name: experiments/test_import_alias.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_import_alias.py
+
       # The Miller-index box of every |q| <= qmax enumeration (predict._hkl_grid -> predict_spots,
       # HKLGrid; theoretical_unique; multishot.reference_lattice; alias_gate.tightness) must hold the
       # whole sphere for OBLIQUE cells. The box was bounded by qmax/|a*| instead of qmax*|a|, which
@@ -530,6 +549,13 @@ jobs:
       # crash, it silently changes WHICH candidates survive (glint_index.py::_first_index_per_group).
       - name: glint/test_first_index_per_group.py
         run: python -m glint.test_first_index_per_group
+
+      # ...and with torch present, importing that module (directly, or through `import fftindex`, which imports
+      # every glint submodule) must NOT run it: it once ended the importing program with status 0 (review s7-04).
+      # Also in the CPU job, where only the source-scan layer can see the defect.
+      - name: experiments/test_import_alias.py (torch installed)
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_import_alias.py
 
       # The N-best PREFIX contract -- index_blind_nbest(q, 10)[:3] == index_blind_nbest(q, 3), the
       # promise #145's cascade reuses one N-best call on -- checked on 3 real cxidb frames. It is

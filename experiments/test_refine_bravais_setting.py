@@ -201,7 +201,8 @@ def reduction_and_centering():
     M = np.diag([30., 60., 60.])
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        M_out, _, _, _ = refine_bravais(np.empty((0, 3)), M, "cubic", TOL_ABS)
+        g = spots(M, np.random.default_rng(7))
+        M_out, _, _, _ = refine_bravais(g, M, "cubic", TOL_ABS)
     warned = any(issubclass(x.category, RuntimeWarning) for x in w)
     check("incompatible centering is refused for a cubic request",
           warned and np.array_equal(M_out, M),

@@ -675,8 +675,8 @@ def _check_ring_dtype(frame, ring_dtype):
             f"StreamDriver: a {src} frame cannot be stored losslessly in the {ring_dtype} ring "
             f"(the constructor's dtype=, uint16 by default for raw ADU): the cast would truncate "
             f"fractions and clamp or wrap negative values before peak finding and integration. "
-            f"Construct StreamDriver(..., dtype=np.float32) for calibrated frames (det.calib is "
-            f"float32), or push frames in the ring's dtype.")
+            f"Construct StreamDriver(..., dtype=frame.dtype) to preserve this frame, or convert it "
+            f"explicitly to a dtype the ring can safely represent (dtype=np.float32 for det.calib).")
 
 
 class _PixelStore:

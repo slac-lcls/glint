@@ -254,6 +254,16 @@ _SCORE_SLACK = 0.05
 _MAX_INDEX = 4                   # conventional / primitive volume: P 1, A B C I 2, R (hex axes) 3, F 4
 _INDICES = {"monoclinic": (1, 2), "orthorhombic": (1, 2, 4), "tetragonal": (1, 2),
             "hexagonal": (1, 3), "trigonal": (1,), "cubic": (1, 2, 4)}
+_CENTERINGS = {
+    "monoclinic": {2: (((0.5, 0.5, 0.0),),)},
+    "orthorhombic": {2: (((0.5, 0.5, 0.0),), ((0.5, 0.0, 0.5),),
+                         ((0.0, 0.5, 0.5),), ((0.5, 0.5, 0.5),)),
+                     4: (((0.0, 0.5, 0.5), (0.5, 0.0, 0.5), (0.5, 0.5, 0.0)),)},
+    "tetragonal": {2: (((0.5, 0.5, 0.5),),)},
+    "hexagonal": {3: (((2 / 3, 1 / 3, 1 / 3), (1 / 3, 2 / 3, 2 / 3)),)},
+    "cubic": {2: (((0.5, 0.5, 0.5),),),
+              4: (((0.0, 0.5, 0.5), (0.5, 0.0, 0.5), (0.5, 0.5, 0.0)),)},
+}
 
 # coefficient vectors (in the reduced basis) of the candidate conventional axes, one per +-pair,
 # and every triple of them whose index |det| is 1..4 -- fixed, so computed once
@@ -283,18 +293,62 @@ def in_setting(M, system):
 
 
 def _reduced(M):
-    """A shortest-vector basis of the lattice of ``M`` (``buerger_reduce`` repeated until it stops
-    shortening), or ``M`` itself if a step does not return a basis of the same lattice."""
-    Mr = M
-    for _ in range(6):
+    """LLL-size-reduce ``M``, then apply Buerger reduction until it stops shortening."""
+    Mr = np.asarray(M, float).copy()
+    k = 1
+    while k < 3:
+        Bstar = np.empty_like(Mr)
+        mu = np.zeros((3, 3))
+        norms = np.zeros(3)
+        for i in range(3):
+            Bstar[:, i] = Mr[:, i] - sum(mu[i, j] * Bstar[:, j] for j in range(i))
+            norms[i] = Bstar[:, i] @ Bstar[:, i]
+            for j in range(i + 1, 3):
+                mu[j, i] = Mr[:, j] @ Bstar[:, i] / norms[i]
+        for j in range(k - 1, -1, -1):
+            q = int(np.rint(mu[k, j]))
+            if q:
+                Mr[:, k] -= q * Mr[:, j]
+                mu[k, :j] -= q * mu[j, :j]
+                mu[k, j] -= q
+                Bstar[:, k] = Mr[:, k] - sum(mu[k, i] * Bstar[:, i] for i in range(k))
+                norms[k] = Bstar[:, k] @ Bstar[:, k]
+                for i in range(k + 1, 3):
+                    mu[i, k] = Mr[:, i] @ Bstar[:, k] / norms[k]
+        if norms[k] >= (0.75 - mu[k, k - 1] ** 2) * norms[k - 1]:
+            k += 1
+        else:
+            Mr[:, [k, k - 1]] = Mr[:, [k - 1, k]]
+            k = max(k - 1, 1)
+
+    while True:
         Mn = buerger_reduce(Mr)
         if np.linalg.norm(Mn, axis=0).sum() >= np.linalg.norm(Mr, axis=0).sum() * (1 - 1e-12):
             break
-        U = np.linalg.solve(Mr, Mn)
-        if np.abs(U - np.rint(U)).max() > 1e-6 or abs(round(np.linalg.det(np.rint(U)))) != 1:
+        Un = np.linalg.solve(Mr, Mn)
+        Uni = np.rint(Un)
+        if np.abs(Un - Uni).max() > 1e-6 or abs(round(np.linalg.det(Uni))) != 1:
             break
         Mr = Mn
     return Mr
+
+
+def _centering_compatible(P, system, index):
+    """Whether ``P``'s index translations are a centering allowed for ``system``."""
+    if index == 1:
+        return True
+    expected = _CENTERINGS[system].get(index)
+    if expected is None:
+        return False
+    translations = set()
+    for n in itertools.product(range(index), repeat=3):
+        t = np.linalg.solve(P, n)
+        t -= np.floor(t + 1e-8)
+        translations.add(tuple(np.round(t, 6)))
+        if len(translations) == index:
+            break
+    return any(translations == {(0.0, 0.0, 0.0), *(tuple(np.round(t, 6)) for t in centering)}
+               for centering in expected)
 
 
 def conventional_settings(M, system, max_groups=3):
@@ -396,19 +450,23 @@ def conventional_settings(M, system, max_groups=3):
         same = (dots.max(2) >= np.cos(np.radians(_AXIS_TOL))).all(1)
         grp = cand[left[same & (score[cand[left]] <= _SCORE_RATIO * score[cand[b]] + _SCORE_SLACK)]]
         left = left[~same]
-        t = grp[np.lexsort((score[grp], _TRI_IDX[grp], l3[grp].sum(1)))[0]]
-        s = int(s_best[t])
-        tri = [int(x) for x in _TRI[t]]
-        if system in ("tetragonal", "hexagonal", "monoclinic"):
-            p, q = sorted((x for x in range(3) if x != s), key=lambda x: l3[t, x])
-            order = [tri[p], tri[q], tri[s]] if system != "monoclinic" else [tri[p], tri[s], tri[q]]
-        else:
-            order = [tri[x] for x in np.argsort(l3[t], kind="stable")]
-        Mc = _fix_signs(V[:, order].copy(), system, near90_guard=False)
-        P = np.linalg.solve(M, Mc)
-        Pi = np.rint(P)
-        if np.abs(P - Pi).max() < 1e-6 and int(round(abs(np.linalg.det(Pi)))) == int(_TRI_IDX[t]):
-            out.append(Pi)
+        ordered = grp[np.lexsort((score[grp], _TRI_IDX[grp], l3[grp].sum(1)))]
+        for t in ordered:
+            s = int(s_best[t])
+            tri = [int(x) for x in _TRI[t]]
+            if system in ("tetragonal", "hexagonal", "monoclinic"):
+                p, q = sorted((x for x in range(3) if x != s), key=lambda x: l3[t, x])
+                order = [tri[p], tri[q], tri[s]] if system != "monoclinic" else [tri[p], tri[s], tri[q]]
+            else:
+                order = [tri[x] for x in np.argsort(l3[t], kind="stable")]
+            Mc = _fix_signs(V[:, order].copy(), system, near90_guard=False)
+            P = np.linalg.solve(M, Mc)
+            Pi = np.rint(P)
+            index = int(round(abs(np.linalg.det(Pi))))
+            if (np.abs(P - Pi).max() < 1e-6 and index == int(_TRI_IDX[t])
+                    and _centering_compatible(Pi, system, index)):
+                out.append(Pi)
+                break
     return out
 
 

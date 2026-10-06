@@ -293,7 +293,8 @@ def test_gate_field_renders_as_the_cli_flag():
     """glint_cli --gate (#216) was written for LUTE's known-cell runs, which without it write nearly
     every frame as a crystal. With no field here, a `gate: strict` YAML key never reached argv: LUTE
     wraps an undeclared key as a template parameter, so every LUTE run was `--gate none`."""
-    f = P.__fields__["gate"]
+    # the model class, whether P is the class itself or a helper that builds it (glint#235)
+    f = type(P(peaks="p.stream", out="o.stream")).__fields__["gate"]
     assert f.field_info.extra["rename_param"] == "gate"
     assert f.field_info.extra["flag_type"] == "--"
     assert P(peaks="p.stream", out="o.stream").gate is None, "must default to the CLI's own default"

@@ -114,7 +114,7 @@ def matches(rowvals, j):
         elif c == "panel":
             if got != want:
                 bad.append(f"{c}={got} want {want}")
-        elif abs(float(got) - want) > TOL[c]:
+        elif not np.isfinite(float(got)) or abs(float(got) - want) > TOL[c]:
             bad.append(f"{c}={got} want {want}")
     return bad
 

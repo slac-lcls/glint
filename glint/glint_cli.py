@@ -34,6 +34,9 @@ def _lattice_type_from_lattice_code(lattice_code):
             "t": "tetragonal", "h": "hexagonal", "c": "cubic"}.get(c[:1])
 
 
+_EVENT_AXIS = {"auto": None, "event": True, "panel": False}     # the CLI choice -> event_axis=
+
+
 def _sparse_only_flags(args, ap):
     """The options this run set that only the sparse front end (hybrid_index) reads. dense_index takes
     none of them -- no cell, no N-best list, no cascade, no escalation -- so a run that goes dense must
@@ -93,10 +96,13 @@ def _load_frames(args):
             if len(cv) < 6:
                 sys.exit("error: --ring-focus needs --cell \"a b c al be ga\"")
             rf = ([float(v) for v in cv[:6]], args.ring_qlow)
+        # The event-axis override reaches the peak finder too: the layout decision that picks what one event is
+        # must be the one --integrate makes on the same file (glint#148)
         frames, images = frames_from_cxi(args.images, args.geom, wavelength_A=args.wavelength,
                                          n=args.N, min_peaks=args.min_peaks, data_key=args.data_path,
                                          peakfinder=args.peakfinder, top_n=args.top_peaks, ring_focus=rf,
-                                         per_panel=getattr(args, "per_panel_finder", False))
+                                         per_panel=getattr(args, "per_panel_finder", False),
+                                         event_axis=_EVENT_AXIS[getattr(args, "event_axis", "auto")])
     else:
         geom = parse_geom(args.geom)
         if geom["wavelength_A"] is None and args.wavelength is None:
@@ -192,14 +198,15 @@ def main():
     ap.add_argument("--int-dmin", type=float, default=2.0, help="--integrate resolution limit in A (default 2.0)")
     ap.add_argument("--int-tol", type=float, default=0.006,
                     help="--integrate Ewald excitation-error gate in 1/A (stills partiality window; default 0.006)")
-    # Both --integrate routes face the layout question: --peaks through integrate_frames/_load_image,
-    # and --images through integrate_cxi, whose (event, ss, fs) reading is checked against the file
-    # by the same decision (an un-assembled panel stack is refused by name, glint#148).
+    # Every route that reads image pixels faces the layout question: --peaks --integrate through
+    # integrate_frames/_load_image, --images --integrate through integrate_cxi, and the --images peak
+    # finder (frames_from_cxi), all through the same decision (predict._leading_axis_is_events, glint#148).
     ap.add_argument("--event-axis", choices=("auto", "event", "panel"), default="auto",
-                    help="--integrate: what the leading axis of a 3-D image dataset means. "
+                    help="what the leading axis of a 3-D image dataset means. "
                          "auto (default) asks the file's per-event metadata and refuses to guess "
                          "when a multi-panel geometry makes it ambiguous; event|panel say so "
-                         "outright (glint#136; applies to both the --peaks and the --images route)")
+                         "outright (glint#136). Applies to --images peak finding and to --integrate "
+                         "on both the --peaks and the --images route")
     # The escape hatch for glint#131. Without it "median" is reachable only from Python, which makes
     # every intensity GLINT produced before that change irreproducible through the shipped routes.
     ap.add_argument("--bg-mode", choices=("clipmean", "median", "mean"), default="clipmean",
@@ -295,7 +302,7 @@ def main():
         if not args.geom:
             ap.error("--integrate requires --geom (and --image-dir for the frame images)")
         from glint.predict import write_stream_integrated
-        _ev_axis = {"auto": None, "event": True, "panel": False}[args.event_axis]
+        _ev_axis = _EVENT_AXIS[args.event_axis]
         if args.images:                                          # stacked .cxi: read data[event] directly (self-contained)
             from glint.predict import integrate_cxi
             from glint.lute_bridge import parse_geom as _pg
@@ -312,6 +319,9 @@ def main():
                                       data_key=args.data_path, event_axis=_ev_axis)
             _panels, _g = _pg(args.geom)
             _pnames = [p["name"] for p in _panels]
+            # integrate_cxi gives each integrated frame its own photon_eV / clen_m, and its chunk header
+            # uses those. These run-level values reach only the chunks with no integrated crystal;
+            # --wavelength wins over the .geom there too, as it does in integration (#241).
             write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
                                     photon_eV=_stream_photon_eV(args.wavelength, _g.get("photon_energy")),
                                     clen_m=_num(_g.get("clen"), 0.15), panel_names=_pnames)

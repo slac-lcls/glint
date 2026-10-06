@@ -47,6 +47,8 @@ STEPS = [
     "experiments/test_device_selection.py",
     "experiments/test_panel_stack_integrate.py",
     "experiments/test_integrate_cxi_layout.py",
+    "experiments/test_images_unassembled_cxi.py",
+    "experiments/test_stream_header_energy.py",
     "experiments/test_geom_data_key.py",
     "experiments/test_integrate_wavelength.py",
     "experiments/test_consensus_degenerate.py",
@@ -73,6 +75,8 @@ STEPS = [
     "experiments/test_per_lattice.py",
     "experiments/test_live_gate_floor.py",           # also in the torch-CPU job, where its real-frame half runs
     "experiments/test_stream_hit_ring.py",
+    "experiments/test_ring_dtype.py",
+    "experiments/test_flush_exception_safe.py",
     "experiments/test_stream_effort.py",
     "experiments/test_stream_driver_options_doc.py",
     "experiments/test_geom_bridge.py",

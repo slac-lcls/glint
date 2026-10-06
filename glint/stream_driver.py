@@ -670,6 +670,29 @@ def _conventional_tetragonal(M):
     return standardize_axes(M, laue="4/mmm")
 
 
+def _check_ring_dtype(frame, ring_dtype):
+    """Refuse a frame that a ``ring_dtype`` buffer cannot hold without losing data (raises TypeError).
+
+    The ring and the rescue-pixel store are preallocated at the constructor's ``dtype`` -- uint16 by
+    default, sized for raw ADU -- and ``buf[...] = frame`` casts silently. A calibrated float frame
+    lost its fractions and had its negatives clamped to 0 (float32) or wrapped to ~65535 (float64,
+    signed ints) before the peak finder saw it: 93 peaks instead of 6 on a pedestal-subtracted
+    sigma=1 frame, 0 of 30 planted spots on an int16 frame, and integrated intensities biased on the
+    pixels that survived. Both integer and float rings take only numpy "safe" casts (bool, uint8 and
+    uint16 into uint16); this rejects dtype-wide precision loss such as float64 into float32.
+    Decided on the dtype alone, so no pixel is read and a uint16 frame into the uint16 ring goes
+    through exactly as before."""
+    src = getattr(frame, "dtype", None)
+    src = np.dtype(src) if src is not None else np.asarray(frame).dtype
+    if not np.can_cast(src, ring_dtype, casting="safe"):
+        raise TypeError(
+            f"StreamDriver: a {src} frame cannot be stored losslessly in the {ring_dtype} ring "
+            f"(the constructor's dtype=, uint16 by default for raw ADU): the cast could lose "
+            f"precision or exceed the ring dtype's representable range before peak finding and integration. "
+            f"Construct StreamDriver(..., dtype=frame.dtype) to preserve this frame, or convert it "
+            f"explicitly to a dtype the ring can safely represent (dtype=np.float32 for det.calib).")
+
+
 class _PixelStore:
     """Detector frames kept past their batch for a LATER rescue (StreamDriver's rescue_pixels): the
     warm-up frames until the cell locks, the buffered misses until a relock. Keyed by arrival index.
@@ -679,7 +702,7 @@ class _PixelStore:
     then stays index-only, as it is without the store."""
 
     def __init__(self, cap, shape, dtype, xp):
-        self.xp = xp
+        self.xp, self.dtype = xp, np.dtype(dtype)
         self._buf = [xp.zeros(shape, dtype) for _ in range(int(cap))]
         self._free = list(range(len(self._buf)))
         self._at = OrderedDict()                      # ev -> (buffer index, src, pkq), oldest first
@@ -690,6 +713,7 @@ class _PixelStore:
 
     def put(self, ev, frame, src=None, pkq=None):
         """Copy `frame` in (device to device for a ring slot, one upload for a host array)."""
+        _check_ring_dtype(frame, self.dtype)          # warmup_batch hands host frames straight in
         if ev in self._at:
             self.release([ev])
         if not self._free:
@@ -866,6 +890,10 @@ class StreamDriver:
     other classes are merged in the setting the cell arrives in, so a known cell must be given in
     the setting its class assumes.
 
+    Ring dtype: `dtype` (uint16 by default, for raw ADU) must hold the pushed frames losslessly; use
+    dtype=np.float32 for calibrated frames (det.calib). push() raises TypeError on a frame the ring
+    would truncate, clamp or wrap -- e.g. any float or signed frame into the default ring.
+
     Adaptive effort: `effort=dict(rate_hz=..., n_gpu=1)` makes the known-cell search depth follow the hit rate
     (GPU time per hit = n_gpu / (rate x hit rate)) and spends what is left on deep, chance-controlled searches of
     the misses; decisions are taken at flush boundaries and logged (stats()["effort"], "effort" events). Off by
@@ -1040,6 +1068,7 @@ class StreamDriver:
             self.acc = MergeAccumulator(snr_bins, self.ops)
         self.n_pushed = self.n_indexed = self.n_integrated = 0
         self.n_gate_rejected = 0            # refused at ingest with no other cell to try (see _index_integrate)
+        self.n_flush_errors = self.n_flush_error_frames = 0     # flush() batches that raised (s2-03)
 
         # Live geometry refinement (opt-in, DIAGNOSTIC-only): pool per-frame predicted-vs-observed
         # residuals into a running (clen, beam-shift) correction, reported in stats()["geom_correction"].
@@ -1833,6 +1862,10 @@ class StreamDriver:
         picks = triage_order(counts, self.warm_topk, self.warm_floor)   # rank by peak count; skip low-signal
         sel = [k for k in picks if qmap[k] is not None]
         qs = [qmap[k] for k in sel]
+        if (self._warmup_buf is not None and getattr(self, "_pix", None) is not None
+                and frames is not None):
+            for k in sel:
+                _check_ring_dtype(frames[k], self.dtype)
         ev0 = self.n_pushed
         self.n_pushed += len(qmap); self.n_warmup += len(qs)
         if self._warmup_buf is not None:
@@ -1864,7 +1897,10 @@ class StreamDriver:
     def push(self, frame, src=None):
         """Ingest one detector frame (host numpy or already-device array). `src` = (image, event) or
         an image filename: where the frame came from, stamped on its .stream chunk instead of the
-        `stream_image` placeholder and the arrival index (event None = one image per file, no Event line)."""
+        `stream_image` placeholder and the arrival index (event None = one image per file, no Event line).
+        Raises TypeError, before any state changes, if the ring's dtype cannot hold `frame` losslessly
+        (see _check_ring_dtype): construct the driver with dtype=np.float32 for calibrated frames."""
+        _check_ring_dtype(frame, self.dtype)                 # covers _push_blind too: refuse, never cast lossily
         if self._blind:
             self._push_blind(frame, src=src); return
         slot = self._n
@@ -2249,10 +2285,13 @@ class StreamDriver:
                     self.n_low_confidence += 1
                     self.low_conf_frames.append((self._frame_no, qc))
             acc.add_frame(hkl[keep], I[keep], sig[keep], self._frame_no)
+            # Counted and numbered the moment it is merged, BEFORE the chunk is written: a write that
+            # raises (full disk) leaves the frame merged, so the next frame must not reuse its number
+            # and stats()["integrated"] must still count it (review of #242).
+            self.n_integrated += 1; self._frame_no += 1
             if self._writer is not None:
                 self._writer.write(self._stream_record(i, Mcan, pred, I, sig, pkI, bg, keep,
                                                        cell_id, frac, low_conf))
-            self.n_integrated += 1; self._frame_no += 1
             if self._events_on:                             # marker, not a terminal outcome: the frame's
                 rec = self._event_base(self._idx[i], "integrated", cell_id)      # `indexed` record precedes it
                 rec.update(slot=(None if retro else int(i)), n_pred=int(len(pred)), n_refl=int(keep.sum()),
@@ -2320,7 +2359,8 @@ class StreamDriver:
         if pred is None:                                    # index-only chunk (push_peaks/push_q): crystal, no reflections
             rows = dict(pred=None, I=None, sigma=None, peak=None, bg=None); fno = None
         else:
-            rows = dict(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep]); fno = self._frame_no
+            rows = dict(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep])
+            fno = self._frame_no - 1                        # advanced when the frame was merged, just before this
         src = self._src[i]
         if src is None:
             image, event = self.stream_image, self._idx[i]
@@ -2865,9 +2905,28 @@ class StreamDriver:
         self._watch = RunningConsensus(min_support=3, gap=2, adaptive=False)    # reset for the next change
 
     def flush(self):
-        """Index the resident batch, integrate each frame against its still-resident pixels."""
+        """Index the resident batch, integrate each frame against its still-resident pixels.
+
+        Exception-safe (review r2 s2-03): the ring is emptied even when the batch raises part-way (a
+        StreamWriter.write on a full disk, an on_event hook, an integrator error). Before, `_n` stayed at
+        B, so every later push() raised IndexError and a retried flush()/close() merged the prefix that
+        was already in `acc` a second time. Now the frames of the failed batch that were already merged
+        stay merged once, the rest of that batch is dropped, the failure is counted in
+        stats()["flush_errors"] and ["flush_error_frames"] (frames resident in a batch that raised), and
+        the exception propagates."""
         if self._blind or self._n == 0:                         # nothing to integrate without a cell
             return
+        n0 = self._n
+        try:
+            self._flush_batch()
+        except BaseException:
+            self.n_flush_errors += 1
+            self.n_flush_error_frames += n0       # resident in the batch that raised; some may be merged
+            raise
+        finally:
+            self._reset_ring()
+
+    def _flush_batch(self):
         slots = [i for i in range(self._n) if self._q[i] is not None]
         eff = self._eff
         if eff is not None:                                     # adaptive effort: (tier, deep) for THIS flush
@@ -2933,6 +2992,8 @@ class StreamDriver:
                     self._buffer_misses(remaining)
                 # hand over the cascade's blind solves so these frames are not indexed a second time
                 self._watchdog(remaining, cached_nbest)
+
+    def _reset_ring(self):
         self._n = 0
         self._q = [None] * self.B
         self._pk = [None] * self.B
@@ -2974,6 +3035,8 @@ class StreamDriver:
                  # must never be silent, and a rising count is the signal that the cell has drifted
                  # away from the sample (or that min_inlier_frac is set too high for this run).
                  gate_rejected=self.n_gate_rejected,
+                 flush_errors=getattr(self, "n_flush_errors", 0),          # flush() batches that raised (s2-03)
+                 flush_error_frames=getattr(self, "n_flush_error_frames", 0),
                  # alias-gate REFUSALS, in the broad sense: proposed locks that were NOT
                  # committed. Counted since glint#83 but never reported, so the one diagnostic
                  # that says "a cell was proposed and turned down" was invisible to anyone

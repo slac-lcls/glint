@@ -18,7 +18,7 @@ IndexGLINT:
     # gate: "strict"                              # with `cell`, set this: unset (= none) writes nearly every
     #                                              frame as a crystal (28% of mfx100848724 r51 vs ~1% for
     #                                              CrystFEL/cctbx). strict = >=10 and >=25% of peaks matched;
-    #                                              ~5% of dense lattice-free frames still pass. Not with `exp`.
+    #                                              cxidb-17 null: 6% overall; 22.8% below 60 peaks. Not with `exp`.
     mode: "auto"                                  # auto | sparse | dense
     nbest: 3
     device: "auto"

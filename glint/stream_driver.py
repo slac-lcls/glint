@@ -1862,7 +1862,8 @@ class StreamDriver:
         picks = triage_order(counts, self.warm_topk, self.warm_floor)   # rank by peak count; skip low-signal
         sel = [k for k in picks if qmap[k] is not None]
         qs = [qmap[k] for k in sel]
-        if getattr(self, "_pix", None) is not None and frames is not None:
+        if (self._warmup_buf is not None and getattr(self, "_pix", None) is not None
+                and frames is not None):
             for k in sel:
                 _check_ring_dtype(frames[k], self.dtype)
         ev0 = self.n_pushed

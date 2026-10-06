@@ -18,14 +18,17 @@ public release under the licence in `LICENSE.md`.
   #112); HNF sublattice enumeration corrected (#179).
 - Opt-in escalation: a deeper known-cell search on frames that still fail the gate, accepted only against the
   frame's own azimuth-scrambled copies, batched (#208, #211); opt-in best-matching candidate selection (#215).
-- `same_lattice` made symmetric (#197); `misorientation_deg` compares lattices, not bases (#207).
+- `same_lattice` made symmetric (#197); `misorientation_deg` compares lattices, not bases (#207); one Bravais-aware
+  axis standardizer for frames and the reference cell (#185).
 
 ### Known-cell engine
 - CUDA-graphed, then fully fused known-cell registration (`index_fused`) with on-device staging (#14, #16);
   candidate axis split across blocks (#167); fp32 working precision by default with `KC_FP=64` to restore fp64
   (#15, #209).
 - Full azimuth turn on oblique cells (#22); both handednesses seeded on oblique cells and the reference setting
-  recovered (#225, in flight at the tag — see the tag's own notes).
+  recovered (#225).
+- The coarse anchor-direction grid used only where it resolves the cell (L0·qmax ≤ 25), the full grid elsewhere
+  (#227); cached fp32 CUDA graphs keep the cell parameters they were captured against (#229).
 
 ### Streaming driver (`glint.stream_driver.StreamDriver`)
 - Device-resident ring: peak finding, batched indexing, integration against the still-resident pixels and a
@@ -37,27 +40,37 @@ public release under the licence in `LICENSE.md`.
   per-frame event trace and peaks-in ingest (#199); best-fit cell assignment (#204); per-lattice scoring of
   double hits (#206); ring slots for hits only and pixels kept for the retroactive rescues (#212); adaptive effort
   (`effort=`), the known-cell depth following the hit rate with a chance-controlled deep search on the misses
-  (#213); an opt-in chance floor on the live gate fitted on a lattice-free null (#214).
+  (#213); an opt-in chance floor on the live gate fitted on a lattice-free null (#214); alias-gate refusals reported
+  in `stats()` (#164).
 - Live detector-geometry refinement as a running accumulator, diagnostic only (#55); CrystFEL stream output with
   per-frame drift and provenance, observed peaks on request, per-frame completeness flag.
-- The committed recorder and two recorded replays with provenance (#199, #200, #202, #203, #205).
+- The committed recorder and two recorded replays with provenance (#199, #200, #201, #202, #203, #205); an empty
+  CrystFEL event id (`Event: //`) names no frame rather than a bad one (#228).
 
 ### Front ends, command line and pipelines
 - `glint` command: peaks + geometry, pre-bridged q, or raw images through GLINT's own peak finder; `--integrate`,
-  `--tofile` (#43), `--escalate` (#208), `--gate` (#216), `--select` (#215); solution files in the reference
-  cell's setting (#221).
+  `--tofile` (#43), `--escalate` (#208), `--gate` with an optional chance floor (#216, #224), `--select` (#215);
+  solution files in the reference cell's setting (#221).
+- Non-finite and zero-length q rows dropped wherever q enters an indexer (#226). `import glint` loads its public
+  names on first use, so NumPy-only submodules import without SciPy (#234); `h5py` declared as a dependency
+  (#169).
 - CrystFEL geometry bridge with one geometry core behind both entry points (#20, #25); the `data =` key forwarded
   to integration (#155); un-assembled multi-panel stacks integrated slab-locally (#157).
 - Peak finders: peakfinder8 with the absolute ADU floor and interior ASIC seams masked (#108, #127), peakfinder9,
-  and the adaptive dual-threshold finder with a fused one-pass reduction and sync-free labelling (#41, #51, #174).
+  and the adaptive dual-threshold finder with a fused one-pass reduction and sync-free labelling (#41, #51, #174);
+  masked and non-finite pixels take no part in the v4, pf9 and pf8 finders' arithmetic, and an opt-in per-panel
+  finder searches a multi-panel slab one panel at a time (#231, #232).
 - LUTE task `GLINTIndexer` with integration and a self-contained front end (#23), raw xtc as a third frame source
-  (#88), the activate-installation trap fixed (#141), and a measured status record (`lute/STATUS.md`).
+  (#88), the activate-installation trap fixed (#141), no default `executable` outside an installed copy
+  (#235), and a measured status record (`lute/STATUS.md`, #220).
 - xtc ingestion for LCLS-I and LCLS-II in one command, MPI-sharded, with a start-up geometry manifest (#47, #48,
-  #104, #105).
+  #104, #105); its `--integrate` predicts each event at its own wavelength, in CrystFEL's frame, on one detector
+  plane (#233).
 
 ### Integration and merge
 - Fused GPU box integration, bit-exact on detector dtypes (#17, #18); robust-mean background and event-aware
   integration (#142); non-positive intensities kept (#132).
+- The live merge refuses frames with no measured mean intensity and keeps I ≤ 0 (#230).
 - Symmetry-constrained refinement and a partiality merge model (#53, synthetic).
 
 ### Validation, numbers and reproducibility

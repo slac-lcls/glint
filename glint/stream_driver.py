@@ -687,8 +687,8 @@ def _check_ring_dtype(frame, ring_dtype):
     if not np.can_cast(src, ring_dtype, casting="safe"):
         raise TypeError(
             f"StreamDriver: a {src} frame cannot be stored losslessly in the {ring_dtype} ring "
-            f"(the constructor's dtype=, uint16 by default for raw ADU): the cast would truncate "
-            f"fractions and clamp or wrap negative values before peak finding and integration. "
+            f"(the constructor's dtype=, uint16 by default for raw ADU): the cast could lose "
+            f"precision or exceed the ring dtype's representable range before peak finding and integration. "
             f"Construct StreamDriver(..., dtype=frame.dtype) to preserve this frame, or convert it "
             f"explicitly to a dtype the ring can safely represent (dtype=np.float32 for det.calib).")
 

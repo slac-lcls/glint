@@ -1040,6 +1040,7 @@ class StreamDriver:
             self.acc = MergeAccumulator(snr_bins, self.ops)
         self.n_pushed = self.n_indexed = self.n_integrated = 0
         self.n_gate_rejected = 0            # refused at ingest with no other cell to try (see _index_integrate)
+        self.n_flush_errors = self.n_flush_error_frames = 0     # flush() batches that raised (s2-03)
 
         # Live geometry refinement (opt-in, DIAGNOSTIC-only): pool per-frame predicted-vs-observed
         # residuals into a running (clen, beam-shift) correction, reported in stats()["geom_correction"].
@@ -2249,10 +2250,13 @@ class StreamDriver:
                     self.n_low_confidence += 1
                     self.low_conf_frames.append((self._frame_no, qc))
             acc.add_frame(hkl[keep], I[keep], sig[keep], self._frame_no)
+            # Counted and numbered the moment it is merged, BEFORE the chunk is written: a write that
+            # raises (full disk) leaves the frame merged, so the next frame must not reuse its number
+            # and stats()["integrated"] must still count it (review of #242).
+            self.n_integrated += 1; self._frame_no += 1
             if self._writer is not None:
                 self._writer.write(self._stream_record(i, Mcan, pred, I, sig, pkI, bg, keep,
                                                        cell_id, frac, low_conf))
-            self.n_integrated += 1; self._frame_no += 1
             if self._events_on:                             # marker, not a terminal outcome: the frame's
                 rec = self._event_base(self._idx[i], "integrated", cell_id)      # `indexed` record precedes it
                 rec.update(slot=(None if retro else int(i)), n_pred=int(len(pred)), n_refl=int(keep.sum()),
@@ -2320,7 +2324,8 @@ class StreamDriver:
         if pred is None:                                    # index-only chunk (push_peaks/push_q): crystal, no reflections
             rows = dict(pred=None, I=None, sigma=None, peak=None, bg=None); fno = None
         else:
-            rows = dict(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep]); fno = self._frame_no
+            rows = dict(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep])
+            fno = self._frame_no - 1                        # advanced when the frame was merged, just before this
         src = self._src[i]
         if src is None:
             image, event = self.stream_image, self._idx[i]
@@ -2865,9 +2870,28 @@ class StreamDriver:
         self._watch = RunningConsensus(min_support=3, gap=2, adaptive=False)    # reset for the next change
 
     def flush(self):
-        """Index the resident batch, integrate each frame against its still-resident pixels."""
+        """Index the resident batch, integrate each frame against its still-resident pixels.
+
+        Exception-safe (review r2 s2-03): the ring is emptied even when the batch raises part-way (a
+        StreamWriter.write on a full disk, an on_event hook, an integrator error). Before, `_n` stayed at
+        B, so every later push() raised IndexError and a retried flush()/close() merged the prefix that
+        was already in `acc` a second time. Now the frames of the failed batch that were already merged
+        stay merged once, the rest of that batch is dropped, the failure is counted in
+        stats()["flush_errors"] and ["flush_error_frames"] (frames resident in a batch that raised), and
+        the exception propagates."""
         if self._blind or self._n == 0:                         # nothing to integrate without a cell
             return
+        n0 = self._n
+        try:
+            self._flush_batch()
+        except BaseException:
+            self.n_flush_errors += 1
+            self.n_flush_error_frames += n0       # resident in the batch that raised; some may be merged
+            raise
+        finally:
+            self._reset_ring()
+
+    def _flush_batch(self):
         slots = [i for i in range(self._n) if self._q[i] is not None]
         eff = self._eff
         if eff is not None:                                     # adaptive effort: (tier, deep) for THIS flush
@@ -2933,6 +2957,8 @@ class StreamDriver:
                     self._buffer_misses(remaining)
                 # hand over the cascade's blind solves so these frames are not indexed a second time
                 self._watchdog(remaining, cached_nbest)
+
+    def _reset_ring(self):
         self._n = 0
         self._q = [None] * self.B
         self._pk = [None] * self.B
@@ -2974,6 +3000,8 @@ class StreamDriver:
                  # must never be silent, and a rising count is the signal that the cell has drifted
                  # away from the sample (or that min_inlier_frac is set too high for this run).
                  gate_rejected=self.n_gate_rejected,
+                 flush_errors=getattr(self, "n_flush_errors", 0),          # flush() batches that raised (s2-03)
+                 flush_error_frames=getattr(self, "n_flush_error_frames", 0),
                  # alias-gate REFUSALS, in the broad sense: proposed locks that were NOT
                  # committed. Counted since glint#83 but never reported, so the one diagnostic
                  # that says "a cell was proposed and turned down" was invisible to anyone

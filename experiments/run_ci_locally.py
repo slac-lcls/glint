@@ -48,6 +48,7 @@ STEPS = [
     "experiments/test_panel_stack_integrate.py",
     "experiments/test_integrate_cxi_layout.py",
     "experiments/test_images_unassembled_cxi.py",
+    "experiments/test_stream_header_energy.py",
     "experiments/test_geom_data_key.py",
     "experiments/test_integrate_wavelength.py",
     "experiments/test_consensus_degenerate.py",
@@ -74,11 +75,13 @@ STEPS = [
     "experiments/test_per_lattice.py",
     "experiments/test_live_gate_floor.py",           # also in the torch-CPU job, where its real-frame half runs
     "experiments/test_stream_hit_ring.py",
+    "experiments/test_flush_exception_safe.py",
     "experiments/test_stream_effort.py",
     "experiments/test_stream_driver_options_doc.py",
     "experiments/test_geom_bridge.py",
     "experiments/test_nonfinite_q_rows.py",          # also in the torch-CPU job, where its engine half runs
     "experiments/test_cli_smoke.py",
+    "experiments/test_stream_crystfel.py",           # its process_hkl layer SKIPs without CrystFEL
     "experiments/test_geom_refine.py",
     # Skips without a GPU and exits 0 (glint#123). Running it here is still worth the second it
     # costs: the module body resolves HKLGrid/_panel_geom/recip_from_M/cell_to_Ar at import, so a
@@ -93,6 +96,8 @@ STEPS = [
     "experiments/test_same_lattice_symmetry.py",
     "experiments/test_gate_project.py",
     "experiments/test_axis_standardizer.py",
+    "experiments/test_import_alias.py",              # also in the torch-CPU job; its child processes are
+                                                     # not under the block here, so they see local torch
     "experiments/test_hkl_box.py",
     "experiments/bench_integrate_fused.py",
     # torch-CPU job: runs for real there (CPU torch), SKIPs here with torch blocked.

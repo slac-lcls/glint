@@ -27,6 +27,8 @@ import re
 
 import numpy as np
 
+from glint.geom import is_bad_region
+
 _RCOL = "   h    k    l          I   sigma(I)   peak  background  fs/px  ss/px panel\n"
 
 # Enough of a detector for the reader to accept the stream when the caller has no .geom -- the xtc
@@ -51,6 +53,8 @@ def panel_bounds(geom_text):
     """[(name, min_fs, max_fs, min_ss, max_ss), ...] from a .geom's text, or [] if there is none."""
     b = {}
     for name, key, val in _PANEL_KEY.findall(geom_text or ""):
+        if is_bad_region(name):                 # `badregionA/min_fs ...` bounds a bad region, not a panel
+            continue
         b.setdefault(name, {})[key] = int(val)
     return [(n, d["min_fs"], d["max_fs"], d["min_ss"], d["max_ss"])
             for n, d in b.items() if len(d) == 4]
@@ -79,6 +83,8 @@ def _origin_panel(geom_text, default="p0"):
         return default
     bounds = {}
     for name, key, val in _PANEL_KEY.findall(geom_text):
+        if is_bad_region(name):                 # a bad region is never the panel a row belongs to
+            continue
         bounds.setdefault(name, {})[key] = int(val)
     for name, b in bounds.items():
         if len(b) == 4 and b["min_fs"] <= 0 <= b["max_fs"] and b["min_ss"] <= 0 <= b["max_ss"]:

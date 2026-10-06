@@ -4,11 +4,11 @@ A drop-in alternative to `CrystFELIndexer` in the LUTE SFX DAG:
 
     PeakFinderSFX -> [GLINTIndexer] -> StreamFileConcatenator -> PartialatorMerger -> HKLManipulator
 
-**Why GLINT in LUTE.** None of LUTE's bundled CrystFEL builds (0.10.2 default ... 0.12.0) are compiled
-with FFBIDX -- `indexamajig --indexing=ffbidx` errors "compiled without FFBIDX support". So GPU
-fast-feedback-style indexing is simply *unavailable* in LUTE today. GLINT fills that gap: GPU blind
-indexing + cross-frame consensus, ~10^2-10^3x faster, emitting the same CrystFEL `.stream` format the
-rest of the DAG consumes.
+**Why GLINT in LUTE.** The CrystFEL builds LUTE runs lack FFBIDX: 0.10.2 (LUTE's default) predates
+it, and 0.12.0 and 0.13.0 report "compiled without FFBIDX support". S3DF's separate fast-feedback build
+(`/sdf/group/lcls/ds/tools/crystfel-fast-feedback-indexer`) is not one LUTE's tasks use. GLINT adds GPU
+blind indexing + cross-frame consensus, ~10^2-10^3x faster, emitting the same CrystFEL `.stream` format
+the rest of the DAG consumes.
 
 ## What is validated
 
@@ -68,8 +68,10 @@ raw-xtc route has no gate, and the model rejects `gate` with `exp`.
 ## Install
     ./install_into_lute.sh [/path/to/lute_new/lute]     # default ~/git/lute_new/lute
 Copies `glint_index.py` -> `lute/io/models/`, exports it, and registers
-`GLINTIndexer = Executor("IndexGLINT")` in `managed_tasks.py`. Edit `executable` in `glint_index.py`
-(or `glint_launch.sh`) if the GLINT repo path differs. GLINTIndexer runs on a **GPU partition** (see
+`GLINTIndexer = Executor("IndexGLINT")` in `managed_tasks.py`. The installed copy's default
+`executable` is this checkout's `glint_launch.sh`; if the checkout moves, inspect the generated
+path change and re-run the installer with `--force`, or set `executable` in the config. The repo copy has no default, so a copy made by hand fails validation
+until `executable` is set. GLINTIndexer runs on a **GPU partition** (see
 `glint_dag.yaml`) and the launcher activates the GLINT torch env.
 
 ## Run (mirrors the standard SFX functional test)

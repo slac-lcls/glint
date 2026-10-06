@@ -37,6 +37,31 @@ def _lattice_type_from_lattice_code(lattice_code):
 _EVENT_AXIS = {"auto": None, "event": True, "panel": False}     # the CLI choice -> event_axis=
 
 
+def _num(v, default):
+    """float(v), or ``default`` when v is absent or not a number. An HDF5 path such as
+    ``/LCLS/photon_energy_eV`` is the per-shot form of a .geom energy or distance."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
+def _stream_photon_eV(wavelength_A, geom_energy, geom_wavelength_A=None):
+    """The run-level ``photon_energy_eV`` an integrated stream is stamped with: the energy its spots
+    were PREDICTED at. --wavelength overrides the .geom for indexing and for prediction, so it does
+    here too. Without it: a literal .geom photon_energy (as before), then the .geom's literal
+    wavelength, and only then the 9392.7 placeholder."""
+    from glint.lute_bridge import HC_EV_A
+    if wavelength_A:
+        return HC_EV_A / wavelength_A
+    e = _num(geom_energy, None)
+    if e is not None:
+        return e
+    if geom_wavelength_A:
+        return HC_EV_A / geom_wavelength_A
+    return 9392.7
+
+
 def _load_frames(args):
     """Return (frames [list of (N,3) q in 1/A], images [list of {image,event}])."""
     from glint.geom import clean_frames, parse_geom, read_crystfel_peaks, peaks_to_q
@@ -85,7 +110,9 @@ def main():
                                       "-- self-contained GPU front end (needs --geom)")
     src.add_argument("--qframes", help="pre-bridged q-vector FRAME blocks (1/A)")
     ap.add_argument("--geom", help="CrystFEL .geom (with --peaks or --images)")
-    ap.add_argument("--wavelength", type=float, help="wavelength in A (overrides .geom)")
+    ap.add_argument("--wavelength", type=float,
+                    help="wavelength in A (overrides .geom): used for indexing, for --integrate's spot "
+                         "prediction and for the integrated stream's photon_energy_eV")
     ap.add_argument("--cell", nargs="+", metavar="V",
                     help='known cell (skip consensus): one quoted string "a b c al be ga" OR six '
                          'space-separated values a b c al be ga (both accepted, e.g. for LUTE which '
@@ -250,26 +277,26 @@ def main():
                                       data_key=args.data_path, event_axis=_ev_axis)
             _panels, _g = _pg(args.geom)
             _pnames = [p["name"] for p in _panels]
-            def _f(v, d):
-                try:
-                    return float(v)
-                except (TypeError, ValueError):
-                    return d
             write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
-                                    photon_eV=_f(_g.get("photon_energy"), 9392.7), clen_m=_f(_g.get("clen"), 0.15),
-                                    panel_names=_pnames)
+                                    photon_eV=_stream_photon_eV(args.wavelength, _g.get("photon_energy")),
+                                    clen_m=_num(_g.get("clen"), 0.15), panel_names=_pnames)
         else:                                                    # per-file images (legacy detectors)
             from glint.predict import integrate_frames
             from glint.geom import parse_geom
             geomd = parse_geom(args.geom); gg = geomd.get("global", {})
+            # Predict at the wavelength the frames were INDEXED at: _load_frames handed --wavelength to
+            # peaks_to_q, and integrate_frames resolves it against the .geom the same way. Leaving it out
+            # crashed on an HDF5-path .geom photon_energy and silently integrated at the .geom energy
+            # when --wavelength overrode a literal one.
             nint, tot = integrate_frames(results, geomd, image_dir=args.image_dir,
                                          data_path=args.data_path,          # None -> the .geom 'data =' key (glint#143)
                                          dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
-                                         event_axis=_ev_axis)
+                                         event_axis=_ev_axis, wavelength_A=args.wavelength)
             _pnames = list(geomd.get("panels", {}).keys())
             write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
-                                    photon_eV=float(gg.get("photon_energy", 9392.7)), clen_m=float(gg.get("clen", 0.15)),
-                                    panel_names=_pnames or None)
+                                    photon_eV=_stream_photon_eV(args.wavelength, gg.get("photon_energy"),
+                                                                geomd["wavelength_A"]),
+                                    clen_m=_num(gg.get("clen"), 0.15), panel_names=_pnames or None)
     else:
         # the .geom is what makes the stream readable at all -- see stream.write_stream
         write_stream(results, args.out,

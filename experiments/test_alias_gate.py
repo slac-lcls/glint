@@ -203,8 +203,7 @@ def _still_q(M, rng, n=120, qmax=0.30):
     1, and the pooled-input failure this file tests for cannot be reproduced (nodes here ~1.7e4 vs 120
     peaks a frame, which is the real ratio's order)."""
     Minv = np.linalg.inv(M)
-    rlen = np.sqrt((Minv ** 2).sum(1))
-    hb = np.ceil(qmax / np.maximum(rlen, 1e-12)).astype(int)
+    hb = np.ceil(qmax * np.linalg.norm(M, axis=0)).astype(int)    # |h_i| <= qmax*|M[:,i]|, any basis
     out = []
     while sum(len(o) for o in out) < n:
         H = np.column_stack([rng.integers(-hb[i], hb[i] + 1, 4 * n) for i in range(3)]).astype(float)

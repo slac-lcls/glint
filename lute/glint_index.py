@@ -1,6 +1,7 @@
 """LUTE task-parameters model for the GLINT GPU indexer -- a drop-in alternative to CrystFELIndexer
 in the SFX DAG:  PeakFinderSFX -> [IndexGLINT] -> StreamFileConcatenator -> PartialatorMerger.
-(PeakFinderSFX is optional: set `images` and GLINT peak-finds the raw .cxi on the GPU itself.)
+(PeakFinderSFX is optional: set `images` and GLINT peak-finds the raw .cxi itself -- on the host
+CPU with numpy/scipy, not on the GPU.)
 
 MERGEABILITY: the default GLINT stream is ORIENTATION-ONLY -- every reflection carries placeholder
 I=0/sigma=0. To merge you must pick one of `integrate: true` (GLINT predicts and box-integrates its
@@ -50,8 +51,9 @@ class IndexGLINTParameters(ThirdPartyParameters):
     )
     images: Optional[str] = Field(
         None,
-        description="ALTERNATIVE to `peaks`: raw detector .cxi (or a .list of them). GLINT peak-finds "
-                    "on the GPU itself, so PeakFinderSFX can be dropped from the DAG. Mutually "
+        description="ALTERNATIVE to `peaks`: raw detector .cxi (or a .list of them). GLINT takes the "
+                    "peaks itself (see `peakfinder`), so PeakFinderSFX can be dropped from the DAG; "
+                    "v4/pf9 peak-find on the host CPU (numpy/scipy), not on the GPU. Mutually "
                     "exclusive with `peaks`.",
         flag_type="--", rename_param="images",
     )
@@ -208,11 +210,15 @@ class IndexGLINTParameters(ThirdPartyParameters):
         flag_type="--", rename_param="out", is_result=True,
     )
     cell: Optional[str] = Field(
-        None, description='Known unit cell "a b c al be ga" (else fully-blind cross-frame consensus).',
+        None, description='Known unit cell "a b c al be ga" (else fully-blind cross-frame consensus). '
+                          'Sparse front end only: mode "dense" refuses it, and mode "auto" stays sparse '
+                          'when it is set.',
         flag_type="--", rename_param="cell",
     )
     mode: str = Field(
-        "auto", description="Front end: auto | sparse (SFX stills) | dense (rotation clouds).",
+        "auto", description="Front end: auto | sparse (SFX stills) | dense (rotation clouds; "
+                            "self-indexes each frame, so it refuses cell, a non-default nbest and "
+                            "cascade).",
         flag_type="--", rename_param="mode",
     )
     nbest: PositiveInt = Field(
@@ -263,10 +269,11 @@ class IndexGLINTParameters(ThirdPartyParameters):
     # ---- integration: emit REAL I/sigma so the stream goes straight to partialator ----------------
     # Without these the stream carries placeholder intensities and only the `tofile` -> CrystFEL
     # handoff yields a mergeable dataset. With `integrate` GLINT predicts and box-integrates its own
-    # reflections (GPU-fused; the whole-frame float64 upcast that used to dominate is gone), so the DAG
-    # can skip indexamajig entirely. TRADE-OFF: CrystFEL's prediction refinement imposes the lattice
-    # symmetry and still merges better -- prefer `tofile` when merge quality is what matters, and
-    # `integrate` when a CrystFEL-free GPU pipeline is what matters.
+    # reflections (host numpy on this route -- the fused GPU integrator is StreamDriver's; the
+    # whole-frame float64 upcast that used to dominate is gone), so the DAG can skip indexamajig
+    # entirely. TRADE-OFF: CrystFEL's prediction refinement imposes the lattice symmetry and still
+    # merges better -- prefer `tofile` when merge quality is what matters, and `integrate` when a
+    # CrystFEL-free pipeline is what matters.
     integrate: bool = Field(
         False,
         description="Predict + integrate GLINT's own reflections and write real I/sigma into the "

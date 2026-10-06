@@ -141,7 +141,7 @@ that does not point at its cause:
   [glint#129](https://github.com/slac-lcls/glint/issues/129), where it is a confound on the
   route-comparison numbers.)
 
-## CrystFEL-free merge: integrate on the GPU
+## CrystFEL-free merge: native integrate
 Set `integrate: true` and GLINT predicts + box-integrates its own reflections, writing real I/sigma
 straight into the stream -- no `indexamajig` step. Needs image data: with `peaks` also set
 `image_dir`; with `images` the frames are already at hand.
@@ -152,17 +152,20 @@ straight into the stream -- no `indexamajig` step. Needs image data: with `peaks
     int_tol: 0.002    # the model's default; the CLI's 0.006 over-predicts (CC1/2 0.04 vs 0.28)
 
 The integration itself is cheap: the whole-frame float64 upcast that used to dominate it is gone
-(~105x on a 16 Mpix frame), and what remains is a gather over the predicted boxes. That gather runs
-on the host in numpy on this route — the fused GPU box-integration lives on the streaming driver's
-device path, not here. **Trade-off, stated as what is actually known:** `tofile` buys CrystFEL's
+(~105x on a 16 Mpix frame), and what remains is a gather over the predicted boxes. Prediction and
+that gather run on the host in numpy on this route — the fused GPU box-integration lives on the
+streaming driver's device path, not here. **Trade-off, stated as what is actually known:** `tofile` buys CrystFEL's
 prediction refinement, which imposes the lattice symmetry; `integrate` buys a pipeline with no
 CrystFEL dependency and, on the one comparison run, ~5x the observations per crystal. Their merge
 quality has NOT been separated -- glint#129's head-to-head used unmatched integration settings, and
 once matched the CC\* difference closed. Do not pick one expecting a quality win.
 
 ## Self-contained front end: drop FindPeaksSFX
-Set `images` (raw `.cxi` or a `.list`) instead of `peaks` and GLINT peak-finds on the GPU itself, so
-the DAG loses its 73-core CPU peak-finding node. `glint_dag_images.yaml` is that DAG.
+Set `images` (raw `.cxi` or a `.list`) instead of `peaks` and GLINT takes the peaks itself, so the
+DAG loses its separate FindPeaksSFX node. `glint_dag_images.yaml` is that DAG. With `peakfinder: v4`
+or `pf9` the peak-finding runs on the host CPU of the GLINT node (numpy/scipy, one frame at a time
+in one process), not on the GPU and not spread over the 73 cores the FindPeaksSFX node had; budget
+the run's time for that. `stored` finds no peaks: it reuses the ones already in the `.cxi`.
 
     images: "{{ work_dir }}/run.cxi"
     peakfinder: "stored"   # v4 | pf9 | stored -- `stored` reuses the .cxi's own peakfinder8 peaks

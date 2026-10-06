@@ -346,9 +346,25 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_nonfinite_q_rows.py
 
+      # Reflection-row column order of the stream writers: one planted value per column, read back by
+      # position the way CrystFEL reads it and by the header's names; write_stream_integrated and
+      # StreamWriter byte-identical; the column header matches CrystFEL's. Swapping I and sigma(I)
+      # in predict._write_chunk passed every other step here (review s8-01).
+      - name: experiments/test_stream_columns.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_stream_columns.py
+
       - name: experiments/test_cli_smoke.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_cli_smoke.py
+
+      # glint_cli and the dense front end, which reads no cell: --mode dense refuses --cell and the other
+      # sparse-only options before loading a frame; --mode auto stays sparse when --cell is given and
+      # names what it ignores when it picks dense (review s8-04). Front ends replaced by recorders
+      # (they need torch); the CLI's own argument handling and dispatch run for real.
+      - name: experiments/test_cli_dense_flags.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_cli_dense_flags.py
 
       # Can CrystFEL read the DEFAULT stream (glint/stream.py::write_stream, glint_cli without --integrate)?
       # The only CI step asserting on that writer's bytes: geometry block, `--- Begin crystal`, `indexed_by =

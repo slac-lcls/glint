@@ -94,7 +94,7 @@ LATTICES = [            # name, conventional cell, centring, system
 N_ORI = 3
 TOL_ABS = 0.02            # integrate_cxi's default sym_refine_tol
 SKEW = np.array([[1., 1, 0], [0, 1, 1], [0, 0, 1]])                 # unimodular, not reduced
-LEFT = np.array([[0., 1, 0], [1, 0, 0], [0, 0, 1]]) @ np.diag([1., 1, -1])   # swap a,b; negate c: det -1
+LEFT = np.array([[0., 1, 0], [1, 0, 0], [0, 0, 1]])   # swap a,b: reverse handedness (det -1)
 
 
 def spots(Mp, rng, dmin=2.5, wavelength=1.3, n=80, pos_sigma=1e-4):
@@ -189,6 +189,25 @@ def refusals():
               f"warned={warned} unchanged={np.array_equal(M_out, M)}")
 
 
+def reduction_and_centering():
+    """Large integer shears reduce correctly, and a wrong centering cannot mimic cubic symmetry."""
+    M = 60.0 * np.array([[1., 50, 0], [0, 1, 0], [0, 0, 1]])
+    P = refine_sym.conventional_setting(M, "cubic")
+    check("large-shear cubic basis is reduced to its conventional cell",
+          P is not None and abs(round(np.linalg.det(P))) == 1
+          and manifold_resid(M @ P, "cubic") < 1e-6,
+          None if P is None else (np.linalg.det(P), manifold_resid(M @ P, "cubic")))
+
+    M = np.diag([30., 60., 60.])
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        M_out, _, _, _ = refine_bravais(np.empty((0, 3)), M, "cubic", TOL_ABS)
+    warned = any(issubclass(x.category, RuntimeWarning) for x in w)
+    check("incompatible centering is refused for a cubic request",
+          warned and np.array_equal(M_out, M),
+          f"warned={warned} unchanged={np.array_equal(M_out, M)}")
+
+
 def search_sweep(n=8):
     """conventional_setting alone on random EXACT cells (no refine): the true conventional cell, every
     type, from the reduced cell, a non-reduced basis and a relabelled one."""
@@ -240,6 +259,8 @@ def main():
         run_lattice(name, cell, cen, system, 1000 + i)
     print("refusals")
     refusals()
+    print("reduction and centering")
+    reduction_and_centering()
     print("conventional_setting sweep")
     search_sweep()
     print()

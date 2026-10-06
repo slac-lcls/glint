@@ -1,5 +1,7 @@
 # GLINT — a fast GPU-native blind crystallography indexer
 
+Stefano Marchesini and Yuan Ni, SLAC National Accelerator Laboratory · [arXiv:2609.07722](https://arxiv.org/abs/2609.07722) · [how to cite](CITATION.cff)
+
 GLINT indexes sparse single-shot serial-crystallography (SFX) diffraction **blind** (no unit
 cell supplied) on the GPU. It proposes candidate real-space axes from a gridless objective,
 anneals cells, keeps the *N*-best hypotheses per frame, derives the unit cell across frames by

@@ -19,7 +19,8 @@ public release under the licence in `LICENSE.md`.
 - Opt-in escalation: a deeper known-cell search on frames that still fail the gate, accepted only against the
   frame's own azimuth-scrambled copies, batched (#208, #211); opt-in best-matching candidate selection (#215).
 - `same_lattice` made symmetric (#197); `misorientation_deg` compares lattices, not bases (#207); one Bravais-aware
-  axis standardizer for frames and the reference cell (#185).
+  axis standardizer for frames and the reference cell (#185); the Miller-index box bounds each index by qmax·|a_i|,
+  so oblique cells are enumerated whole in every |q| ≤ qmax search, the alias gate's included (#240).
 
 ### Known-cell engine
 - CUDA-graphed, then fully fused known-cell registration (`index_fused`) with on-device staging (#14, #16);
@@ -45,7 +46,9 @@ public release under the licence in `LICENSE.md`.
 - Live detector-geometry refinement as a running accumulator, diagnostic only (#55); CrystFEL stream output with
   per-frame drift and provenance, observed peaks on request, per-frame completeness flag.
 - The committed recorder and two recorded replays with provenance (#199, #200, #201, #202, #203, #205); an empty
-  CrystFEL event id (`Event: //`) names no frame rather than a bad one (#228).
+  CrystFEL event id (`Event: //`) names no frame rather than a bad one (#228); `flush()` empties the ring even when
+  a batch raises (#242); a frame the ring's dtype cannot hold losslessly is refused rather than cast (#245); merging
+  under a Laue class derived from the header reads the centering, so hexagonal + H/R is -3m1 (#248).
 
 ### Front ends, command line and pipelines
 - `glint` command: peaks + geometry, pre-bridged q, or raw images through GLINT's own peak finder; `--integrate`,
@@ -53,13 +56,18 @@ public release under the licence in `LICENSE.md`.
   solution files in the reference cell's setting (#221).
 - Non-finite and zero-length q rows dropped wherever q enters an indexer (#226). `import glint` loads its public
   names on first use, so NumPy-only submodules import without SciPy (#234); `h5py` declared as a dependency
-  (#169).
+  (#169); `import fftindex` no longer exits the interpreter (#239).
+- `--integrate` predicts at `--wavelength` and stamps that energy in the stream (#241); with `--images`, each stream
+  chunk states its own photon energy and camera length (#246). `--mode dense` refuses `--cell` and the other
+  sparse-only options instead of dropping them silently, and `--mode auto` with `--cell` stays sparse (#249).
 - CrystFEL geometry bridge with one geometry core behind both entry points (#20, #25); the `data =` key forwarded
-  to integration (#155); un-assembled multi-panel stacks integrated slab-locally (#157).
+  to integration (#155); un-assembled multi-panel stacks integrated slab-locally (#157), and read as one event per
+  stack by the `--images` peak finder too (#244); `.geom` bad-region blocks are bad regions, not panels, and bare
+  `x`/`-y` direction terms mean ±1 (#243).
 - Peak finders: peakfinder8 with the absolute ADU floor and interior ASIC seams masked (#108, #127), peakfinder9,
   and the adaptive dual-threshold finder with a fused one-pass reduction and sync-free labelling (#41, #51, #174);
   masked and non-finite pixels take no part in the v4, pf9 and pf8 finders' arithmetic, and an opt-in per-panel
-  finder searches a multi-panel slab one panel at a time (#231, #232).
+  finder searches a multi-panel slab one panel at a time (#231, #232); the LUTE task exposes `--gate` (#239).
 - LUTE task `GLINTIndexer` with integration and a self-contained front end (#23), raw xtc as a third frame source
   (#88), the activate-installation trap fixed (#141), no default `executable` outside an installed copy
   (#235), and a measured status record (`lute/STATUS.md`, #220).
@@ -71,7 +79,8 @@ public release under the licence in `LICENSE.md`.
 - Fused GPU box integration, bit-exact on detector dtypes (#17, #18); robust-mean background and event-aware
   integration (#142); non-positive intensities kept (#132).
 - The live merge refuses frames with no measured mean intensity and keeps I ≤ 0 (#230).
-- Symmetry-constrained refinement and a partiality merge model (#53, synthetic).
+- Symmetry-constrained refinement and a partiality merge model (#53, synthetic); `refine_bravais` puts any start
+  basis in the conventional setting before refining (#247).
 
 ### Validation, numbers and reproducibility
 - CPU test suites on GitHub Actions, mirrored locally by `experiments/run_ci_locally.py` (#107, #124, #165).

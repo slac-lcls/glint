@@ -1120,7 +1120,7 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
             # 9392.70 eV / 0.15 m when the .geom names HDF5 paths. clen_m is the .geom clen resolved
             # for this event, in metres, WITHOUT coffset: the quantity the CLI already wrote for a
             # literal .geom, so that output is unchanged.
-            r["clen_m"] = clen * scale
+r["clen_m"] = clen_m
             if eV_used is not None:
                 r["photon_eV"] = eV_used
             n += 1; tot += int(keep.sum())

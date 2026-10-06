@@ -86,6 +86,5 @@ public release under the licence in `LICENSE.md`.
   wording (#194, #195).
 
 ### Research scripts (not shipped in the wheel)
-- Powder auto-indexing package and pipeline (#177); FPGA-grade peak emission study (#189). The convergent-beam
-  (CBXD) scripts, data and results (#10, #13, #149) moved to a separate private repository before this release,
-  until the companion paper is out.
+- Powder auto-indexing package and pipeline (#177); FPGA-grade peak emission study (#189). Convergent-beam
+  (CBXD) research scripts and results (#10, #13, #149) are still present in the source tree.

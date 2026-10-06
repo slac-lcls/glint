@@ -149,6 +149,10 @@ def _write_cxi(h5py, path, frames):
     """A stacked .cxi of slab frames with SEAM_MASK as its mask."""
     with h5py.File(path, "w") as h:
         h["/entry_1/data_1/data"] = np.stack(frames)
+        # per-event metadata, as a real .cxi carries: with exactly two frames of this two-panel
+        # geometry, the leading axis would otherwise be ambiguous (events or panels), and
+        # frames_from_cxi refuses to guess (predict._leading_axis_is_events, glint#136/#148)
+        h["/LCLS/eventNumber"] = np.arange(len(frames))
         mk = np.zeros(SLAB, np.uint16); mk[~SEAM_MASK] = 1
         h["/entry_1/data_1/mask"] = mk
 

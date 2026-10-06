@@ -131,6 +131,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_integrate_cxi_layout.py
 
+      # ...and the --images PEAK FINDER (frames_from_cxi) makes that same decision: an un-assembled
+      # (panel, ss, fs) file is ONE event, each slab peak-found alone and mapped through its own panels
+      # (it was one "event" per panel, all through panel 0's geometry), a 4-D (event, panel, ss, fs) file
+      # is one frame per event (it crashed), and the unmappable cases are refused by name (glint#148).
+      - name: experiments/test_images_unassembled_cxi.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_images_unassembled_cxi.py
+
       # The --images --integrate stream states each frame's OWN photon energy and camera length. With
       # the .geom's photon_energy / clen given as HDF5 paths (the usual LCLS form) every chunk used to
       # say 9392.70 eV / 0.150 m, a placeholder, while integration used the per-event values; and

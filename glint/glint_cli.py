@@ -206,7 +206,7 @@ def main():
     if args.mode == "dense" and unread:
         them = "them" if len(unread) > 1 else "it"
         ap.error(f"--mode dense self-indexes every frame and does not read {', '.join(unread)}; "
-                 f"use --mode sparse (or auto) to apply {them}, or drop {them} to self-index")
+                 f"use --mode sparse to apply {them}, or drop {them} to self-index")
     if args.device == "cpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 

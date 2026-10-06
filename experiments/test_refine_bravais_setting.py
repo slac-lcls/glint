@@ -94,7 +94,7 @@ LATTICES = [            # name, conventional cell, centring, system
 N_ORI = 3
 TOL_ABS = 0.02            # integrate_cxi's default sym_refine_tol
 SKEW = np.array([[1., 1, 0], [0, 1, 1], [0, 0, 1]])                 # unimodular, not reduced
-LEFT = np.array([[0., 1, 0], [1, 0, 0], [0, 0, 1]]) @ np.diag([1., 1, -1])   # swap a,b; negate c: det -1
+LEFT = np.array([[0., 1, 0], [1, 0, 0], [0, 0, 1]])   # swap a,b: reverse handedness (det -1)
 
 
 def spots(Mp, rng, dmin=2.5, wavelength=1.3, n=80, pos_sigma=1e-4):

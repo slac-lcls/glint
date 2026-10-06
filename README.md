@@ -96,7 +96,8 @@ known-cell search on every frame keeping the candidate that matches the most pea
 finder on the pixels instead of reading a peak stream; on this route it runs on the host CPU (numpy/scipy),
 not the GPU (the GPU finder is used by the xtc route, `experiments/xtc_bridge`, and by `StreamDriver`).
 `--per-panel-finder` runs it once per panel of a multi-panel slab, so nothing it computes crosses a panel
-seam (off by default: a fixed cost per panel).
+seam (off by default: a fixed cost per panel); `--event-axis event|panel` says what a 3-D stack's leading axis
+is when the file itself cannot (default auto).
 
 ## LUTE pipeline
 

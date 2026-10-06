@@ -378,7 +378,12 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
         else:
             m = np.asarray(m[0] if m.ndim >= 3 else m)
         good = (m == int(str(glob.get("mask_good", "0")), 0))     # True = good pixel
-    masks = {k: (None if good is None else good[k] if (stack and good.ndim == 3) else good) for k in groups}
+    if stack and good is not None and good.ndim == 3 and good.shape[0] not in (1, nslab):
+        raise ValueError(
+            f"{cxi_path}:{mask_key} mask shape {good.shape} does not match the {nslab}-slab data stack")
+    masks = {k: (None if good is None else
+                 good[k] if (stack and good.ndim == 3 and good.shape[0] > 1) else
+                 good[0] if (stack and good.ndim == 3) else good) for k in groups}
     if ring_focus is not None:                                     # KNOWN-CELL: search only the powder-ring annuli
         cell6, qlow = ring_focus
         c0 = _meta(clen_spec, f, 0, 0.1); sc = clen_scale if clen_scale is not None else (0.001 if abs(c0) > 10 else 1.0)

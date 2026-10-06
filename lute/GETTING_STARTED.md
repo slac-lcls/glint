@@ -10,9 +10,9 @@ nothing else.
 > field name is additionally checked against the code by script. Tracks A2/A3 and Track B are
 > checked against the code but have **not** been executed here.
 
-> **Access.** `slac-lcls/glint` is private pending SLAC's institutional software-release review.
-> If you cannot clone it, ask Stefano Marchesini for repository access; there is no public
-> download yet.
+> **Access.** `slac-lcls/glint` is released under the licence in `LICENSE.md` (BSD-3-Clause with the
+> SLAC/DOE enhancements grant-back); see `CITATION.cff` for how to cite it and `CHANGELOG.md` for what
+> each tagged version contains.
 
 ---
 

@@ -22,8 +22,9 @@ Run GLINT blind on real SFX datasets and judge output against established indexe
   "when to reach for GLINT" table.
 
 ## 2. Productization (LCLS)  *(suggested lead: Mona / Stefano)*
-- **[#3]** Wire the LUTE `GLINTIndexer` task (`lute/`) into a real SFX DAG — it fills the gap that
-  LUTE's CrystFEL builds lack (none is compiled with FFBIDX).
+- **[#3]** Wire the LUTE `GLINTIndexer` task (`lute/`) into a real SFX DAG — it adds GPU blind indexing,
+  which LUTE's CrystFEL builds do not offer (they lack FFBIDX; S3DF's separate fast-feedback build is not one
+  LUTE's tasks use).
 - **Landed since August:** the `--integrate` path and the `--images` front end are exposed and smoke-tested;
   the streaming driver has a named cell registry and a per-frame event trace (#199), pixel and peaks-in replay
   under a CrystFEL geometry (#200, #203), a merge class chosen per sample (#186), an opt-in chance floor on the

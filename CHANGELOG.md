@@ -61,8 +61,7 @@ public release under the licence in `LICENSE.md`.
   masked and non-finite pixels take no part in the v4, pf9 and pf8 finders' arithmetic, and an opt-in per-panel
   finder searches a multi-panel slab one panel at a time (#231, #232).
 - LUTE task `GLINTIndexer` with integration and a self-contained front end (#23), raw xtc as a third frame source
-  (#88), the activate-installation trap fixed (#141), no default `executable` outside an installed copy
-  (#235), and a measured status record (`lute/STATUS.md`, #220).
+  (#88), the activate-installation trap fixed (#141), and a measured status record (`lute/STATUS.md`, #220).
 - xtc ingestion for LCLS-I and LCLS-II in one command, MPI-sharded, with a start-up geometry manifest (#47, #48,
   #104, #105); its `--integrate` predicts each event at its own wavelength, in CrystFEL's frame, on one detector
   plane (#233).

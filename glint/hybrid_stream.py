@@ -282,7 +282,8 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
             # computed in the leader's frame, so a pooled cloud of many orientations puts every
             # candidate at chance coverage and leaves the score a 1/V preference for smaller cells.
             # Measured on the cxidb-62 lock, that refused the TRUE cell (every half-volume derivative
-            # scored 1.5-1.8x the leader) while the same gate per frame confirmed it 30/40. The frame's
+            # scored 1.5-1.8x the leader) while the same gate per frame confirmed it 30/40 (both measured
+            # pre-#179, before the tightness box fix; see the alias_gate module docstring). The frame's
             # own agreeing N-best hypothesis IS the leader's lattice in that frame's orientation, so
             # the correct input is already in hand -- no re-indexing.
             voters = [(frames[i], next(c for c, _ in NB[i] if same_lattice(c, Mc)))

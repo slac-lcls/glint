@@ -8,15 +8,18 @@ I=0/sigma=0. To merge you must pick one of `integrate: true` (GLINT predicts and
 own reflections, writing real I/sigma) or the `tofile` -> indexamajig handoff. Feeding the default
 stream straight to partialator merges zeros.
 
-Why GLINT in LUTE: none of LUTE's bundled CrystFEL builds (0.10.2 default ... 0.12.0) are compiled
-with FFBIDX, so GPU fast-feedback-style indexing is simply unavailable via indexamajig. GLINT fills
-that gap -- GPU blind indexing + cross-frame consensus -- and emits the same CrystFEL `.stream` that
-ConcatenateStreamFiles / partialator already consume. For the best MERGE, set `tofile` (GLINT hands
+Why GLINT in LUTE: the CrystFEL builds in /sdf/group/lcls/ds/tools/crystfel (0.10.2, LUTE's default,
+to 0.13.0) are compiled without FFBIDX; CrystFEL's GPU fast-feedback indexer is only in the separate
+build under /sdf/group/lcls/ds/tools/crystfel-fast-feedback-indexer. GLINT adds GPU blind indexing
+with cross-frame consensus, and emits the same CrystFEL `.stream` that ConcatenateStreamFiles /
+partialator already consume. For the best MERGE, set `tofile` (GLINT hands
 CrystFEL the refined-merge solution file).
 
-INSTALL (see lute/README.md): copy to `lute/io/models/glint_index.py`, add
-`from .glint_index import *` to `lute/io/models/__init__.py`, and add
-`GLINTIndexer: Executor = Executor("IndexGLINT")` to `lute/managed_tasks.py`.
+INSTALL (see lute/README.md): `lute/install_into_lute.sh` copies this file to
+`lute/io/models/glint_index.py` with `executable` defaulting to the installing checkout's
+`lute/glint_launch.sh`, adds `from .glint_index import *` to `lute/io/models/__init__.py`, and adds
+`GLINTIndexer: Executor = Executor("IndexGLINT")` to `lute/managed_tasks.py`. This file itself has no
+default launcher: a copy made by hand fails validation until `executable` is set.
 """
 from typing import Any, Dict, Literal, Optional
 
@@ -36,8 +39,10 @@ class IndexGLINTParameters(ThirdPartyParameters):
         result_from_params: str = ""
 
     executable: str = Field(
-        "/sdf/home/s/smarches/git/glint/lute/glint_launch.sh",
-        description="Launcher that activates the GLINT GPU (torch) env and runs glint.glint_cli.",
+        "",
+        description="REQUIRED. Path to a GLINT checkout's lute/glint_launch.sh, the launcher that "
+                    "activates the GLINT GPU (torch) env and runs glint.glint_cli. install_into_lute.sh "
+                    "makes the installing checkout's launcher the default.",
         flag_type="",
     )
     peaks: str = Field(
@@ -314,6 +319,17 @@ class IndexGLINTParameters(ThirdPartyParameters):
             if legacy not in (None, ""):
                 values["tofile"] = legacy
         return values
+
+    @validator("executable", always=True)
+    def _executable_required(cls, executable: str) -> str:
+        """No launcher path is right for every installation, so the repo copy has no default (the
+        installer writes one). Fail at config time, naming what to set, rather than when the Executor
+        launches an empty command."""
+        if not executable:
+            raise ValueError(
+                "`executable` is required: the path to a GLINT checkout's lute/glint_launch.sh"
+            )
+        return executable
 
     @validator("exp", always=True)
     def _one_source(cls, exp: Optional[str], values: Dict[str, Any]) -> Optional[str]:

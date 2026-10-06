@@ -2250,10 +2250,13 @@ class StreamDriver:
                     self.n_low_confidence += 1
                     self.low_conf_frames.append((self._frame_no, qc))
             acc.add_frame(hkl[keep], I[keep], sig[keep], self._frame_no)
+            # Counted and numbered the moment it is merged, BEFORE the chunk is written: a write that
+            # raises (full disk) leaves the frame merged, so the next frame must not reuse its number
+            # and stats()["integrated"] must still count it (review of #242).
+            self.n_integrated += 1; self._frame_no += 1
             if self._writer is not None:
                 self._writer.write(self._stream_record(i, Mcan, pred, I, sig, pkI, bg, keep,
                                                        cell_id, frac, low_conf))
-            self.n_integrated += 1; self._frame_no += 1
             if self._events_on:                             # marker, not a terminal outcome: the frame's
                 rec = self._event_base(self._idx[i], "integrated", cell_id)      # `indexed` record precedes it
                 rec.update(slot=(None if retro else int(i)), n_pred=int(len(pred)), n_refl=int(keep.sum()),
@@ -2321,7 +2324,8 @@ class StreamDriver:
         if pred is None:                                    # index-only chunk (push_peaks/push_q): crystal, no reflections
             rows = dict(pred=None, I=None, sigma=None, peak=None, bg=None); fno = None
         else:
-            rows = dict(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep]); fno = self._frame_no
+            rows = dict(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=pkI[keep], bg=bg[keep])
+            fno = self._frame_no - 1                        # advanced when the frame was merged, just before this
         src = self._src[i]
         if src is None:
             image, event = self.stream_image, self._idx[i]

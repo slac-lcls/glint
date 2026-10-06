@@ -84,5 +84,45 @@ n_after = drv.acc.stats()["frames"]
 check("frames merged <= physical frames", n_after <= 4 and n_after <= ref4, f"{n_after} (physical 4)")
 check("ring is empty", drv._n == 0, drv._n)
 
+
+print("\n3. the stream writer raises once: the merged frame keeps its number and its count")
+# _integrate_one merges a frame into acc under _frame_no and then writes its chunk. When the counters moved
+# only after a successful write, a failed write left the merged frame unnumbered: the next frame reused its
+# frame_no (duplicate `glint/frame_no` in the stream) and stats()["integrated"] undercounted the merge.
+
+
+class _Writer:
+    """Stands in for StreamWriter: the second write fails; every other method is a no-op."""
+    def __init__(self):
+        self.n = 0
+
+    def write(self, rec):
+        self.n += 1
+        if self.n == 2:
+            raise OSError("disk full")
+
+    def __getattr__(self, name):                 # header, flush, close, n_chunks, ...
+        return (lambda *a, **k: None) if name != "n_chunks" and name != "n_indexed" else 0
+
+
+drv, _ = th._drv(B=B)
+drv._writer = _Writer()
+errs = []
+for f in FR[:12]:
+    try:
+        drv.push(f)
+    except OSError as e:
+        errs.append(e)
+try:
+    drv.close()
+except OSError as e:
+    errs.append(e)
+st = drv.stats()
+check("the write failed exactly once", len(errs) == 1, len(errs))
+check("every merged frame is counted: stats()['integrated'] == frames in acc",
+      st["integrated"] == st["frames"], f"integrated {st['integrated']} vs merged {st['frames']}")
+check("frame numbers advanced once per merged frame, so none is reused after the failed write",
+      drv._frame_no == st["frames"], f"_frame_no {drv._frame_no} vs merged {st['frames']}")
+
 print(f"\n{'FAILURES: ' + ', '.join(FAILS) if FAILS else 'ALL PASS'}")
 sys.exit(1 if FAILS else 0)

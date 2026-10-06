@@ -61,8 +61,9 @@ With `cell` that is nearly every frame, because a known-cell search returns the 
 for. LUTE's SFX test runs wrote 28% of mfx100848724 r51 as crystals where CrystFEL and cctbx index
 about 1%, and 98% of mfxl1038923 r58. `gate: "strict"` writes only frames with at least 10 peaks
 and at least 25% of their peaks matched; the rest are written as unindexed, and `integrate` and
-`tofile` skip them. It is not null-calibrated: about 5% of dense lattice-free frames still pass, so
-it reduces chance crystals rather than removing them. It applies to `peaks` and `images` only; the
+`tofile` skip them. It is not null-calibrated: in the cxidb-17 null, 6% pass overall and
+22.8% of copies below 60 peaks pass, so it reduces chance crystals rather than removing them. It
+applies to `peaks` and `images` only; the
 raw-xtc route has no gate, and the model rejects `gate` with `exp`.
 
 ## Install

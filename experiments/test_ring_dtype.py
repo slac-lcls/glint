@@ -12,8 +12,8 @@ read" example omits dtype, so following it with calibrated frames hit this direc
 
 The fix refuses instead of guessing: push() (both the known-cell and the blind warm-up path) and
 the rescue-pixel store raise TypeError, before any state changes, when the frame's dtype does not
-cast losslessly into the ring's (an integer ring takes numpy-"safe" casts only; a float ring takes
-any integer or float frame). The default stays uint16 -- it is what raw-ADU throughput and the
+cast losslessly into the ring's (both ring types take numpy-"safe" casts only). The default stays
+uint16 -- it is what raw-ADU throughput and the
 bit-exact benchmarks are measured with -- and a uint16 frame goes through exactly as before.
 
 What is pinned:
@@ -22,7 +22,7 @@ What is pinned:
     counted and the driver still usable afterwards;
   * the rescue-pixel store refuses the same, directly and through warmup_batch(rescue_pixels=...);
   * a float32 ring takes float32 frames (6 peaks on the sigma=1 frame, all 6 planted spots) and
-    float64 frames (same peaks as the float32 cast of the frame);
+    rejects float64 frames whose precision it cannot preserve;
   * UNCHANGED: a uint16 frame into the default ring lands bit-for-bit, its peak list is the finder's
     on the frame itself, and uint8/bool frames are still accepted.
 
@@ -174,6 +174,17 @@ except Exception as e:                               # noqa: BLE001
 check("warmup_batch(float32 frames, rescue_pixels=4) on the default ring -> TypeError",
       isinstance(exc, TypeError) and "dtype=np.float32" in str(exc),
       repr(exc) if exc else f"stored {len(drv._pix)} frames, truncated")
+check("...rejection leaves warm-up bookkeeping and rescue buffers untouched",
+      drv.n_pushed == 0 and drv.n_warmup == 0 and not drv._warmup_buf and not drv._warmup_ev
+      and len(drv._pix) == 0,
+      (drv.n_pushed, drv.n_warmup, drv._warmup_buf, drv._warmup_ev, len(drv._pix)))
+try:
+    drv.warmup_batch(frames.astype(np.uint16))
+    retry_exc = None
+except Exception as e:                               # noqa: BLE001
+    retry_exc = e
+check("...driver can retry a compatible warm-up batch", retry_exc is None and drv.n_pushed == len(frames),
+      repr(retry_exc) if retry_exc else drv.n_pushed)
 drv = driver(None, rescue_pixels=4, warmup_rescue=True, dtype=np.float32)
 try:
     drv.warmup_batch(frames)
@@ -193,8 +204,8 @@ push_outcome(d, fr32)
 check("float32 frame into a float32 ring: accepted, 6 peaks, all 6 planted spots",
       exc is None and npk32 == 6 and n_planted(d.finder.find(d._ring[0])) == 6, (repr(exc), npk32))
 exc64, npk64, _ = push_outcome(driver(dtype=np.float32), fr32.astype(np.float64))
-check("float64 frame into a float32 ring: accepted (precision, not data) with the same peaks",
-      exc64 is None and npk64 == npk32, (repr(exc64), npk64, npk32))
+check("float64 frame into a float32 ring: rejected because its dtype may lose precision",
+      isinstance(exc64, TypeError) and npk64 is None, (repr(exc64), npk64))
 
 # ---- UNCHANGED: raw uint16 into the default ring ------------------------------------------------
 print("raw uint16 frames into the default ring (unchanged)")

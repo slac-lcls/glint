@@ -664,14 +664,13 @@ def _check_ring_dtype(frame, ring_dtype):
     lost its fractions and had its negatives clamped to 0 (float32) or wrapped to ~65535 (float64,
     signed ints) before the peak finder saw it: 93 peaks instead of 6 on a pedestal-subtracted
     sigma=1 frame, 0 of 30 planted spots on an int16 frame, and integrated intensities biased on the
-    pixels that survived. An integer ring takes what it holds BY TYPE (numpy "safe": bool, uint8 and
-    uint16 into uint16); a float ring takes any integer or float frame ("same_kind": float64 into
-    float32 rounds precision, not data). Decided on the dtype alone, so no pixel is read and a
-    uint16 frame into the uint16 ring goes through exactly as before."""
+    pixels that survived. Both integer and float rings take only numpy "safe" casts (bool, uint8 and
+    uint16 into uint16); this rejects dtype-wide precision loss such as float64 into float32.
+    Decided on the dtype alone, so no pixel is read and a uint16 frame into the uint16 ring goes
+    through exactly as before."""
     src = getattr(frame, "dtype", None)
     src = np.dtype(src) if src is not None else np.asarray(frame).dtype
-    rule = "same_kind" if ring_dtype.kind == "f" else "safe"
-    if not np.can_cast(src, ring_dtype, casting=rule):
+    if not np.can_cast(src, ring_dtype, casting="safe"):
         raise TypeError(
             f"StreamDriver: a {src} frame cannot be stored losslessly in the {ring_dtype} ring "
             f"(the constructor's dtype=, uint16 by default for raw ADU): the cast would truncate "
@@ -1847,6 +1846,9 @@ class StreamDriver:
         picks = triage_order(counts, self.warm_topk, self.warm_floor)   # rank by peak count; skip low-signal
         sel = [k for k in picks if qmap[k] is not None]
         qs = [qmap[k] for k in sel]
+        if getattr(self, "_pix", None) is not None and frames is not None:
+            for k in sel:
+                _check_ring_dtype(frames[k], self.dtype)
         ev0 = self.n_pushed
         self.n_pushed += len(qmap); self.n_warmup += len(qs)
         if self._warmup_buf is not None:

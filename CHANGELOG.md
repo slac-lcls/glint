@@ -3,7 +3,7 @@
 Pull-request numbers refer to `slac-lcls/glint`. Measured figures live in `experiments/check_numbers.py --facts` and
 in the pages it guards; this file names what changed, not how much.
 
-## v0.1.0 — first tagged release (date: the tag)
+## v0.1.0 — 2026-10-06
 
 The state of the code behind *Real-time blind indexing by cross-frame consensus* (arXiv:2609.07722) and the first
 public release under the licence in `LICENSE.md`.
@@ -94,8 +94,11 @@ public release under the licence in `LICENSE.md`.
 - BSD-3-Clause licence with the SLAC/DOE enhancements grant-back, SLAC copyright notice, third-party notices with
   verified upstream terms and data provenance (#114, #133, #150, #166, #193); funding acknowledgment in TT&SP's
   wording (#194, #195).
+- Release preparation: `CITATION.cff` and this changelog (#236); internal message drafts out of the tree (#237); the
+  CBXD material moved to `slac-lcls/glint-cbxd` (#238); the docs brought up to date for the release, including the
+  merge-route measurement on mfx100848724 r51 (#250).
 
 ### Research scripts (not shipped in the wheel)
 - Powder auto-indexing package and pipeline (#177); FPGA-grade peak emission study (#189). The convergent-beam
-  (CBXD) scripts, data and results (#10, #13, #149) moved to a separate private repository before this release,
+  (CBXD) scripts, data and results (#10, #13, #149) moved to `slac-lcls/glint-cbxd` before this release (#238),
   until the companion paper is out.

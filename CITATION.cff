@@ -21,7 +21,7 @@ authors:
     given-names: Yuan
     affiliation: "SLAC National Accelerator Laboratory"
 version: 0.1.0
-# date-released: YYYY-MM-DD   (the tag date)
+date-released: 2026-10-06
 # doi: 10.11578/dc.XXXXXXXX  (the DOE CODE DOI, when announced)
 repository-code: "https://github.com/slac-lcls/glint"
 # LICENSE.md is BSD-3-Clause plus the SLAC/DOE enhancements grant-back; no single SPDX identifier names that

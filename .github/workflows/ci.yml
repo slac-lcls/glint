@@ -131,6 +131,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_integrate_cxi_layout.py
 
+      # The --images --integrate stream states each frame's OWN photon energy and camera length. With
+      # the .geom's photon_energy / clen given as HDF5 paths (the usual LCLS form) every chunk used to
+      # say 9392.70 eV / 0.150 m, a placeholder, while integration used the per-event values; and
+      # --wavelength never reached the header. Library path, the CLI with its indexer stubbed (no torch),
+      # and literal-.geom output unchanged. Builds its .cxi with h5py (installed above).
+      - name: experiments/test_stream_header_energy.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_stream_header_energy.py
+
       # The .geom `data =` key must reach integration (glint#143). parse_geom used to drop it,
       # so the peaks+--integrate route could never read a non-default dataset path; #142's test
       # passed data_path explicitly, which is why CI stayed green through the defect.

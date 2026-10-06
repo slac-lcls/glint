@@ -270,6 +270,9 @@ def main():
                                       data_key=args.data_path, event_axis=_ev_axis)
             _panels, _g = _pg(args.geom)
             _pnames = [p["name"] for p in _panels]
+            # integrate_cxi gives each integrated frame its own photon_eV / clen_m, and its chunk header
+            # uses those. These run-level values reach only the chunks with no integrated crystal;
+            # --wavelength wins over the .geom there too, as it does in integration (#241).
             write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
                                     photon_eV=_stream_photon_eV(args.wavelength, _g.get("photon_energy")),
                                     clen_m=_num(_g.get("clen"), 0.15), panel_names=_pnames)

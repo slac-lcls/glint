@@ -48,6 +48,7 @@ STEPS = [
     "experiments/test_panel_stack_integrate.py",
     "experiments/test_integrate_cxi_layout.py",
     "experiments/test_geom_data_key.py",
+    "experiments/test_integrate_wavelength.py",
     "experiments/test_consensus_degenerate.py",
     "experiments/test_consensus_order.py",
     "experiments/test_stream_gate_lock.py",
@@ -56,6 +57,7 @@ STEPS = [
     "experiments/test_lock_gate_wiring.py",
     "experiments/test_laue_ops.py",
     "experiments/test_streamdriver_laue.py",
+    "experiments/test_laue_centering.py",
     "experiments/test_merge_frame_gate.py",
     "experiments/test_multilattice.py",
     "experiments/test_double_hit_rule.py",
@@ -93,6 +95,7 @@ STEPS = [
     "experiments/test_axis_standardizer.py",
     "experiments/test_import_alias.py",              # also in the torch-CPU job; its child processes are
                                                      # not under the block here, so they see local torch
+    "experiments/test_hkl_box.py",
     "experiments/bench_integrate_fused.py",
     # torch-CPU job: runs for real there (CPU torch), SKIPs here with torch blocked.
     "experiments/test_nbest_prefix.py",

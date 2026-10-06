@@ -359,9 +359,9 @@ Replaces `CrystFELIndexer` in the standard SFX pipeline:
 
     PeakFinderSFX → [GLINTIndexer] → StreamFileConcatenator → PartialatorMerger → HKLManipulator
 
-Worth knowing why this exists: none of LUTE's bundled CrystFEL builds are compiled with FFBIDX, so
-`indexamajig --indexing=ffbidx` errors out — GPU fast-feedback indexing is simply unavailable in
-LUTE today.
+Worth knowing why this exists: the CrystFEL builds LUTE runs (0.10.2 by default) lack FFBIDX,
+so `indexamajig --indexing=ffbidx` errors out there. S3DF has a separate fast-feedback
+build (`/sdf/group/lcls/ds/tools/crystfel-fast-feedback-indexer`), but LUTE's tasks do not use it.
 
 ### Install
 

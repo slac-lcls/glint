@@ -10,6 +10,9 @@ Convention (CrystFEL): a pixel at data-array (fs, ss) lies on the panel whose [m
 coords  X = corner_x + lfs*fsx + lss*ssx ,  Y = corner_y + lfs*fsy + lss*ssy ; metres via /res;
 z = clen + coffset. Scattered unit s_hat = R/|R|; incident beam +z (s0=(0,0,1)); q=(s_hat-s0)/lambda.
 """
+import re
+import warnings
+
 import numpy as np
 
 _HC_eV_A = 12398.419843320026          # h*c in eV.A  ->  lambda_A = _HC_eV_A / E_eV
@@ -20,13 +23,49 @@ _GLOBAL = ("photon_energy", "wavelength", "clen", "res", "coffset", "adu_per_eV"
 _PANEL_INHERIT = ("res", "clen", "coffset")
 
 
+# One term of a CrystFEL direction (geometry(5) fs/ss): optional sign, optional coefficient, axis.
+_DIR_TERM = re.compile(r"\s*([+-]?)\s*((?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)?\s*([xyz])")
+
+
 def _vec(s):
-    """Parse a CrystFEL direction string like '+1.0x -0.0y' or '-0.5x +0.866y +0.0z' -> (x,y,z)."""
+    """Parse a CrystFEL direction string -> np.array([x, y, z]).
+
+    The ONE fs/ss parser: glint.lute_bridge imports it, so the --peaks and --images routes cannot
+    read the same .geom differently. Each term is an optional sign, an optional coefficient and an
+    axis: 'x' and '+x' are +1, '-y' is -1, and '+1.0x -0.0y', '-0.5x +0.866y +0.0z', '1e-3x' read
+    as written. Anything else raises a ValueError naming the string. The old parsers skipped any
+    term they could not read, so a bare 'x' (GLINT's own stream header writes `fs = x`) came back
+    as the zero vector and every peak on that panel collapsed onto its corner, with no warning."""
+    text = str(s)
     v = [0.0, 0.0, 0.0]
-    import re
-    for val, axis in re.findall(r"([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s*([xyz])", s):
-        v["xyz".index(axis)] += float(val)
+    seen = []
+    pos = 0
+    while text[pos:].strip():
+        m = _DIR_TERM.match(text, pos)
+        if m is None:
+            raise ValueError(f"cannot read CrystFEL direction {s!r} at {text[pos:].strip()!r} "
+                             f"(expected terms like 'x', '-y', '+1.0x -0.0y')")
+        sign, num, axis = m.groups()
+        if axis in seen:
+            raise ValueError(f"CrystFEL direction {s!r} gives axis {axis!r} twice")
+        seen.append(axis)
+        c = float(num) if num else 1.0
+        v["xyz".index(axis)] += -c if sign == "-" else c
+        pos = m.end()
+    if not seen:
+        raise ValueError(f"empty CrystFEL direction {s!r}")
     return np.array(v, float)
+
+
+def _check_basis(name, fsx, fsy, ssx, ssy):
+    """Refuse a panel whose fs/ss span no area in the detector plane.
+
+    Every peak on such a panel maps to one point, and integration later fails with a bare
+    'Singular matrix'. With _vec strict this needs explicit zeros or fs parallel to ss, but it is
+    the one check that names the panel whatever the cause."""
+    if abs(fsx * ssy - fsy * ssx) < 1e-12:
+        raise ValueError(f"panel {name}: fs = ({fsx:g}, {fsy:g}) and ss = ({ssx:g}, {ssy:g}) are "
+                         f"parallel or zero in x/y, so the panel has no area")
 
 
 def _wavelength_A(d):
@@ -51,11 +90,38 @@ def _wavelength_A(d):
     return None
 
 
+def is_bad_region(name):
+    """True if a `name/key` block in a .geom is a CrystFEL BAD REGION rather than a panel.
+
+    geometry(5) requires bad-region names to begin with "bad" (`badregionA/min_fs`,
+    `bad_beamstop/min_x`, ...), so the prefix is what tells the two kinds of block apart. Every
+    parser here that splits `name/key` must skip these: a bad region has no corner_x/fs/ss, and
+    treating one as a panel crashed the --peaks route with a bare KeyError 'corner_x'."""
+    return name.startswith("bad")
+
+
+def warn_bad_regions(path, names):
+    """Warn that a .geom's bad regions were read but are NOT applied by GLINT.
+
+    Peaks are used as given. A CrystFEL peak search run with this .geom leaves the bad regions out
+    already, but GLINT's own peak finders (--images) and --integrate do not mask the pixels inside
+    them, so the user should know."""
+    if names:
+        warnings.warn(f"{path}: {len(names)} CrystFEL bad region(s) ({', '.join(sorted(names))}) are "
+                      f"read but not applied; GLINT does not mask peaks or pixels inside them",
+                      stacklevel=3)
+
+
 def parse_geom(path):
-    """Parse a CrystFEL .geom into {'panels': {name: {...}}, 'wavelength_A': float}.
-    Panel fields: min_fs,max_fs,min_ss,max_ss,corner_x,corner_y,fsx,fsy,ssx,ssy,res,clen,coffset."""
+    """Parse a CrystFEL .geom into {'panels': {name: {...}}, 'wavelength_A': float, 'global': {...},
+    'bad_regions': {name: {...}}}.
+    Panel fields: min_fs,max_fs,min_ss,max_ss,corner_x,corner_y,fsx,fsy,ssx,ssy,res,clen,coffset.
+    Bad regions (blocks whose name starts with "bad", see `is_bad_region`) are kept apart from the
+    panels with their raw keys (min_fs/max_fs/min_ss/max_ss/panel or min_x/max_x/min_y/max_y);
+    nothing in GLINT applies them yet."""
     g = {}
     panels = {}
+    bad = {}
     for raw in open(path):
         line = raw.split(";", 1)[0].strip()
         if not line or "=" not in line:
@@ -63,6 +129,12 @@ def parse_geom(path):
         key, val = (s.strip() for s in line.split("=", 1))
         if "/" in key:
             pname, sub = key.split("/", 1)
+            if is_bad_region(pname):
+                try:
+                    bad.setdefault(pname, {})[sub] = float(val)
+                except ValueError:
+                    bad.setdefault(pname, {})[sub] = val          # e.g. `badregionA/panel = q0a0`
+                continue
             p = panels.setdefault(pname, {})
             if sub in ("fs", "ss"):
                 v = _vec(val)
@@ -87,7 +159,10 @@ def parse_geom(path):
         p.setdefault("coffset", 0.0)
         p.setdefault("fsx", 1.0); p.setdefault("fsy", 0.0)
         p.setdefault("ssx", 0.0); p.setdefault("ssy", 1.0)
-    return {"panels": panels, "wavelength_A": _wavelength_A(g), "global": g}
+    for name, p in panels.items():
+        _check_basis(name, p["fsx"], p["fsy"], p["ssx"], p["ssy"])
+    warn_bad_regions(path, list(bad))
+    return {"panels": panels, "wavelength_A": _wavelength_A(g), "global": g, "bad_regions": bad}
 
 
 def read_crystfel_peaks(path):
@@ -268,6 +343,18 @@ def _panel_z(name, p):
     return out
 
 
+def panel_corner(name, p):
+    """(corner_x, corner_y) of a parsed panel, or a ValueError NAMING the block that lacks them.
+
+    Anything that reaches a panel consumer without a corner is not a usable panel, and the bare
+    KeyError 'corner_x' this used to raise named neither the block nor the file line to fix."""
+    missing = [k for k in ("corner_x", "corner_y") if k not in p]
+    if missing:
+        raise ValueError(f".geom block '{name}/...' has no {' or '.join(missing)}, so it is not a "
+                         f"usable panel (keys present: {sorted(p)})")
+    return p["corner_x"], p["corner_y"]
+
+
 def _specs_from_geom_panels(panels):
     """.geom dict-of-dicts -> _q_from_panels specs. Bounds default to +-inf (a single-panel .geom
     need not declare min_fs) while the panel-local origin defaults to 0 -- they are different
@@ -276,9 +363,10 @@ def _specs_from_geom_panels(panels):
                  lo_ss=p.get("min_ss", -np.inf), hi_ss=p.get("max_ss", np.inf),
                  off_fs=p.get("min_fs", 0.0), off_ss=p.get("min_ss", 0.0),
                  fsx=p["fsx"], fsy=p["fsy"], ssx=p["ssx"], ssy=p["ssy"],
-                 cx=p["corner_x"], cy=p["corner_y"], res=p["res"],
+                 cx=cx, cy=cy, res=p["res"],
                  z=_panel_z(name, p))
-            for name, p in panels.items()]
+            for name, p in panels.items()
+            for cx, cy in (panel_corner(name, p),)]
 
 
 def peaks_to_q(peaks, geom, wavelength_A=None):

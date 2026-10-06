@@ -85,8 +85,15 @@ def _load_model():
             sys.modules["pydantic"] = saved
 
 
-P = _load_model()
+Model = _load_model()
 XTC = dict(exp="mfxx49820", run=16, zdist=0.1027, out="o.stream")   # a minimal valid xtc config
+LAUNCHER = "/path/to/glint/lute/glint_launch.sh"
+
+
+def P(**kw):
+    """The model with a launcher set, so each test exercises only the rule it names."""
+    kw.setdefault("executable", LAUNCHER)
+    return Model(**kw)
 
 
 def bad(**kw):
@@ -97,6 +104,15 @@ def bad(**kw):
 
 
 # --------------------------------------------------------------------- exactly one frame source
+def test_executable_is_required():
+    # The repo copy has no default launcher; install_into_lute.sh writes the installing checkout's.
+    with pytest.raises(Exception) as e:
+        Model(peaks="p.stream", out="o.stream")
+    assert "`executable` is required" in str(e.value)
+    assert "`executable` is required" in bad(peaks="p.stream", out="o.stream", executable="")
+    assert P(peaks="p.stream", out="o.stream").executable == LAUNCHER
+
+
 def test_no_source_rejected():
     assert "frame source is required" in bad(out="o.stream")
 
@@ -264,7 +280,7 @@ def test_event_axis_field_renders_as_the_cli_flag():
     a typo. It is deliberately NOT in the launcher's xtc whitelist -- glint_xtc.py reads frames from
     psana and has no such flag -- so the launcher drops and REPORTS it there, which the
     dropped-flag test above already covers as a class."""
-    f = P.__fields__["event_axis"]
+    f = Model.__fields__["event_axis"]
     assert f.field_info.extra["rename_param"] == "event-axis"
     assert f.field_info.extra["flag_type"] == "--"
     assert P(**XTC).event_axis is None
@@ -278,7 +294,7 @@ def test_bg_mode_field_renders_as_the_cli_flag():
     """`bg_mode="median"` is the only way to reproduce intensities from a pre-glint#131 run, so it
     has to survive the whole chain: task model -> flag name -> launcher whitelist. It was reachable
     only from Python when it landed, which is an escape hatch that rescues nobody."""
-    f = P.__fields__["bg_mode"]
+    f = Model.__fields__["bg_mode"]
     assert f.field_info.extra["rename_param"] == "bg-mode"
     assert f.field_info.extra["flag_type"] == "--"
     assert P(**XTC).bg_mode is None, "must default to GLINT's own default, not pin one here"

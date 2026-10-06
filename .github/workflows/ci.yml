@@ -486,6 +486,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_axis_standardizer.py
 
+      # refine_sym.refine_bravais (integrate_cxi's sym_refine) from a start that is NOT the conventional
+      # cell -- the Buerger-reduced primitive cells the blind indexer emits, hexagonal gamma 60, mixed
+      # rhombohedral angles, every centred lattice -- used to return a different lattice that fit a few
+      # percent of the spots (review s4-04). All 14 Bravais lattices from four settings each must come
+      # back a basis of the true lattice with an exactly symmetric metric; conventional starts unchanged.
+      - name: experiments/test_refine_bravais_setting.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_refine_bravais_setting.py
+
       # `import fftindex` (the back-compat alias) must hand control back (review s7-04). The shim imports every
       # glint submodule and catches only Exception; glint/test_first_index_per_group.py called sys.exit at module
       # scope, so with torch installed the import ended the caller's program with status 0. On this torch-less

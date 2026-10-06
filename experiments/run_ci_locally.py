@@ -99,6 +99,8 @@ STEPS = [
     "experiments/test_same_lattice_symmetry.py",
     "experiments/test_gate_project.py",
     "experiments/test_axis_standardizer.py",
+    "experiments/test_refine_bravais_setting.py",
+
     "experiments/test_import_alias.py",              # also in the torch-CPU job; its child processes are
                                                      # not under the block here, so they see local torch
     "experiments/test_hkl_box.py",

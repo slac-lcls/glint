@@ -41,7 +41,7 @@ Convergent-beam X-ray diffraction (Chapman group, arXiv:2602.14402) turns each r
 streak whose curvature carries the out-of-plane information a single still lacks; blind orientation and cell
 recovery there is the figure kept in the paper's *Outlook*. The scripts, data and results for it are developed
 in a separate private repository with Yuan Ni until the companion paper is out
-(`slac-lcls/glint-cbxd`, where this track's issues were transferred); the merged pull requests #10, #13, #61,
+(`slac-lcls/glint-cbxd`, issues #1–7); the merged pull requests #10, #13, #61,
 #115 and #149 remain the record of that work here.
 
 ## 4. Throughput & the optimizer  *(suggested lead: Yuan)*

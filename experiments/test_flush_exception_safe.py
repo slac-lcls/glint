@@ -65,8 +65,9 @@ drv.close()
 st = drv.stats()
 check("only the one injected exception reaches the caller", errs == ["ConnectionError"], errs)
 check("every frame is counted as pushed", drv.n_pushed == 12, drv.n_pushed)
-check("no frame merged twice (acc frames <= the no-fault run)", st["frames"] <= ref, f"{st['frames']} vs {ref}")
-check("the frames after the failed batch are all merged", st["frames"] >= ref - B, f"{st['frames']} vs {ref}")
+expected = control(2) + ref - control(B)
+check("merged prefix retained once and all later frames merged", st["frames"] == expected,
+      f"{st['frames']} vs {expected}")
 check("the failure is reported", st.get("flush_errors") == 1 and st.get("flush_error_frames") == B,
       (st.get("flush_errors"), st.get("flush_error_frames")))
 

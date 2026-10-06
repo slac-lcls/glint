@@ -670,6 +670,29 @@ def _conventional_tetragonal(M):
     return standardize_axes(M, laue="4/mmm")
 
 
+def _check_ring_dtype(frame, ring_dtype):
+    """Refuse a frame that a ``ring_dtype`` buffer cannot hold without losing data (raises TypeError).
+
+    The ring and the rescue-pixel store are preallocated at the constructor's ``dtype`` -- uint16 by
+    default, sized for raw ADU -- and ``buf[...] = frame`` casts silently. A calibrated float frame
+    lost its fractions and had its negatives clamped to 0 (float32) or wrapped to ~65535 (float64,
+    signed ints) before the peak finder saw it: 93 peaks instead of 6 on a pedestal-subtracted
+    sigma=1 frame, 0 of 30 planted spots on an int16 frame, and integrated intensities biased on the
+    pixels that survived. Both integer and float rings take only numpy "safe" casts (bool, uint8 and
+    uint16 into uint16); this rejects dtype-wide precision loss such as float64 into float32.
+    Decided on the dtype alone, so no pixel is read and a uint16 frame into the uint16 ring goes
+    through exactly as before."""
+    src = getattr(frame, "dtype", None)
+    src = np.dtype(src) if src is not None else np.asarray(frame).dtype
+    if not np.can_cast(src, ring_dtype, casting="safe"):
+        raise TypeError(
+            f"StreamDriver: a {src} frame cannot be stored losslessly in the {ring_dtype} ring "
+            f"(the constructor's dtype=, uint16 by default for raw ADU): the cast could lose "
+            f"precision or exceed the ring dtype's representable range before peak finding and integration. "
+            f"Construct StreamDriver(..., dtype=frame.dtype) to preserve this frame, or convert it "
+            f"explicitly to a dtype the ring can safely represent (dtype=np.float32 for det.calib).")
+
+
 class _PixelStore:
     """Detector frames kept past their batch for a LATER rescue (StreamDriver's rescue_pixels): the
     warm-up frames until the cell locks, the buffered misses until a relock. Keyed by arrival index.
@@ -679,7 +702,7 @@ class _PixelStore:
     then stays index-only, as it is without the store."""
 
     def __init__(self, cap, shape, dtype, xp):
-        self.xp = xp
+        self.xp, self.dtype = xp, np.dtype(dtype)
         self._buf = [xp.zeros(shape, dtype) for _ in range(int(cap))]
         self._free = list(range(len(self._buf)))
         self._at = OrderedDict()                      # ev -> (buffer index, src, pkq), oldest first
@@ -690,6 +713,7 @@ class _PixelStore:
 
     def put(self, ev, frame, src=None, pkq=None):
         """Copy `frame` in (device to device for a ring slot, one upload for a host array)."""
+        _check_ring_dtype(frame, self.dtype)          # warmup_batch hands host frames straight in
         if ev in self._at:
             self.release([ev])
         if not self._free:
@@ -865,6 +889,10 @@ class StreamDriver:
     put in the tetragonal conventional setting (4-fold axis in c) only for the tetragonal classes;
     other classes are merged in the setting the cell arrives in, so a known cell must be given in
     the setting its class assumes.
+
+    Ring dtype: `dtype` (uint16 by default, for raw ADU) must hold the pushed frames losslessly; use
+    dtype=np.float32 for calibrated frames (det.calib). push() raises TypeError on a frame the ring
+    would truncate, clamp or wrap -- e.g. any float or signed frame into the default ring.
 
     Adaptive effort: `effort=dict(rate_hz=..., n_gpu=1)` makes the known-cell search depth follow the hit rate
     (GPU time per hit = n_gpu / (rate x hit rate)) and spends what is left on deep, chance-controlled searches of
@@ -1834,6 +1862,10 @@ class StreamDriver:
         picks = triage_order(counts, self.warm_topk, self.warm_floor)   # rank by peak count; skip low-signal
         sel = [k for k in picks if qmap[k] is not None]
         qs = [qmap[k] for k in sel]
+        if (self._warmup_buf is not None and getattr(self, "_pix", None) is not None
+                and frames is not None):
+            for k in sel:
+                _check_ring_dtype(frames[k], self.dtype)
         ev0 = self.n_pushed
         self.n_pushed += len(qmap); self.n_warmup += len(qs)
         if self._warmup_buf is not None:
@@ -1865,7 +1897,10 @@ class StreamDriver:
     def push(self, frame, src=None):
         """Ingest one detector frame (host numpy or already-device array). `src` = (image, event) or
         an image filename: where the frame came from, stamped on its .stream chunk instead of the
-        `stream_image` placeholder and the arrival index (event None = one image per file, no Event line)."""
+        `stream_image` placeholder and the arrival index (event None = one image per file, no Event line).
+        Raises TypeError, before any state changes, if the ring's dtype cannot hold `frame` losslessly
+        (see _check_ring_dtype): construct the driver with dtype=np.float32 for calibrated frames."""
+        _check_ring_dtype(frame, self.dtype)                 # covers _push_blind too: refuse, never cast lossily
         if self._blind:
             self._push_blind(frame, src=src); return
         slot = self._n

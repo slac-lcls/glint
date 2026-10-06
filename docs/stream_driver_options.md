@@ -16,8 +16,10 @@ provenance) and the class docstring, which is the fuller treatment of each mecha
 ## Construct, feed, read
 
 ```python
+import numpy as np
 from glint.stream_driver import StreamDriver
 d = StreamDriver(None, panels, clen_m, wavelength_A, shape,      # Mc=None: discover the cell
+                 dtype=np.float32,      # calibrated frames (det.calib); the uint16 default is for raw ADU
                  B=64, dmin=2.0, min_inliers=10, warmup_rescue=True, adaptive_relock=True)
 for frame in frames:            # host or device array of `shape`; or push_peaks(fs, ss) / push_q(q)
     d.push(frame)
@@ -55,7 +57,7 @@ Columns: the option and its default; what it does; where it was measured (a pull
 | `clen_m` | required | camera length, m | #19 | `--clen` overrides the geometry's |
 | `wavelength_A` | required | wavelength, Å; one value for the run | #19 | `--wavelength` |
 | `shape` | required | detector array shape the ring is preallocated for | #19 | from the geometry |
-| `dtype` | `uint16` | ring dtype | #19 | — |
+| `dtype` | `uint16` | ring dtype; it must hold the pushed frames losslessly, so use `np.float32` for calibrated frames — `push()` raises `TypeError` on a frame the ring would truncate, clamp or wrap (any float or signed frame into the uint16 default) | #19 | — (pixel inputs are read as float32 into a float32 ring) |
 | `mask` | `None` | good-pixel mask for the peak finder (`True` = good) | #19 | `--mask`, `--edge-mask N` |
 | `use_gpu` | `True` | CuPy device path; `False` is the numpy path the CI tests run | #19 | `--cupy` turns it on |
 | `pf_kw` | `None` | settings of the device peak finder (`glint.peakfinder_v4.PeakFinderV4`), e.g. `abs_thr`, `son_min`, `min_pix` | #19 | `--pf-kw JSON` |

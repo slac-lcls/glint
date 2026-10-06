@@ -75,6 +75,7 @@ STEPS = [
     "experiments/test_per_lattice.py",
     "experiments/test_live_gate_floor.py",           # also in the torch-CPU job, where its real-frame half runs
     "experiments/test_stream_hit_ring.py",
+    "experiments/test_ring_dtype.py",
     "experiments/test_flush_exception_safe.py",
     "experiments/test_stream_effort.py",
     "experiments/test_stream_driver_options_doc.py",

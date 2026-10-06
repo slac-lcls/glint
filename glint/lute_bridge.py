@@ -371,19 +371,33 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
     if n:
         nfr = min(n, nfr)
     good = None
+    event_masks = None
     if mask_key and mask_key in f:
         m = f[mask_key]
-        if stack:      # per-slab (slab, ss, fs) or one (ss, fs) for every slab; a per-event stack -> event 0's
+        if stack and m.ndim == 4:     # (event, slab, ss, fs)
+            good = np.asarray(m) == int(str(glob.get("mask_good", "0")), 0)
+            if good.shape[0] not in (1, data.shape[0]):
+                raise ValueError(
+                    f"{cxi_path}:{mask_key} mask event axis {good.shape[0]} does not match "
+                    f"the {data.shape[0]}-event data stack")
+            if good.shape[1] not in (1, nslab):
+                raise ValueError(
+                    f"{cxi_path}:{mask_key} mask shape {good.shape} does not match the {nslab}-slab data stack")
+            event_masks = {k: good[:, k if good.shape[1] > 1 else 0] for k in groups}
+            good = None
+        elif stack:   # per-slab (slab, ss, fs) or one (ss, fs) for every slab
             m = np.asarray(m[0] if m.ndim >= 4 else m)
+            good = (m == int(str(glob.get("mask_good", "0")), 0))  # True = good pixel
         else:
             m = np.asarray(m[0] if m.ndim >= 3 else m)
-        good = (m == int(str(glob.get("mask_good", "0")), 0))     # True = good pixel
+            good = (m == int(str(glob.get("mask_good", "0")), 0))  # True = good pixel
     if stack and good is not None and good.ndim == 3 and good.shape[0] not in (1, nslab):
         raise ValueError(
             f"{cxi_path}:{mask_key} mask shape {good.shape} does not match the {nslab}-slab data stack")
-    masks = {k: (None if good is None else
-                 good[k] if (stack and good.ndim == 3 and good.shape[0] > 1) else
-                 good[0] if (stack and good.ndim == 3) else good) for k in groups}
+    masks = event_masks if event_masks is not None else {
+        k: (None if good is None else
+            good[k] if (stack and good.ndim == 3 and good.shape[0] > 1) else
+            good[0] if (stack and good.ndim == 3) else good) for k in groups}
     if ring_focus is not None:                                     # KNOWN-CELL: search only the powder-ring annuli
         cell6, qlow = ring_focus
         c0 = _meta(clen_spec, f, 0, 0.1); sc = clen_scale if clen_scale is not None else (0.001 if abs(c0) > 10 else 1.0)
@@ -420,7 +434,10 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
         stk = data[i] if data.ndim >= 4 else data
         xs, ys, ws, ks = [], [], [], []
         for k, grp in groups.items():
-            pk = finder(np.asarray(stk[k], np.float32), mask=masks[k], **pf_kw)
+            mask = masks[k]
+            if mask is not None and mask.ndim == 3:
+                mask = mask[i if mask.shape[0] > 1 else 0]
+            pk = finder(np.asarray(stk[k], np.float32), mask=mask, **pf_kw)
             xk = np.asarray(pk["x"], float)
             xs.append(xk); ys.append(np.asarray(pk["y"], float))
             ws.append(np.asarray(pk.get("intensity", pk.get("snr", np.zeros(len(xk)))), float))

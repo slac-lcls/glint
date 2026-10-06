@@ -155,6 +155,7 @@ with tempfile.TemporaryDirectory() as d:
     g3, g4, gc = gfile("stack3.geom", "3d"), gfile("stack4.geom", "4d"), gfile("canvas.geom", "canvas")
     g3_nomap = gfile("nomap.geom", "3d", mapped=False)
     g3_mask = gfile("stack3_mask.geom", "3d", mask=True)
+    g4_mask = gfile("stack4_mask.geom", "4d", mask=True)
     pan3, _ = parse_geom(g3)
     pan4, _ = parse_geom(g4)
 
@@ -267,6 +268,17 @@ with tempfile.TemporaryDirectory() as d:
     check("...slab 0 bad -> only panel 1's truth survives (was: slab 0's mask used for every panel)",
           e0 is None and len(got0[0]) == 1 and same(got0[0][0], truth(evA, pan3, masks=goodm[::-1])),
           e0 or [len(q) for q in got0[0]])
+    m4 = np.zeros((2, P, S, F), np.uint16)
+    m4[0, 1] = 1                                                  # event 0: slab 1 bad
+    m4[1, 0] = 1                                                  # event 1: slab 0 bad
+    cM4 = write(os.path.join(d, "mask_per_event.cxi"), np.stack(ev2), n_events=2, mask=m4)
+    got4, e4 = attempt(lambda: frames_from_cxi(cM4, g4_mask, wavelength_A=WL, min_peaks=0))
+    per_event_masks = ([np.ones((S, F), bool), np.zeros((S, F), bool)],
+                       [np.zeros((S, F), bool), np.ones((S, F), bool)])
+    check("a (event, slab, ss, fs) mask selects each event's own slab masks",
+          e4 is None and len(got4[0]) == 2
+          and all(same(got4[0][i], truth(ev2[i], pan4, masks=per_event_masks[i])) for i in range(2)),
+          e4 or [len(q) for q in got4[0]])
 
     rms = [ring_qmask([pan3[p]], CLEN, WL, CELL6, (S, F), qlow=0.15) for p in range(P)]
     rm_one = ring_qmask(pan3, CLEN, WL, CELL6, (S, F), qlow=0.15)    # one canvas for overlapping windows

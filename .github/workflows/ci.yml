@@ -138,6 +138,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_geom_data_key.py
 
+      # --integrate predicts at the wavelength the frames were INDEXED at (--wavelength over the .geom)
+      # and stamps that energy as photon_energy_eV. The --peaks route ignored --wavelength: a path-valued
+      # .geom photon_energy crashed after indexing, and a literal one was integrated off the spots. The
+      # CLI runs in-process with an oracle indexer in place of glint.hybrid_stream, so h5py + numpy only.
+      - name: experiments/test_integrate_wavelength.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_integrate_wavelength.py
+
       - name: experiments/test_consensus_degenerate.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_consensus_degenerate.py

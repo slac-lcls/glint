@@ -55,7 +55,7 @@ from glint.lattice import LENGTH_ORDER_LAUE, LOW_LAUE, UNIQUE_C_LAUE, cell_to_Ar
 from glint.lute_bridge import peaks_to_q, slab_rects
 from glint.geom import q_rows_ok      # drops NaN/inf (off-panel) and |q| ~ 0 (beam-centre) rows at every front door
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
-                           _hkl_grid, project_q)
+                           _hkl_bounds, _hkl_grid, project_q)
 from glint.peakfinder_v4 import PeakFinderV4, PerPanelFinder
 from glint.running_consensus import RunningConsensus
 from glint.multishot import same_lattice
@@ -468,11 +468,15 @@ def _asu_key(hkl, ops):
 
 
 def theoretical_unique(Mc, dmin, ops):
-    """Number of unique reflections to `dmin` for the reference cell -- the completeness denominator."""
+    """Number of unique reflections to `dmin` for the reference cell -- the completeness denominator.
+
+    The box is _hkl_bounds, the one _hkl_grid / HKLGrid use, so oblique cells are no longer clipped.
+    The cut stays `norm(q) <= qmax` rather than _hkl_grid's `q.q <= qmax^2`: the two disagree only on
+    exact |q| == qmax ties, but that is enough to move an orthogonal count (P212121 40/60/80 at 2.0 A:
+    13573 vs 13572), and orthogonal cells are meant to be unchanged by the box fix."""
     R = recip_from_M(np.asarray(Mc, float))
     qmax = 1.0 / dmin
-    n = np.linalg.norm(R, axis=1)
-    H, K, L = (int(np.ceil(qmax / x)) + 1 for x in n)
+    H, K, L = _hkl_bounds(R, qmax)                     # the same box _hkl_grid / HKLGrid use
     g = np.mgrid[-H:H + 1, -K:K + 1, -L:L + 1].reshape(3, -1).T.astype(int)
     g = g[np.any(g != 0, axis=1)]
     q = g @ R

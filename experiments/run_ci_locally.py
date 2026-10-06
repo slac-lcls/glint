@@ -91,6 +91,7 @@ STEPS = [
     "experiments/test_same_lattice_symmetry.py",
     "experiments/test_gate_project.py",
     "experiments/test_axis_standardizer.py",
+    "experiments/test_hkl_box.py",
     "experiments/bench_integrate_fused.py",
     # torch-CPU job: runs for real there (CPU torch), SKIPs here with torch blocked.
     "experiments/test_nbest_prefix.py",

@@ -305,17 +305,35 @@ def test_gate_field_renders_as_the_cli_flag():
         P(peaks="p.stream", out="o.stream", gate="Strict")   # a typo must not silently mean none
 
 
+def test_floor_gate_field_renders_and_requires_floor():
+    f = type(P(peaks="p.stream", out="o.stream")).__fields__["floor"]
+    assert f.field_info.extra["rename_param"] == "floor"
+    assert f.field_info.extra["flag_type"] == "--"
+    for spec in ("cxidb17", "1,2", "1,2,3"):
+        assert P(peaks="p.stream", out="o.stream", gate="floor", floor=spec).floor == spec
+        assert P(images="i.cxi", out="o.stream", gate="floor", floor=spec).floor == spec
+    assert "`gate: floor` requires `floor`" in bad(peaks="p.stream", out="o.stream", gate="floor")
+    assert "`floor` is used only with `gate: floor`" in bad(
+        peaks="p.stream", out="o.stream", floor="cxidb17")
+    assert "`floor` is used only with `gate: floor`" in bad(
+        peaks="p.stream", out="o.stream", gate="strict", floor="cxidb17")
+    with pytest.raises(Exception):
+        P(peaks="p.stream", out="o.stream", gate="Floor", floor="cxidb17")
+
+
 def test_gate_rejected_on_xtc():
     """glint_xtc.py has no gate and the launcher drops --gate on that route, so accepting it would let
     a run look gated when it was not."""
     assert "applies only to the `peaks` / `images`" in bad(gate="strict", **XTC)
+    assert "applies only to the `peaks` / `images`" in bad(gate="floor", floor="cxidb17", **XTC)
 
 
 def test_launcher_forwards_gate_to_the_cli(tmp_path):
     argv, err = _run_launcher(tmp_path, ["--images", "i.cxi", "--cell", "79 79 38 90 90 90",
-                                         "--gate", "strict"])
+                                         "--gate", "floor", "--floor", "cxidb17"])
     assert any("glint.glint_cli" in a for a in argv), argv
-    assert "--gate" in argv and argv[argv.index("--gate") + 1] == "strict", (argv, err)
+    assert "--gate" in argv and argv[argv.index("--gate") + 1] == "floor", (argv, err)
+    assert "--floor" in argv and argv[argv.index("--floor") + 1] == "cxidb17", (argv, err)
 
 
 def test_launcher_drops_gate_on_xtc_and_says_so(tmp_path):

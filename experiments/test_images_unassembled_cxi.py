@@ -190,6 +190,27 @@ with tempfile.TemporaryDirectory() as d:
     check("...also with NO per-event metadata (leading axis == panel count): the dimN keys decide",
           exc is None and len(got[0]) == 1 and same(got[0][0], qA), exc or [len(q) for q in got[0]])
 
+    # A peak on no panel of its slab: panel 1's window covers only fs 0..31 of slab 1, so slab 1's
+    # peaks at fs >= 32 map to NaN rows. They are dropped once per event, as on every other route
+    # (glint.geom.clean_q, review s7-05), and reported; the rest keep their order and their panel.
+    import contextlib
+    import io
+    from glint.geom import clean_q
+    g3_half = gfile("stack3_half.geom", "3d")
+    open(g3_half, "w").write(geom_text("3d").replace(f"p1/max_fs = {F-1}", "p1/max_fs = 31"))
+    pan3h, _ = parse_geom(g3_half)
+    raw = truth(evA, pan3h)
+    n_off = int((~np.isfinite(raw).all(1)).sum())
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        got, exc = attempt(lambda: frames_from_cxi(cA, g3_half, wavelength_A=WL, min_peaks=6))
+    check("a panel-stack peak on no panel of its slab is dropped, the rest stay aligned with their panels",
+          n_off > 0 and exc is None and len(got[0]) == 1 and same(got[0][0], clean_q(raw))
+          and len(got[0][0]) == len(raw) - n_off,
+          exc or (n_off, [len(q) for q in got[0]]))
+    check("...and the drop is reported once for the event",
+          f"dropped {n_off} peak(s) in 1 frame(s)" in err.getvalue(), err.getvalue().strip()[:200])
+
     # ---- 4-D (event, panel, ss, fs) --------------------------------------------------------------
     print("4-D (event, panel, ss, fs), CrystFEL 4-D .geom (dim0 = %, pN/dim1 = N)")
     ev2 = [one_event(), one_event(shift=2)]

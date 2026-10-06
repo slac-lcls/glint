@@ -21,6 +21,7 @@ authors:
   - family-names: Ni
     given-names: Yuan
     affiliation: "SLAC National Accelerator Laboratory"
+    orcid: "https://orcid.org/0000-0002-5797-5234"
 version: 0.1.0
 date-released: 2026-10-06
 # doi: 10.11578/dc.XXXXXXXX  (the DOE CODE DOI, when announced)

@@ -1145,8 +1145,10 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
             # the writer used its run-level kwargs, which the CLI fills from the .geom: a placeholder
             # 9392.70 eV / 0.15 m when the .geom names HDF5 paths. clen_m is the .geom clen resolved
             # for this event, in metres, WITHOUT coffset: the quantity the CLI already wrote for a
-            # literal .geom, so that output is unchanged.
-r["clen_m"] = clen_m
+            # literal .geom, so that output is unchanged. CrystFEL reads the chunk's camera length the same
+            # way: `average_camera_length` is clen, and coffset comes from the geometry block the stream
+            # embeds, so a reader re-projecting the rows gets clen + coffset as prediction did.
+            r["clen_m"] = clen * scale
             if eV_used is not None:
                 r["photon_eV"] = eV_used
             n += 1; tot += int(keep.sum())

@@ -55,7 +55,7 @@ from glint.lattice import LENGTH_ORDER_LAUE, LOW_LAUE, UNIQUE_C_LAUE, cell_to_Ar
 from glint.lute_bridge import peaks_to_q, slab_rects
 from glint.geom import q_rows_ok      # drops NaN/inf (off-panel) and |q| ~ 0 (beam-centre) rows at every front door
 from glint.predict import (predict_spots, integrate_spots, recip_from_M, _canonical_axes,
-                           _hkl_grid, project_q)
+                           _hkl_bounds, _hkl_grid, project_q)
 from glint.peakfinder_v4 import PeakFinderV4, PerPanelFinder
 from glint.running_consensus import RunningConsensus
 from glint.multishot import same_lattice
@@ -363,6 +363,9 @@ TETRAGONAL_LAUE = ("4/m", "4/mmm")
 # Lattice type (CrystFEL stream vocabulary, plus "trigonal") -> holohedry, the Laue class ASSUMED when
 # only the lattice is known. A crystal of lower symmetry on the same lattice (4/m on tetragonal, -3 or
 # -3m on hexagonal P, 6/m, m-3) has to name its class through `laue=` -- the lattice cannot tell.
+# The holohedry depends on the CENTERING too, which this table does not carry: "hexagonal" with
+# centering H or R is a rhombohedral (hR) lattice on hexagonal triple-cell axes, whose holohedry is
+# -3m (-3m1 on those axes), not 6/mmm. laue_from_symmetry applies that case.
 _HOLOHEDRY = {
     "triclinic": "-1", "monoclinic": "2/m", "orthorhombic": "mmm", "tetragonal": "4/mmm",
     "trigonal": "-3m", "rhombohedral": "-3m_R", "hexagonal": "6/mmm", "cubic": "m-3m",
@@ -422,8 +425,13 @@ def _is_subgroup(sub, sup):
 def laue_from_symmetry(sym):
     """Laue class implied by a CrystFEL-style symmetry record {lattice_type, centering, unique_axis}
     -- the one StreamDriver(stream_symmetry=...) stamps on every chunk -- or None when it names no
-    lattice_type. Assumes the HOLOHEDRY (see _HOLOHEDRY): the header carries the lattice, not the
-    point group, so this is the most the record can support; a lower class is `laue=`'s job.
+    lattice_type. Assumes the HOLOHEDRY of the LATTICE, which is lattice_type plus centering (see
+    _HOLOHEDRY): the header carries the lattice, not the point group, so this is the most the record
+    can support; a lower class is `laue=`'s job.
+    Hexagonal with centering H or R is a rhombohedral lattice on hexagonal (triple-cell) axes, the
+    usual R3/R32 setting: its holohedry is -3m ('-3m', i.e. -3m1 on those axes), not 6/mmm, whose
+    extra operators send obverse-allowed reflections (-h+k+l = 3n) onto absent nodes. Every other
+    centering leaves the class to lattice_type alone.
     Monoclinic honours unique_axis (a/b/c; '*' or absent means b). The c-unique classes warn when the
     record says the unique axis is elsewhere, because the operator set assumes c and cannot follow."""
     sym = dict(sym or {})
@@ -439,10 +447,12 @@ def laue_from_symmetry(sym):
             return f"2/m_ua{ua}"
         if ua != "*":
             raise ValueError(f"unknown monoclinic unique_axis {ua!r}; known: *, a, b, c")
+    cen = str(sym.get("centering") or "P").strip().upper()
+    cls = "-3m" if (lt == "hexagonal" and cen in ("H", "R")) else _HOLOHEDRY[lt]
     if lt in ("tetragonal", "trigonal", "hexagonal") and ua not in ("*", "c"):
-        warnings.warn(f"lattice_type {lt} with unique_axis {ua!r}: the {_HOLOHEDRY[lt]} operator set "
+        warnings.warn(f"lattice_type {lt} with unique_axis {ua!r}: the {cls} operator set "
                       "assumes the unique axis in c; the live merge will use c (glint#180)")
-    return _HOLOHEDRY[lt]
+    return cls
 
 
 def canon(hkl, ops):
@@ -458,11 +468,15 @@ def _asu_key(hkl, ops):
 
 
 def theoretical_unique(Mc, dmin, ops):
-    """Number of unique reflections to `dmin` for the reference cell -- the completeness denominator."""
+    """Number of unique reflections to `dmin` for the reference cell -- the completeness denominator.
+
+    The box is _hkl_bounds, the one _hkl_grid / HKLGrid use, so oblique cells are no longer clipped.
+    The cut stays `norm(q) <= qmax` rather than _hkl_grid's `q.q <= qmax^2`: the two disagree only on
+    exact |q| == qmax ties, but that is enough to move an orthogonal count (P212121 40/60/80 at 2.0 A:
+    13573 vs 13572), and orthogonal cells are meant to be unchanged by the box fix."""
     R = recip_from_M(np.asarray(Mc, float))
     qmax = 1.0 / dmin
-    n = np.linalg.norm(R, axis=1)
-    H, K, L = (int(np.ceil(qmax / x)) + 1 for x in n)
+    H, K, L = _hkl_bounds(R, qmax)                     # the same box _hkl_grid / HKLGrid use
     g = np.mgrid[-H:H + 1, -K:K + 1, -L:L + 1].reshape(3, -1).T.astype(int)
     g = g[np.any(g != 0, axis=1)]
     q = g @ R
@@ -846,10 +860,11 @@ class StreamDriver:
     Merge symmetry: `laue` names the Laue class the running merge (completeness, CC*, Rsplit and
     the theoretical-unique denominator) is accumulated under -- one of LAUE_CLASSES or a setting such
     as "2/m_uac" / "-31m" (see laue_ops) -- or `ops` supplies the operator list outright. Left unset
-    it follows `stream_symmetry`'s lattice_type (its holohedry; laue_from_symmetry), and without
-    that it is "4/mmm", the historical default. Blind locks are put in the tetragonal conventional
-    setting (4-fold axis in c) only for the tetragonal classes; other classes are merged in the
-    setting the cell arrives in, so a known cell must be given in the setting its class assumes.
+    it follows `stream_symmetry`'s lattice (the holohedry of its lattice_type and centering;
+    laue_from_symmetry), and without that it is "4/mmm", the historical default. Blind locks are
+    put in the tetragonal conventional setting (4-fold axis in c) only for the tetragonal classes;
+    other classes are merged in the setting the cell arrives in, so a known cell must be given in
+    the setting its class assumes.
 
     Adaptive effort: `effort=dict(rate_hz=..., n_gpu=1)` makes the known-cell search depth follow the hit rate
     (GPU time per hit = n_gpu / (rate x hit rate)) and spends what is left on deep, chance-controlled searches of
@@ -967,8 +982,8 @@ class StreamDriver:
         #   ops              an explicit operator list, used verbatim (laue is then only a label;
         #                    None unless given, so no tetragonal standardization is applied);
         #   laue             a Laue-class name (laue_ops); aliases/settings resolve to laue_name();
-        #   stream_symmetry  the holohedry of its lattice_type (laue_from_symmetry), so the header an
-        #                    offline merger reads and the live merge cannot disagree;
+        #   stream_symmetry  the holohedry of its lattice_type + centering (laue_from_symmetry), so
+        #                    the header an offline merger reads and the live merge cannot disagree;
         #   "4/mmm"          the historical default -- bit-identical to before for every caller that
         #                    passes neither.
         # An explicit laue that contradicts stream_symmetry WARNS rather than fails: the operator is

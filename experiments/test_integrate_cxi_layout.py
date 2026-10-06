@@ -271,6 +271,8 @@ check("glint_cli calls integrate_cxi with event_axis=", "event_axis" in calls.ge
       calls.get("integrate_cxi"))
 check("...and still integrate_frames with event_axis=", "event_axis" in calls.get("integrate_frames", ()),
       calls.get("integrate_frames"))
+check("...and integrate_frames with wavelength_A= (the --wavelength the frames were indexed at)",
+      "wavelength_A" in calls.get("integrate_frames", ()), calls.get("integrate_frames"))
 check("--event-axis help no longer scopes itself to --peaks only",
       "--integrate --peaks:" not in cli_src and "--images" in cli_src.split("--event-axis", 1)[1][:600])
 check("glint_cli maps a tetragonal lattice code to the lattice_type hint integrate_cxi uses",

@@ -2,9 +2,9 @@ DRAFT -- not tested against the actual slac-lcls/lute source tree. GLINT does no
 `install/bin/activate_installation`; this patch was reconstructed from the snippet quoted in
 glint#128 (which quoted the file as of `~/git/lute_new/lute` @ c457afc, `file_indexing`, v0.2.0-3).
 A GLINT maintainer should check this out against a real LUTE checkout, adjust the context lines and
-the exact PYTHONPATH-export shape to match, and only then propose it upstream (or the issue text in
-lute/upstream_activate_installation_ISSUE_DRAFT.md) against slac-lcls/lute. Nothing in this repo or
-this PR opens anything against slac-lcls/lute.
+the exact PYTHONPATH-export shape to match, and only then propose it upstream (as a patch or as an
+issue describing the symptom below) against slac-lcls/lute. Nothing in this repo opens anything
+against slac-lcls/lute.
 
 Symptom this fixes: the install can carry several `lib/pythonX.Y/site-packages` trees side by side
 (e.g. 3.9, 3.11, 3.12) and only some of them are populated with `launch_scripts`. Deriving the tree

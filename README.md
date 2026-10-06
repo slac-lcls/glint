@@ -87,9 +87,12 @@ consensus, default 3) · `--mode auto|sparse|dense` · `--escalate` (a deeper kn
 that still fail the gate, accepted only against the frame's own azimuth-scrambled copies; off by default) ·
 `--gate none|strict|floor` (write a frame as a crystal only if it passes the paper's scoring bar; `floor` also
 requires `--floor NAME|a,b[,c]` for a dataset-specific chance floor; default none) ·
+`--select first|matched` (which consensus-consistent candidate a frame keeps: the first N-best cell, or the
+known-cell search on every frame keeping the candidate that matches the most peaks; default first) ·
 `--integrate` (real I/σ) · `--tofile` (hand orientations to CrystFEL for the refined merge) ·
 `--device cpu|auto` · `-N` (limit frames). `--images raw.cxi --geom detector.geom` runs GLINT's own GPU
-peak finder on the pixels instead of reading a peak stream.
+peak finder on the pixels instead of reading a peak stream; `--per-panel-finder` runs it once per panel of a
+multi-panel slab, so nothing it computes crosses a panel seam (off by default: a fixed cost per panel).
 
 ## LUTE pipeline
 
@@ -98,9 +101,10 @@ for `CrystFELIndexer` in the LCLS SFX workflow:
 
     PeakFinderSFX -> [GLINTIndexer] -> StreamFileConcatenator -> PartialatorMerger -> HKLManipulator
 
-The reason it exists: none of LUTE's bundled CrystFEL builds are compiled with FFBIDX support, so
-`indexamajig --indexing=ffbidx` fails and GPU fast-feedback-style indexing is unavailable in LUTE
-today. GLINT fills that gap, emitting a CrystFEL `.stream` the downstream stages already understand.
+The reason it exists: the CrystFEL builds LUTE runs (0.10.2 by default) lack FFBIDX support, so
+`indexamajig --indexing=ffbidx` fails there; S3DF's separate fast-feedback build is not one LUTE
+uses. GLINT adds GPU blind indexing to LUTE, emitting a CrystFEL `.stream` the downstream stages
+already understand.
 
 **Pick a merge route.** GLINT's default stream carries the cell and the per-frame orientation, with
 placeholder `I=0.00` intensities — everything a *refiner* needs and nothing a *merger* does. One of
@@ -110,17 +114,19 @@ want CrystFEL in the pipeline:
 * **`integrate: true`** — no CrystFEL step. GLINT predicts and box-integrates its own reflections
   and writes real I/σ, so the stream flows straight through the concatenator to
   `PartialatorMerger`. Prediction runs on the GPU; the box gather itself is host numpy on this
-  route. This is the configuration of the validated end-to-end run.
+  route. This was the configuration of the first validated end-to-end run (glint#3).
 * **`tofile:`** — hand the orientations to `indexamajig --indexing=file`, added as a task between
   `GLINTIndexer` and `StreamFileConcatenator`, so CrystFEL's prediction refinement imposes the
   lattice symmetry. Note that `tofile:` alone is not enough: without the added task the DAG
   concatenates the placeholder stream.
 
-Which merges *better* is not settled — see
-[glint#129](https://github.com/slac-lcls/glint/issues/129), where the only head-to-head ran the two
-routes at unmatched integration settings. Matching them closed the CC\* gap, and the R_split
-difference that remains is explained by multiplicity and a selection cut rather than by intensity
-quality. Choose on dependencies, not on an expected quality ranking.
+Which merges *better* depends on the data. On cxidb-17 lysozyme the two routes matched once their
+integration settings were matched ([glint#129](https://github.com/slac-lcls/glint/issues/129)). On
+mfx100848724 run 51 (Jungfrau-16M, tetragonal lysozyme, LUTE validation of 29 Sep 2026) they did not: over
+the 171 frames both indexers indexed, CrystFEL's integration merged to CC½ 0.27 and GLINT's own to 0.08, and
+handing GLINT's orientations to CrystFEL gave 0.27. GLINT's integrator imposes no lattice symmetry and writes
+each frame's cell as refined (spread 1–1.6 Å on that run, against 0.06 Å for CrystFEL's). For a merge, prefer
+`tofile:`; use `integrate: true` where CrystFEL is unavailable, and compare the two on your own data.
 
 Configuration for both, including the traps worth knowing on the `tofile:` route, is in
 [`lute/README.md`](lute/README.md). Install the Task into a LUTE tree with
@@ -145,9 +151,9 @@ directory holds the research scripts and diagnostic harness (not shipped in the 
 ## Roadmap & contributing
 
 Open directions live in [`ROADMAP.md`](ROADMAP.md): real-data validation and LCLS productization,
-faster M1–M6, breaking the **blind convergent-beam (CBXD)** wall, and exploratory extensions to
-**powder** (metric-tensor auto-indexing → Rietveld) and **Laue / pink-beam** (the fat Ewald sphere) —
-all resting on the same gridless objective + GPU consensus. Settled questions and negative results are
+faster M1–M6, the **blind convergent-beam (CBXD)** problem (developed separately until its paper is out),
+and exploratory extensions to **powder** (metric-tensor auto-indexing → Rietveld) and **Laue / pink-beam**
+(the fat Ewald sphere) — all resting on the same gridless objective + GPU consensus. Settled questions and negative results are
 in [`docs/results.md`](docs/results.md). How to work in the repo (branches/PRs, envs, validation gates)
 is in [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`docs/onboarding.md`](docs/onboarding.md).
 

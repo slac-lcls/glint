@@ -138,6 +138,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_geom_data_key.py
 
+      # --integrate predicts at the wavelength the frames were INDEXED at (--wavelength over the .geom)
+      # and stamps that energy as photon_energy_eV. The --peaks route ignored --wavelength: a path-valued
+      # .geom photon_energy crashed after indexing, and a literal one was integrated off the spots. The
+      # CLI runs in-process with an oracle indexer in place of glint.hybrid_stream, so h5py + numpy only.
+      - name: experiments/test_integrate_wavelength.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_integrate_wavelength.py
+
       - name: experiments/test_consensus_degenerate.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_consensus_degenerate.py
@@ -183,6 +191,14 @@ jobs:
       - name: experiments/test_streamdriver_laue.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_streamdriver_laue.py
+
+      # ...and that the class derived from the header reads the CENTERING: hexagonal + H/R (a
+      # rhombohedral lattice on hexagonal axes) is -3m1, not 6/mmm, whose extra operators merge
+      # allowed reflections with absent ones. Every other input is pinned against a verbatim copy
+      # of the pre-fix function.
+      - name: experiments/test_laue_centering.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_laue_centering.py
 
       # The live merge refuses frames whose mean intensity is not measured (n <= 5, or mean(I) <= 3 sem)
       # instead of scaling them by an unbounded 1/mean(I) or leaving them in raw units (review r2 s1-01,
@@ -421,6 +437,17 @@ jobs:
       - name: experiments/test_refine_bravais_setting.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_refine_bravais_setting.py
+
+      # The Miller-index box of every |q| <= qmax enumeration (predict._hkl_grid -> predict_spots,
+      # HKLGrid; theoretical_unique; multishot.reference_lattice; alias_gate.tightness) must hold the
+      # whole sphere for OBLIQUE cells. The box was bounded by qmax/|a*| instead of qmax*|a|, which
+      # clipped high-resolution rows on triclinic, monoclinic beta >~ 115, hexagonal and blind-primitive
+      # cells, and made the alias gate's node count basis-dependent. Checked against a brute-force
+      # sphere that shares no formula with the code. test_streamdriver_laue and test_axis_standardizer
+      # could not see it: both compare the box against itself. numpy-only.
+      - name: experiments/test_hkl_box.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_hkl_box.py
 
       # Not a test: it checks that run_ci_locally.py's STEPS still matches the steps above, so the
       # local "run it as poor as CI" harness cannot quietly fall behind this file and start

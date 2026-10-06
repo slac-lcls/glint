@@ -41,7 +41,10 @@ coverage 0.0276-0.0302 across the whole index-2 family against a 0.027 chance va
 half-volume derivatives at 1.5-1.8x the leader, and a randomly ROTATED copy of the leader scoring
 within 1.26x of the as-locked one -- i.e. the pooled score carried essentially no orientation
 information. The same gate on the same lock, evaluated per frame, confirmed the true cell on 30 of 40
-frames with a median best/leader of exactly 1.000.
+frames with a median best/leader of exactly 1.000. All of these cxidb-62 figures are PRE-#179: they were
+measured on #111's code (2026-08-13), before #179 added the off-diagonal index-2 derivatives and before
+`tightness` bounded its node-count box by qmax*|M[:,i]| (the old box undercounted npred on skewed bases,
+and the cxidb-62 cell is hexagonal). They have not been re-measured on the current gate.
 
 Two defences follow from that measurement. `confirm` ABSTAINS (returns the leader untouched) unless the
 leader's coverage clears `coverage_floor`, which sits a safety factor above the coverage at which an
@@ -59,10 +62,9 @@ signal here at all?".
 Opt-in: the streaming driver calls `AliasGate.confirm(M_leader, Q)` only when an `alias_gate=` is passed;
 default None => the gate never runs => the lock path is bit-identical to today.
 """
-import itertools
 import numpy as np
 
-from .lattice import reduced_params
+from .lattice import buerger_reduce, reduced_params
 
 
 # --------------------------------------------------------------------------- derivative lattices ----
@@ -196,7 +198,7 @@ def coverage_floor(hkl_tol=0.15, margin=1.10, max_index=2, safety=2.0):
 
     -- 1/k at f=1 (the alias loses cleanly, which is why the test works when it is applicable) rising to
     k as f -> 0 (the score IS the 1/V prior). At the cxidb-62 lock f was 0.0028, predicting 1.82 against
-    the 1.77 measured -- and inverting that f recovers ~360 frames' worth of dilution against 314 real
+    the 1.77 measured (pre-#179, see the module docstring) -- and inverting that f recovers ~360 frames' worth of dilution against 314 real
     voters, which is the arithmetic of pooling in one line. Requiring the ratio to stay within `margin`
     bounds f from below; the floor is the coverage there, with s = sqrt(margin/k):
 
@@ -270,12 +272,19 @@ def tightness(M, Q, hkl_tol=0.15):
 
     occ_nodes = {tuple(x) for x in h[inl].astype(int)}
     qmax = float(np.sqrt(np.einsum("ij,ij->i", Q, Q)).max())
-    Minv = np.linalg.inv(M)                                   # hkl -> q : q = hkl @ Minv
-    rlen = np.sqrt((Minv ** 2).sum(1))                        # |dq| per unit step in h,k,l
-    hb = np.ceil(qmax / np.maximum(rlen, 1e-12)).astype(int) + 1
-    grid = np.array(list(itertools.product(range(-hb[0], hb[0] + 1),
-                                           range(-hb[1], hb[1] + 1),
-                                           range(-hb[2], hb[2] + 1))), float)
+    # npred counts the LATTICE's nodes in the shell, so any basis of it gives the same count: use the
+    # Buerger-reduced one, whose box is the smallest (a skewed derivative's own box can be many times
+    # the shell). Keep M if the reduction did not return a basis of the same lattice (|det| differs).
+    Mb = buerger_reduce(M)
+    if abs(abs(np.linalg.det(Mb)) - abs(np.linalg.det(M))) > 1e-6 * abs(np.linalg.det(M)):
+        Mb = M
+    Minv = np.linalg.inv(Mb)                                  # hkl -> q : q = hkl @ Minv
+    # h_i = q . Mb[:,i], so |h_i| <= qmax*|Mb[:,i]| bounds the box for ANY basis. The old bound,
+    # qmax/|row_i(Minv)|, is short by cos(angle(Mb[:,i], row_i(Minv))) on a skewed basis, which
+    # undercounted npred for oblique derivatives and made the score basis-dependent.
+    hb = np.ceil(qmax * np.linalg.norm(Mb, axis=0)).astype(int) + 1
+    grid = np.stack(np.meshgrid(*(np.arange(-b, b + 1) for b in hb), indexing="ij"),
+                    -1).reshape(-1, 3).astype(float)
     qg = grid @ Minv
     qgn = np.sqrt(np.einsum("ij,ij->i", qg, qg))
     npred = int(((qgn > 1e-9) & (qgn <= qmax)).sum())

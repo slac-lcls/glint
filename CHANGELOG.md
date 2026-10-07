@@ -6,7 +6,8 @@ in the pages it guards; this file names what changed, not how much.
 ## v0.1.0 — 2026-10-06
 
 The state of the code behind *Real-time blind indexing by cross-frame consensus* (arXiv:2609.07722) and the first
-public release under the licence in `LICENSE.md`.
+public release under the licence in `LICENSE.md`. Registered with DOE CODE as record 193615, DOI
+[10.11578/dc.20261006.1](https://doi.org/10.11578/dc.20261006.1) (approved 7 Oct 2026).
 
 ### Blind indexing and consensus
 - Gridless multi-start front end (M1–M6) with the fused M3 kernel on by default (#30, #39); the M3 peak cap and a

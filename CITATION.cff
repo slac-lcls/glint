@@ -1,6 +1,6 @@
 # Citation metadata for GLINT (Citation File Format 1.2.0). GitHub reads this file for "Cite this repository";
-# DOE CODE and Zenodo read the same fields. Keep `version` equal to pyproject.toml's and fill `doi` and
-# `date-released` when the DOE CODE record is announced at the tagged release.
+# DOE CODE and Zenodo read the same fields. Keep `version` equal to pyproject.toml's; `doi` and `date-released`
+# are those of the DOE CODE record (193615) announced at the tagged release.
 cff-version: 1.2.0
 message: "If you use GLINT, please cite the method paper below and this software record."
 type: software
@@ -24,7 +24,14 @@ authors:
     orcid: "https://orcid.org/0000-0002-5797-5234"
 version: 0.1.0
 date-released: 2026-10-06
-# doi: 10.11578/dc.XXXXXXXX  (the DOE CODE DOI, when announced)
+doi: 10.11578/dc.20261006.1
+identifiers:
+  - type: doi
+    value: 10.11578/dc.20261006.1
+    description: "DOE CODE software record 193615 (release v0.1.0)"
+  - type: other
+    value: "arXiv:2609.07722"
+    description: "Method paper"
 repository-code: "https://github.com/slac-lcls/glint"
 # LICENSE.md is BSD-3-Clause plus the SLAC/DOE enhancements grant-back; no single SPDX identifier names that
 # text exactly, so the file is referenced rather than an identifier asserted.

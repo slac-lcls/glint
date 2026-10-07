@@ -1,6 +1,6 @@
 # GLINT — a fast GPU-native blind crystallography indexer
 
-Stefano Marchesini and Yuan Ni, SLAC National Accelerator Laboratory · [arXiv:2609.07722](https://arxiv.org/abs/2609.07722) · [how to cite](CITATION.cff)
+Stefano Marchesini and Yuan Ni, SLAC National Accelerator Laboratory · [arXiv:2609.07722](https://arxiv.org/abs/2609.07722) · [DOI 10.11578/dc.20261006.1](https://doi.org/10.11578/dc.20261006.1) · [how to cite](CITATION.cff)
 
 GLINT indexes sparse single-shot serial-crystallography (SFX) diffraction **blind** (no unit
 cell supplied) on the GPU. It proposes candidate real-space axes from a gridless objective,
@@ -155,6 +155,13 @@ The blind front-end (`glint.glint_fast.index_blind_nbest`), the consensus
 (`glint.multishot.consensus_cell`), and the GPU known-cell rescue
 (`glint.replica_gpu.index_known_gpu_cell`) are all individually importable. The `experiments/`
 directory holds the research scripts and diagnostic harness (not shipped in the wheel).
+
+## Cite
+
+If you use GLINT, cite the method paper, S. Marchesini and Y. Ni, *Real-time blind indexing by cross-frame
+consensus*, arXiv:2609.07722 (2026), and the software record: DOE CODE record 193615,
+[doi:10.11578/dc.20261006.1](https://doi.org/10.11578/dc.20261006.1), release `v0.1.0`. [`CITATION.cff`](CITATION.cff) carries both
+in machine-readable form, and GitHub's "Cite this repository" button reads it.
 
 ## Roadmap & contributing
 

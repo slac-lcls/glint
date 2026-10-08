@@ -17,8 +17,10 @@ merging is a plain header-once chunk concatenation.
 
 GPU pinning: preferred is to let the launcher give each rank one device (srun --gpus-per-task=1 /
 --gpu-bind, or CUDA_VISIBLE_DEVICES per task) -- then this does nothing. Otherwise pass --gpus-per-node
-N and each rank is pinned to local_rank % N, set in the environment BEFORE torch/cupy import and BEFORE
-the bridge worker spawns (the worker inherits the env), so the whole rank shares one GPU.
+N and each rank is pinned to one device: one of the devices the launcher left visible when its mask lists
+several (allowed[local_rank % len(allowed)]), else local_rank % N; an empty mask (a CPU rank) is kept. Set
+in the environment BEFORE torch/cupy import and BEFORE the bridge worker spawns (the worker inherits the
+env), so the whole rank shares one GPU. The mask is only ever narrowed, never replaced (lcls2#155).
 
 For xtc2 the MPI lives only at the conda1 level: each rank independently calls its own conda2 bridge
 worker with its shard (nranks worker processes, disjoint events), so there is no MPI inside conda2.
@@ -49,16 +51,34 @@ def _local_rank():
 def pin_gpu(local_rank, gpus_per_node):
     """Pin this rank to one GPU by setting CUDA_VISIBLE_DEVICES, BEFORE any torch/cupy import and before
     the conda2 bridge worker spawns (it inherits the env), so the in-env index and the bridged peak-find
-    share one device. No-op when the launcher already pinned exactly one device (the preferred path).
-    Returns the CUDA_VISIBLE_DEVICES in effect (or None if left untouched)."""
+    share one device. Returns the CUDA_VISIBLE_DEVICES in effect (None if unset and left untouched).
+
+    The launcher's mask is authoritative: whatever it left visible is the ALLOWED set, and this only ever
+    narrows that set, never replaces it (the rule psana2's MPI GPU path is adopting in lcls2#155, and the
+    two processes share a device by inheriting this variable).
+      * one device (ordinal or UUID)  -> trust it; no-op (the documented srun --gpus-per-task=1 path);
+      * an empty mask                 -> a CPU-only rank; left empty, never re-enabled;
+      * several devices               -> with --gpus-per-node, pick allowed[local_rank % len(allowed)];
+                                         without it (0 = trust launcher) leave them all visible;
+      * unset                         -> with --gpus-per-node N, pin local_rank % N; else leave unset.
+    Until this version a multi-device mask was overwritten with the bare physical ordinal local_rank % N,
+    which can name a GPU outside the allowed set, and an empty mask was read as unset."""
     cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if cvd is not None and cvd != "" and "," not in cvd:
-        return cvd  # launcher already pinned exactly one device -- trust it
+    lr = local_rank if local_rank is not None else 0
+    if cvd is not None:
+        allowed = [d.strip() for d in cvd.split(",") if d.strip()]
+        if len(allowed) <= 1:
+            return cvd                       # one device, or none: the launcher decided; keep it
+        if gpus_per_node and gpus_per_node > 0:
+            dev = allowed[lr % len(allowed)]
+            os.environ["CUDA_VISIBLE_DEVICES"] = dev
+            return dev
+        return cvd                           # several visible, no pin requested: trust the launcher
     if gpus_per_node and gpus_per_node > 0:
-        dev = (local_rank if local_rank is not None else 0) % gpus_per_node
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(dev)
-        return str(dev)
-    return cvd  # all devices visible -- caller should pin via the launcher; documented in --help
+        dev = str(lr % gpus_per_node)
+        os.environ["CUDA_VISIBLE_DEVICES"] = dev
+        return dev
+    return None                              # unset, no pin requested; caller may pin via the launcher
 
 
 def concat_streams(part_paths, out_path):
@@ -96,7 +116,8 @@ def main(argv=None):
 
     ap = glint_xtc.build_parser()
     ap.add_argument("--gpus-per-node", type=int, default=int(os.environ.get("GLINT_GPUS_PER_NODE", "0")),
-                    help="pin rank to GPU (local_rank %% N) when the launcher has not; 0 = trust launcher")
+                    help="pin this rank to one GPU: one of the launcher's CUDA_VISIBLE_DEVICES when it lists several, "
+                         "else local_rank %% N; an empty mask is kept; 0 = trust the launcher (default)")
     ap.add_argument("--keep-parts", action="store_true", help="keep the per-rank partial .stream files")
     args = ap.parse_args(argv)
     if not args.exp:

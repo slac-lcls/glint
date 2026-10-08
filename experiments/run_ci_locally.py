@@ -45,6 +45,7 @@ STEPS = [
     "experiments/test_xtc_integrate_wavelength.py",
     "experiments/test_integrate_event.py",
     "experiments/test_device_selection.py",
+    "experiments/test_pin_gpu.py",
     "experiments/test_panel_stack_integrate.py",
     "experiments/test_integrate_cxi_layout.py",
     "experiments/test_images_unassembled_cxi.py",

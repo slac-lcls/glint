@@ -49,6 +49,7 @@ STEPS = [
     "experiments/test_integrate_cxi_layout.py",
     "experiments/test_images_unassembled_cxi.py",
     "experiments/test_stream_header_energy.py",
+    "experiments/test_global_coffset.py",
     "experiments/test_geom_data_key.py",
     "experiments/test_integrate_wavelength.py",
     "experiments/test_consensus_degenerate.py",

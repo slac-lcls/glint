@@ -148,6 +148,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_stream_header_energy.py
 
+      # A GLOBAL .geom coffset is applied once on the --images route: z = clen + coffset, as CrystFEL
+      # and the --peaks route have it. frames_from_cxi and integrate_cxi added it to clen AND let every
+      # panel inherit it, so q, the ring_focus mask and predicted (fs, ss) belonged to a detector at
+      # clen + 2*coffset. Checked against an independent forward model and against the --peaks route
+      # on the same .geom; the pre-fix tree fails 13 checks. Builds its .cxi with h5py (installed above).
+      - name: experiments/test_global_coffset.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_global_coffset.py
+
       # The .geom `data =` key must reach integration (glint#143). parse_geom used to drop it,
       # so the peaks+--integrate route could never read a non-default dataset path; #142's test
       # passed data_path explicitly, which is why CI stayed green through the defect.

@@ -779,8 +779,9 @@ The serial GLINT integration does not have to wait for it.
   `CUDA_VISIBLE_DEVICES`:
   - On the documented launch (`srun --gpus-per-task=1`), Slurm sets it and `pin_gpu` leaves it
     alone.
-  - Otherwise `pin_gpu` sets it when `--gpus-per-node N` is given. The default, 0, leaves every GPU
-    visible.
+  - Otherwise `pin_gpu` sets it when `--gpus-per-node N` is given, choosing within the launcher's mask
+    when it lists several devices and keeping an empty mask empty (it narrows the mask, never replaces
+    it). The default, 0, leaves the launcher's visibility unchanged.
 
   The conda2 reader inherits that mask, so the torch indexer and the reader's peak-find share one
   device. A reader on psana's native MPI GPU path can have the variable rewritten. If the new index

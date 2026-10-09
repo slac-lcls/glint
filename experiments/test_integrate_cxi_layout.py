@@ -125,7 +125,7 @@ with tempfile.TemporaryDirectory() as d:
     gpath = os.path.join(d, "one.geom"); open(gpath, "w").write(GEOM)
     g4path = os.path.join(d, "four.geom"); open(g4path, "w").write(GEOM4)
     panels, glob = parse_geom(gpath)
-    clen_m = float(glob["clen"]) + float(glob.get("coffset", 0.0))
+    clen_m = float(glob["clen"])            # as integrate_cxi: the panels carry the coffset
     wl = lambda_from_eV(float(glob["photon_energy"]))
     check("the 4-panel geometry parses as 4 panels", len(parse_geom(g4path)[0]) == NP)
 

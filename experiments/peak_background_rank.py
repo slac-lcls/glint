@@ -40,14 +40,13 @@ with h5py.File(CXI, "r") as f:
     Y = np.asarray(f["/entry_1/result_1/peakYPosRaw"])
     I = np.asarray(f["/entry_1/result_1/peakTotalIntensity"])
     clen_spec, en_spec = glob.get("clen"), glob.get("photon_energy")
-    coff = float(glob.get("coffset", 0.0))
     QS, IS, FR = [], [], []
     for i in range(len(npk)):
         k = int(npk[i])
         if k < 6:
             continue
         clen = _meta(clen_spec, f, i, 0.1)
-        clen = clen * (0.001 if abs(clen) > 10 else 1.0) + coff
+        clen = clen * (0.001 if abs(clen) > 10 else 1.0)       # no coffset: peaks_to_q adds each panel's
         eV = _meta(en_spec, f, i, None)
         wl = lambda_from_eV(eV) if eV else 1.3
         q = peaks_to_q(X[i, :k], Y[i, :k], panels, clen, wl)

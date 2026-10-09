@@ -43,6 +43,7 @@ STEPS = [
     "experiments/test_negative_intensities.py",
     "experiments/test_lazy_exports.py",
     "experiments/test_xtc_integrate_wavelength.py",
+    "experiments/test_xtc_help.py",
     "experiments/test_integrate_event.py",
     "experiments/test_device_selection.py",
     "experiments/test_panel_stack_integrate.py",

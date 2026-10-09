@@ -71,7 +71,7 @@ def build_parser():
                          "Use when the trusted geometry is a refinement that was never written back "
                          "into psana: on mfxx49820 r0016 psana's deployed 0-end.data is the "
                          "unrefined 2021 start, and against btx's refined r0016.geom it is off by a "
-                         "median 3.16% in |q|, signed per detector quadrant -- which no --zdist can "
+                         "median 3.16%% in |q|, signed per detector quadrant -- which no --zdist can "
                          "absorb, and which is enough to stop blind indexing finding the true cell.")
     pf = ap.add_argument_group(
         "peak finder (PeakFinderV4)",

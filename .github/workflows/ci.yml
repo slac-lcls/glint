@@ -100,6 +100,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_xtc_integrate_wavelength.py
 
+      # glint_xtc.py --help must exit 0. argparse %-formats every help= string, so the bare "%" in
+      # --geom's "median 3.16% in |q|" was a %i directive and every --help died with a TypeError
+      # (lute/glint_launch.sh dropped --help, and LUTE's IndexGLINT now runs the file directly).
+      # Runs the real entry point in a subprocess and build_parser().format_help() in-process, with
+      # a control that a bare "% i" does raise on this interpreter. numpy only.
+      - name: experiments/test_xtc_help.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_xtc_help.py
+
       # The peaks-route integrator's event addressing (glint#136). It builds a 3-event .cxi and
       # checks the three frames integrate to three DIFFERENT intensities -- which is exactly what
       # the shipped code could not do, and nothing else here would have noticed.

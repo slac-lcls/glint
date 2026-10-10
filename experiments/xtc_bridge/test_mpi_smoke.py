@@ -50,9 +50,10 @@ def main():
 
     import glint_xtc_mpi
     out = str(HERE / "_mpi_smoke.stream")
-    # GPU pinning is left to the launcher / GLINT_GPUS_PER_NODE (portable across 1- and N-GPU nodes);
-    # --zdist is required by the parser but unused here (the reader is stubbed).
-    argv = ["--exp", "sim", "--run", "1", "--zdist", "0.1", "--psana", "1", "-o", out]
+    # This checks sharding and the merge, not placement, so its ranks may share a GPU (--share-gpu keeps
+    # it portable across 1- and N-GPU nodes); --zdist is required by the parser but unused here (the
+    # reader is stubbed).
+    argv = ["--exp", "sim", "--run", "1", "--zdist", "0.1", "--psana", "1", "-o", out, "--share-gpu"]
     rc = glint_xtc_mpi.main(argv)
 
     if rank != 0:

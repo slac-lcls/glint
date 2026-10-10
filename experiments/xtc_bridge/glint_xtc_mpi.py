@@ -15,12 +15,12 @@ time still spread evenly and no rank needs the event count up front (see xtc_cor
 global event index is written into each chunk, so partial streams from different ranks never collide and
 merging is a plain header-once chunk concatenation.
 
-GPU pinning: preferred is to let the launcher give each rank one device (srun --gpus-per-task=1 /
---gpu-bind, or CUDA_VISIBLE_DEVICES per task) -- then this does nothing. Otherwise pass --gpus-per-node
-N and each rank is pinned to one device: one of the devices the launcher left visible when its mask lists
-several (allowed[local_rank % len(allowed)]), else local_rank % N; an empty mask (a CPU rank) is kept. Set
-in the environment BEFORE torch/cupy import and BEFORE the bridge worker spawns (the worker inherits the
-env), so the whole rank shares one GPU. The mask is only ever narrowed, never replaced (lcls2#155).
+GPU placement belongs to the launcher; this wrapper never writes CUDA_VISIBLE_DEVICES. Give each rank
+its own GPU (srun --gpus-per-task=1, --gpu-bind, or a per-rank CUDA_VISIBLE_DEVICES). The rank's torch
+indexer and the conda2 bridge worker it spawns inherit the same unmodified mask, so both use its first
+device. A rank that would have to guess -- several ranks on a node, each seeing several GPUs or an unset
+mask -- stops with the launch fix instead, unless --share-gpu says those ranks share one GPU on purpose.
+See check_gpu_binding.
 
 For xtc2 the MPI lives only at the conda1 level: each rank independently calls its own conda2 bridge
 worker with its shard (nranks worker processes, disjoint events), so there is no MPI inside conda2.
@@ -34,51 +34,57 @@ from pathlib import Path
 CHUNK_START = "----- Begin chunk -----"
 
 
-def _local_rank():
-    """Node-local rank from whichever launcher set it (SLURM / OpenMPI / MVAPICH / Hydra); None if
-    unknown (single node or an unrecognised launcher)."""
-    for k in ("SLURM_LOCALID", "OMPI_COMM_WORLD_LOCAL_RANK", "MV2_COMM_WORLD_LOCAL_RANK",
-              "MPI_LOCALRANKID", "PMI_LOCAL_RANK"):
-        v = os.environ.get(k)
-        if v is not None:
-            try:
-                return int(v)
-            except ValueError:
-                pass
-    return None
+class GpuBindingError(RuntimeError):
+    """The launcher has not decided this rank's GPU, and guessing could put ranks on the wrong one."""
 
 
-def pin_gpu(local_rank, gpus_per_node):
-    """Pin this rank to one GPU by setting CUDA_VISIBLE_DEVICES, BEFORE any torch/cupy import and before
-    the conda2 bridge worker spawns (it inherits the env), so the in-env index and the bridged peak-find
-    share one device. Returns the CUDA_VISIBLE_DEVICES in effect (None if unset and left untouched).
+LAUNCH_FIX = ("give each rank its own GPU from the launcher (srun --gpus-per-task=1, or a per-rank "
+              "CUDA_VISIBLE_DEVICES), run one rank per node, or pass --share-gpu if this node's ranks "
+              "should share one GPU")
 
-    The launcher's mask is authoritative: whatever it left visible is the ALLOWED set, and this only ever
-    narrows that set, never replaces it (the rule psana2's MPI GPU path is adopting in lcls2#155, and the
-    two processes share a device by inheriting this variable).
-      * one device (ordinal or UUID)  -> trust it; no-op (the documented srun --gpus-per-task=1 path);
-      * an empty mask                 -> a CPU-only rank; left empty, never re-enabled;
-      * several devices               -> with --gpus-per-node, pick allowed[local_rank % len(allowed)];
-                                         without it (0 = trust launcher) leave them all visible;
-      * unset                         -> with --gpus-per-node N, pin local_rank % N; else leave unset.
-    Until this version a multi-device mask was overwritten with the bare physical ordinal local_rank % N,
-    which can name a GPU outside the allowed set, and an empty mask was read as unset."""
-    cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
-    lr = local_rank if local_rank is not None else 0
+
+def check_gpu_binding(cvd, local_size, share_gpu=False):
+    """Describe the GPU this rank will use, WITHOUT changing CUDA_VISIBLE_DEVICES; raise GpuBindingError
+    when the launcher has not decided it. cvd is the inherited CUDA_VISIBLE_DEVICES (None if unset);
+    local_size is the number of MPI ranks on this node.
+
+    The launcher owns placement (glint#256 review). The rank's torch indexer and the conda2 bridge worker
+    it spawns inherit the same unmodified mask, so both use its first device. GLINT used to write the
+    variable instead, but a write cannot be relied on: importing mpi4py can initialize CUDA (lcls2#175
+    measured it under psana's MPI), after which the write no longer moves this process, only the worker
+    it spawns, and the two can end up on different GPUs.
+      * one device (ordinal, UUID or MIG id) -> the launcher's choice;
+      * an empty mask                        -> the launcher gave this rank no GPU;
+      * several devices, or unset            -> fine for a node's only rank, which uses the first device;
+                                                with several ranks on the node they would all use that
+                                                same device, so refuse unless share_gpu says it is meant.
+    """
     if cvd is not None:
-        allowed = [d.strip() for d in cvd.split(",") if d.strip()]
-        if len(allowed) <= 1:
-            return cvd                       # one device, or none: the launcher decided; keep it
-        if gpus_per_node and gpus_per_node > 0:
-            dev = allowed[lr % len(allowed)]
-            os.environ["CUDA_VISIBLE_DEVICES"] = dev
-            return dev
-        return cvd                           # several visible, no pin requested: trust the launcher
-    if gpus_per_node and gpus_per_node > 0:
-        dev = str(lr % gpus_per_node)
-        os.environ["CUDA_VISIBLE_DEVICES"] = dev
-        return dev
-    return None                              # unset, no pin requested; caller may pin via the launcher
+        devices = [d.strip() for d in cvd.split(",") if d.strip()]
+        if len(devices) == 1:
+            return f"GPU {devices[0]} (set by the launcher)"
+        if not devices:
+            return "no GPU (CUDA_VISIBLE_DEVICES is empty)"
+        seen = f"CUDA_VISIBLE_DEVICES={cvd}"
+    else:
+        seen = "CUDA_VISIBLE_DEVICES unset"
+    if local_size <= 1:
+        return f"the first visible GPU ({seen}; the only rank on this node)"
+    if share_gpu:
+        return f"the first visible GPU, shared by the {local_size} ranks on this node (--share-gpu; {seen})"
+    raise GpuBindingError(f"{local_size} ranks on this node with {seen}: every rank would use the same "
+                          f"first GPU. To fix: {LAUNCH_FIX}.")
+
+
+def retired_gpus_per_node(value, environ):
+    """--gpus-per-node and GLINT_GPUS_PER_NODE made GLINT write CUDA_VISIBLE_DEVICES; both are retired.
+    Return the error text when either asks for pinning (anything but unset or 0), else None."""
+    env = (environ.get("GLINT_GPUS_PER_NODE") or "").strip()
+    if (value is None or value == 0) and env in ("", "0"):
+        return None
+    given = f"--gpus-per-node {value}" if value not in (None, 0) else f"GLINT_GPUS_PER_NODE={env}"
+    return (f"{given}: this option was removed, because GLINT no longer sets CUDA_VISIBLE_DEVICES. "
+            f"Instead, {LAUNCH_FIX}.")
 
 
 def concat_streams(part_paths, out_path):
@@ -115,9 +121,12 @@ def main(argv=None):
     import glint_xtc
 
     ap = glint_xtc.build_parser()
-    ap.add_argument("--gpus-per-node", type=int, default=int(os.environ.get("GLINT_GPUS_PER_NODE", "0")),
-                    help="pin this rank to one GPU: one of the launcher's CUDA_VISIBLE_DEVICES when it lists several, "
-                         "else local_rank %% N; an empty mask is kept; 0 = trust the launcher (default)")
+    ap.add_argument("--gpus-per-node", type=int, default=None,
+                    help="removed: GLINT no longer sets CUDA_VISIBLE_DEVICES; give each rank its GPU from the "
+                         "launcher (srun --gpus-per-task=1)")
+    ap.add_argument("--share-gpu", action="store_true",
+                    help="allow several ranks on a node to share its first visible GPU when the launcher has "
+                         "not given each rank its own")
     ap.add_argument("--keep-parts", action="store_true", help="keep the per-rank partial .stream files")
     args = ap.parse_args(argv)
     if not args.exp:
@@ -125,10 +134,28 @@ def main(argv=None):
             sys.stderr.write("set --exp or GLINT_EXP (the beamtime id is not committed)\n")
         return 2
 
-    dev = pin_gpu(_local_rank(), args.gpus_per_node)
+    # Decide placement on every rank, then agree, so a refusal on one rank stops all of them here
+    # rather than leaving the others blocked in the gather below.
+    node = comm.Split_type(MPI.COMM_TYPE_SHARED)
+    local_size = node.Get_size()
+    node.Free()
+    gpu, problem = None, retired_gpus_per_node(args.gpus_per_node, os.environ)
+    if problem is None:
+        try:
+            gpu = check_gpu_binding(os.environ.get("CUDA_VISIBLE_DEVICES"), local_size, args.share_gpu)
+        except GpuBindingError as e:
+            problem = str(e)
+    bad = [(r, p) for r, p in enumerate(comm.allgather(problem)) if p]
+    if bad:
+        if rank == 0:
+            for r, p in bad[:4]:
+                sys.stderr.write(f"[glint_xtc_mpi] rank {r}: {p}\n")
+            if len(bad) > 4:
+                sys.stderr.write(f"[glint_xtc_mpi] ... and {len(bad) - 4} more ranks\n")
+        return 2
     if rank == 0:
         print(f"[glint_xtc_mpi] {size} ranks; psana{args.psana}; {args.exp} run {args.run}; "
-              f"CUDA_VISIBLE_DEVICES={dev}; out {args.out}", flush=True)
+              f"rank 0 uses {gpu}; out {args.out}", flush=True)
 
     # each rank reads + indexes its event shard into a partial stream
     out = glint_xtc.read_qframes(args, rank=rank, nranks=size, verbose=(rank == 0))

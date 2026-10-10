@@ -764,6 +764,12 @@ from reading the source and has not yet been validated in a launch.
 - select only within each rank's allowed devices;
 - discover the actual GPU-sharing peers across EB groups for the budget.
 
+[lcls2#175](https://github.com/slac-lcls/lcls2/pull/175) (open, against `features/psana2-gpu`)
+implements this. It selects a device within the launcher's mask and does **not** rewrite the variable,
+because importing mpi4py initializes CUDA there, so a later write is ignored. @monarin's review of it
+(9 Oct) has a P1 open: the selected device does not yet reach the run, so workers can stay on the
+default GPU.
+
 The serial GLINT integration does not have to wait for it.
 
 @monarin's suggested starting configuration for a native-MPI run:
@@ -777,16 +783,15 @@ The serial GLINT integration does not have to wait for it.
 **Where this collides with GLINT.**
 - **Device placement.** Each `glint_xtc_mpi.py` rank is meant to see exactly one GPU through
   `CUDA_VISIBLE_DEVICES`:
-  - On the documented launch (`srun --gpus-per-task=1`), Slurm sets it and `pin_gpu` leaves it
-    alone.
-  - Otherwise `pin_gpu` sets it when `--gpus-per-node N` is given, choosing within the launcher's mask
-    when it lists several devices and keeping an empty mask empty (it narrows the mask, never replaces
-    it). The default, 0, leaves the launcher's visibility unchanged.
+  - The launcher sets it (the documented launch is `srun --gpus-per-task=1`). GLINT never writes it
+    (glint#256): a write after `import mpi4py` may not move the rank itself, only the reader it spawns.
+  - Several ranks on a node without a GPU each make the wrapper stop with the launch fix, unless
+    `--share-gpu` says they share one GPU on purpose. `--gpus-per-node` is removed.
 
   The conda2 reader inherits that mask, so the torch indexer and the reader's peak-find share one
   device. A reader on psana's native MPI GPU path can have the variable rewritten. If the new index
   is visible and CUDA has not yet initialized, the two then land on different physical GPUs, or
-  several ranks pile onto one, and nothing reports it. Until lcls2#155 lands, keep the reader
+  several ranks pile onto one, and nothing reports it. Until lcls2#175 lands, keep the reader
   serial.
 - **Memory.** psana's per-worker quota does not cap GLINT's own allocations: the torch indexer, cupy
   peak-finder scratch and the ring. Neither psana's current EB-group count nor the peer discovery

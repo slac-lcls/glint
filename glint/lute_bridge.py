@@ -28,7 +28,11 @@ HC_EV_A = 12398.419843320026     # h*c in eV*Angstrom -> lambda[A] = HC/E[eV]
 
 
 def parse_geom(path):
-    """Return (panels, globals). panels: list of dicts; globals: raw key->value."""
+    """Return (panels, globals). panels: list of dicts; globals: raw key->value.
+
+    Each panel's ``coffset`` is its own, or the global ``coffset`` when it has none (CrystFEL: a
+    top-level value is the default for the panels), so a panel's z is clen + p["coffset"]. Callers
+    pass the bare clen as ``clen_m``; adding the global coffset to it as well counts it twice."""
     panels, glob = {}, {}
     with open(path) as f:
         for line in f:
@@ -119,7 +123,8 @@ def panel_of(fs, ss, panels):
 def peaks_to_q(fs_arr, ss_arr, panels, clen_m, wavelength_A):
     """Detector peak (fs,ss) arrays -> (n,3) reciprocal vectors q [1/A].
 
-    clen_m: detector distance [m] (per event). wavelength_A: [A].
+    clen_m: the .geom clen [m] (per event), WITHOUT coffset: each panel adds its own (parse_geom).
+    wavelength_A: [A].
 
     Peaks that land on no panel come back as NaN rows, and so do NON-FINITE inputs (NaN/inf
     fs or ss) -- they match no panel rather than raising, which the per-peak predecessor did
@@ -220,14 +225,13 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
     n_slabs_geom = len(set(panel_slabs)) if panel_slabs is not None else 0
     data_key = data_key or glob.get("data", "/entry_1/data_1/data")
     clen_spec, en_spec, mask_key = glob.get("clen"), glob.get("photon_energy"), glob.get("mask")
-    coff = float(glob.get("coffset", 0.0))
     f = h5py.File(cxi_path, "r")
     dropped = [0, 0]                                                # rows dropped by _q, frames they were in
 
     def _q(xarr, yarr, i, pans=panels, clean=True):                 # (fs,ss) peaks -> q for event i
         clen = _meta(clen_spec, f, i, 0.1)
         scale = clen_scale if clen_scale is not None else (0.001 if abs(clen) > 10 else 1.0)
-        clen = clen * scale + coff
+        clen = clen * scale                     # no coffset: peaks_to_q adds each panel's (parse_geom)
         wl = wavelength_A
         if wl is None:
             eV = _meta(en_spec, f, i, None)
@@ -404,7 +408,7 @@ def frames_from_cxi(cxi_path, geom_path, wavelength_A=None, n=0, min_peaks=6, da
         e0 = _meta(en_spec, f, 0, None); wl0 = wavelength_A or (lambda_from_eV(e0) if e0 else None)
         from glint.ring_mask import ring_qmask
         for k, grp in groups.items():                              # one canvas per slab: windows overlap across slabs
-            rmask = ring_qmask(grp, c0 * sc + coff, wl0, cell6, (H, W), qlow=qlow)
+            rmask = ring_qmask(grp, c0 * sc, wl0, cell6, (H, W), qlow=qlow)   # panels carry the coffset
             masks[k] = rmask if masks[k] is None else (masks[k] & rmask)
     finder = _get_finder(peakfinder)
     # per_panel on a multi-panel slab: one finder per panel rectangle, so no background ring, local-max

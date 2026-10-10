@@ -1067,7 +1067,6 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
     _slabs = [_panel_slab(p) for p in panels]
     panel_slabs = _slabs if len(panels) > 1 and all(s is not None for s in _slabs) else None
     clen_spec, en_spec = glob.get("clen"), glob.get("photon_energy")
-    coff = float(glob.get("coffset", 0.0))
     data_key = data_key or glob.get("data", "/entry_1/data_1/data")   # explicit arg > .geom `data` key > default
     handles = {}
     def _h5(p):
@@ -1094,7 +1093,10 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
             ev = int(r.get("event", 0))
             clen = _meta(clen_spec, f, ev, 0.1)
             scale = clen_scale if clen_scale is not None else (0.001 if abs(clen) > 10 else 1.0)
-            clen_m = clen * scale + coff
+            # clen alone: every panel carries its coffset (its own, else the .geom's global one) and
+            # project_q adds it, so z = clen + coffset once, as in CrystFEL and the --peaks route.
+            # Adding the global coffset here as well put the detector at clen + 2*coffset.
+            clen_m = clen * scale
             wl = wavelength_A
             eV = None
             if wl is None:
@@ -1148,7 +1150,7 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
             # literal .geom, so that output is unchanged. CrystFEL reads the chunk's camera length the same
             # way: `average_camera_length` is clen, and coffset comes from the geometry block the stream
             # embeds, so a reader re-projecting the rows gets clen + coffset as prediction did.
-            r["clen_m"] = clen * scale
+            r["clen_m"] = clen_m
             if eV_used is not None:
                 r["photon_eV"] = eV_used
             n += 1; tot += int(keep.sum())

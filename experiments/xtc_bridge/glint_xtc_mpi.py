@@ -112,11 +112,8 @@ def concat_streams(part_paths, out_path):
     return nchunks
 
 
-def main(argv=None):
-    from mpi4py import MPI
-    comm = MPI.COMM_WORLD
-    rank, size = comm.Get_rank(), comm.Get_size()
-
+def build_parser():
+    """glint_xtc's parser plus this wrapper's options. Needs no MPI, so --help text is testable on CPU."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))  # import sibling glint_xtc + readers
     import glint_xtc
 
@@ -128,7 +125,16 @@ def main(argv=None):
                     help="allow several ranks on a node to share its first visible GPU when the launcher has "
                          "not given each rank its own")
     ap.add_argument("--keep-parts", action="store_true", help="keep the per-rank partial .stream files")
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None):
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+    rank, size = comm.Get_rank(), comm.Get_size()
+
+    args = build_parser().parse_args(argv)   # also puts this directory on sys.path
+    import glint_xtc
     if not args.exp:
         if rank == 0:
             sys.stderr.write("set --exp or GLINT_EXP (the beamtime id is not committed)\n")

@@ -15,8 +15,8 @@ WHAT RUNS (numpy only: --help needs argparse, numpy and xtc_core, nothing heavy)
      "97.7%", with no "%%" left in the text;
   3. build_parser().format_help() in-process, which expands every help string and group description
      at once, so any future bare "%" in glint_xtc.py fails here rather than at the beamline.
-glint_xtc_mpi.py builds its parser inside main() after `from mpi4py import MPI`, so its two extra
-options are not reachable without MPI; the one with a "%" is already escaped ("%% N").
+glint_xtc_mpi.py's extra options are checked the same way by test_gpu_binding.py, through its
+build_parser(), which needs no MPI.
 
 Plain script: prints ok/FAIL lines and exits non-zero on any failure (CI runs it as a script).
 """

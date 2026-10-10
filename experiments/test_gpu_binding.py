@@ -13,7 +13,8 @@ on a node it refuses, with the launch fix, unless ``--share-gpu`` says they shar
 The checks below compare the WHOLE environment before and after every call, and scan the module's
 source for any write to the variable, so restoring the old pinning fails here.
 
-Torch- and MPI-free on purpose, so it really runs in the CPU CI job and in ``run_ci_locally.py``.
+Torch- and MPI-free on purpose (the --help check needs numpy and xtc_core, as glint_xtc's own
+--help test does), so it really runs in the CPU CI job and in ``run_ci_locally.py``.
 
   PYTHONPATH=. python experiments/test_gpu_binding.py     # exit 0 = all pass
 """
@@ -109,6 +110,17 @@ for node in ast.walk(ast.parse(MODULE.read_text())):
             writes.append(f"line {node.lineno}: {ast.unparse(node)}")
 report("glint_xtc_mpi.py source writes CUDA_VISIBLE_DEVICES nowhere", not writes,
        "; ".join(writes) or "no writes found")
+
+# the wrapper's --help renders (argparse %-formats every help string; glint#257) and lists the options
+try:
+    import glint_xtc_mpi
+    text = glint_xtc_mpi.build_parser().format_help()
+    ok = all(o in text for o in ("--share-gpu", "--gpus-per-node", "--keep-parts")) and "removed:" in text
+    report("glint_xtc_mpi --help renders", ok, f"{len(text)} chars")
+except ImportError as e:   # numpy / xtc_core missing: say so rather than pass silently
+    report("glint_xtc_mpi --help renders", False, f"could not import the parser: {e}")
+except (TypeError, ValueError) as e:
+    report("glint_xtc_mpi --help renders", False, f"{type(e).__name__}: {e}")
 
 print(f"\n{'OK' if FAILS == 0 else 'FAIL'}: {FAILS} failing case(s)")
 sys.exit(1 if FAILS else 0)

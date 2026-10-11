@@ -89,6 +89,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_radial_nonfinite_q.py
 
+      # PeakFinder8 on a q-map with one NaN/inf pixel found NO peaks: RadialIntegrator's default qmin = q.min()
+      # was NaN, so every weight of its background operator was. The default range is now the finite q's, and
+      # pf8 masks a pixel with no finite q (+inf passed `q >= r_min`). Checks a NaN/+inf/-inf q gives exactly the
+      # peaks of that pixel masked (background or peak pixel, caller mask or none, fp64/fp32, one-shot), the
+      # reported 256x256 one-spot case, and that all-finite maps keep d21de4c's good, M and peaks bit for bit.
+      # d21de4c fails 27 checks. numpy + scipy.
+      - name: experiments/test_pf8_nonfinite_q.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_pf8_nonfinite_q.py
+
       - name: experiments/test_negative_intensities.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_negative_intensities.py

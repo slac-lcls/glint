@@ -74,7 +74,7 @@ class RadialIntegrator:
     nbin : int, optional
         Number of output bins (default ~sqrt(npix)/2).
     qmin, qmax : float, optional
-        Bin range (default the data min/max).
+        Bin range (default the min/max of the finite q; a NaN/inf q is a masked pixel).
     mask : bool array, optional
         True = keep the pixel.
     norm : array, optional
@@ -90,8 +90,20 @@ class RadialIntegrator:
         xp = _xp(q_per_pixel); self._xp = xp
         q2d = q_per_pixel
         q = q2d.ravel().astype(xp.float64); npix = q.size
-        self.qmin = float(q.min() if qmin is None else qmin)
-        self.qmax = float(q.max() if qmax is None else qmax)
+        qr = q
+        if qmin is None or qmax is None:
+            # The default range is the FINITE q's. q.min() of a map with one NaN pixel is NaN, which made dq
+            # and every bin index NaN: M then held NaN weights (arm64 numpy) or none at all (x86 numpy, CuPy),
+            # and PeakFinder8 found 0 peaks or hundreds of junk ones. Those pixels never reach M
+            # (_linear/_area gate them), so they get no say in the range either. All-finite maps: qr is q.
+            fin = xp.isfinite(q)
+            if not bool(fin.all()):
+                if not bool(fin.any()):
+                    raise ValueError("q_per_pixel has no finite value, so there is no default qmin/qmax; "
+                                     "pass both")
+                qr = q[fin]
+        self.qmin = float(qr.min() if qmin is None else qmin)
+        self.qmax = float(qr.max() if qmax is None else qmax)
         self.nbin = NB = int(nbin if nbin is not None else np.sqrt(npix) / 2)
         self.dq = (self.qmax - self.qmin) / NB
         self.q = self.qmin + (xp.arange(NB) + 0.5) * self.dq       # bin centres

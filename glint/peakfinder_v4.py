@@ -15,9 +15,13 @@ GROW pixels and the SAME gathered scatter-add reduction gives the per-peak stats
 (cupy) or CPU (numpy/scipy).
 
 NOTE this is *modelled on* the Dubrovin/psalgos DUAL-THRESHOLD finder ``peaks_droplet`` = ``peak_finder_v4r3``
-(a GPU re-implementation of the idea), not a port of the psalgos C++; it agrees with
-``psalgos.pypsalgos.peaks_droplet`` on peaks but is not bit-identical. (The adaptive-SNR sibling
-``peaks_adaptive`` = ``peak_finder_v3r3`` is matched by peakfinder9.py instead.)
+(a GPU re-implementation of the idea), not a port of the psalgos C++. Until 2026-10 this docstring said the two
+agree on peaks. That rested on one comparison with the psana1-era ``psalgos`` package (2026-07: one synthetic
+frame, different thresholds, and only this finder's peaks looked up in the other's list), and it cannot be
+repeated today: the psana2 build ships ``peak_finder_v3r3_d2`` but not ``peak_finder_v4r3_d2`` (checked
+2026-09-11), so psana2's own ``pypsalg.peaks_droplet_2d`` wrapper raises AttributeError. Agreement with
+``peaks_droplet`` is therefore NOT verified. (The adaptive-SNR sibling ``peaks_adaptive`` = ``peak_finder_v3r3``
+is in psana2; see peakfinder9.py.)
 Credit: dual-threshold local-background peak finding -- M. Dubrovin (SLAC/LCLS), psalgos
 (github.com/lcls-psana/psalgos), ``peak_finder_v4r3`` / ``peaks_droplet``; local-window lineage shared with
 peakfinder9 (Gevorkov/CFEL). Authors of this GPU version: SLAC LCLS DRP team, with Claude (Anthropic).

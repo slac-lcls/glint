@@ -352,6 +352,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_stream_driver_options_doc.py
 
+      # peakfinder_v4.py's docstring claimed peak-level agreement with psalgos' dual-threshold finder on the
+      # strength of one psana1-era comparison, which psana2 cannot repeat (it does not ship peak_finder_v4r3_d2).
+      # Scans every tracked text file, this one included, for the withdrawn wording, after showing its patterns
+      # catch d21de4c's two sentences and spare a true pf9 / v3r3 sentence, and checks the docstring says
+      # agreement is not verified. d21de4c fails 4 checks. Text only.
+      - name: experiments/test_pfv4_psalgos_claim.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_pfv4_psalgos_claim.py
+
       - name: experiments/test_geom_bridge.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_geom_bridge.py

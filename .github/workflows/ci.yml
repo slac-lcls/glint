@@ -79,6 +79,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_peakfinder_per_panel.py
 
+      # RadialIntegrator (pf8's background operator): a NaN/inf q is a masked pixel. d21de4c cast floor(t) to
+      # int64 before testing t was finite; numpy on arm64 lands a NaN at bin 0, so a NaN q at explicit qmin/qmax
+      # put 2 NaN weights into M, and an infinite q in the area split stored 780 extra entries. Also checks that
+      # no non-finite value reaches the cast (a platform whose cast lands out of range, as CuPy's does, hides the
+      # NaN weights but not the cast), and that a finite q-map builds M, den and I(q) bit for bit as d21de4c did
+      # (pre-fix builder frozen in the test). d21de4c fails 12 checks on arm64. numpy + scipy.
+      - name: experiments/test_radial_nonfinite_q.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_radial_nonfinite_q.py
+
       - name: experiments/test_negative_intensities.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_negative_intensities.py

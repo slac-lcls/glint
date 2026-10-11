@@ -40,6 +40,7 @@ STEPS = [
     "experiments/test_peakfinder_mask.py",
     "experiments/test_pf8_graph_masks.py",           # GPU-only: SKIPs here
     "experiments/test_peakfinder_per_panel.py",
+    "experiments/test_radial_nonfinite_q.py",
     "experiments/test_negative_intensities.py",
     "experiments/test_lazy_exports.py",
     "experiments/test_xtc_integrate_wavelength.py",

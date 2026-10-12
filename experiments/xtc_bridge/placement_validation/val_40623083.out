@@ -1,0 +1,881 @@
+node sdfampere002; job 40623083; GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-bd0aab0d-59cb-f0dd-23aa-4c34dac484cb) GPU 1: NVIDIA A100-SXM4-40GB (UUID: GPU-7ca24550-6f3d-0566-015a-88cbb5918209) 
+
+################ ana-4.0.58-py3-minipytorch: torch 2.1.0.post302 mpi4py 3.1.5
+
+=== ana-4.0.58-py3-minipytorch :: a. 2 tasks, one GPU each (expect RUN, different GPUs)
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+ARGS [] | GLINT_GPUS_PER_NODE None
+  sdfampere002 rank 0: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+  sdfampere002 rank 1: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:01:00.0
+VERDICT RUN
+RANK {"rank": 0, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "ok", "key": "PCI 0000:41:00.0", "detail": "CuPy, 1 visible", "child": "PCI 0000:41:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+RANK {"rank": 1, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "ok", "key": "PCI 0000:01:00.0", "detail": "CuPy, 1 visible", "child": "PCI 0000:01:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+
+=== ana-4.0.58-py3-minipytorch :: b. 2 tasks on one GPU (expect STOP)
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+ARGS [] | GLINT_GPUS_PER_NODE None
+  sdfampere002 rank 0: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+  sdfampere002 rank 1: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+PROBLEM ranks 0, 1 on sdfampere002 would all use PCI 0000:41:00.0. To fix: give each rank its own GPU from the launcher (srun --gpus-per-task=1, or a per-rank CUDA_VISIBLE_DEVICES), or pass --share-gpu if these ranks should share one GPU.
+VERDICT STOP
+RANK {"rank": 0, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "ok", "key": "PCI 0000:41:00.0", "detail": "CuPy, 1 visible", "child": "PCI 0000:41:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+RANK {"rank": 1, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "ok", "key": "PCI 0000:41:00.0", "detail": "CuPy, 1 visible", "child": "PCI 0000:41:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+
+=== ana-4.0.58-py3-minipytorch :: c. 2 tasks on one GPU, --share-gpu (expect RUN)
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+ARGS ['--share-gpu'] | GLINT_GPUS_PER_NODE None
+  sdfampere002 rank 0: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+  sdfampere002 rank 1: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+VERDICT RUN
+RANK {"rank": 0, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "ok", "key": "PCI 0000:41:00.0", "detail": "CuPy, 1 visible", "child": "PCI 0000:41:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+RANK {"rank": 1, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "ok", "key": "PCI 0000:41:00.0", "detail": "CuPy, 1 visible", "child": "PCI 0000:41:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+
+=== ana-4.0.58-py3-minipytorch :: d. 2 tasks, both see both GPUs (expect STOP)
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+ARGS [] | GLINT_GPUS_PER_NODE None
+  sdfampere002 rank 0: CUDA_VISIBLE_DEVICES='0,1' -> PCI 0000:01:00.0
+  sdfampere002 rank 1: CUDA_VISIBLE_DEVICES='0,1' -> PCI 0000:01:00.0
+PROBLEM ranks 0, 1 on sdfampere002 would all use PCI 0000:01:00.0. To fix: give each rank its own GPU from the launcher (srun --gpus-per-task=1, or a per-rank CUDA_VISIBLE_DEVICES), or pass --share-gpu if these ranks should share one GPU.
+VERDICT STOP
+RANK {"rank": 0, "host": "sdfampere002", "cvd": "0,1", "env_unchanged": true, "status": "ok", "key": "PCI 0000:01:00.0", "detail": "CuPy, 2 visible", "child": "PCI 0000:01:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+RANK {"rank": 1, "host": "sdfampere002", "cvd": "0,1", "env_unchanged": true, "status": "ok", "key": "PCI 0000:01:00.0", "detail": "CuPy, 2 visible", "child": "PCI 0000:01:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+
+=== ana-4.0.58-py3-minipytorch :: e. GLINT_GPUS_PER_NODE=2 exported (expect STOP)
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+ARGS [] | GLINT_GPUS_PER_NODE 2
+  sdfampere002 rank 0: CUDA_VISIBLE_DEVICES='0' -> unchecked (not checked)
+  sdfampere002 rank 1: CUDA_VISIBLE_DEVICES='0' -> unchecked (not checked)
+PROBLEM rank 0: GLINT_GPUS_PER_NODE=2 was removed (glint_xtc_mpi no longer sets CUDA_VISIBLE_DEVICES). Unset it, and give each rank its own GPU from the launcher (srun --gpus-per-task=1, or a per-rank CUDA_VISIBLE_DEVICES).
+PROBLEM rank 1: GLINT_GPUS_PER_NODE=2 was removed (glint_xtc_mpi no longer sets CUDA_VISIBLE_DEVICES). Unset it, and give each rank its own GPU from the launcher (srun --gpus-per-task=1, or a per-rank CUDA_VISIBLE_DEVICES).
+VERDICT STOP
+RANK {"rank": 0, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "unchecked", "key": null, "detail": "not checked", "child": "PCI 0000:41:00.0", "child_matches_parent": false, "libcuda_mapped_after_mpi_import": false}
+RANK {"rank": 1, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "unchecked", "key": null, "detail": "not checked", "child": "PCI 0000:01:00.0", "child_matches_parent": false, "libcuda_mapped_after_mpi_import": false}
+
+=== ana-4.0.58-py3-minipytorch :: f. timing: hide GPUs after importing mpi4py
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+TIMING mask before='0'; libcuda mapped after mpi4py import: False; after hiding all GPUs post-import, CuPy sees 0 device(s) (CUDARuntimeError) -> the write took effect
+
+=== ana-4.0.58-py3-minipytorch :: g. MPI smoke test, 2 ranks on one GPU (expect ALL PASS)
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+[glint_xtc_mpi] 2 ranks; psana1; sim run 1; out /sdf/home/s/smarches/glint_pr256_val/glint/experiments/xtc_bridge/_mpi_smoke.stream; --share-gpu
+  sdfampere002 rank 0: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+  sdfampere002 rank 1: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+[sim] rank 0/2 owns 12 of 24 events
+[glint_xtc_mpi] 24 indexed / 24 frames (24 chunks, 24 events, 0 skipped no-wavelength) across 2 ranks -> /sdf/home/s/smarches/glint_pr256_val/glint/experiments/xtc_bridge/_mpi_smoke.stream
+  PASS  header appears exactly once
+  PASS  all 24 events present exactly once (sharding covered + disjoint)
+  PASS  planted cell indexed on a majority across ranks (24/24)
+ALL PASS
+
+################ ana-4.0.59-py3-minipytorch: torch 1.11.0 mpi4py 3.1.5
+
+=== ana-4.0.59-py3-minipytorch :: a. 2 tasks, one GPU each (expect RUN, different GPUs)
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+ARGS [] | GLINT_GPUS_PER_NODE None
+  sdfampere002 rank 0: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+  sdfampere002 rank 1: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:01:00.0
+VERDICT RUN
+RANK {"rank": 0, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "ok", "key": "PCI 0000:41:00.0", "detail": "CuPy, 1 visible", "child": "PCI 0000:41:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+RANK {"rank": 1, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "ok", "key": "PCI 0000:01:00.0", "detail": "CuPy, 1 visible", "child": "PCI 0000:01:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+
+=== ana-4.0.59-py3-minipytorch :: b. 2 tasks on one GPU (expect STOP)
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+ARGS [] | GLINT_GPUS_PER_NODE None
+  sdfampere002 rank 0: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+  sdfampere002 rank 1: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+PROBLEM ranks 0, 1 on sdfampere002 would all use PCI 0000:41:00.0. To fix: give each rank its own GPU from the launcher (srun --gpus-per-task=1, or a per-rank CUDA_VISIBLE_DEVICES), or pass --share-gpu if these ranks should share one GPU.
+VERDICT STOP
+RANK {"rank": 0, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "ok", "key": "PCI 0000:41:00.0", "detail": "CuPy, 1 visible", "child": "PCI 0000:41:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+RANK {"rank": 1, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "ok", "key": "PCI 0000:41:00.0", "detail": "CuPy, 1 visible", "child": "PCI 0000:41:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+
+=== ana-4.0.59-py3-minipytorch :: c. 2 tasks on one GPU, --share-gpu (expect RUN)
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+ARGS ['--share-gpu'] | GLINT_GPUS_PER_NODE None
+  sdfampere002 rank 0: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+  sdfampere002 rank 1: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+VERDICT RUN
+RANK {"rank": 0, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "ok", "key": "PCI 0000:41:00.0", "detail": "CuPy, 1 visible", "child": "PCI 0000:41:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+RANK {"rank": 1, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "ok", "key": "PCI 0000:41:00.0", "detail": "CuPy, 1 visible", "child": "PCI 0000:41:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+
+=== ana-4.0.59-py3-minipytorch :: d. 2 tasks, both see both GPUs (expect STOP)
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+ARGS [] | GLINT_GPUS_PER_NODE None
+  sdfampere002 rank 0: CUDA_VISIBLE_DEVICES='0,1' -> PCI 0000:01:00.0
+  sdfampere002 rank 1: CUDA_VISIBLE_DEVICES='0,1' -> PCI 0000:01:00.0
+PROBLEM ranks 0, 1 on sdfampere002 would all use PCI 0000:01:00.0. To fix: give each rank its own GPU from the launcher (srun --gpus-per-task=1, or a per-rank CUDA_VISIBLE_DEVICES), or pass --share-gpu if these ranks should share one GPU.
+VERDICT STOP
+RANK {"rank": 0, "host": "sdfampere002", "cvd": "0,1", "env_unchanged": true, "status": "ok", "key": "PCI 0000:01:00.0", "detail": "CuPy, 2 visible", "child": "PCI 0000:01:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+RANK {"rank": 1, "host": "sdfampere002", "cvd": "0,1", "env_unchanged": true, "status": "ok", "key": "PCI 0000:01:00.0", "detail": "CuPy, 2 visible", "child": "PCI 0000:01:00.0", "child_matches_parent": true, "libcuda_mapped_after_mpi_import": false}
+
+=== ana-4.0.59-py3-minipytorch :: e. GLINT_GPUS_PER_NODE=2 exported (expect STOP)
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+ARGS [] | GLINT_GPUS_PER_NODE 2
+  sdfampere002 rank 0: CUDA_VISIBLE_DEVICES='0' -> unchecked (not checked)
+  sdfampere002 rank 1: CUDA_VISIBLE_DEVICES='0' -> unchecked (not checked)
+PROBLEM rank 0: GLINT_GPUS_PER_NODE=2 was removed (glint_xtc_mpi no longer sets CUDA_VISIBLE_DEVICES). Unset it, and give each rank its own GPU from the launcher (srun --gpus-per-task=1, or a per-rank CUDA_VISIBLE_DEVICES).
+PROBLEM rank 1: GLINT_GPUS_PER_NODE=2 was removed (glint_xtc_mpi no longer sets CUDA_VISIBLE_DEVICES). Unset it, and give each rank its own GPU from the launcher (srun --gpus-per-task=1, or a per-rank CUDA_VISIBLE_DEVICES).
+VERDICT STOP
+RANK {"rank": 0, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "unchecked", "key": null, "detail": "not checked", "child": "PCI 0000:41:00.0", "child_matches_parent": false, "libcuda_mapped_after_mpi_import": false}
+RANK {"rank": 1, "host": "sdfampere002", "cvd": "0", "env_unchanged": true, "status": "unchecked", "key": null, "detail": "not checked", "child": "PCI 0000:01:00.0", "child_matches_parent": false, "libcuda_mapped_after_mpi_import": false}
+
+=== ana-4.0.59-py3-minipytorch :: f. timing: hide GPUs after importing mpi4py
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+TIMING mask before='0'; libcuda mapped after mpi4py import: False; after hiding all GPUs post-import, CuPy sees 0 device(s) (CUDARuntimeError) -> the write took effect
+
+=== ana-4.0.59-py3-minipytorch :: g. MPI smoke test, 2 ranks on one GPU (expect ALL PASS)
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+A requested component was not found, or was unable to be opened.  This
+means that this component is either not installed or is unable to be
+used on your system (e.g., sometimes this means that shared libraries
+that the component requires are unable to be found/loaded).  Note that
+PMIX stopped checking at the first component that it did not find.
+Host:      sdfampere002
+Framework: psec
+Component: munge
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+--------------------------------------------------------------------------
+No OpenFabrics connection schemes reported that they were able to be
+used on a specific port.  As such, the openib BTL (OpenFabrics
+support) will be disabled for this port.
+  Local host:           sdfampere002
+  Local device:         mlx5_0
+  Local port:           1
+  CPCs attempted:       rdmacm, udcm
+--------------------------------------------------------------------------
+[glint_xtc_mpi] 2 ranks; psana1; sim run 1; out /sdf/home/s/smarches/glint_pr256_val/glint/experiments/xtc_bridge/_mpi_smoke.stream; --share-gpu
+  sdfampere002 rank 0: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+  sdfampere002 rank 1: CUDA_VISIBLE_DEVICES='0' -> PCI 0000:41:00.0
+[sim] rank 0/2 owns 12 of 24 events
+/sdf/home/s/smarches/glint_pr256_val/glint/glint/glint_fast.py:506: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at  /home/conda/feedstock_root/build_artifacts/pytorch-recipe_1650965732461/work/aten/src/ATen/native/TensorShape.cpp:2227.)
+  tri = torch.combinations(torch.arange(cd.shape[0], device=DEV), 3)
+/sdf/home/s/smarches/glint_pr256_val/glint/glint/glint_fast.py:506: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at  /home/conda/feedstock_root/build_artifacts/pytorch-recipe_1650965732461/work/aten/src/ATen/native/TensorShape.cpp:2227.)
+  tri = torch.combinations(torch.arange(cd.shape[0], device=DEV), 3)
+[glint_xtc_mpi] 24 indexed / 24 frames (24 chunks, 24 events, 0 skipped no-wavelength) across 2 ranks -> /sdf/home/s/smarches/glint_pr256_val/glint/experiments/xtc_bridge/_mpi_smoke.stream
+  PASS  header appears exactly once
+  PASS  all 24 events present exactly once (sharding covered + disjoint)
+  PASS  planted cell indexed on a majority across ranks (24/24)
+ALL PASS
+
+DONE

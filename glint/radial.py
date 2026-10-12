@@ -74,7 +74,8 @@ class RadialIntegrator:
     nbin : int, optional
         Number of output bins (default ~sqrt(npix)/2).
     qmin, qmax : float, optional
-        Bin range (default the min/max of the finite q; a NaN/inf q is a masked pixel).
+        Bin range (default the min/max of the finite q). Non-finite q is excluded; with ``split="area"``
+        and inferred half-widths, its finite-difference neighbours are excluded too.
     mask : bool array, optional
         True = keep the pixel.
     norm : array, optional

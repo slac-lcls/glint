@@ -49,12 +49,12 @@ srun -n 8 --gpus-per-task=1 python glint_xtc_mpi.py --exp <exp> --run <run> --zd
 The global event index is written into each chunk, so per-rank chunks never collide and the merge is a
 plain header-once concatenation. GPU placement: the launcher gives each rank its GPU
 (`--gpus-per-task=1` / `--gpu-bind`), and the wrapper **never writes `CUDA_VISIBLE_DEVICES`**. The rank's
-indexer and xtc2's bridge worker inherit the same mask and both use its first device. With several ranks
-on a node and no GPU per rank (each sees several devices, or none is set), the wrapper stops with the
-launch fix, unless `--share-gpu` says those ranks share one GPU on purpose. `--gpus-per-node` /
-`GLINT_GPUS_PER_NODE`, which used to rewrite the mask, are removed and now exit with that fix: a rewrite
-after `import mpi4py` may not move the rank itself, only its worker (lcls2#175 keeps the launcher's mask
-for the same reason). For xtc2 the MPI is only at the conda1
+indexer and xtc2's bridge worker inherit the same mask and both use its first device. Before reading,
+every rank reports the physical UUID of that device; the wrapper stops with the launch fix if a rank sees
+no GPU, or if two ranks on a node would use the same GPU, unless `--share-gpu` says they share it on
+purpose, and it logs every rank's hostname, mask and GPU. `--gpus-per-node` / `GLINT_GPUS_PER_NODE`, which
+used to rewrite the mask, are removed and now exit with that fix: a rewrite after `import mpi4py` may not
+move the rank itself, only its worker (lcls2#175 keeps the launcher's mask for the same reason). For xtc2 the MPI is only at the conda1
 level — each rank calls its own conda2 bridge worker with its shard, so there is no MPI inside conda2.
 
 ### Related: the online/streaming counterpart (LCLStreamer)

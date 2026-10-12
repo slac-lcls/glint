@@ -125,8 +125,8 @@ jobs:
         run: PYTHONPATH=. python experiments/test_device_selection.py
 
       # glint_xtc_mpi never writes CUDA_VISIBLE_DEVICES (the launcher owns placement, glint#256 review), and
-      # stops when a rank has no GPU or two ranks resolve to one. main() runs as one rank of a simulated job
-      # (stand-in mpi4py, stub GPU identities), so it is torch-, GPU- and MPI-free and runs here.
+      # stops when a rank has no GPU or two ranks resolve to one GPU. main() runs as rank 0 and rank 1 of a
+      # simulated job through the real reader dispatch, with stand-in mpi4py/cupy/torch, so it runs here.
       - name: experiments/test_gpu_binding.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_gpu_binding.py

@@ -75,7 +75,7 @@ def main():
     present = [text.count(f"Event: //{i}\n") for i in range(N_EVENTS)]
     check(f"all {N_EVENTS} events present exactly once (sharding covered + disjoint)",
           all(c == 1 for c in present))
-    n_idx = text.count("indexed_by = glint")
+    n_idx = text.count("indexed_by = file")   # glint.stream writes "file" for an indexed frame
     check(f"planted cell indexed on a majority across ranks ({n_idx}/{N_EVENTS})",
           n_idx >= 0.6 * N_EVENTS)
     try:

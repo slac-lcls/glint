@@ -786,14 +786,17 @@ The serial GLINT integration does not have to wait for it.
   - The launcher sets it (the documented launch is `srun --gpus-per-task=1`). `glint_xtc_mpi.py`
     never writes it (glint#256): a write after `import mpi4py` may not move the rank itself, only
     the reader it spawns.
-  - Before reading, every rank reports the physical UUID of the GPU it will use, and the wrapper
+  - Before reading, every rank identifies the GPU it will use physically: CuPy's PCI bus id, or
+    torch's UUID (torch >= 2.5; the S3DF envs have 2.1 and 1.11) if CuPy is missing. The wrapper
     stops with the launch fix if a rank sees no GPU, or if two ranks on a node resolve to the same
-    GPU, unless `--share-gpu` says they share it on purpose. It logs hostname, rank, mask and UUID
-    for every rank. `--gpus-per-node` is removed.
+    GPU, unless `--share-gpu` says they share it on purpose. If neither library can identify the
+    device, ranks on a node are compared by their masks' first device. Rank 0 logs hostname, rank,
+    mask and GPU for every rank. `--gpus-per-node` is removed.
 
   The conda2 reader inherits that mask, so the torch indexer and the reader's peak-find share one
   device. The reader must stay serial (`PS_PARALLEL=none`) whether or not lcls2#175 lands: this
-  serial bridge takes no part in #175's MPI placement.
+  serial bridge takes no part in #175's MPI placement. GLINT does not yet set `PS_PARALLEL=none` for
+  the reader itself.
 - **Native psana2-gpu (follow-up adapter, glint#219; not started).** It replaces the bridge rather
   than nesting under `glint_xtc_mpi.py`'s sharding. Per @monarin's review of glint#256, GLINT then:
   - keeps the launcher's mask and skips `glint_xtc_mpi.py`'s placement check; psana assigns each BD
@@ -803,7 +806,12 @@ The serial GLINT integration does not have to wait for it.
   - verifies the physical GPU identity, not the environment string, including a run where the
     assigned local device is 1;
   - budgets memory for every worker's GLINT allocations (see *Memory*), since psana's quota does
-    not cover them.
+    not cover them;
+  - makes no CUDA allocation at import, before psana's device is current. `glint/replica_gpu_batch.py`
+    and `glint/replica_gpu.py` create tensors at module scope today;
+  - orders its CuPy and PyTorch streams, and finishes with a batch before psana reuses its buffers;
+  - submits calibration and peak finding through `GpuTask(function(batch, stream))`, publishing
+    compact results first; full indexing inside the BDs can follow, as in glint#219.
 
   This waits for lcls2#175, including its P1.
 - **Memory.** psana's per-worker quota does not cap GLINT's own allocations: the torch indexer, cupy

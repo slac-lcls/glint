@@ -17,10 +17,10 @@ merging is a plain header-once chunk concatenation.
 
 GPU placement belongs to the launcher; this wrapper never writes CUDA_VISIBLE_DEVICES. Give each rank
 its own GPU (srun --gpus-per-task=1, --gpu-bind, or a per-rank CUDA_VISIBLE_DEVICES). The rank's torch
-indexer and the conda2 bridge worker it spawns inherit the same unmodified mask, so both use its first
-device. Before reading, every rank reports the physical UUID of that device; the run stops with the
-launch fix if a rank sees no GPU, or if two ranks on a node would use the same GPU, unless --share-gpu
-says they share it on purpose. See decide_placement.
+indexer and its reader inherit the same unmodified mask, so both use its first device. Before reading,
+every rank identifies that device physically (CuPy's PCI bus id; torch's UUID as a fallback) and the
+run stops with the launch fix if a rank sees no GPU, or if two ranks on a host would use the same GPU,
+unless --share-gpu says they share it on purpose. See decide_placement.
 
 For xtc2 the MPI lives only at the conda1 level: each rank independently calls its own conda2 bridge
 worker with its shard (nranks worker processes, disjoint events), so there is no MPI inside conda2.
@@ -39,81 +39,108 @@ SHARE_FIX = "or pass --share-gpu if these ranks should share one GPU"
 
 
 def gpu_identity():
-    """(uuid, note) for the GPU this rank and its reader will use: CUDA device 0 under the inherited mask.
+    """(status, key, detail) for the GPU this rank and its reader will use: CUDA device 0 under the
+    inherited mask. status is "ok" (key names the physical device, unique on this host), "no-gpu", or
+    "unknown" (nothing here can identify it).
 
-    uuid is None when no CUDA device is visible (note says so) or when this torch cannot report a device
-    UUID (note "no uuid"). Initializing CUDA here is safe: nothing writes the mask afterwards, and the
-    reader is a separate process started with subprocess, not a fork."""
+    CuPy is asked first: the reader's peak finders run on it, and CuPy reports a device's PCI bus id,
+    which is unique on a host. torch's device UUID is the fallback, and it needs torch >= 2.5.
+    Initializing CUDA here is safe because nothing writes the mask afterwards. On --psana 1 the reader
+    runs in this process, on this same device; on --psana 2 envbridge starts it as a new process
+    (subprocess, not a fork) that inherits the unmodified mask."""
+    try:
+        import cupy
+    except ImportError:
+        cupy = None
+    if cupy is not None:
+        try:
+            n = cupy.cuda.runtime.getDeviceCount()
+        except Exception as e:  # CUDARuntimeError when no device or driver is usable
+            return "no-gpu", None, f"CuPy: {type(e).__name__}: {e}"
+        if n < 1:
+            return "no-gpu", None, "CuPy sees no device"
+        bus = cupy.cuda.Device(0).pci_bus_id
+        return "ok", f"PCI {bus.upper()}", f"CuPy, {n} visible"
     try:
         import torch
-    except ImportError as e:
-        return None, f"no uuid: torch not importable ({e})"
+    except ImportError:
+        return "unknown", None, "neither CuPy nor torch is importable"
     if not torch.cuda.is_available():
-        return None, "no GPU visible"
+        if getattr(torch.version, "cuda", None) is None:
+            return "unknown", None, f"no CuPy, and torch {torch.__version__} is built without CUDA"
+        return "no-gpu", None, "torch sees no CUDA device"
     props = torch.cuda.get_device_properties(0)
     uuid = getattr(props, "uuid", None)
     if uuid is None:
-        return None, f"no uuid: torch {torch.__version__} does not report device UUIDs ({props.name})"
-    return f"GPU-{uuid}", props.name
+        return "unknown", None, f"no CuPy, and torch {torch.__version__} reports no device UUID (needs >= 2.5)"
+    return "ok", f"GPU-{uuid}", f"torch, {props.name}"
 
 
 def placement_record(rank, host, environ, retired, identity):
-    """What one rank reports before reading: who it is, its mask, and the GPU it resolved to."""
-    uuid, note = identity if identity is not None else (None, "not checked")
+    """What one rank reports before reading: who it is, its mask, and the GPU it identified."""
+    status, key, detail = identity if identity is not None else ("unchecked", None, "not checked")
     return {"rank": rank, "host": host, "cvd": environ.get("CUDA_VISIBLE_DEVICES"),
-            "uuid": uuid, "note": note, "retired": retired}
+            "status": status, "key": key, "detail": detail, "retired": retired}
+
+
+def _first_device(cvd):
+    devices = [d.strip() for d in (cvd or "").split(",") if d.strip()]
+    return devices[0] if devices else None
 
 
 def decide_placement(records, share_gpu=False):
     """Return the problems (a list of strings, empty = run) from every rank's placement_record.
 
     Deterministic in its input, so every rank, given the same allgathered list, reaches the same verdict.
-    The rules, by physical identity rather than by the mask string (equal strings need not be one GPU,
-    and different strings can be):
       * a retired option on any rank stops the run;
-      * a rank that sees no GPU stops the run: the reader's peak finders run on the GPU (cupy);
-      * two ranks on one host resolving to the same GPU UUID stop the run, unless share_gpu;
-      * a rank whose torch cannot report a UUID falls back to its mask: several devices or none set,
-        with other ranks on its host, stops the run unless share_gpu (it would use the same first GPU).
+      * a rank that sees no GPU, or whose GPU check raised, stops the run (the reader's peak finders
+        run on the GPU, cupy);
+      * two ranks on one host whose GPUs have the same physical key stop the run, unless share_gpu;
+      * ranks that cannot identify their GPU ("unknown") are compared by mask: two on one host whose
+        first visible device is the same, or unset, stop the run unless share_gpu, because nothing
+        shows they use different GPUs.
     """
     problems = [f"rank {r['rank']}: {r['retired']}" for r in records if r["retired"]]
     if problems:
         return problems
+    for r in records:
+        if r["status"] == "no-gpu" or (r["status"] == "unknown" and r["cvd"] is not None and not _first_device(r["cvd"])):
+            problems.append(f"rank {r['rank']} on {r['host']} sees no GPU (CUDA_VISIBLE_DEVICES={r['cvd']!r}; "
+                            f"{r['detail']}); the reader's peak finders run on the GPU. To fix: {LAUNCH_FIX}.")
+        elif r["status"] not in ("ok", "unknown"):
+            problems.append(f"rank {r['rank']} on {r['host']} could not check its GPU ({r['status']}: {r['detail']}). "
+                            f"Check that the GPU is usable, and {LAUNCH_FIX}.")
+    if share_gpu or problems:
+        return problems
     by_host = {}
     for r in records:
         by_host.setdefault(r["host"], []).append(r)
-    for r in records:
-        if r["uuid"] is None and r["note"] == "no GPU visible":
-            problems.append(f"rank {r['rank']} on {r['host']} sees no GPU (CUDA_VISIBLE_DEVICES="
-                            f"{r['cvd']!r}); the reader's peak finders run on the GPU. To fix: {LAUNCH_FIX}.")
-    if share_gpu:
-        return problems
     for host, rs in sorted(by_host.items()):
-        by_gpu = {}
+        groups = {}
         for r in rs:
-            if r["uuid"] is not None:
-                by_gpu.setdefault(r["uuid"], []).append(r["rank"])
-        for uuid, ranks in sorted(by_gpu.items()):
-            if len(ranks) > 1:
-                problems.append(f"ranks {', '.join(map(str, ranks))} on {host} would all use {uuid}. "
+            if r["status"] == "ok":
+                groups.setdefault(("key", r["key"]), []).append(r["rank"])
+            elif r["status"] == "unknown":
+                groups.setdefault(("mask", _first_device(r["cvd"])), []).append(r["rank"])
+        for (kind, val), ranks in sorted(groups.items(), key=lambda kv: (kv[0][0], str(kv[0][1]))):
+            if len(ranks) < 2:
+                continue
+            names = ", ".join(map(str, ranks))
+            if kind == "key":
+                problems.append(f"ranks {names} on {host} would all use {val}. To fix: {LAUNCH_FIX}, {SHARE_FIX}.")
+            else:
+                first = "an unset mask" if val is None else f"first visible device {val!r}"
+                problems.append(f"ranks {names} on {host} cannot identify their GPUs (no CuPy, and torch < 2.5 or "
+                                f"without CUDA) and have {first}, so nothing shows they use different GPUs. "
                                 f"To fix: {LAUNCH_FIX}, {SHARE_FIX}.")
-        for r in rs:
-            if r["uuid"] is None and r["note"].startswith("no uuid") and len(rs) > 1:
-                devices = [d for d in (r["cvd"] or "").split(",") if d.strip()]
-                if r["cvd"] is None or len(devices) > 1:
-                    problems.append(f"rank {r['rank']} on {host} cannot check its GPU ({r['note']}) and sees "
-                                    f"CUDA_VISIBLE_DEVICES={r['cvd']!r} with {len(rs)} ranks on the host, so "
-                                    f"they would use the same first GPU. To fix: {LAUNCH_FIX}, {SHARE_FIX}.")
     return problems
 
 
-def placement_summary(records, limit=8):
-    """One line per rank for rank 0's log: host, rank, mask, and the GPU it resolved to."""
-    rows = [f"  {r['host']} rank {r['rank']}: CUDA_VISIBLE_DEVICES={r['cvd']!r} -> {r['uuid'] or r['note']}"
+def placement_summary(records):
+    """One line per rank for rank 0's log: host, rank, mask, and the GPU it identified."""
+    return [f"  {r['host']} rank {r['rank']}: CUDA_VISIBLE_DEVICES={r['cvd']!r} -> "
+            + (r["key"] if r["status"] == "ok" else f"{r['status']} ({r['detail']})")
             for r in sorted(records, key=lambda r: (r["host"], r["rank"]))]
-    if len(rows) > limit:
-        rows = rows[:limit] + [f"  ... and {len(rows) - limit} more ranks"]
-    return rows
 
 
 def retired_gpus_per_node(value, environ):
@@ -135,7 +162,12 @@ def agree_on_placement(comm, args, environ, identity_fn=None, host=None):
     Returns (problems, records). Collective: every rank must call it, once, at the same point."""
     import socket
     retired = retired_gpus_per_node(args.gpus_per_node, environ)
-    identity = None if retired else (identity_fn or gpu_identity)()
+    identity = None
+    if not retired:
+        try:
+            identity = (identity_fn or gpu_identity)()
+        except Exception as e:  # report it rather than leave the other ranks waiting in allgather
+            identity = ("error", None, f"{type(e).__name__}: {e}")
     rec = placement_record(comm.Get_rank(), host or socket.gethostname(), environ, retired, identity)
     records = comm.allgather(rec)
     return decide_placement(records, args.share_gpu), records
@@ -197,17 +229,14 @@ def main(argv=None):
     # Every rank reports the GPU it resolved to, then all decide on the same list, so a refusal stops
     # every rank here instead of leaving the others blocked in the gather below.
     problems, records = agree_on_placement(comm, args, os.environ)
-    if problems:
-        if rank == 0:
-            for p in problems[:6]:
-                sys.stderr.write(f"[glint_xtc_mpi] {p}\n")
-            if len(problems) > 6:
-                sys.stderr.write(f"[glint_xtc_mpi] ... and {len(problems) - 6} more\n")
-        return 2
     if rank == 0:
         print(f"[glint_xtc_mpi] {size} ranks; psana{args.psana}; {args.exp} run {args.run}; out {args.out}"
               + ("; --share-gpu" if args.share_gpu else ""), flush=True)
         print("\n".join(placement_summary(records)), flush=True)
+        for p in problems:
+            sys.stderr.write(f"[glint_xtc_mpi] {p}\n")
+    if problems:
+        return 2
 
     # each rank reads + indexes its event shard into a partial stream
     out = glint_xtc.read_qframes(args, rank=rank, nranks=size, verbose=(rank == 0))

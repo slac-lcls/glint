@@ -36,7 +36,7 @@ WITHDRAWN = [
      re.compile(r"\b(?:agrees?|agreed|match(?:es|ed)?|reproduc(?:es?|ed)|validated)\b" + _SAME_SENTENCE + _ORACLE, re.I)),
     ("the v4r3 oracle ... is matched by / agrees with peakfinder_v4",
      re.compile(_ORACLE + _SAME_SENTENCE +
-                r"\b(?:(?:matched|reproduced)\s+by|agree(?:s|d)?\s+with)\s+peakfinder_v4", re.I))
+                r"\b(?:(?:matched|reproduced)\s+by|agree(?:s|d)?\s+with)\s+peakfinder_v4", re.I)),
     ("agrees with peaks_droplet on peaks", re.compile(r"peaks_droplet\s+on\s+peaks", re.I)),
 ]
 

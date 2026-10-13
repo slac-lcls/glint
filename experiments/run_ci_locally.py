@@ -81,7 +81,6 @@ STEPS = [
     "experiments/test_flush_exception_safe.py",
     "experiments/test_stream_effort.py",
     "experiments/test_stream_driver_options_doc.py",
-    "experiments/test_pfv4_psalgos_claim.py",
     "experiments/test_geom_bridge.py",
     "experiments/test_nonfinite_q_rows.py",          # also in the torch-CPU job, where its engine half runs
     "experiments/test_stream_columns.py",

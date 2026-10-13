@@ -16,8 +16,12 @@ GROW pixels and the SAME gathered scatter-add reduction gives the per-peak stats
 
 NOTE this is *modelled on* the Dubrovin/psalgos DUAL-THRESHOLD finder ``peaks_droplet`` = ``peak_finder_v4r3``
 (a GPU re-implementation of the idea), not a port of the psalgos C++. Until 2026-10 this docstring said the two
-agree on peaks. That rested on one comparison with the psana1-era ``psalgos`` package (2026-07: one synthetic
-frame, different thresholds, and only this finder's peaks looked up in the other's list), and it cannot be
+agree on peaks. That rested on one comparison with the psana1-era ``psalgos`` package (drp-benchmarks
+``eb5572a`` ``radial_integration/benchmarks/psana_agreement.py``, 2026-07-02): one synthetic 384x504 frame
+with 30 planted peaks; psalgos ``peaks_droplet`` at absolute thresholds 25/60 ADU against this finder at
+SNR 5/6, son_min 6, min_pix 2 (neither is GLINT's production setting); and only this finder's peaks looked
+up in psalgos' list (27 of 27 found, psalgos found 29). It ran drp-benchmarks' 217-line predecessor of this
+file, before GLINT's GPU CCL (#51), abs_thr/sig_floor (#200) and masked-pixel (#231) changes. It cannot be
 repeated today: the psana2 build ships ``peak_finder_v3r3_d2`` but not ``peak_finder_v4r3_d2`` (checked
 2026-09-11), so psana2's own ``pypsalg.peaks_droplet_2d`` wrapper raises AttributeError. Agreement with
 ``peaks_droplet`` is therefore NOT verified. (The adaptive-SNR sibling ``peaks_adaptive`` = ``peak_finder_v3r3``
@@ -255,13 +259,16 @@ def _ccl_module():
 class PeakFinderV4:
     """Adaptive dual-threshold peak finder (psana psalgos family). No geometry/q -- only the image shape (+ mask).
 
-    Parameters (psalgos ``peaks_adaptive`` names in brackets):
+    Parameters (nearest psalgos ``peaks_droplet`` = ``peak_finder_v4r3`` names in brackets; psalgos' thresholds
+    are absolute detector units, these are SNRs unless stated):
       window_radius     [r0/dr]        radius of the local-background ring.
-      thr_low           [nsigm]        SNR to GROW a peak (a pixel joins if snr > thr_low).
-      thr_high          [-]           SNR to SEED a peak (a component is kept only if it contains snr > thr_high).
-      son_min           [son_min]      the integrated peak SNR sum(I-bg)/sqrt(sum sigma^2) must exceed this.
-      min_sig, local_max_radius, min_pix, max_pix, dtype.
-      abs_thr           [thr]          a seed pixel must also rise abs_thr detector units above the local
+      thr_low           [thr_low]      SNR to GROW a peak (a pixel joins if snr > thr_low).
+      thr_high          [thr_high]     SNR to SEED a peak (a component is kept only if it contains snr > thr_high).
+      son_min           [-]            the integrated peak SNR sum(I-bg)/sqrt(sum sigma^2) must exceed this
+                                       (v4r3 has no such cut; ``peaks_adaptive``'s son_min is the analogue).
+      min_pix, max_pix  [npix_min/npix_max]
+      min_sig, local_max_radius, dtype.
+      abs_thr           [-]            a seed pixel must also rise abs_thr detector units above the local
                                        background -- peakfinder8's --threshold, applied to (I - bg) rather than
                                        to the raw pixel (identical where the background is ~0). Default 0: off.
       sig_floor         [-]            floor on the local sigma inside the SNR only (I-bg)/max(sigma, sig_floor), so

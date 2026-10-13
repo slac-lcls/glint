@@ -28,8 +28,11 @@ Credit: the peakfinder9 ALGORITHM is Y. Gevorkov (master thesis, CFEL/DESY Hambu
 by T. A. White; European XFEL has a single-threaded-Python PORT of it (D. Hammer, calNG). This file is a
 fused-CUDA implementation of that algorithm. Its closest psana sibling is M. Dubrovin's (SLAC/LCLS, psalgos)
 adaptive-SNR ``peaks_adaptive`` = ``peak_finder_v3r3`` -- an INDEPENDENT LCLS implementation of the same
-local-window family (peakfinder9 agrees with it on peak positions but isn't bit-identical; psana2 ships the
-compiled ``peak_finder_v3r3_d2``, so that can be checked). The psalgos DUAL-THRESHOLD finder ``peaks_droplet`` =
+local-window family. They agree on peak positions, not values: drp-benchmarks ``2b9a3df``
+``radial_integration/test_peakfinder_psalgos_parity.py`` (2026-09-11, sdfampere040, psana2's compiled
+``peak_finder_v3r3_d2``) found 38 of 38 pf9 peaks in v3r3's set and 38 of v3r3's 39 in pf9's (40 planted,
+one-to-one within 2.5 px). That ran drp-benchmarks' peakfinder9, which this file derives from; this copy has
+since diverged and has not been re-run against v3r3. The psalgos DUAL-THRESHOLD finder ``peaks_droplet`` =
 ``peak_finder_v4r3`` is the model for peakfinder_v4.py, whose agreement with it is NOT verified: psana2 does not
 ship it. peakfinder8 for reference:
 A. Barty et al., "Cheetah", J. Appl. Cryst. 47, 1118-1131 (2014).

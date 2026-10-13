@@ -5,8 +5,9 @@ on numpy, here on every GPU path the finder has.
 The numpy tests cannot reach the GPU code: the default range's finite-q reductions and boolean index on a cupy
 array, and pf8's GPU-only paths -- the fused backward kernel (fp64 and fp32), the custom fp32 forward, and the
 CUDA-graph replay of the fp32 loop. Each path is built on a q-map with one NaN / +inf / -inf pixel (on the
-background and on a peak) and must give EXACTLY the peaks of that pixel masked with its q finite, on the same
-path. Which paths actually ran is printed and checked, so a geometry that silently falls back cannot pass as
+background and on a peak) and must give the peaks of that pixel masked with its q finite, on the same path:
+the same count and npix, centroids, intensities and SNRs within float noise (TOL; GPU sums are not
+order-fixed, so bit equality is not expected and is reported, not required). Which paths actually ran is printed and checked, so a geometry that silently falls back cannot pass as
 coverage. A q-map with no finite value (a dead panel) must build and find no peaks on every path. fp64 GPU
 peaks must match numpy's (same count, centroids within 1e-6 px), and the GPU default range must equal
 numpy's.
@@ -43,10 +44,34 @@ def host(pk):
     return {k: cp.asnumpy(pk[k]) if isinstance(pk[k], cp.ndarray) else np.asarray(pk[k]) for k in KEYS}
 
 
-def same(a, b):
+def bitsame(a, b):
     a, b = host(a), host(b)
     return all(a[k].dtype == b[k].dtype and a[k].shape == b[k].shape and a[k].tobytes() == b[k].tobytes()
                for k in KEYS)
+
+
+def _sorted(p):
+    o = np.lexsort((p["x"], p["y"]))
+    return {k: p[k][o] for k in KEYS}
+
+
+TOL = {"dxy": 1e-4, "dI": 1e-4, "dsnr": 1e-3}   # px, relative, relative
+
+
+def close(a, b):
+    """Same peaks within TOL: count and npix exact, centroids/intensity/SNR within float noise. The GPU sums
+    with atomics and cuSPARSE, whose order is not fixed, so two operators that differ only in one masked
+    pixel's (empty) column need not agree bit for bit. A real masking error moves the result far past TOL:
+    on d21de4c a NaN q gives 0 peaks and +inf hundreds."""
+    a, b = _sorted(host(a)), _sorted(host(b))
+    if len(a["x"]) != len(b["x"]) or not np.array_equal(a["npix"], b["npix"]):
+        return False, f"{len(a['x'])} vs {len(b['x'])} peaks / npix differ"
+    if not len(a["x"]):
+        return True, "no peaks"
+    dxy = max(np.abs(a["x"] - b["x"]).max(), np.abs(a["y"] - b["y"]).max())
+    rel = lambda k: float((np.abs(a[k] - b[k]) / np.maximum(np.abs(b[k]), 1e-30)).max())
+    d = {"dxy": float(dxy), "dI": rel("intensity"), "dsnr": rel("snr")}
+    return all(d[k] <= TOL[k] for k in TOL), ", ".join(f"{k} {v:.1e}" for k, v in d.items())
 
 
 rng = np.random.default_rng(7)
@@ -104,6 +129,10 @@ for cname, (kw, flags) in CONFIGS.items():
     probe.find(IMG_D)
     reached = {f: bool(getattr(probe, f, False)) for f in flags}
     check(f"B {cname}: the path ran ({', '.join(f'{f}={v}' for f, v in reached.items())})", all(reached.values()), reached)
+    twin = PeakFinder8(cp.asarray(Q), **kw); twin.find(IMG_D)
+    p1, p2 = probe.find(IMG_D), twin.find(IMG_D)
+    print(f"  INFO  {cname}: two builds of the SAME finder bit-identical: {bitsame(p1, p2)} ({close(p1, p2)[1]})")
+    worst = {}
     for mask, mtag in ((None, "no mask"), (MASK, "caller mask")):
         for px, ptag in ((BG_PX, "background px"), (PEAK_PX, "peak px")):
             ref = PeakFinder8(cp.asarray(Q), mask=g(masked(mask, px)), **kw)
@@ -111,8 +140,10 @@ for cname, (kw, flags) in CONFIGS.items():
             for tag, v in VALUES.items():
                 f = PeakFinder8(cp.asarray(with_q(px, v)), mask=g(mask), **kw)
                 f.find(IMG_D); pk = f.find(IMG_D)
-                check(f"B {cname}, {mtag}, q = {tag} on a {ptag} == that pixel masked", same(pk, ref_pk),
-                      f"{len(host(pk)['x'])} vs {len(host(ref_pk)['x'])} peaks")
+                ok, why = close(pk, ref_pk)
+                check(f"B {cname}, {mtag}, q = {tag} on a {ptag} == that pixel masked (within TOL)", ok, why)
+                worst[(mtag, ptag, tag)] = why
+    print(f"  INFO  {cname}: per-case differences vs that pixel masked: " + "; ".join(sorted(set(worst.values())))[:400])
     for tag, v in VALUES.items():
         try:
             f = PeakFinder8(cp.full((N, N), v), **kw); f.find(IMG_D); n, err = len(host(f.find(IMG_D))["x"]), None

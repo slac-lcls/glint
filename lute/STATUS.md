@@ -731,12 +731,24 @@ Each rank spawns its own conda2 reader process for its shard, and that child imp
 `CUDA_VISIBLE_DEVICES` was preserved in every case. Without `--mpi=pmix` the ranks come up as
 singletons and nothing hangs, so the hang shows only under a real multi-rank launch.
 
-What this means for which env runs the reader. Checked 2026-10-04 with a serial `import psana` and
-`PS_PARALLEL=none` on `sdfiana027`:
-- **`lcls2_091526`, the psconda default, still loads MPI.** No release includes lcls2#163 yet. Do not
-  use it as the reader env under `srun --mpi=pmix` until one does.
+What this means for which env runs the reader. Checked with a serial `import psana` and
+`PS_PARALLEL=none` on `sdfiana027` (2026-10-04; release lines re-checked 2026-10-08):
+- **`lcls2_091526`, still the psconda default, loads MPI.** Do not use it as the reader env under
+  `srun --mpi=pmix`.
+- **`lcls2_100726` does not load MPI.** It is a `master` build from 2026-10-07 at
+  `/sdf/group/lcls/ds/ana/sw/conda2/rel/ana/lcls2_100726`, and it includes lcls2#163. Checked by
+  putting its `install/` first on `PATH`, `PYTHONPATH` and `LD_LIBRARY_PATH` over the psconda env.
+  psana then resolved from that release, and `mpi4py.MPI` was not in `sys.modules`. It is not the
+  default yet.
 - **`xpp_drp_gpu_311`, the env today's reader uses, does not load MPI.** Its `UtilsJungfrau.py` has no
   `mpi4py` import.
+- **`features/psana2-gpu` does not have the fix.** That is the branch the `GpuTask` code lives on
+  (lcls2#135, head `9b32dda`). It has diverged from `master`, 162 commits ahead and 20 behind, and its
+  `UtilsJungfrau.py` still runs `from mpi4py import MPI` at module level (lines 40-41). So the
+  combined env glint#219 needs, if built from that branch, has to carry lcls2#163, by merging
+  `master` or cherry-picking `0e630c88a`. Without it the reader child carries the same import that
+  hung the `srun --mpi=pmix` parent at `MPI.Finalize()` above. That was measured with `lcls2_091526`,
+  not with a psana2-gpu build.
 
 Not run yet: GLINT's actual reader, `xtc_qreader` under `glint_xtc_mpi.py`, on a full build of
 lcls2 `master`. That waits for the combined env glint#219 needs. The psana2-gpu reader should still

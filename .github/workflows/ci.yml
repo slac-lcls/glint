@@ -79,6 +79,35 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_peakfinder_per_panel.py
 
+      # RadialIntegrator (pf8's background operator): a NaN/inf q is a masked pixel. d21de4c cast floor(t) to
+      # int64 before testing t was finite; numpy on arm64 lands a NaN at bin 0, so a NaN q at explicit qmin/qmax
+      # put 2 NaN weights into M, and an infinite q in the area split stored 780 extra entries. Also checks that
+      # no non-finite value reaches the cast (a platform whose cast lands out of range, as CuPy's does, hides the
+      # NaN weights but not the cast), and that a finite q-map builds M, den and I(q) bit for bit as d21de4c did
+      # (pre-fix builder frozen in the test). d21de4c fails 12 checks on arm64. numpy + scipy.
+      - name: experiments/test_radial_nonfinite_q.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_radial_nonfinite_q.py
+
+      # PeakFinder8 on a q-map with one NaN/inf pixel broke every frame: RadialIntegrator's default qmin = q.min()
+      # was NaN, so its background operator held NaN weights (arm64: no peaks) or none (x86, CuPy: no peaks on a
+      # dense frame, junk peaks on a sparse one). The default range is now the finite q's, and
+      # pf8 masks a pixel with no finite q (+inf passed `q >= r_min`). Checks a NaN/+inf/-inf q gives exactly the
+      # peaks of that pixel masked (background or peak pixel, caller mask or none, fp64/fp32, one-shot), the
+      # reported 256x256 one-spot case, a dead panel (no finite q: no peaks), and that all-finite maps keep
+      # d21de4c's good, M and peaks bit for bit. d21de4c fails 33 checks. numpy + scipy.
+      - name: experiments/test_pf8_nonfinite_q.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_pf8_nonfinite_q.py
+
+      # The same non-finite-q checks on the GPU: the default range's cupy reductions and boolean index, and pf8's
+      # fused backward, custom fp32 forward and CUDA-graph paths. GPU-only: SKIPs here; run it on a GPU node.
+      # Last run on an A100 (S3DF job 40673990, ana-4.0.58/59-py3-minipytorch, cupy 12.3/13.0): 0 failures here;
+      # d21de4c fails 45 (a NaN q -> 0 peaks, +inf -> 514-522), 417e35e fails 9 (the dead-panel checks).
+      - name: experiments/test_pf8_nonfinite_q_gpu.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_pf8_nonfinite_q_gpu.py
+
       - name: experiments/test_negative_intensities.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_negative_intensities.py

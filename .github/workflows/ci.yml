@@ -100,6 +100,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_pf8_nonfinite_q.py
 
+      # The same non-finite-q checks on the GPU: the default range's cupy reductions and boolean index, and pf8's
+      # fused backward, custom fp32 forward and CUDA-graph paths. GPU-only: SKIPs here; run it on a GPU node.
+      - name: experiments/test_pf8_nonfinite_q_gpu.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_pf8_nonfinite_q_gpu.py
+
       - name: experiments/test_negative_intensities.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_negative_intensities.py

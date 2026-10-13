@@ -102,6 +102,8 @@ jobs:
 
       # The same non-finite-q checks on the GPU: the default range's cupy reductions and boolean index, and pf8's
       # fused backward, custom fp32 forward and CUDA-graph paths. GPU-only: SKIPs here; run it on a GPU node.
+      # Last run on an A100 (S3DF job 40673990, ana-4.0.58/59-py3-minipytorch, cupy 12.3/13.0): 0 failures here;
+      # d21de4c fails 45 (a NaN q -> 0 peaks, +inf -> 514-522), 417e35e fails 9 (the dead-panel checks).
       - name: experiments/test_pf8_nonfinite_q_gpu.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_pf8_nonfinite_q_gpu.py

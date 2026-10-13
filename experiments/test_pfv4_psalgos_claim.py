@@ -29,7 +29,8 @@ SELF = os.path.relpath(os.path.abspath(__file__), ROOT)
 # oracle's name (in one sentence), the reverse order, and d21de4c's own phrase. Matched against normalised text
 # (see _norm). "agreement" alone is not a verb here, so "agreement with peaks_droplet is NOT verified" is free.
 _ORACLE = r"(?:peaks_droplet|peak_finder_v4r3|v4r3)"
-_SAME_SENTENCE = r"(?:[^.]|\.(?=\S)){0,80}?"     # no sentence end; a dotted name (psalgos.pypsalgos.x) is fine
+_SAME_SENTENCE = r"(?:[^.!?]|[.!?](?=\S)){0,80}?"  # no sentence end (. ! or ? then a space); a dotted name
+                                                    # (psalgos.pypsalgos.x) or "!=" in code is fine
 WITHDRAWN = [
     ("agrees with / matches / reproduces / validated ... the v4r3 oracle",
      re.compile(r"\b(?:agrees?|agreed|match(?:es|ed)?|reproduc(?:es?|ed)|validated)\b" + _SAME_SENTENCE + _ORACLE, re.I)),
@@ -99,6 +100,10 @@ CORRECT = ("peakfinder9 agrees with it on peak positions but isn't bit-identical
 check("the corrected wording is not caught", _hits(CORRECT) == [], _hits(CORRECT))
 PF9_TRUE = "peakfinder9 agrees with psalgos `peak_finder_v3r3_d2` on peak positions."
 check("a true pf9 / v3r3 sentence is not caught (checker's D3)", _hits(PF9_TRUE) == [], _hits(PF9_TRUE))
+# "!" and "?" end a sentence as "." does: an agreement verb in one sentence and the oracle in the next is free
+for two in ("peakfinder_v4 agrees with peakfinder9! peaks_droplet is not verified.",
+            "Does peakfinder_v4 agree with peakfinder9? peaks_droplet was never rerun."):
+    check(f"not caught across a sentence end: {two[:50]}", _hits(two) == [], _hits(two))
 
 print("\nno tracked file carries the withdrawn claim")
 files, how = _tracked_files()

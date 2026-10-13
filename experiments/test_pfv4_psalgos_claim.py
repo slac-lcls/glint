@@ -24,7 +24,6 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SELF = os.path.relpath(os.path.abspath(__file__), ROOT)
-TEXT_EXT = {".py", ".md", ".txt", ".rst", ".tex", ".yml", ".yaml", ".cff", ".toml", ".cfg", ".sh", ".ipynb"}
 
 # The withdrawn claim, in each shape it has been or is likely to be written: an agreement verb before the v4r3
 # oracle's name (in one sentence), the reverse order, and d21de4c's own phrase. Matched against normalised text
@@ -89,7 +88,8 @@ check("d21de4c peakfinder9.py sentence is caught", _hits(OLD_P9) != [], _hits(OL
 for shape in ("validated: it agrees with `peaks_droplet` (27/27 of our peaks matched by psana)",
               "PeakFinderV4 reproduces psalgos peaks_droplet's peak list",
               "it matches psalgos.pypsalgos.peaks_droplet (not bit-identical)",
-              "the dual-threshold peak_finder_v4r3 is matched by peakfinder_v4.py"):
+              "the dual-threshold peak_finder_v4r3 is matched by peakfinder_v4.py",
+              "the dual-threshold peak_finder_v4r3 agrees with peakfinder_v4.py"):
     check(f"caught: {shape[:60]}", _hits(shape) != [], _hits(shape))
 # ... and true or retracting sentences are not
 CORRECT = ("peakfinder9 agrees with it on peak positions but isn't bit-identical. The psalgos DUAL-THRESHOLD "
@@ -104,19 +104,23 @@ print("\nno tracked file carries the withdrawn claim")
 files, how = _tracked_files()
 scanned, bad = [], []
 for rel in files:
-    if rel == SELF or os.path.splitext(rel)[1].lower() not in TEXT_EXT:
+    if rel == SELF:
         continue
     path = os.path.join(ROOT, rel)
     if not os.path.isfile(path):
         continue
-    with open(path, encoding="utf-8", errors="replace") as fh:
-        found = _hits(fh.read())
+    with open(path, "rb") as fh:
+        content = fh.read()
+    if b"\0" in content:
+        continue
+    found = _hits(content.decode("utf-8", errors="replace"))
     scanned.append(rel)
     if found:
         bad.append(f"{rel}: {found}")
 must = {os.path.join("glint", "peakfinder_v4.py"), os.path.join("glint", "peakfinder9.py"),
-        "THIRD_PARTY_NOTICES.md", "README.md"}
-check(f"the scan reached the finder modules and the notices ({len(scanned)} files via {how})",
+        "THIRD_PARTY_NOTICES.md", "README.md", "experiments/xtc_bridge/common_mode_ab_result.json",
+        "docs/streaming_replay/glint_streaming_cxidb480_real.html", "experiments/xgandalf/ffbidx_driver.cpp"}
+check(f"the scan reached the finder modules, notices, and other text formats ({len(scanned)} files via {how})",
       must <= set(scanned), sorted(must - set(scanned)))
 check("no tracked text file says peakfinder_v4 agrees with / is matched to psalgos", not bad, bad)
 

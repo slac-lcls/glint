@@ -135,11 +135,11 @@ class RadialIntegrator:
         ok = xp.ones(q.size, bool) if okmask is None else okmask.copy()
         # A non-finite q has no bin, and nothing below caught it: floor(nan).astype(int64) is UNDEFINED,
         # and where it lands decides the answer. numpy on arm64 gives 0 -- in range, so ok0 stayed True
-        # and the weights 1 - frac and frac (both NaN) went into M, making two bins NaN for every frame;
-        # CuPy gives INT64_MIN (drp-benchmarks, A100) -- out of range, so the GPU path was clean by
-        # accident. Gate the pixel BEFORE the cast instead of relying on where undefined behaviour lands.
-        # (Ported from drp-benchmarks 6b41892, radial_integration/radial.py.) On a finite q only masked
-        # pixels change b0, and their entries stay (row 0, weight 0), so M is unchanged bit for bit.
+        # and the weights 1 - frac and frac (both NaN) went into M, making two bins NaN for every frame
+        # (experiments/test_radial_nonfinite_q.py, part A). A platform whose cast lands out of range would be
+        # clean by accident; CuPy is not tested here. Gate the pixel BEFORE the cast instead of relying on
+        # where undefined behaviour lands. On a finite q only masked pixels change b0, and their entries stay
+        # (row 0, weight 0), so M is unchanged bit for bit.
         ok &= xp.isfinite(t)
         b0 = xp.floor(xp.where(ok, t, 0.0)).astype(xp.int64); frac = t - b0
         ok0 = ok & (b0 >= 0) & (b0 < NB); ok1 = ok & (b0 + 1 >= 0) & (b0 + 1 < NB)
@@ -169,13 +169,14 @@ class RadialIntegrator:
         # half-width too. A NaN one fails `qhi > qlo` above; an INFINITE one does not -- clip() sends its
         # interval to the full [qmin, qmax], so it emitted an entry in EVERY bin, all of weight 0
         # (dq / 2 / inf): the answer stayed right, but one infinite pixel added 780 stored entries to M on a
-        # 128x128 map binned 200 ways. Drop the contaminated stencil instead. (Filling the bad pixel before
-        # differencing, to keep the neighbours, was measured worse in drp-benchmarks: a global fill invents a
-        # local gradient and the neighbours smear their weight across bins nothing should reach.)
+        # 128x128 map binned 200 ways (experiments/test_radial_nonfinite_q.py, part B, d21de4c, arm64 numpy
+        # 1.26). Drop the contaminated stencil instead. Filling the bad pixel before differencing, to keep the
+        # neighbours, would not help: a global fill invents a local gradient, and the neighbours would smear
+        # their weight across bins nothing should reach.
         ok &= xp.isfinite(hw)
         # ...and only now cast: floor() of a non-finite value is undefined, and clip() would turn whatever
-        # it produced into a REAL bin index (see _linear). Ported with the gate above from drp-benchmarks
-        # 6b41892. On a finite q and half-width, `ok` and every kept pixel's jlo/jhi are as before.
+        # it produced into a REAL bin index (see _linear). On a finite q and half-width, `ok` and every kept
+        # pixel's jlo/jhi are as before.
         jlo = xp.clip(xp.floor(xp.where(ok, (qlo - self.qmin) / self.dq, 0.0)).astype(xp.int64), 0, NB - 1)
         jhi = xp.clip(xp.floor(xp.where(ok, (qhi - self.qmin) / self.dq, 0.0)).astype(xp.int64), 0, NB - 1)
         counts = xp.where(ok, jhi - jlo + 1, 0).astype(xp.int64)

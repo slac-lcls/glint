@@ -17,14 +17,16 @@ background 0 and SNR ~1e6 x its count. Builds on the previous commit's gate in r
   A  RadialIntegrator's default range ignores non-finite q: equal to the clean map's when the bad pixel is not
      the extremum, the min of the rest when it is; an all-non-finite map raises; M is that of the pixel masked.
   B  PeakFinder8: a NaN, +inf or -inf q -- on background, on a peak, with and without a caller's mask, fp64 and
-     fp32, class and one-shot -- gives EXACTLY the peak list of that pixel masked with its q finite.
+     fp32, class and one-shot -- gives EXACTLY the peak list of that pixel masked with its q finite. A q-map
+     with no finite value at all (a dead panel) builds, and finds no peaks.
   C  the reported case: 256x256, one bright spot, one NaN q -> the same one peak.
   D  all-finite maps: PeakFinder8's `good` and M are d21de4c's bit for bit (its construction frozen below), so
      its peaks are too; the default range is exactly q.min()/q.max(). The comparator is shown to fail on a
      one-ulp change.
 
-d21de4c fails 27 of the 49 checks (A, B, C) on arm64; the tree with only the previous commit's gate fails 23,
-its default range still NaN or infinite. Plain script: prints ok/FAIL lines, exits 1 on any failure. numpy + scipy.
+d21de4c fails 33 of the 46 checks of A, B and C (65 in all) on arm64 numpy 1.26; the tree with only the
+previous commit's gate fails 27, its default range still NaN or infinite. Without the dead-panel case in
+PeakFinder8, the 7 dead-panel checks fail: the finder refused to build. Plain script: prints ok/FAIL lines, exits 1 on any failure. numpy + scipy.
 
     PYTHONPATH=. python experiments/test_pf8_nonfinite_q.py
 """
@@ -120,7 +122,7 @@ def part_a():
     rest = Q.copy(); rest[amin] = np.inf
     check("A NaN at the minimum-q pixel: qmin is the min of the other pixels", ri.qmin == float(rest.min()),
           (ri.qmin, float(rest.min())))
-    for tag, v in VALUES.items():                        # one end given, the other defaulted (checker's P1)
+    for tag, v in VALUES.items():                        # one end given, the other defaulted
         ri = RadialIntegrator(with_q(BG_PX, v), qmin=lo)
         check(f"A q = {tag}, qmin given and qmax defaulted: qmax is the clean map's", ri.qmax == hi, ri.qmax)
         ri = RadialIntegrator(with_q(BG_PX, v), qmax=hi)
@@ -130,7 +132,7 @@ def part_a():
         RadialIntegrator(np.full((8, 8), np.nan)); msg = None
     except ValueError as e:
         msg = str(e)
-    # the module's own message, not numpy's empty-reduction ValueError (checker's P2)
+    # the module's own message, not numpy's empty-reduction ValueError
     check("A an all-NaN q-map without qmin/qmax raises the module's ValueError",
           msg is not None and "no finite value" in msg, msg)
     ri = RadialIntegrator(np.full((8, 8), np.nan), qmin=0.0, qmax=1.0, nbin=4)
@@ -155,6 +157,19 @@ def part_b():
     one = P8.peakfinder8(IMG, with_q(BG_PX, np.nan))
     check("B one-shot peakfinder8(), NaN q == that pixel masked",
           same(one, P8.peakfinder8(IMG, Q, mask=masked(None, BG_PX))), len(one["x"]))
+    # a dead or unmapped panel: no pixel has a finite q, so every pixel is masked -> builds, and no peaks
+    for tag, v in VALUES.items():
+        for mask, mtag in ((None, "no mask"), (MASK, "caller mask")):
+            try:
+                pk = P8.PeakFinder8(np.full(Q.shape, v), mask=mask).find(IMG); n, err = len(pk["x"]), None
+            except Exception as e:
+                n, err = None, f"{type(e).__name__}: {e}"
+            check(f"B every q = {tag} ({mtag}): builds and finds no peaks", n == 0, err or n)
+    try:
+        n = len(P8.peakfinder8(IMG, np.full(Q.shape, np.nan))["x"]); err = None
+    except Exception as e:
+        n, err = None, f"{type(e).__name__}: {e}"
+    check("B one-shot peakfinder8() on an all-NaN q-map: no peaks", n == 0, err or n)
 
 
 def part_c():

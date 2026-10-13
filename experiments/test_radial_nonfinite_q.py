@@ -7,13 +7,13 @@ undefined: numpy on arm64 gives 0, which is a real bin, so a NaN q at explicit q
 platform's choice -- CuPy's lands out of range, and the same code is clean there by accident -- so this test
 checks the CAST too (part C), not only where it happened to land. `_area` cast in the same place; an infinite
 q there gave its four gradient neighbours an infinite half-width, whose interval clip() stretched over every
-bin: 780 extra (zero-weight) stored entries from one pixel on the map below. drp-benchmarks fixed both in
-6b41892; this is that gate, ported.
+bin: 780 extra (zero-weight) stored entries from one pixel on the map below. The fix gates both before the
+cast.
 
   A  a NaN / +inf / -inf q at explicit qmin/qmax builds EXACTLY the M of that pixel masked (linear) or of its
      finite-difference stencil masked (area: the pixel and its four neighbours, whose half-width it feeds);
      no NaN weight reaches M, no live bin goes empty, I(q) is finite wherever the clean map's is.
-  B  ...and the counts on the scene the drp-benchmarks test used (NaN weights, extra stored entries).
+  B  ...and the counts on the ring scene below (NaN weights, extra stored entries).
   C  no non-finite value reaches a float->int cast while M is built (numpy's "invalid value encountered
      in cast"). First shows that this interpreter does warn on such a cast; SKIPs if it does not.
   D  a finite q-map builds the same M, den and I(q) as d21de4c, bit for bit: both splits, default and
@@ -66,7 +66,7 @@ def same_bytes(a, b):
 
 
 def scene(N=128, rings=(0.30, 0.55, 0.812, 1.05), sig=0.006):
-    """drp-benchmarks' test_radial.make_scene: q = |r| * 2/N, a few Gaussian rings."""
+    """q = |r| * 2/N, a few Gaussian rings."""
     yy, xx = np.mgrid[-N // 2:N // 2, -N // 2:N // 2]
     q = np.sqrt(xx ** 2 + yy ** 2) * (2.0 / N)
     img = np.zeros((N, N))
@@ -76,7 +76,7 @@ def scene(N=128, rings=(0.30, 0.55, 0.812, 1.05), sig=0.006):
 
 
 Q, IMG = scene()
-BAD = (5, 5)                                                     # a corner pixel, as in drp-benchmarks
+BAD = (5, 5)                                                     # a pixel near the corner
 STENCIL = [(5, 5), (4, 5), (6, 5), (5, 4), (5, 6)]              # the pixel + its four gradient neighbours
 KW = dict(nbin=200, qmin=0.0, qmax=1.4)
 VALUES = {"NaN": np.nan, "+inf": np.inf, "-inf": -np.inf}

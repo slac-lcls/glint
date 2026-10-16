@@ -16,12 +16,10 @@ GROW pixels and the SAME gathered scatter-add reduction gives the per-peak stats
 
 NOTE this is *modelled on* the Dubrovin/psalgos DUAL-THRESHOLD finder ``peaks_droplet`` = ``peak_finder_v4r3``
 (a GPU re-implementation of the idea), not a port of the psalgos C++. Until 2026-10 this docstring said the two
-agree on peaks. That rested on one comparison with the psana1-era ``psalgos`` package (drp-benchmarks
-``eb5572a`` ``radial_integration/benchmarks/psana_agreement.py``, 2026-07-02): one synthetic 384x504 frame
-with 30 planted peaks; psalgos ``peaks_droplet`` at absolute thresholds 25/60 ADU against this finder at
-SNR 5/6, son_min 6, min_pix 2 (neither is GLINT's production setting); and only this finder's peaks looked
-up in psalgos' list (27 of 27 found, psalgos found 29). It ran drp-benchmarks' 217-line predecessor of this
-file, before GLINT's GPU CCL (#51), abs_thr/sig_floor (#200) and masked-pixel (#231) changes. It cannot be
+agree on peaks. That rested on one comparison with the psana1-era ``psalgos`` package (July 2026): one
+synthetic frame, psalgos ``peaks_droplet`` at absolute thresholds against this finder at SNR thresholds (neither
+at GLINT's production setting), only this finder's peaks looked up in psalgos' list, and an earlier version of
+this finder, before the GPU CCL (#51), abs_thr/sig_floor (#200) and masked-pixel (#231) changes. It cannot be
 repeated today: the psana2 build ships ``peak_finder_v3r3_d2`` but not ``peak_finder_v4r3_d2`` (checked
 2026-09-11), so psana2's own ``pypsalg.peaks_droplet_2d`` wrapper raises AttributeError. Agreement with
 ``peaks_droplet`` is therefore NOT verified. (The adaptive-SNR sibling ``peaks_adaptive`` = ``peak_finder_v3r3``

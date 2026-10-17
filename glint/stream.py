@@ -37,6 +37,32 @@ _FALLBACK_GEOM = ("clen = 0.1\nres = 5000\nadu_per_photon = 1\nphoton_energy = 9
                   "p0/min_fs = 0\np0/max_fs = 1023\np0/min_ss = 0\np0/max_ss = 1023\n"
                   "p0/corner_x = -512.5\np0/corner_y = -512.5\np0/fs = x\np0/ss = y\n")
 
+# A registration whose basis spans less than this volume (A^3) is degenerate, not a crystal. The stream writers
+# write such a frame as unindexed; the solution-file writer, which inverts M, used to stop on the first singular
+# one and lose the whole file.
+MIN_CELL_VOLUME_A3 = 1.0
+
+
+def has_cell(M):
+    """True when ``M`` (columns a, b, c in A) is a usable basis: finite, with |det M| >= MIN_CELL_VOLUME_A3.
+    The one rule shared by ``write_stream``, ``predict._write_chunk`` and ``predict.write_solution_file``, so
+    the stream and the solution file hold the same frames."""
+    if M is None:
+        return False
+    M = np.asarray(M, float)
+    return bool(np.all(np.isfinite(M)) and abs(np.linalg.det(M)) >= MIN_CELL_VOLUME_A3)
+
+
+def written_note(stats):
+    """The run-summary line for a stream that holds a different number of crystals (``stats["n_written"]``,
+    from the writer) than ``stats["n_idx"]`` counts, or None. A registration with no usable cell is counted as
+    indexed but written as unindexed, and nothing else in the summary says so."""
+    w = stats.get("n_written")
+    if w is None or w == stats["n_idx"]:
+        return None
+    return (f"  written to stream  : {w} crystals, not {stats['n_idx']} -- frames with no usable cell "
+            f"(|det M| < {MIN_CELL_VOLUME_A3:g} A^3) are written as unindexed")
+
 
 def _header(geom_text, generator="GLINT (fftindex)"):
     """CrystFEL stream header. The reader needs a geometry-file block right after the format line
@@ -140,7 +166,7 @@ def write_stream(results, path, geom_text=None, panel=None, photon_eV=9392.7, cl
             f.write(f"Image serial number: {serial}\n")
             f.write("hit = 1\n")
             M = r.get("M")
-            valid = M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
+            valid = has_cell(M)
             # 'file', not 'glint': CrystFEL validates this against its own indexer list, and from
             # its side the orientation IS externally supplied.
             f.write(f"indexed_by = {'file' if valid else 'none'}\n")

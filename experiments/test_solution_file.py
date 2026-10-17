@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from glint.lattice import cell_to_Ar                                    # noqa: E402
 from glint.predict import write_fromfile, write_solution_file           # noqa: E402
+from glint.stream import has_cell, write_stream, written_note           # noqa: E402
 
 FAILS = []
 
@@ -118,6 +119,35 @@ n, W, txt, err = run([{"image": "x.cxi", "event": 0, "M": other}], "mPb", ref=P2
 _, _, txt_old, _ = run([{"image": "x.cxi", "event": 0, "M": other}], "mPb")
 check("written exactly as without a reference (the old behaviour)", txt == txt_old)
 check("and counted on stderr", "no signed permutation of the reference" in err, err)
+
+print("\na frame with no usable cell is skipped; one singular basis used to raise and lose the whole file")
+flat = LYSO.copy(); flat[:, 2] = 0.0                                    # a zero-length axis: det M = 0
+BAD = [{"image": "x.cxi", "event": 10, "M": flat},
+       {"image": "x.cxi", "event": 11, "M": np.full((3, 3), np.nan)},
+       {"image": "x.cxi", "event": 12, "M": 0.5 * np.eye(3)}]           # finite, but 0.125 A^3
+for code, ref, cell in (("tPc", None, LYSO), ("mPb", P21, P21), ("aP", None, LYSO)):
+    good = [{"image": "x.cxi", "event": i, "M": rot(40 + i) @ cell} for i in range(3)]
+    try:
+        n, W, txt, err = run(good[:1] + BAD + good[1:], code, ref=ref)
+    except np.linalg.LinAlgError as e:
+        check(f"{code}: no exception", False, e)
+        continue
+    _, _, txt_good, _ = run(good, code, ref=ref)
+    check(f"{code}: the 3 good frames are written, byte-identical to a file without the bad ones",
+          n == 3 and txt == txt_good, n)
+    check(f"{code}: the 3 skipped frames are counted on stderr", "3 frame(s) have no usable cell" in err, err)
+with tempfile.TemporaryDirectory() as d:
+    n_stream = write_stream(good[:1] + BAD + good[1:], os.path.join(d, "o.stream"))
+check("the stream writer holds the same 3 frames", n_stream == 3, n_stream)
+check("has_cell: None, singular, non-finite and sub-1 A^3 bases are not cells; a real one is",
+      [has_cell(M) for M in (None, flat, np.full((3, 3), np.nan), 0.5 * np.eye(3), LYSO)]
+      == [False, False, False, False, True])
+
+note = written_note({"n_idx": 300, "n_written": 200})
+check("the run summary names a stream holding 200 of 300 indexed",
+      note is not None and "written to stream  : 200 crystals, not 300" in note, note)
+check("and adds nothing when the counts agree, or with no count from the writer",
+      written_note({"n_idx": 300, "n_written": 300}) is None and written_note({"n_idx": 300}) is None)
 
 print("\nthe old name")
 check("write_fromfile is write_solution_file", write_fromfile is write_solution_file)

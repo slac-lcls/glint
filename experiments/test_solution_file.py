@@ -7,9 +7,15 @@ through. On LUTE's cxil1015922 r136 test (C2, 111.94/172.23/41.23, beta 106.2 on
 check rejected all 27 frames. With a reference cell the writer now picks the proper signed permutation of the
 columns closest to it; tetragonal / orthorhombic / hexagonal codes keep their standard setting, byte for byte.
 
+Without a reference cell, triclinic, primitive monoclinic and rhombohedral codes used to get the length-only rule
+frame by frame, which keeps each frame's column signs. On mfx101343025 r194 (28.0/62.5/60.9, beta 90.8, written
+as ``mPb`` with no --cell) 101 of 229 frames came out at beta 89.2, 180 degrees about a from the rest: a setting
+2/m does not relate to theirs. Every frame of such a run now gets the run's own setting.
+
   PYTHONPATH=. python experiments/test_solution_file.py      # exit 0 = all pass
 """
 import io
+import itertools
 import os
 import sys
 import tempfile
@@ -20,7 +26,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from glint.lattice import cell_to_Ar                                    # noqa: E402
-from glint.predict import write_fromfile, write_solution_file           # noqa: E402
+from glint.predict import _canonical_axes, write_fromfile, write_solution_file   # noqa: E402
 from glint.stream import has_cell, write_stream, written_note           # noqa: E402
 
 FAILS = []
@@ -97,7 +103,7 @@ check("hR: the reference's angles (75, 75, 75), right-handed",
       all(np.allclose(params(A), params(HR), atol=1e-4) and np.linalg.det(A) > 0 for A, _ in W) and not err,
       [np.round(params(A), 2) for A, _ in W[:1]])
 
-print("\nwithout the reference cell: the old behaviour, and a warning for monoclinic codes")
+print("\nbase-centered code without the reference cell: the old behavior, and a warning")
 res = [{"image": "x.cxi", "event": 0, "M": rot(9) @ C2[:, [2, 0, 1]]}]
 n, W, _, err = run(res, "mCb")
 check("the axes stay in the engine's order (the r136 failure, reproduced)",
@@ -116,9 +122,75 @@ check("tPc still puts the 4-fold axis (37.98) in c", all(abs(params(A)[2] - 37.9
 print("\na frame that is no permutation of the reference is left alone, with a warning")
 other = rot(3) @ cell_to_Ar(50.0, 70.0, 90.0, 90, 100.0, 90)
 n, W, txt, err = run([{"image": "x.cxi", "event": 0, "M": other}], "mPb", ref=P21)
-_, _, txt_old, _ = run([{"image": "x.cxi", "event": 0, "M": other}], "mPb")
-check("written exactly as without a reference (the old behaviour)", txt == txt_old)
+check("written in the setting _canonical_axes gives it (the old behavior)",
+      np.allclose(W[0][0], _canonical_axes(other, centering="P"), atol=1e-3))
 check("and counted on stderr", "no signed permutation of the reference" in err, err)
+
+print("\nno reference cell: every frame of a run in ONE setting")
+# Each frame: the cell with noise (0.3% on edges, 0.15 degrees on angles), at its own orientation, handed in with
+# random column order and signs, left-handed included, as the blind search's reduced cells come.
+SIGNED = [np.eye(3)[:, list(p)] * np.array(s) for p in itertools.permutations(range(3))
+          for s in itertools.product((1.0, -1.0), repeat=3)]
+
+
+def noisy_run(cell, n, seed):
+    g = np.random.default_rng(seed)
+    truth, res = [], []
+    for i in range(n):
+        C = cell_to_Ar(*(np.array(cell[:3]) * (1 + 0.003 * g.normal(size=3))),
+                       *(np.array(cell[3:]) + 0.15 * g.normal(size=3)))
+        T = rot(1000 * seed + i) @ C
+        truth.append(T)
+        res.append({"image": "x.cxi", "event": i, "M": T @ SIGNED[g.integers(len(SIGNED))]})
+    return truth, res
+
+
+def relabelings(truth, W):
+    """The signed permutation taking each frame's true basis to the written one."""
+    return [np.rint(np.linalg.solve(T, A)) for T, (A, _) in zip(truth, W)]
+
+
+R194 = (28.00, 62.50, 60.90, 90.0, 90.8, 90.0)       # beta 0.8 from 90, the two long edges 2.6% apart
+truth, res = noisy_run(R194, 60, seed=5)
+n, W, _, err = run(res, "mPb")
+X = relabelings(truth, W)
+TWO_B = np.diag([-1.0, 1.0, -1.0])                   # the 2-fold about b: the one proper operator of 2/m
+check("mPb, r194-like cell: every frame is the true basis up to the 2-fold about b (none at 180 degrees about a)",
+      n == 60 and all(np.allclose(x, np.eye(3)) or np.allclose(x, TWO_B) for x in X),
+      sum(not (np.allclose(x, np.eye(3)) or np.allclose(x, TWO_B)) for x in X))
+P = np.array([params(A) for A, _ in W])
+check("mPb: the code's setting, a 28 / b 62.5 (unique) / c 60.9, beta obtuse on every frame, right-handed",
+      np.allclose(np.median(P[:, :3], 0), R194[:3], atol=0.3) and (P[:, 4] > 90).all()
+      and all(np.linalg.det(A) > 0 for A, _ in W), np.round(np.median(P, 0), 2))
+check("mPb: stderr names the run's cell", "the run's setting, cell 28" in err, err)
+n, W, _, err = run(res, "mPc")
+P = np.array([params(A) for A, _ in W])
+check("mPc: the unique axis 62.5 in c and the obtuse angle between a and b, on every frame",
+      np.allclose(np.median(P[:, :3], 0), [28.0, 60.9, 62.5], atol=0.3) and (P[:, 5] > 90).all(),
+      np.round(np.median(P, 0), 2))
+# Before: the length-only rule frame by frame. Same frames, how many came out in the other setting.
+# Its setting is (60.9, 62.5, 28): the angle between a and c is beta on some frames and 180 - beta on others.
+obtuse = sum(params(_canonical_axes(r["M"]))[4] > 90 for r in res)
+check("(the length-only rule on the same frames splits them between two settings)", 0 < obtuse < len(res),
+      obtuse)
+
+TRI = (30.0, 40.0, 50.0, 80.0, 95.0, 105.0)
+truth, res = noisy_run(TRI, 30, seed=6)
+n, W, _, err = run(res, "aP")
+X = relabelings(truth, W)
+check("aP, triclinic cell: one relabeling for every frame (-1 has no proper operator but the identity)",
+      n == 30 and all(np.allclose(x, X[0]) for x in X) and not err, err)
+
+HRC = (50.0, 50.0, 50.0, 75.0, 75.0, 75.0)
+bad_runs = []
+for sd in range(7, 13):                              # several runs: some seeds come with mixed column signs
+    truth, res = noisy_run(HRC, 40, seed=sd)
+    n, W, _, err = run(res, "hR")
+    ang = np.array([params(A)[3:] for A, _ in W])
+    if not (n == 40 and (np.ptp(ang, axis=1) < 1.5).all() and ((ang < 90).all() or (ang > 90).all())):
+        bad_runs.append(sd)
+check("hR without a reference: every frame's three angles equal, one sign convention for the run "
+      "(a mixed-sign seed must not set 75/105/105 for all)", not bad_runs, bad_runs)
 
 print("\na frame with no usable cell is skipped; one singular basis used to raise and lose the whole file")
 flat = LYSO.copy(); flat[:, 2] = 0.0                                    # a zero-length axis: det M = 0

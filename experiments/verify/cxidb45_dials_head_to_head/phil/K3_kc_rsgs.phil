@@ -1,0 +1,7 @@
+# K3: real-space grid search on the target cell, inside stills_process (refinement + outlier rejection),
+# the like-for-like replacement of the earlier bare "DIALS grid, cell supplied" row (49.9%).
+indexing.known_symmetry {
+  space_group = P43212
+  unit_cell = 68.7 68.7 108.6 90 90 90
+}
+indexing.method = real_space_grid_search

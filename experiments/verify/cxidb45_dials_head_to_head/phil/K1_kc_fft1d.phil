@@ -1,0 +1,5 @@
+# K1: stills_process defaults + the target cell and symmetry (Proteinase K, P4(3)2(1)2).
+indexing.known_symmetry {
+  space_group = P43212
+  unit_cell = 68.7 68.7 108.6 90 90 90
+}

@@ -48,6 +48,7 @@ import unicodedata
 import math
 from math import comb
 from dataclasses import dataclass, field
+from fractions import Fraction
 from pathlib import Path
 
 HOME = Path.home()
@@ -737,6 +738,382 @@ FACTS: dict[str, float | str] = {
     "roibin_sigma_q1":        0.666,
     "roibin_sigma_q3":        0.974,
     "roibin_sigma_nrefl":     15206,   # matched on (frame, hkl)
+
+    # Real-run merges: GLINT's orientations integrated by CrystFEL, against CrystFEL's own indexing ---
+    # GLINT 95d51ce writes its blind orientations to a solution file (glint_cli --tofile, --gate strict);
+    # CrystFEL 0.10.2 reads it with indexamajig --indexing=file --tolerance=10,10,10,3 and integrates. The
+    # comparator is indexamajig's own XGANDALF indexing of the same frames (--tolerance=5,5,5,1.5 --multi;
+    # --no-revalidate on r0016). Every arm is merged by partialator --model=unity --min-measurements=2
+    # --max-rel-B=100.0 -j 1 and scored by compare_hkl. A row uses the frames BOTH routes index, split ten
+    # times into half-datasets with the halves assigned by frame key (partialator --custom-split, one
+    # seeded assignment shared by every arm). CC1/2, CC*, Rsplit and completeness are the MEAN over the ten
+    # splits (sd in the key or the trailing comment); crystals merged and d, the resolution where CC1/2
+    # falls to 0.143, are medians.
+    #   Slurm 41037259 (r0016 peak lists, btx peak finder), 41037260 (GLINT, sdfampere010, A100), 41037261
+    #   (CrystFEL indexing, sdfmilan136), 41037262 (--indexing=file, sdfmilan177) and the key-paired merges
+    #   41130408 (sdfmilan135). The first merge pass, 41037263, split halves by chunk order, so one frame
+    #   missing from an arm unpaired every later frame. Its numbers are superseded (r194's verdict changed
+    #   with the pairing) and must not be quoted.
+    #   r0016 = mfxx49820 r0016, Epix10ka2M, first 6,000 events, 2,295 frames with peaks.
+    #   r194  = mfx101343025 r194, Jungfrau-16M, monoclinic lysozyme, first 3,000 events, 278 frames.
+    #           Completeness is 2% in every r194 arm, so its statistics carry little weight.
+    #   r51   = mfx100848724 r51, Jungfrau-16M, tetragonal lysozyme, 11,058 frames with >= 10 peaks.
+    # Null: every frame given another frame's GLINT orientation (three shuffle seeds, peak checks off),
+    # i.e. what the merge returns when the orientations carry no information.
+    # A difference counts as DETECTED only when one sign holds in >= 8 of the 10 splits AND |mean| exceeds
+    # CrystFEL's own split sd (the merge collector's rule). No equivalence margin was set, so "not
+    # detected" is not a claim of parity. check_arithmetic re-applies the rule to both rows.
+    "merge_splits":                    10,
+    "merge_r0016_common_frames":      998,
+    "merge_r0016_glint_crystals":     520,
+    "merge_r0016_cf_crystals":        537,
+    "merge_r0016_glint_d_A":         2.25,
+    "merge_r0016_cf_d_A":            2.26,
+    "merge_r0016_glint_cchalf":     0.370,
+    "merge_r0016_glint_cchalf_sd":  0.055,
+    "merge_r0016_cf_cchalf":        0.323,
+    "merge_r0016_cf_cchalf_sd":     0.127,
+    "merge_r0016_glint_ccstar":     0.733,  # sd 0.039
+    "merge_r0016_cf_ccstar":        0.724,  # sd 0.045
+    "merge_r0016_glint_rsplit_pct":  82.6,  # sd 2.1
+    "merge_r0016_cf_rsplit_pct":     86.8,  # sd 15.7
+    "merge_r0016_glint_compl_pct":   75.2,  # sd 0.9
+    "merge_r0016_cf_compl_pct":      75.9,  # sd 0.5
+    "merge_r0016_cchalf_diff":     0.0468,  # GLINT minus CrystFEL, paired split by split: not detected
+    "merge_r0016_cchalf_diff_sd":  0.1274,
+    "merge_r0016_cchalf_diff_pos":      5,  # splits where GLINT's CC1/2 is the higher
+    "merge_r0016_cchalf_diff_neg":      5,
+    "merge_r0016_null1_cchalf":     0.023,  # the three shuffled-orientation merges
+    "merge_r0016_null2_cchalf":     0.028,
+    "merge_r0016_null3_cchalf":     0.025,
+    "merge_r0016_glint_minus_null": 0.3473, # against null1, sd 0.0564
+    "merge_r0016_cf_minus_null":    0.3005, # against null1, sd 0.1271
+    # The two routes find the same orientations, not only similar statistics: misorientation between
+    # GLINT's and CrystFEL's solutions over the 998 frames (RESULTS.md: median 0.0398 deg, 0.97395 within 1 deg).
+    "merge_r0016_misorient_median_deg": 0.040,
+    "merge_r0016_misorient_le1deg_pct":  97.4,
+    "merge_r194_common_frames":       114,
+    "merge_r194_glint_crystals":       79,
+    "merge_r194_cf_crystals":          77,
+    "merge_r194_glint_d_A":          2.05,
+    "merge_r194_cf_d_A":             1.42,
+    "merge_r194_glint_cchalf":      0.211,
+    "merge_r194_glint_cchalf_sd":   0.101,
+    "merge_r194_cf_cchalf":         0.413,
+    "merge_r194_cf_cchalf_sd":      0.180,
+    "merge_r194_glint_ccstar":      0.572,  # sd 0.112
+    "merge_r194_cf_ccstar":         0.742,  # sd 0.122
+    "merge_r194_glint_rsplit_pct":   92.5,  # sd 7.7
+    "merge_r194_cf_rsplit_pct":      80.7,  # sd 10.4
+    "merge_r194_glint_compl_pct":     2.0,  # sd 0.3
+    "merge_r194_cf_compl_pct":        2.1,  # sd 0.3
+    "merge_r194_cchalf_diff":     -0.2018,  # lower on average, but 3+/7- is short of 8 of 10: not detected
+    "merge_r194_cchalf_diff_sd":   0.2265,
+    "merge_r194_cchalf_diff_pos":       3,
+    "merge_r194_cchalf_diff_neg":       7,
+    "merge_r194_null1_cchalf":      0.003,
+    "merge_r194_null2_cchalf":      0.010,
+    "merge_r194_null3_cchalf":      0.006,
+    "merge_r194_glint_minus_null":  0.2077, # against null1, sd 0.0978
+    "merge_r194_cf_minus_null":     0.4095, # against null1, sd 0.1801
+    # r194's misorientation reads a median 179.79 deg. That is a choice of setting, not an orientation
+    # error: with beta = 90.8 deg GLINT writes each frame in one of two near-equivalent settings, 57% of
+    # them as (a,-b,-c); chosen against the known cell the median is 0.171 deg. Do not quote 179.79.
+    #
+    # CrystFEL's acceptance of GLINT's solutions with its peak checks ON: most real orientations pass, and
+    # none given to the wrong frame. With the checks off (--no-check-peaks --no-refine --no-retry) it
+    # accepts 98-100% of real and shuffled orientations alike, so the merge rows are compared on merge
+    # statistics, never on acceptance.
+    "merge_r0016_glint_solutions":   1548,
+    "merge_r0016_glint_accepted":    1038,
+    "merge_r0016_glint_accepted_pct":  67,  # RESULTS.md prints 67.1%
+    "merge_r194_glint_solutions":     230,
+    "merge_r194_glint_accepted":      123,
+    "merge_r194_glint_accepted_pct":   53,  # 123/230 = 53.48; RESULTS.md prints 53.5, which rounds again to 54
+    "merge_shuffled_checked_accepted":  0,  # each of the three shuffle seeds: 0/1548 on r0016, 0/230 on r194
+    "merge_shuffled_checked_of":     1778,  # = 1548 + 230, per seed
+    # r51 has no paired GLINT row in this run: the solution-file writer stopped on a degenerate cell
+    # (fixed in #263). The blind run itself is the result. GLINT's consensus declines to establish a cell:
+    # the largest group of pooled per-frame cells is below the 2% pool share (r194 26.1%, r0016 15.1%),
+    # so there is no rescue and each frame keeps its own best cell. Scored against LUTE's cell
+    # (79.17/79.17/37.96) with the shipped same_lattice, 250 of the 2,408 cells written carry the correct
+    # lattice. The log's "FINAL indexed 3895" counts cells before the writer drops |det M| < 1, so it is
+    # not a yield. From 41037260's log and orientation stream.
+    "merge_r51_frames":             11058,
+    "merge_r51_pooled_cells":       32199,
+    "merge_r51_top_group":            269,
+    "merge_r51_top_group_pct":        0.8,
+    "merge_r51_correct_lattice":      250,
+    "merge_r51_correct_lattice_pct":  2.3,
+
+    # The per-frame blind indexer ALONE on real runs, binned by peaks per frame ------------------------
+    # index_blind_fast at its defaults: one frame at a time, no consensus, no rescue. GLINT 95d51ce, one
+    # A100 per run, no CrystFEL step. Slurm 41006499 (array: r0016 ran as 41017341 on sdfampere035; r0278,
+    # r0058 and cxidb-45 as 41017395, 41017753 and 41018032 on sdfampere030) and 41006500 (binning).
+    # Strict criterion as everywhere in this file: the frame's best cell is the reference lattice AND
+    # indexes >= 25% and >= 10 of its peaks within 0.15 of integer. Null: the same frames azimuth-scrambled,
+    # 0 at the strict criterion in every bin of every run (0/1940 r0278, 0/2370 r0058, 0/907 cxidb-45 too).
+    # Control: the known-cell indexer (index_known_fast) handed the reference cell.
+    # r0016 = mfxx49820 r0016, 2,228 frames, reference btx sample2.cell (external). Bins are inclusive peak
+    # counts. Accuracy turns over above ~100 peaks and the known-cell control turns over with it (65, 53
+    # and 27% in the top three bins), so the curve is not monotone in peaks; the cause is untested.
+    "r0016_sf_frames":               2228,
+    "r0016_sf_bin_6_9_frames":        240,
+    "r0016_sf_bin_6_9_strict":          0,
+    "r0016_sf_bin_6_9_pct":             0,
+    "r0016_sf_bin_10_14_frames":      227,
+    "r0016_sf_bin_10_14_strict":       34,
+    "r0016_sf_bin_10_14_pct":          15,
+    "r0016_sf_bin_15_19_frames":      189,
+    "r0016_sf_bin_15_19_strict":       40,
+    "r0016_sf_bin_15_19_pct":          21,
+    "r0016_sf_bin_20_29_frames":      328,
+    "r0016_sf_bin_20_29_strict":       93,
+    "r0016_sf_bin_20_29_pct":          28,
+    "r0016_sf_bin_30_39_frames":      259,
+    "r0016_sf_bin_30_39_strict":       94,
+    "r0016_sf_bin_30_39_pct":          36,
+    "r0016_sf_bin_40_59_frames":      377,
+    "r0016_sf_bin_40_59_strict":      157,
+    "r0016_sf_bin_40_59_pct":          42,
+    "r0016_sf_bin_60_99_frames":      382,
+    "r0016_sf_bin_60_99_strict":      178,
+    "r0016_sf_bin_60_99_pct":          47,
+    "r0016_sf_bin_100_149_frames":    163,
+    "r0016_sf_bin_100_149_strict":     69,
+    "r0016_sf_bin_100_149_pct":        42,
+    "r0016_sf_bin_150_249_frames":     63,
+    "r0016_sf_bin_150_249_strict":     14,
+    "r0016_sf_bin_150_249_pct":        22,
+    "r0016_sf_strict_of2228":         679,
+    "r0016_sf_strict_pct":             30,
+    "r0016_sf_lattice_of2228":        690,  # correct lattice, no coverage bar
+    "r0016_sf_lattice_pct":            31,
+    "r0016_sf_null_of2228":             0,
+    "r0016_known_strict_of2228":     1234,
+    "r0016_known_strict_pct":          55,
+    # ⚑ The known-cell control has a null of its own and it is NOT zero: handed the cell, the scrambled
+    # frames pass the strict criterion on 330 of 2,228 (15%), and the lattice test on 1,920. Quote 55%
+    # beside this 15%, not beside the blind null's 0. (r0016_summary.json, known_scr.)
+    "r0016_known_null_of2228":        330,
+    # cxidb-45 (907 frames, every one at the lists' 170-peak cap), same two indexers; counts from
+    # cxidb45_summary.json. The head-to-head block below re-measures the per-frame row (324 again) and runs
+    # a separate cell-supplied GLINT pass (805, one frame from this 806).
+    "pk45_sf_strict_of907":           324,
+    "pk45_sf_strict_pct":              36,
+    "pk45_sf_known_of907":            806,
+    "pk45_sf_known_pct":               89,
+    # r0278 and r0058 (mfxl1038923, Epix10ka2M; geometry unrefined, the btx r0016 panel layout at 0.058
+    # and 0.050 m) have no recorded cell. Their reference is GLINT's vote over every indexed frame's best
+    # blind cell (consensus_cell at the shipped min_frac 0.02 / min_lead 1.5, summary json
+    # reference.top1_vote), so "correct" on these two runs means "agrees with GLINT's own vote". Angles
+    # 88.40/90.50/88.95 and 90.87/88.15/90.05 deg; volumes 284,294 and 264,159 A^3. The vote pools one
+    # cell per indexed frame, so its pool is indexed_r0278 / indexed_r0058 above (checked). The CrystFEL
+    # block below is the independent check.
+    "r0278_frames":                  1940,
+    "r0278_vote_a":                 44.41,
+    "r0278_vote_b":                 70.60,
+    "r0278_vote_c":                 90.72,
+    "r0278_vote_support":             635,
+    "r0278_vote_pool":               1785,
+    "r0058_frames":                  2370,
+    "r0058_vote_a":                 43.87,
+    "r0058_vote_b":                 67.68,
+    "r0058_vote_c":                 89.02,
+    "r0058_vote_support":             718,
+    "r0058_vote_pool":               2319,
+
+    # The shipped stopping rule on real runs, frame by frame in arrival order -------------------------
+    # The default StreamDriver rule (lock_support 3; lock_gap 2, adaptive; lock_frac 0.02 and lock_lead 1.5
+    # once 72 cells are pooled; warmup_nbest 3; min_peaks 6) fed each run's cached per-frame N-best cells
+    # in psana event order (cxidb-17: file order). GLINT 95d51ce, seed 20261015. Slurm 41011615 (cells and
+    # the arrival-order runs, sdfampere023, A100), 41011616 (scrambled groups, array of 4 on sdfampere026
+    # and sdfampere030 A100s) and 41056365 (400 random orders x 8 seeds, sdfmilan027; the 6 h first
+    # attempt, 41011617, timed out). A decision is correct when same_lattice(decided cell, reference)
+    # passes at its defaults. The reference is the whole-run batch vote for r0278 and r0058 (GLINT's own;
+    # no independent cell exists), btx sample2 for r0016 on refined geometry, and the textbook lysozyme
+    # cell for the 480 cxidb-17 frames. *_frames counts frames pushed to the driver before it decided (at
+    # events 226, 148, 27 and 4); *_vol_ratio is the decided cell's volume over the whole-run batch cell's.
+    "decide_r0278_frames":             10,
+    "decide_r0058_frames":              6,
+    "decide_r0016_frames":              8,
+    "decide_cx17_frames":               5,
+    "decide_r0278_support":             3,  # members of the leading group at the decision
+    "decide_r0058_support":             3,
+    "decide_r0016_support":             3,
+    "decide_cx17_support":              4,
+    "decide_r0278_runnerup":            1,
+    "decide_r0058_runnerup":            1,
+    "decide_r0016_runnerup":            1,
+    "decide_cx17_runnerup":             2,
+    "decide_r0278_vol_ratio":      1.0003,
+    "decide_r0058_vol_ratio":      0.9848,
+    "decide_r0016_vol_ratio":      1.0063,
+    "decide_cx17_vol_ratio":       0.9994,
+    "decide_r0016_vol_ratio_btx":  1.0059,  # against btx sample2 (external)
+    "decide_cx17_vol_ratio_textbook": 0.9888,  # against the textbook lysozyme cell (external)
+    # The null: azimuth-scrambled frames (|q| and q_z kept, lattice destroyed) pushed frame by frame into
+    # a fresh driver, so ANY decision is false. 10,000 groups of 100 frames (3,333 from r0278, 3,333 from
+    # r0058, 3,334 from refined r0016) and 20 whole scrambled runs at each of the three run sizes. All 8
+    # decisions are wrong cells, and 7 of them came at the minimum support of 3 (runner-up 1), the support
+    # at which the real runs above decide too. The interval is the normal (Wald) approximation; the
+    # one-sided upper bound is per 1,000 groups. The batch requirements applied once to each whole group
+    # decide on none of the 10,000.
+    "decide_scr_groups":            10000,
+    "decide_scr_group_frames":        100,
+    "decide_scr_decided":               8,
+    "decide_scr_decided_pct":        0.08,  # = 0.080%
+    "decide_scr_wald_lo_pct":       0.025,
+    "decide_scr_wald_hi_pct":       0.135,
+    "decide_scr_at_support3":           7,
+    "decide_scr_upper95_per1000":   1.443,
+    "decide_scr_batch_decided":         0,
+    "decide_scr_wholerun_groups":      60,
+    "decide_scr_wholerun_decided":      0,
+    # 400 random orders of each set (seed 1 below; 8 seeds in all): the shipped rule decides in all 400 on
+    # each. r0058 is the weak run: 17 wrong decisions at a median volume ratio of 0.960 (a smaller cell, not
+    # the usual doubled one), and 7 to 20 wrong across the 8 seeds. On cxidb-17 this replay finds 1 wrong
+    # decision in 400 (a doubled cell) where seqstop_false_locks above records 0 on another set of orders;
+    # the shipped and support-and-lead-only rules agree on all 400 orders here, so the difference is the
+    # orders drawn, not the rule.
+    "decide_rand_orders":             400,
+    "decide_rand_r0278_correct":      393,
+    "decide_rand_r0058_correct":      383,
+    "decide_rand_r0016_correct":      399,
+    "decide_rand_cx17_correct":       399,
+    "decide_rand_r0058_wrong":         17,
+    "decide_rand_r0058_wrong_pct":    4.3,
+    "decide_rand_r0058_wrong_vol_ratio": 0.960,
+    "decide_rand_r0058_correct_min":  380,  # across the 8 seeds
+    "decide_rand_r0058_correct_max":  393,
+
+    # cxidb-45 head-to-head: GLINT and DIALS on the SAME 170-peak lists -------------------------------
+    # cxidb-45 Proteinase K, 907 frames x 170 peaks (experiments/prok_q.npz), reference P4_3 2_1 2
+    # 68.7/68.7/108.6. Strict criterion as everywhere here, which on 170 peaks means >= 43 matched
+    # (glint_fast.gpass at 95d51ce; checked against gate_frac below). DIALS 3.dev.1332-g3e144e7ea, given the
+    # peaks through a virtual flat panel; spot finding and integration are not exercised. Slurm 41011687
+    # (prep), 41011688 (dials.stills_process, array of 20, one EPYC 7713 core each), 41011689 (GLINT,
+    # sdfampere035, A100) and 41011690 (scoring); then the DIALS routes behind the earlier table rows,
+    # 41099183 (array of 9, one core each, sdfmilan183 and sdfmilan223) and 41099184 (scoring).
+    # Null: the lists azimuth-scrambled per peak (seed 20260928), 0 of 907 at the strict criterion for every
+    # GLINT and DIALS arm. Times: DIALS rows are per-frame medians on one core; the GLINT consensus and
+    # cell-supplied rows are one batch call's wall time / 907 (offline by construction: consensus needs the
+    # pool); the GLINT per-frame row is a per-frame median. Single runs, no spread on the times. DIALS runs
+    # at its defaults plus the cctbx.xfel second-pass settings and is not tuned.
+    "pk45_frames":                    907,
+    "pk45_peaks_per_frame":           170,
+    "pk45_strict_min_matched":         43,  # = max(gate_min, ceil(gate_frac * 170))
+    "pk45_glint_perframe_strict":     324,  # single-frame blind, no consensus
+    "pk45_glint_perframe_pct":       35.7,
+    "pk45_glint_perframe_ms":         6.0,
+    "pk45_glint_consensus_strict":    804,  # consensus and rescue, no cell given
+    "pk45_glint_consensus_pct":      88.6,
+    "pk45_glint_consensus_ms":      24.15,
+    "pk45_glint_known_strict":        805,  # the same cell handed in buys one frame
+    "pk45_glint_known_ms":          21.35,
+    "pk45_dials_xfel_strict":         675,  # stills_process with the cell, cctbx.xfel second-pass settings
+    "pk45_dials_xfel_pct":           74.4,
+    "pk45_dials_xfel_ms":          1307.0,
+    "pk45_dials_defaults_strict":     605,  # stills_process with the cell, plain defaults
+    "pk45_dials_defaults_ms":      1227.0,
+    "pk45_dials_grid_refined_strict": 552,  # the cell, real-space grid search plus stills refinement
+    "pk45_dials_grid_refined_ms":  1714.0,
+    # Without the cell. DIALS's automatic max_cell picks a median 76.95 A on these lists, below the 108.6 A
+    # c axis, and its stills route indexes 42; with max_cell fixed at 200 A it indexes 446. The bare 1D-FFT
+    # basis search keeping the best of 25 candidate cells, unrefined, reaches 535, but it has no step that
+    # can decline a frame: an upper bound on a blind yield, not an indexer.
+    "pk45_dials_auto_maxcell_strict":  42,
+    "pk45_dials_maxcell200_strict":   446,
+    "pk45_dials_maxcell200_pct":     49.2,
+    "pk45_dials_maxcell200_ms":    1446.0,
+    "pk45_dials_best25_strict":       535,
+    "pk45_dials_best25_ms":         360.0,
+    "pk45_dials_grid_norefine_strict": 263, # the cell, grid search, no refinement: below the blind best-of-25
+    "pk45_dials_grid_norefine_ms":  319.0,
+    # Paired on the 907 frames: GLINT with consensus and no cell against the best DIALS row with the cell.
+    "pk45_mcnemar_glint_only":        138,
+    "pk45_mcnemar_dials_only":          9,
+    "pk45_mcnemar_p":             8.2e-31,  # exact two-sided, recomputed in check_arithmetic
+    "pk45_null_strict":                 0,  # every GLINT and DIALS arm on the scrambled lists
+    # Why the strict criterion and not the cell alone: handed the cell, GLINT on SCRAMBLED peaks still
+    # returns the correct lattice on 896 of 907 frames, and the length-only gate (three sorted axes within
+    # 5%, no angles, no peak fraction) passes 895. A cell-agreement score cannot tell a known-cell result
+    # from noise. The real arms at that length-only gate, for a table note:
+    "pk45_glint_known_null_lattice":  896,
+    "pk45_glint_perframe_lengate":    333,
+    "pk45_glint_consensus_lengate":   895,
+    "pk45_glint_known_lengate":       893,
+    "pk45_dials_xfel_lengate":        682,
+    "pk45_dials_defaults_lengate":    605,
+    "pk45_dials_grid_refined_lengate": 577,
+
+    # r51: merge statistics against frames merged, on LUTE's CrystFEL stream -------------------------
+    # mfx100848724 r51, LUTE's CrystFEL 0.10.2 stream (251 frames, 280 crystals). Merged whole in stream
+    # order it reproduces LUTE's own merge exactly (CC1/2 to 7 digits, the same 2,120 pairs). Then paired
+    # random subsets of 10-100% of the frames, seeds 1-8, merged by partialator --model=unity
+    # --min-measurements=2 --max-rel-B=100.0 and scored by compare_hkl -y 4/mmm on its fixed resolution
+    # range; sweep values are MEDIANS over the 8 seeds. Slurm 41011666, sdfmilan137; no GLINT output
+    # enters. Nulls: each crystal's intensities permuted over its own reflections ("all"), or within blocks
+    # of 20 neighbors in 1/d, which keeps the Wilson falloff ("shell"). Below 88 frames only 6-7 reflection
+    # pairs remain, so nothing under 88 is a measurement. The job's own analysis resolves no dependence on
+    # frames for CC1/2, CC* or Rsplit over 88-251, and the seed spread at 251 is comparable to the change
+    # from 188 to 251 frames.
+    # The source notes disagree on three values; these are the corrected ones. The 251-frame Rsplit is the
+    # 8-seed median 91.27 (not 92.30, one seed, nor 89.69, a pooled median that was withdrawn). The 88-frame
+    # CC1/2 and CC* are the fixed-range medians 0.1396/0.5540 (the automatic range gives 0.1403/0.5557). The
+    # 251-frame null CC1/2 is the 8-seed median -0.0083 (not the single-seed -0.0072 still in the later
+    # summary table).
+    "r51_stream_frames":              251,
+    "r51_stream_crystals":            280,
+    "r51_stream_cchalf":        0.2742221,
+    "r51_stream_ccstar":        0.6560602,
+    "r51_stream_rsplit_pct":        93.16,
+    "r51_stream_pairs":              2120,
+    "r51_sweep_lo_frames":             88,
+    "r51_sweep_lo_cchalf":         0.1396,
+    "r51_sweep_lo_ccstar":         0.5540,
+    "r51_sweep_lo_rsplit_pct":     108.08,
+    "r51_sweep_hi_frames":            251,
+    "r51_sweep_hi_cchalf":         0.2890,
+    "r51_sweep_hi_cchalf_min":     0.2163,
+    "r51_sweep_hi_cchalf_max":     0.3665,
+    "r51_sweep_hi_cchalf_spread":  0.1502,
+    "r51_sweep_hi_ccstar":         0.6697,
+    "r51_sweep_hi_rsplit_pct":      91.27,
+    "r51_sweep_hi_rsplit_min":      87.57,
+    "r51_sweep_hi_rsplit_max":      96.28,
+    "r51_sweep_hi_rsplit_spread":    8.71,
+    "r51_sweep_hi_null_cchalf":   -0.0083,  # "all"
+    "r51_sweep_hi_null_shell_cchalf": 0.0580,
+    "r51_sweep_hi_null_rsplit_pct": 111.78,
+    "r51_sweep_hi_null_shell_rsplit_pct": 105.98,
+
+    # CrystFEL's most common cell on r0278 and r0058: an independent check of the vote above ----------
+    # Blind XGANDALF through CrystFEL 0.12.0 indexamajig (--peaks=cxi --no-image-data --no-revalidate
+    # --indexing=xgandalf, no cell) on the SAME frames and peak lists as the vote (GLINT's psana1 reader and
+    # peak finder at 95d51ce, the same unrefined geometry; 2,369 of r0058's 2,370 frames processed). The
+    # most common cell is GLINT's consensus_cell used as a mode finder over CrystFEL's crystals. Slurm
+    # 41155327, sdfmilan183. Null: azimuth-scrambled copies of each run's first 400 frames through the same
+    # chain (112 and 76 of them indexed). Both modes are the same lattice as the vote (same_lattice), on
+    # small support: 8 of 667 is below the 2% pool share, so the shipped batch rule would decide on r0058
+    # only. Volume ratios are to the vote's cell (the job's JSON carries 0.9938 and 0.9924).
+    "cfmode_r0278_a":               44.64,
+    "cfmode_r0278_b":               70.84,
+    "cfmode_r0278_c":               89.46,
+    "cfmode_r0278_support":             8,
+    "cfmode_r0278_indexed":           667,
+    "cfmode_r0278_support_pct":       1.2,
+    "cfmode_r0278_vol_ratio":       0.994,
+    "cfmode_r0278_null_max_group":      1,
+    "cfmode_r0058_a":               43.65,
+    "cfmode_r0058_b":               67.71,
+    "cfmode_r0058_c":               88.73,
+    "cfmode_r0058_support":            15,
+    "cfmode_r0058_indexed":           447,
+    "cfmode_r0058_support_pct":       3.4,
+    "cfmode_r0058_vol_ratio":       0.992,
+    "cfmode_r0058_null_max_group":      2,
+    "cfmode_null_frames":             400,
 }
 
 # Every arm-vs-default discordant split from the n=480 M3 sweep, both channels: (arm-only,
@@ -2983,6 +3360,149 @@ def check_arithmetic() -> list[str]:
     if not (float(F["roibin_sigma_q1"]) <= float(F["roibin_sigma_median"])
             <= float(F["roibin_sigma_q3"])):
         bad.append("  FACTS: S17's sigma(I) quartiles do not bracket the median")
+
+    # --- the real-run blocks at the end of FACTS (merges through CrystFEL, the per-frame indexer, the
+    # stopping rule, the cxidb-45 head-to-head, the r51 sweep, CrystFEL's most common cell). A count and
+    # its percentage are compared EXACTLY: the percentage must equal 100*count/total rounded half up to
+    # the decimals it is stored with. A relative tolerance passes both 53 and 54 for 123/230, and 54 is
+    # the double-rounding slip (53.48 -> 53.5 -> 54) the merge printout invites. round() is not used: it
+    # takes 17/400 = 4.25 to 4.2, where the source (and half-up) says 4.3.
+    def whole(key: str) -> int:
+        v = F[key]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v != int(v):
+            bad.append(f"  FACTS: {key} = {v!r} must be a whole count")
+            return 0
+        return int(v)
+
+    def pct_exact(pct_key: str, num_key: str, den_key: str, nd: int) -> None:
+        n, d = whole(num_key), whole(den_key)
+        if d <= 0 or not 0 <= n <= d:
+            bad.append(f"  FACTS: {pct_key}: {num_key} = {F[num_key]} of {den_key} = {F[den_key]} "
+                       "is not a count within its total")
+            return
+        want = Fraction(math.floor(Fraction(100 * n, d) * 10 ** nd + Fraction(1, 2)), 10 ** nd)
+        if Fraction(str(F[pct_key])) != want:
+            bad.append(f"  FACTS: {pct_key} = {F[pct_key]} but 100 * {n}/{d} rounds to "
+                       f"{float(want):.{nd}f}")
+
+    # A difference stored beside its parts: each value is rounded to its own decimals, so a - b and the
+    # stored difference may differ by the three half-units together and by no more.
+    def diff_exact(diff_key: str, a_key: str, b_key: str, nd_a: int, nd_b: int, nd_d: int) -> None:
+        a, b, d = (Fraction(str(F[k])) for k in (a_key, b_key, diff_key))
+        slack = sum(Fraction(1, 2 * 10 ** k) for k in (nd_a, nd_b, nd_d))
+        if abs(a - b - d) > slack:
+            bad.append(f"  FACTS: {diff_key} = {F[diff_key]} but {a_key} - {b_key} = {float(a - b):g}")
+
+    # Merges through CrystFEL. Means are stored to 3 decimals and the paired differences to 4.
+    for ds in ("r0016", "r194"):
+        p = f"merge_{ds}_"
+        diff_exact(p + "cchalf_diff", p + "glint_cchalf", p + "cf_cchalf", 3, 3, 4)
+        diff_exact(p + "glint_minus_null", p + "glint_cchalf", p + "null1_cchalf", 3, 3, 4)
+        diff_exact(p + "cf_minus_null", p + "cf_cchalf", p + "null1_cchalf", 3, 3, 4)
+        pos, neg = whole(p + "cchalf_diff_pos"), whole(p + "cchalf_diff_neg")
+        if pos + neg != whole("merge_splits"):
+            bad.append(f"  FACTS: {p}cchalf_diff_pos + {p}cchalf_diff_neg = {pos + neg}, not the "
+                       f"{F['merge_splits']} splits")
+        # Both rows are read as "no detected difference". The collector detects one when a sign holds
+        # in >= 8 of the 10 splits AND |mean| exceeds CrystFEL's own split sd.
+        if max(pos, neg) >= 8 and abs(float(F[p + "cchalf_diff"])) > float(F[p + "cf_cchalf_sd"]):
+            bad.append(f"  FACTS: the {ds} GLINT - CrystFEL CC1/2 difference now meets the detection "
+                       f"rule ({max(pos, neg)} of 10 splits, |{F[p + 'cchalf_diff']}| > "
+                       f"{F[p + 'cf_cchalf_sd']}), so 'no detected difference' is false for {ds}")
+        pct_exact(p + "glint_accepted_pct", p + "glint_accepted", p + "glint_solutions", 0)
+    if whole("merge_shuffled_checked_of") != (whole("merge_r0016_glint_solutions")
+                                              + whole("merge_r194_glint_solutions")):
+        bad.append("  FACTS: merge_shuffled_checked_of must be the r0016 + r194 solution counts "
+                   f"({F['merge_r0016_glint_solutions']} + {F['merge_r194_glint_solutions']})")
+    pct_exact("merge_r51_top_group_pct", "merge_r51_top_group", "merge_r51_pooled_cells", 1)
+    pct_exact("merge_r51_correct_lattice_pct", "merge_r51_correct_lattice", "merge_r51_frames", 1)
+    if float(F["merge_r51_top_group_pct"]) >= 2.0:
+        bad.append("  FACTS: r51's largest group is at or above the shipped 2% pool share, so the "
+                   "consensus would NOT decline on r51 and that row must be rewritten")
+
+    # The per-frame indexer alone: every bin's percentage, and the bins partition the frames and the
+    # strict count.
+    n_sum = k_sum = 0
+    for lo, hi in ((6, 9), (10, 14), (15, 19), (20, 29), (30, 39), (40, 59), (60, 99), (100, 149),
+                   (150, 249)):
+        b = f"r0016_sf_bin_{lo}_{hi}_"
+        pct_exact(b + "pct", b + "strict", b + "frames", 0)
+        n_sum += whole(b + "frames")
+        k_sum += whole(b + "strict")
+    if n_sum != whole("r0016_sf_frames") or k_sum != whole("r0016_sf_strict_of2228"):
+        bad.append(f"  FACTS: the r0016 peak bins sum to {k_sum}/{n_sum}, not "
+                   f"r0016_sf_strict_of2228/r0016_sf_frames ({F['r0016_sf_strict_of2228']}/"
+                   f"{F['r0016_sf_frames']})")
+    pct_exact("r0016_sf_strict_pct", "r0016_sf_strict_of2228", "r0016_sf_frames", 0)
+    pct_exact("r0016_sf_lattice_pct", "r0016_sf_lattice_of2228", "r0016_sf_frames", 0)
+    pct_exact("r0016_known_strict_pct", "r0016_known_strict_of2228", "r0016_sf_frames", 0)
+    pct_exact("pk45_sf_strict_pct", "pk45_sf_strict_of907", "pk45_frames", 0)
+    pct_exact("pk45_sf_known_pct", "pk45_sf_known_of907", "pk45_frames", 0)
+    # The vote pools one best cell per indexed frame, so its pool is the S16 indexed count.
+    for run in ("r0278", "r0058"):
+        if whole(f"{run}_vote_pool") != whole(f"indexed_{run}"):
+            bad.append(f"  FACTS: {run}_vote_pool ({F[f'{run}_vote_pool']}) must equal indexed_{run} "
+                       f"({F[f'indexed_{run}']}): one best cell per indexed frame")
+
+    # The stopping rule.
+    pct_exact("decide_scr_decided_pct", "decide_scr_decided", "decide_scr_groups", 3)
+    p_scr = whole("decide_scr_decided") / max(1, whole("decide_scr_groups"))
+    se_scr = math.sqrt(p_scr * (1.0 - p_scr) / max(1, whole("decide_scr_groups")))
+    for key, sign in (("decide_scr_wald_lo_pct", -1.0), ("decide_scr_wald_hi_pct", 1.0)):
+        want = Fraction(math.floor(100.0 * (p_scr + sign * 1.96 * se_scr) * 1000 + 0.5), 1000)
+        if Fraction(str(F[key])) != want:
+            bad.append(f"  FACTS: {key} = {F[key]} but the Wald interval from "
+                       f"{F['decide_scr_decided']}/{F['decide_scr_groups']} gives {float(want):.3f}")
+    if whole("decide_scr_at_support3") > whole("decide_scr_decided"):
+        bad.append("  FACTS: decide_scr_at_support3 exceeds the scrambled decisions it is a subset of")
+    if whole("decide_rand_r0058_correct") + whole("decide_rand_r0058_wrong") != whole("decide_rand_orders"):
+        bad.append("  FACTS: r0058's correct + wrong random-order decisions must be the "
+                   f"{F['decide_rand_orders']} orders (it decides in every one)")
+    pct_exact("decide_rand_r0058_wrong_pct", "decide_rand_r0058_wrong", "decide_rand_orders", 1)
+    if not (whole("decide_rand_r0058_correct_min") <= whole("decide_rand_r0058_correct")
+            <= whole("decide_rand_r0058_correct_max")):
+        bad.append("  FACTS: decide_rand_r0058_correct lies outside its own 8-seed range")
+
+    # The cxidb-45 head-to-head. 25% of 170 peaks is the 43 the strict criterion needs on these lists.
+    if whole("pk45_strict_min_matched") != max(int(F["gate_min"]),
+                                               math.ceil(float(F["gate_frac"])
+                                                         * whole("pk45_peaks_per_frame"))):
+        bad.append(f"  FACTS: pk45_strict_min_matched ({F['pk45_strict_min_matched']}) is not "
+                   "max(gate_min, ceil(gate_frac * pk45_peaks_per_frame))")
+    for arm in ("glint_perframe", "glint_consensus", "dials_xfel", "dials_maxcell200"):
+        pct_exact(f"pk45_{arm}_pct", f"pk45_{arm}_strict", "pk45_frames", 1)
+    g_only, d_only = whole("pk45_mcnemar_glint_only"), whole("pk45_mcnemar_dials_only")
+    if g_only - d_only != whole("pk45_glint_consensus_strict") - whole("pk45_dials_xfel_strict"):
+        bad.append(f"  FACTS: the paired split {g_only}/{d_only} implies a margin of {g_only - d_only}, "
+                   "but pk45_glint_consensus_strict - pk45_dials_xfel_strict is "
+                   f"{whole('pk45_glint_consensus_strict') - whole('pk45_dials_xfel_strict')}")
+    n_disc = g_only + d_only
+    p_mc = min(1.0, 2.0 * sum(math.comb(n_disc, i) for i in range(min(g_only, d_only) + 1))
+               / 2 ** n_disc) if n_disc else 1.0
+    if float(f"{p_mc:.1e}") != float(F["pk45_mcnemar_p"]):
+        bad.append(f"  FACTS: pk45_mcnemar_p = {F['pk45_mcnemar_p']} but the exact two-sided McNemar p "
+                   f"for {g_only}/{d_only} is {p_mc:.1e}")
+
+    # The r51 sweep: each spread is max - min, each median sits inside its range, and the 100% subsets
+    # are the whole stream.
+    diff_exact("r51_sweep_hi_cchalf_spread", "r51_sweep_hi_cchalf_max", "r51_sweep_hi_cchalf_min", 4, 4, 4)
+    diff_exact("r51_sweep_hi_rsplit_spread", "r51_sweep_hi_rsplit_max", "r51_sweep_hi_rsplit_min", 2, 2, 2)
+    for med, lo, hi in (("r51_sweep_hi_cchalf", "r51_sweep_hi_cchalf_min", "r51_sweep_hi_cchalf_max"),
+                        ("r51_sweep_hi_rsplit_pct", "r51_sweep_hi_rsplit_min", "r51_sweep_hi_rsplit_max")):
+        if not float(F[lo]) <= float(F[med]) <= float(F[hi]):
+            bad.append(f"  FACTS: {med} = {F[med]} is outside its own seed range [{F[lo]}, {F[hi]}]")
+    if whole("r51_sweep_hi_frames") != whole("r51_stream_frames"):
+        bad.append("  FACTS: r51_sweep_hi_frames must be the whole stream (r51_stream_frames)")
+
+    # CrystFEL's most common cell: support percentages, and the real mode must out-support the largest
+    # group the scrambled copies form, or it confirms nothing.
+    for run in ("r0278", "r0058"):
+        c = f"cfmode_{run}_"
+        pct_exact(c + "support_pct", c + "support", c + "indexed", 1)
+        if whole(c + "null_max_group") >= whole(c + "support"):
+            bad.append(f"  FACTS: on {run} the scrambled control's largest group "
+                       f"({F[c + 'null_max_group']}) reaches the real mode's support "
+                       f"({F[c + 'support']}), so CrystFEL's mode no longer confirms the vote")
 
     m = float(F["peakfind_ms"]) / float(F["predict_ms"])
     if float(F["predict_ms"]) >= float(F["peakfind_ms"]):

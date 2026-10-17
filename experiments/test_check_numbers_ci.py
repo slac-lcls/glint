@@ -718,6 +718,39 @@ ARITHMETIC_PERTURBATIONS = [
     # outside, not by nudging toward the measured value.
     ({"sf_ceiling_of120": 95},                        "solved + selection-miss"),
     ({"sf_ceiling_of120": 5},                         "solved + selection-miss"),
+    # THE REAL-RUN BLOCKS (merges through CrystFEL, per-frame indexer, stopping rule, cxidb-45
+    # head-to-head, r51 sweep, CrystFEL's most common cell): one perturbation per guard. The 54 and
+    # 4.2 cases are the two rounding traps the exact percentage check exists for: 123/230 = 53.48
+    # printed as 53.5 and rounded again, and round(4.25, 1) == 4.2 where 17/400 is 4.3 half up.
+    ({"merge_r0016_cchalf_diff": 0.0568},             "merge_r0016_cchalf_diff = "),
+    ({"merge_r194_glint_minus_null": 0.2177},         "merge_r194_glint_minus_null = "),
+    ({"merge_r0016_cf_minus_null": 0.2905},           "merge_r0016_cf_minus_null = "),
+    ({"merge_r0016_cchalf_diff_pos": 6},              "not the 10 splits"),
+    ({"merge_r194_cchalf_diff_pos": 2, "merge_r194_cchalf_diff_neg": 8}, "meets the detection rule"),
+    ({"merge_r194_glint_accepted_pct": 54},           "merge_r194_glint_accepted_pct = "),
+    ({"merge_shuffled_checked_of": 1777},             "merge_shuffled_checked_of must be"),
+    ({"merge_r51_correct_lattice": 260},              "merge_r51_correct_lattice_pct = "),
+    ({"merge_r51_top_group": 700, "merge_r51_top_group_pct": 2.2}, "would NOT decline"),
+    ({"r0016_sf_bin_60_99_pct": 46},                  "r0016_sf_bin_60_99_pct = "),
+    ({"r0016_sf_bin_40_59_strict": 158},              "peak bins sum"),
+    ({"r0016_sf_bin_6_9_frames": 240.5},              "must be a whole count"),
+    ({"r0016_known_strict_pct": 56},                  "r0016_known_strict_pct = "),
+    ({"pk45_sf_known_pct": 88},                       "pk45_sf_known_pct = "),
+    ({"r0278_vote_pool": 1786},                       "r0278_vote_pool"),
+    ({"decide_scr_wald_hi_pct": 0.136},               "decide_scr_wald_hi_pct = "),
+    ({"decide_scr_at_support3": 9},                   "decide_scr_at_support3 exceeds"),
+    ({"decide_rand_r0058_wrong": 18},                 "correct + wrong"),
+    ({"decide_rand_r0058_wrong_pct": 4.2},            "decide_rand_r0058_wrong_pct = "),
+    ({"decide_rand_r0058_correct_min": 384},          "8-seed range"),
+    ({"pk45_strict_min_matched": 42},                 "pk45_strict_min_matched"),
+    ({"pk45_dials_xfel_pct": 74.5},                   "pk45_dials_xfel_pct = "),
+    ({"pk45_mcnemar_glint_only": 139},                "paired split"),
+    ({"pk45_mcnemar_p": 8.3e-31},                     "pk45_mcnemar_p = "),
+    ({"r51_sweep_hi_rsplit_spread": 8.91},            "r51_sweep_hi_rsplit_spread = "),
+    ({"r51_sweep_hi_cchalf": 0.3700},                 "outside its own seed range"),
+    ({"r51_sweep_hi_frames": 250},                    "whole stream"),
+    ({"cfmode_r0278_support_pct": 1.3},               "cfmode_r0278_support_pct = "),
+    ({"cfmode_r0058_null_max_group": 15},             "no longer confirms"),
 ]
 
 

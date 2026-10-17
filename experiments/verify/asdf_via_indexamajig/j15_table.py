@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One table from the <arm>_summary.json files j8_score.py wrote. asdf has no 'xgandalf' profile token, so the
+"""One table from the <arm>_summary.json files ../common/score_arm.py wrote. asdf has no 'xgandalf' profile token, so the
 per-frame time is CrystFEL's own 'index' time (index_ms), one core, -j 1; wall_s is the whole arm."""
 import glob, json, os, sys
 out = sys.argv[1]

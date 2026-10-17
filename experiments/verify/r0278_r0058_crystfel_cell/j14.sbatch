@@ -19,8 +19,10 @@ cp $VDIR/README.md $VDIR/env.sh $OUT/
 echo "host $(hostname)  date $(date -Is)  GLINT COMMIT $(cat $GLINT/COMMIT)  $(indexamajig --version | head -1)"
 env | grep '^GLINT_' && { echo "GLINT_* variables set: the shipped defaults would not apply"; exit 1; } || true
 chk() { [ "$(md5sum < "$1" | cut -d' ' -f1)" = "$2" ] || { echo "md5 of $1 changed (want $2)"; exit 1; }; }
-md5sum $J4OUT/r0278_qlists.npz $J4OUT/r0058_qlists.npz $CXI_TOOLS/bin/make_cxi_pinned.py
-chk $CXI_TOOLS/bin/make_cxi_pinned.py e237baae682b05988406b7acfdd70268
+md5sum $J4OUT/r0278_qlists.npz $J4OUT/r0058_qlists.npz $CXI_TOOLS/qframes_to_cxi.py
+# qframes_to_cxi.py is the recorded run's make_cxi_pinned.py (md5 e237baae682b05988406b7acfdd70268) with its
+# pinned-tree path read from VERIFY_GLINT; logic unchanged.
+chk $CXI_TOOLS/qframes_to_cxi.py c23ff4debc48b5f3ba512b44a5306bcb
 # q lists (same frames and peaks as the per-frame check), and azimuth-scrambled copies as the null (|q| and q_z kept, lattice
 # destroyed). The null uses each run's first 400 frames: blind XGANDALF is slow on scrambled frames (dry run:
 # about 20 core-s per frame with a long tail), and 400 frames are enough to show whether a dominant cell forms.
@@ -37,11 +39,11 @@ for r in r0278 r0058; do
   first400 inputs/${r}_real.txt inputs/${r}_first400.txt
   python $GLINT/experiments/scramble_qlist.py inputs/${r}_first400.txt inputs/${r}_scr.txt --seed $SCR_SEED
 done
-# CXI peak lists for indexamajig (make_cxi.py at 95d51ce, the copy with the pinned sys.path). It writes one wavelength per set: r0278
+# CXI peak lists for indexamajig (make_cxi.py at 95d51ce, the copy reading the pinned tree). It writes one wavelength per set: r0278
 # has one (1.26296 A); r0058's per-event wavelengths spread 0.8% (1.2615-1.2717 A), and make_cxi infers their median.
 cd $OUT/cxi
 for s in $SETS; do
-  python $CXI_TOOLS/bin/make_cxi_pinned.py ../inputs/$s.txt $s | tee $s.make_cxi.log
+  python $CXI_TOOLS/qframes_to_cxi.py ../inputs/$s.txt $s | tee $s.make_cxi.log
   lam=$(sed -n 's/.*; lambda \([0-9.]*\) .*/\1/p' $s.make_cxi.log)
   case $s in r0278*) want=1.26296 ;; r0058*) want=1.26434 ;; esac
   python -c "import sys; sys.exit(abs($lam - $want) > 0.003)" || { echo "$s: inferred lambda $lam, expected $want"; exit 1; }

@@ -18,7 +18,7 @@ for r in r0278 r0058; do
   python $GLINT/experiments/scramble_qlist.py inputs/${r}_real.txt inputs/${r}_scr.txt --seed $SCR_SEED
 done
 cd cxi
-for s in $SETS; do python $CXI_TOOLS/bin/make_cxi_pinned.py ../inputs/$s.txt $s | tail -1; done
+for s in $SETS; do python $CXI_TOOLS/qframes_to_cxi.py ../inputs/$s.txt $s | tail -1; done
 for s in $SETS; do
   mkdir -p $OUT/cf/run_$s && cd $OUT/cf/run_$s && ln -sf $OUT/cxi/${s}.cxi ${s}.cxi   # the event list names it relative to the cwd
   indexamajig -i $OUT/cxi/${s}_events.lst -g $OUT/cxi/${s}.geom -o $OUT/cf/${s}.stream \

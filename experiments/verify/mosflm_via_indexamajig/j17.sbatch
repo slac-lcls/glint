@@ -15,9 +15,9 @@
 # Submit from $VERIFY_OUT/mosflm_via_indexamajig after `mkdir -p logs`. Account and partition: site settings.
 set -o pipefail
 J=${VERIFY_DIR:?set VERIFY_DIR to experiments/verify}/mosflm_via_indexamajig
-HARNESS=${VERIFY_INPUTS:?set VERIFY_INPUTS to the inputs root}/cxidb17_harness   # j8_score.py (md5-checked below); not in this branch
+IN=${VERIFY_INPUTS:?set VERIFY_INPUTS to the inputs root}/cxidb17_harness/inputs   # the 120-frame CXI inputs; not in this branch
+SCORE=$VERIFY_DIR/common/score_arm.py                       # the scorer (md5-checked below)
 P=${VERIFY_GLINT:?set VERIFY_GLINT to the pinned GLINT tree}
-IN=$HARNESS/inputs
 C=/sdf/group/lcls/ds/tools/crystfel/0.12.0
 OUT=${VERIFY_OUT:?set VERIFY_OUT to the output root}/mosflm_via_indexamajig/run_${SLURM_JOB_ID}
 mkdir -p "$OUT" && chmod 700 "$OUT" && cd "$OUT" || exit 1
@@ -32,7 +32,9 @@ for f in frames120.txt frames120_scr.txt cf120.cxi cf120.geom cf120_events.lst c
     [ -s "$IN/$f" ] || { echo "missing $IN/$f"; exit 1; }
 done
 cmp -s "$IN/frames120.txt" "$P/experiments/xgandalf/frames_cxidb_clean.txt" || { echo "frames120 differs from 95d51ce"; exit 1; }
-[ "$(md5sum < $HARNESS/j8_score.py | cut -d' ' -f1)" = d4182cf73c292b4e4c22d907e85d260e ] || { echo "j8_score.py changed"; exit 1; }
+# score_arm.py is the recorded scorer (md5 d4182cf73c292b4e4c22d907e85d260e) with its pinned-tree path read from
+# VERIFY_GLINT; logic unchanged.
+[ "$(md5sum < $SCORE | cut -d' ' -f1)" = 6d0e9408ecd6ebffd5ed4ddaafd64fd8 ] || { echo "score_arm.py changed"; exit 1; }
 cp $J/README.md $J/j17.sbatch $J/j17_table.py "$OUT/"
 { echo "job $SLURM_JOB_ID  node $(hostname)  start $(date -Is)"; grep -m1 "model name" /proc/cpuinfo
   echo "glint commit: $(cat $P/COMMIT)"; echo "crystfel: $(indexamajig --version 2>&1 | head -1)"; echo "ipmosflm: $(readlink -f $OUT/bin/ipmosflm)"; } > PROVENANCE.txt
@@ -62,11 +64,11 @@ meta() { printf '{"argv": %s, "time": "%s", "node": "%s", "job": "%s", "glint_co
     "$(grep -P "^$1\t" ARGV.tsv | cut -f2- | python -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')" \
     "$(cat $1.time 2>/dev/null | tail -1)" "$(hostname)" "$SLURM_JOB_ID" "$(cat $P/COMMIT)"; }
 for arm in blind_on blind_nopeaks blind_alloff cell_on cell_nopeaks cell_off cell_alloff; do
-    python $HARNESS/j8_score.py --arm $arm --kind stream --result $arm.stream --profile $arm.out --events $E \
+    python $SCORE --arm $arm --kind stream --result $arm.stream --profile $arm.out --events $E \
         --frames $IN/cf120_qeff.txt --out $OUT --meta "$(meta $arm)" || echo "score failed: $arm"
 done
 for arm in null_blind_alloff null_cell_alloff; do
-    python $HARNESS/j8_score.py --arm $arm --kind stream --result $arm.stream --profile $arm.out --events $Es \
+    python $SCORE --arm $arm --kind stream --result $arm.stream --profile $arm.out --events $Es \
         --frames $IN/cf120scr_qeff.txt --out $OUT --meta "$(meta $arm)" || echo "score failed: $arm"
 done
 python $J/j17_table.py $OUT

@@ -40,8 +40,11 @@ raw data from `/sdf/data/lcls/ds`.
 | `glint_gt_mfxx49820/r0016_q6000.npz` | 18aedece | `stopping_rule_live_and_scrambled` (unrefined r0016) |
 | `q480_fix.txt` | d6d86c1b | `stopping_rule_live_and_scrambled`, `xgandalf_fast_cores` (480 cxidb-17 frames) |
 | `xg_fast/A_default.txt`, `xg_fast/B_fast.txt`, `xgd480_fix.txt` | | `xgandalf_fast_cores` (earlier driver outputs, controls) |
-| `cxi_tools/bin/make_cxi_pinned.py` | e237baae | `r0278_r0058_crystfel_cell` |
-| `cxidb17_harness/j8_score.py`, `cxidb17_harness/inputs/` | d4182cf7 (scorer) | `asdf_via_indexamajig`, `mosflm_via_indexamajig` |
+| `cxidb17_harness/inputs/` | | `asdf_via_indexamajig`, `mosflm_via_indexamajig` (the 120 cxidb-17 frames as CXI, and a scrambled copy) |
+
+`common/` holds two helpers that checks share: `score_arm.py`, the per-frame scorer of the asdf and MOSFLM
+checks, and `qframes_to_cxi.py`, the CXI writer of `r0278_r0058_crystfel_cell`. Each is a recorded run's file
+with only its pinned-tree path changed to `VERIFY_GLINT`; the sbatch files check their md5.
 
 ## Checks
 

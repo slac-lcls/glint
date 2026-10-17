@@ -18,9 +18,11 @@ Under `$VERIFY_INPUTS/cxidb17_harness`, from a separate harness that is not in t
   `inputs/cf120.{cxi,geom}`, `cf120_events.lst`, `cf120_qeff.txt`: the 120 frames back-projected to CXI by
   `experiments/make_cxi.py` at 95d51ce.
 - `inputs/frames120_scr.txt`, `cf120scr.*`: the azimuth-scrambled copy, seed 20260928.
-- `j8_score.py` (md5 d4182cf73c292b4e4c22d907e85d260e, checked by the job): the scorer. Strict = correct
-  lattice (`same_lattice` against 79.02 79.02 37.98) and at least 25% and 10 peaks within 0.15 of integer
-  hkl, at the 95d51ce gate.
+
+The scorer is `../common/score_arm.py` (md5 6d0e9408ecd6ebffd5ed4ddaafd64fd8, checked by the job): the
+harness's scorer (md5 d4182cf73c292b4e4c22d907e85d260e) with the pinned tree read from `VERIFY_GLINT`, logic
+unchanged. Strict = correct lattice (`same_lattice` against 79.02 79.02 37.98) and at least 25% and 10 peaks
+within 0.15 of integer hkl, at the 95d51ce gate.
 
 ## argv
 
@@ -28,7 +30,7 @@ Under `$VERIFY_INPUTS/cxidb17_harness`, from a separate harness that is not in t
 indexamajig -i cf120_events.lst -g cf120.geom [-p lyso.cell] --peaks=cxi --indexing=asdf --no-image-data \
   --no-revalidate --integration=none -j 1 --profile [--no-retry --no-refine --no-check-cell] [--no-check-peaks] \
   -o <arm>.stream --temp-dir=$OUT
-python j8_score.py --arm <arm> --kind stream --result <arm>.stream --profile <arm>.out --events <events> \
+python ../common/score_arm.py --arm <arm> --kind stream --result <arm>.stream --profile <arm>.out --events <events> \
   --frames <qeff> --out $OUT --meta <json>
 python j15_table.py $OUT
 ```

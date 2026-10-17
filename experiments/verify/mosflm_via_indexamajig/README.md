@@ -10,9 +10,9 @@ binary is on PATH. Time per frame is CrystFEL's own `index` time (`--profile`), 
 
 ## Inputs
 
-The same as `../asdf_via_indexamajig`: the 120-frame CXI inputs, their scrambled copy and the scorer
-`j8_score.py` (md5 d4182cf73c292b4e4c22d907e85d260e) under `$VERIFY_INPUTS/cxidb17_harness`, not in this
-branch.
+The same as `../asdf_via_indexamajig`: the 120-frame CXI inputs and their scrambled copy under
+`$VERIFY_INPUTS/cxidb17_harness`, not in this branch, and the scorer `../common/score_arm.py` (md5
+6d0e9408ecd6ebffd5ed4ddaafd64fd8, from the harness's d4182cf73c292b4e4c22d907e85d260e).
 
 ## argv
 
@@ -20,7 +20,7 @@ branch.
 indexamajig -i cf120_events.lst -g cf120.geom [-p lyso.cell] --peaks=cxi --indexing=mosflm --no-image-data \
   --no-revalidate --integration=none -j 1 --profile [--no-retry --no-refine --no-check-cell] [--no-check-peaks] \
   -o <arm>.stream --temp-dir=$OUT
-python j8_score.py --arm <arm> --kind stream --result <arm>.stream --profile <arm>.out --events <events> \
+python ../common/score_arm.py --arm <arm> --kind stream --result <arm>.stream --profile <arm>.out --events <events> \
   --frames <qeff> --out $OUT --meta <json>
 python j17_table.py $OUT
 ```

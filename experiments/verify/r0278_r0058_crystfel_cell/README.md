@@ -17,17 +17,18 @@ finder (with the shipped batch gate, and ungated), and a histogram of Buerger-re
 - `$VERIFY_OUT/per_frame_accuracy_vs_peaks/r0278_qlists.npz` (1,940 frames) and `r0058_qlists.npz`
   (2,370 frames): the q lists of the per-frame check, GLINT's psana1 reader and v4 peak finder, the btx
   r0016 panel layout at 0.058 and 0.050 m.
-- `$VERIFY_INPUTS/cxi_tools/bin/make_cxi_pinned.py` (md5 e237baae682b05988406b7acfdd70268, checked by the
-  job): `experiments/make_cxi.py` at 95d51ce with its two `sys.path` lines and two default paths pointed
-  at the pinned tree. It writes the CXI peak lists, one wavelength per set (r0058: the median of a 0.8%
-  spread).
+- `../common/qframes_to_cxi.py` (md5 c23ff4debc48b5f3ba512b44a5306bcb, checked by the job):
+  `experiments/make_cxi.py` at 95d51ce with its two `sys.path` lines and two default paths reading the
+  pinned tree from `VERIFY_GLINT`; the recorded run used the same file with those paths fixed (md5
+  e237baae682b05988406b7acfdd70268). It writes the CXI peak lists, one wavelength per set (r0058: the
+  median of a 0.8% spread).
 
 ## argv
 
 ```
 python npz2qlist_j4.py $J4OUT/<run>_qlists.npz inputs/<run>_real.txt
 python $VERIFY_GLINT/experiments/scramble_qlist.py inputs/<run>_first400.txt inputs/<run>_scr.txt --seed 20260928
-python make_cxi_pinned.py ../inputs/<set>.txt <set>
+python ../common/qframes_to_cxi.py ../inputs/<set>.txt <set>
 indexamajig -i <set>_events.lst -g <set>.geom -o <set>.stream --peaks=cxi --no-image-data --no-revalidate \
   --indexing=xgandalf -j 64
 python cells.py $OUT

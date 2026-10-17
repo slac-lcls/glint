@@ -47,10 +47,17 @@ srun -n 8 --gpus-per-task=1 python glint_xtc_mpi.py --exp <exp> --run <run> --zd
 ```
 
 The global event index is written into each chunk, so per-rank chunks never collide and the merge is a
-plain header-once concatenation. GPU pinning: if the launcher already gives each rank one device
-(`--gpus-per-task=1` / `--gpu-bind`), the wrapper leaves it alone; otherwise pass `--gpus-per-node N`
-and each rank is pinned to `local_rank % N` **before** torch/cupy import and before the bridge worker
-spawns (so xtc2's inherited-env worker shares the same GPU). For xtc2 the MPI is only at the conda1
+plain header-once concatenation. GPU placement: the launcher gives each rank its GPU
+(`--gpus-per-task=1` / `--gpu-bind`), and the wrapper **never writes `CUDA_VISIBLE_DEVICES`**. The rank's
+indexer and its reader inherit the same mask and both use its first device. Before reading, every rank
+identifies that device physically (CuPy's PCI bus id; torch's UUID, torch >= 2.5, if CuPy is missing),
+and the wrapper stops with the launch fix if a rank sees no GPU, or if two ranks on a node would use the
+same GPU, unless `--share-gpu` says they share it on purpose. If neither can identify the device, ranks
+on a node are compared by their masks' first device instead. Rank 0 logs every rank's hostname, mask
+and GPU. The reader's own device is inferred from the inherited mask, not checked separately. `--gpus-per-node` / `GLINT_GPUS_PER_NODE`, which
+used to rewrite the mask, are removed and now exit with that fix. A rewrite after `import mpi4py` moves the
+rank only if MPI has not already initialized CUDA; that held in GLINT's conda1 envs but not in psana2-gpu's
+(lcls2#175). Hardware check: `placement_validation/` (S3DF job 40623083). For xtc2 the MPI is only at the conda1
 level — each rank calls its own conda2 bridge worker with its shard, so there is no MPI inside conda2.
 
 ### Related: the online/streaming counterpart (LCLStreamer)

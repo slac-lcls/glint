@@ -776,6 +776,12 @@ from reading the source and has not yet been validated in a launch.
 - select only within each rank's allowed devices;
 - discover the actual GPU-sharing peers across EB groups for the budget.
 
+[lcls2#175](https://github.com/slac-lcls/lcls2/pull/175) (open, against `features/psana2-gpu`)
+implements this. It selects a device within the launcher's mask and does **not** rewrite the variable:
+its design notes measured CUDA already initialized after `import psana` (whose CUDA-aware MPI calls
+`cuInit` when mpi4py loads), so a later write is ignored. @monarin's review of it (9 Oct) has a P1
+open: the selected device does not yet reach the run, so workers can stay on the default GPU.
+
 The serial GLINT integration does not have to wait for it.
 
 @monarin's suggested starting configuration for a native-MPI run:
@@ -789,16 +795,49 @@ The serial GLINT integration does not have to wait for it.
 **Where this collides with GLINT.**
 - **Device placement.** Each `glint_xtc_mpi.py` rank is meant to see exactly one GPU through
   `CUDA_VISIBLE_DEVICES`:
-  - On the documented launch (`srun --gpus-per-task=1`), Slurm sets it and `pin_gpu` leaves it
-    alone.
-  - Otherwise `pin_gpu` sets it when `--gpus-per-node N` is given. The default, 0, leaves every GPU
-    visible.
+  - The launcher sets it (the documented launch is `srun --gpus-per-task=1`). `glint_xtc_mpi.py`
+    never writes it (glint#256). A write after `import mpi4py` moves the rank only if MPI has not
+    already initialized CUDA. In GLINT's conda1 envs it had not (S3DF job 40623083), but lcls2#175
+    measured that it had after `import psana` in the psana2-gpu env.
+  - Before reading, every rank identifies the GPU it will use physically: CuPy's PCI bus id, or
+    torch's UUID (torch >= 2.5; the S3DF envs have 2.1 and 1.11) if CuPy is missing. The wrapper
+    stops with the launch fix if a rank sees no GPU, or if two ranks on a node resolve to the same
+    GPU, unless `--share-gpu` says they share it on purpose. If neither library can identify the
+    device, ranks on a node are compared by their masks' first device. Rank 0 logs hostname, rank,
+    mask and GPU for every rank. `--gpus-per-node` is removed.
+  - **Checked on hardware.** S3DF job 40623083 ran on 2× A100 in both conda1 envs
+    (`experiments/xtc_bridge/placement_validation/`):
+    - one GPU per task runs, and two tasks on one GPU, or both seeing both GPUs, stop;
+    - `--share-gpu` runs;
+    - each rank's reader child lands on the rank's GPU.
+
+    Under `--gpus-per-task=1` both tasks see the mask `'0'` on different GPUs, so the check has to
+    use identity, not the string.
 
   The conda2 reader inherits that mask, so the torch indexer and the reader's peak-find share one
-  device. A reader on psana's native MPI GPU path can have the variable rewritten. If the new index
-  is visible and CUDA has not yet initialized, the two then land on different physical GPUs, or
-  several ranks pile onto one, and nothing reports it. Until lcls2#155 lands, keep the reader
-  serial.
+  device. The reader must stay serial (`PS_PARALLEL=none`) whether or not lcls2#175 lands: this
+  serial bridge takes no part in #175's MPI placement. GLINT does not yet set `PS_PARALLEL=none` for
+  the reader itself.
+- **Native psana2-gpu (follow-up adapter, glint#219; not started).** It replaces the bridge rather
+  than nesting under `glint_xtc_mpi.py`'s sharding. Per @monarin's review of glint#256, GLINT then:
+  - keeps the launcher's mask and skips `glint_xtc_mpi.py`'s placement check; psana assigns each BD
+    within that mask;
+  - initializes torch and CuPy on the device psana selected, never assuming `cuda:0` or recomputing
+    the rank-to-device map. With a mask `3,4` and a BD on physical GPU 4, that is local device 1;
+  - verifies the physical GPU identity, not the environment string, including a run where the
+    assigned local device is 1;
+  - budgets memory for every worker's GLINT allocations (see *Memory*), since psana's quota does
+    not cover them;
+  - makes no CUDA allocation at import, before psana's device is current. `glint/replica_gpu_batch.py`
+    and `glint/replica_gpu.py` create tensors at module scope today;
+  - orders its CuPy and PyTorch streams, and finishes with a batch before psana reuses its buffers.
+    CuPy loads a kernel module once per process, so a kernel's `__device__` globals (a peak counter,
+    say) are shared by every GpuTask instance there; a stage that uses them has to serialize across
+    streams, as a GpuTask-contract prototype of the peak stage found;
+  - submits calibration and peak finding through `GpuTask(function(batch, stream))`, publishing
+    compact results first; full indexing inside the BDs can follow, as in glint#219.
+
+  This waits for lcls2#175, including its P1.
 - **Memory.** psana's per-worker quota does not cap GLINT's own allocations: the torch indexer, cupy
   peak-finder scratch and the ring. Neither psana's current EB-group count nor the peer discovery
   planned in lcls2#155 can see GLINT's indexer processes or independent serial readers. This applies

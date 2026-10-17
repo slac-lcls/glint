@@ -410,6 +410,8 @@ FACTS: dict[str, float | str] = {
     "floor_median_sigmas":     7.51,     # median (real - mu)/sd -- the paper's "7.5"
     "floor_mean_sigmas":      11.41,     # ...and the mean, quoted as 11.4 (glint.tex's "11.4 null-sigma")
     "floor_K":                70400,     # candidate seeds in the single-frame blind search
+    "n_dir":                   2200,     # trial directions on the Fibonacci sphere (glint_index.py, sample(n_dir=2200))
+    "n_len":                     32,     # trial lengths, np.arange(30, 126, 3) = 30..123 A in 3 A steps; floor_K = n_dir * n_len
     "floor_fit_a":            29.24,     # Fig. 5(b) sweep fit: floor(K) = a + b*sqrt(2 ln K)
     "floor_fit_b":             4.53,     # b is the PER-SEED sigma_0 the extreme-value law wants
     "floor_fit_r":            0.985,     # Pearson r of that fit, quoted in the caption
@@ -511,6 +513,19 @@ FACTS: dict[str, float | str] = {
     # 4.12 -> 3.84, i.e. the wall dropped by 0.28 against a predict saving of 0.28.
     "stream_ms":           3.64,    # steady state per frame, B=40   (#50+#68; was 4.42, then 4.16)
     "stream_fps":          275.0,   # = 1000/stream_ms               (#50+#68; was 226, then 240)
+    # The same pipeline on a REAL run: mfxx49820 r0016 (Epix10ka2M, btx-refined geometry), all 12,133 hits, one
+    # A100 (sdfampere020), StreamDriver defaults at 95d51ce, Slurm 41040988_1. Timed from one full batch after the
+    # cell is established to the end of the run, push() and close() only, device-synchronised; reading and
+    # calibration are NOT included, so this is not a detector readout rate. A second task on another A100
+    # (41040988_0, sdfampere038) gave 255.9 frames/s on the same hits; that node is on the exclude list, so
+    # the lower figure is the one quoted. Yields are identical in both tasks.
+    "r0016_sustained_fps":   231.1,
+    "r0016_hits":            12133,
+    "r0016_lock_frame":         24,  # detector frame, counted from 0, at which the consensus cell is established
+    "r0016_strict_of_hits":   6653,  # at the strict criterion (correct lattice, >=10 and >=25% of peaks)
+    "r0016_strict_pct":       54.8,  # = 100 * r0016_strict_of_hits / r0016_hits
+    "r0016_null_strict_of_hits": 2015,  # azimuth-scrambled copies of the same hits through the same pass:
+    "r0016_null_strict_pct":  16.6,  # the strict bar has a real chance rate on r0016, so 54.8% is quoted against 16.6%
     "peakfind_ms":         1.16,    # LARGEST single stage, 7.3x predict          (#41, open; was 2.38)
     "predict_ms":          0.16,    # fused gate+projection kernel      (#68, merged; was 1.11, 0.42)
     "index_b40_ms":        0.54,    # fused index, B=40 (NOT the 0.26 B=120 amortization)
@@ -677,6 +692,12 @@ FACTS: dict[str, float | str] = {
     "xgandalf_fast_ratio":    11.003,  # = 12620/1147 (default median / fast median), SAME host, measured
     "xgandalf_fast_blind_ms": 1049.0,  # = xgandalf_blind_ms / xgandalf_fast_ratio
     "xgandalf_fast_speedup":  40.8,    # = xgandalf_fast_blind_ms / blind_ms; paper says "~40x"
+    # Fast execution timed DIRECTLY on one pinned AMD EPYC 7542 core (Slurm 41011531, on sdfampere002's CPUs):
+    # xg_driver over libxgandalf from CrystFEL 0.12.0, pitch 2 / 3 iterations, the 120 cxidb-17 lists, 88/120
+    # strict and 96/120 lattice as above. Median per frame; the mean is 1392.2. It is 8% slower than the
+    # derived xgandalf_fast_blind_ms, whose ratio was measured on an EPYC 7702, so the ~40x is conservative
+    # (1137.7 / blind_ms = 44x).
+    "xgandalf_fast_1core_ms": 1137.7,
     "ffbidx_latency_ms":   4.4,     # per single call -- a LATENCY
     "ffbidx_pipelined_ms": 3.1,     # persistent indexer -- the THROUGHPUT comparator
     "ffbidx_speedup":      18.0,    # = ffbidx_pipelined_ms / fused_b120_ms (throughput vs throughput)
@@ -2140,6 +2161,18 @@ def check_arithmetic() -> list[str]:
     close("xgandalf_fast_speedup = xgandalf_fast_blind_ms/blind_ms",
           float(F["xgandalf_fast_speedup"]),
           float(F["xgandalf_fast_blind_ms"]) / float(F["blind_ms"]), tol=0.05)
+    close("xgandalf_fast_1core_ms within 15% of the derived xgandalf_fast_blind_ms",
+          float(F["xgandalf_fast_1core_ms"]), float(F["xgandalf_fast_blind_ms"]), tol=0.15)
+    _r0016_strict_pct = round(100.0 * float(F["r0016_strict_of_hits"]) / float(F["r0016_hits"]), 1)
+    if float(F["r0016_strict_pct"]) != _r0016_strict_pct:
+        bad.append(f'  FACTS: r0016_strict_pct = {F["r0016_strict_pct"]}% but counts round to {_r0016_strict_pct}%')
+    _r0016_null_pct = round(100.0 * float(F["r0016_null_strict_of_hits"]) / float(F["r0016_hits"]), 1)
+    if float(F["r0016_null_strict_pct"]) != _r0016_null_pct:
+        bad.append(f'  FACTS: r0016_null_strict_pct = {F["r0016_null_strict_pct"]}% but counts round to {_r0016_null_pct}%')
+    _nd, _nl = float(F["n_dir"]), float(F["n_len"])
+    if not (_nd.is_integer() and _nl.is_integer()) or _nd * _nl != float(F["floor_K"]):
+        bad.append(f'  FACTS: n_dir and n_len must be integers whose product is floor_K '
+                   f'({F["n_dir"]} * {F["n_len"]} vs {F["floor_K"]})')
     close("hits_per_s = rep_rate * hit_rate", float(F["hits_per_s"]),
           float(F["rep_rate_hz"]) * float(F["hit_rate"]))
     close("fused_share = index_b40 + integrate", float(F["fused_share_ms"]),

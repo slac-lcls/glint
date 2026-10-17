@@ -29,7 +29,7 @@ python mosflm_table.py $OUT
 
 `null_blind_alloff` and `null_cell_alloff` on the scrambled frames.
 
-## Expected (not yet in FACTS)
+## Expected (FACTS keys)
 
 | arm | returned | lattice | strict | index ms median |
 |---|---|---|---|---|
@@ -42,6 +42,11 @@ python mosflm_table.py $OUT
 | cell_alloff | 68 | 55 | 44 | 811 |
 | null_blind_alloff | 2 | 0 | 0 | 2176 |
 | null_cell_alloff | 0 | 0 | 0 | 690 |
+
+The strict column is `mosflm_<arm>_strict_of120` (of `mosflm_frames` 120), with `mosflm_blind_on_strict_pct`
+22.5 and `mosflm_cell_on_strict_pct` 29.2; the median index times of the two `_on` arms are
+`mosflm_blind_on_1core_ms` 6896 and `mosflm_cell_on_1core_ms` 3674. The returned and lattice columns and the
+other times are not in FACTS.
 
 ## Outputs
 

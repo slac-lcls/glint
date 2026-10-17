@@ -41,7 +41,7 @@ The exact argv of each arm is written to `ARGV.tsv`.
 
 `null_blind_alloff` and `null_cell_alloff`: the two `_alloff` arms on the scrambled frames.
 
-## Expected (not yet in FACTS)
+## Expected (FACTS keys)
 
 | arm | returned | lattice | strict | index ms median |
 |---|---|---|---|---|
@@ -54,6 +54,10 @@ The exact argv of each arm is written to `ARGV.tsv`.
 | cell_alloff | 111 | 64 | 64 | 340 |
 | null_blind_alloff | 110 | 0 | 0 | 314 |
 | null_cell_alloff | 98 | 0 | 0 | 395 |
+
+The strict column is `asdf_<arm>_strict_of120` (of `asdf_frames` 120), with `asdf_cell_on_strict_pct` 35.8;
+the median index times of the two `_on` arms are `asdf_blind_on_1core_ms` 2676 and `asdf_cell_on_1core_ms`
+2003. The returned and lattice columns and the other times are not in FACTS.
 
 ## Outputs
 

@@ -1135,6 +1135,139 @@ FACTS: dict[str, float | str] = {
     "cfmode_r0058_vol_ratio":       0.992,
     "cfmode_r0058_null_max_group":      2,
     "cfmode_null_frames":             400,
+
+    # asdf and MOSFLM through CrystFEL, the r51 re-run with the solution-file guard, and the order replays
+    # at eight random states -------------------------------------------------------------------------------
+    # asdf and MOSFLM: CrystFEL 0.12.0 indexamajig --indexing=asdf or --indexing=mosflm (ipmosflm of CCP4 8.0)
+    # --peaks=cxi --no-image-data --no-revalidate --integration=none -j 1 --profile, on the 120 cxidb-17 peak
+    # lists back-projected to a flat-panel CXI file by experiments/make_cxi.py at 95d51ce. Each frame is
+    # scored with GLINT 95d51ce's gate (experiments/verify/common/score_arm.py): strict = correct lattice
+    # against 79.02/79.02/37.98 and >= 25% and >= 10 of its peaks within 0.15 of integer hkl. Nine arms per
+    # method, all at once, one EPYC 7713 core each: blind (no cell) and with the cell (-p lyso.cell), each at
+    # CrystFEL's defaults (_on), without the peak check (_nopeaks) and with retry, refinement, the cell check
+    # and the peak check all off (_alloff); _off (cell only) turns off the first three and keeps the peak
+    # check. Nulls: the two _alloff arms on azimuth-scrambled copies of the lists (seed 20260928). Times are
+    # CrystFEL's own per-frame `index` time from --profile, median over the 120 frames, one core. asdf: Slurm
+    # 41168320 (milano); MOSFLM: Slurm 41172742 (milano). The earlier asdf and MOSFLM rows had no surviving
+    # driver, so these re-measure them.
+    "asdf_frames":                    120,
+    "asdf_blind_on_strict_of120":       0,  # asdf blind finds no correct lattice in any arm
+    "asdf_blind_nopeaks_strict_of120":  0,
+    "asdf_blind_alloff_strict_of120":   0,
+    "asdf_cell_on_strict_of120":       43,
+    "asdf_cell_on_strict_pct":       35.8,
+    "asdf_cell_off_strict_of120":      43,
+    "asdf_cell_nopeaks_strict_of120":  71,
+    "asdf_cell_alloff_strict_of120":   64,
+    "asdf_null_blind_alloff_strict_of120": 0,
+    "asdf_null_cell_alloff_strict_of120":  0,
+    "asdf_blind_on_1core_ms":        2676,
+    "asdf_cell_on_1core_ms":         2003,
+    "mosflm_frames":                  120,
+    "mosflm_blind_on_strict_of120":    27,
+    "mosflm_blind_on_strict_pct":    22.5,
+    "mosflm_blind_nopeaks_strict_of120": 39,
+    "mosflm_blind_alloff_strict_of120":  32,
+    "mosflm_cell_on_strict_of120":     35,
+    "mosflm_cell_on_strict_pct":     29.2,
+    "mosflm_cell_off_strict_of120":    23,
+    "mosflm_cell_nopeaks_strict_of120": 54,
+    "mosflm_cell_alloff_strict_of120": 44,
+    "mosflm_null_blind_alloff_strict_of120": 0,
+    "mosflm_null_cell_alloff_strict_of120":  0,
+    "mosflm_blind_on_1core_ms":      6896,
+    "mosflm_cell_on_1core_ms":       3674,
+    # r51 re-run: the r51 arms of the merge block above at GLINT abe330c, the head of #263 (95d51ce, the #261
+    # docstrings and the guard that skips a frame with no usable cell; glint/ identical to main at b21b165).
+    # Same chain and CrystFEL 0.10.2: GLINT's blind and known-cell solution files, indexamajig --indexing=file
+    # --tolerance=10,10,10,3, three shuffled-orientation nulls with the peak checks on, and merges of the
+    # frames both routes index, split ten times by frame key. CrystFEL's own indexing is the first run's
+    # stream (41037261), not re-run. Slurm 41172814 (GLINT, A100), 41172816 (--indexing=file) and 41172817
+    # (merges), 17 Oct 2026. The consensus declines on r51 as before (merge_r51_top_group), so each frame
+    # keeps its own best cell. Of the 2,408 solutions written, 250 are the reference lattice (LUTE's
+    # 79.17/79.17/37.96, shipped same_lattice), the same count as merge_r51_correct_lattice. CrystFEL's checks
+    # keep 242 of them and none of the 2,408 shuffled solutions at any of the three seeds. On the 241 frames
+    # both routes index, GLINT's orientation is a median 0.0099 deg from CrystFEL's own (237 within 1 deg,
+    # RESULTS.md 0.98340). Merge rows are the mean (sd) over the ten splits, and neither difference meets the
+    # detection rule of the merge block. The known-cell row uses the 302 frames GLINT given the cell and
+    # CrystFEL both index.
+    "merge_r51guard_solutions":      2408,
+    "merge_r51guard_ref_lattice":     250,
+    "merge_r51guard_accepted":        242,
+    "merge_r51guard_accepted_pct":   10.0,  # RESULTS.md prints 10.0%
+    "merge_r51guard_shuffled_accepted": 0,  # of the 2,408, at each of the three shuffle seeds
+    "merge_r51guard_common_frames":   241,
+    "merge_r51guard_misorient_median_deg": 0.0099,
+    "merge_r51guard_misorient_le1deg":    237,
+    "merge_r51guard_misorient_le1deg_pct": 98.3,
+    "merge_r51guard_glint_cchalf":      0.217,
+    "merge_r51guard_glint_cchalf_sd":   0.034,
+    "merge_r51guard_cf_cchalf":         0.222,
+    "merge_r51guard_cf_cchalf_sd":      0.027,
+    "merge_r51guard_cchalf_diff":     -0.0051,  # GLINT minus CrystFEL, paired split by split: not detected
+    "merge_r51guard_cchalf_diff_sd":   0.0387,
+    "merge_r51guard_cchalf_diff_pos":       3,
+    "merge_r51guard_cchalf_diff_neg":       7,
+    "merge_r51guard_null1_cchalf":      0.007,  # shuffled orientations on the same frames, seed 1
+    "merge_r51guard_null1_cchalf_sd":   0.038,
+    "merge_r51guard_glint_minus_null": 0.2107,  # sd 0.0338
+    "merge_r51guard_cf_minus_null":    0.2158,  # sd 0.043
+    "merge_r51guard_known_frames":        302,
+    "merge_r51guard_known_glint_cchalf": 0.261,
+    "merge_r51guard_known_glint_cchalf_sd": 0.049,
+    "merge_r51guard_known_cf_cchalf":    0.263,
+    "merge_r51guard_known_cf_cchalf_sd": 0.045,
+    "merge_r51guard_known_cchalf_diff": -0.0024,
+    "merge_r51guard_known_cchalf_diff_sd": 0.0507,
+    "merge_r51guard_known_cchalf_diff_pos":  4,
+    "merge_r51guard_known_cchalf_diff_neg":  6,
+    # The order replays at eight random states. seqstop_* and poolgate_bad_* above each come from one set of
+    # 400 random orders, at a seed that was not recorded. Here both replays run at the eight seeds of
+    # experiments/test_seqstop_replay.py (0, 1, 2, 3, 7, 11, 42, 2024), 400 orders each, with an order-replay
+    # harness (replay.py, md5 52d39995) fed GLINT 95d51ce's own per-frame cells (index_blind_nbest at the
+    # shipped warmup_nbest 3, regenerated at its defaults) for the 480 cxidb-17 frames and for r0016 on
+    # unrefined psana geometry. Both rules: support and lead only (gap-only above) and the full shipped rule.
+    # Slurm array 41172544 (milano, one task per seed), 17 Oct 2026. A decision is false when
+    # same_lattice(decided cell, reference) fails; the median and p90 count frames to a correct decision.
+    # cxidb-17/480: every one of the 3,200 orders decides and 3 decisions are false (1 at seed 1, 2 at seed
+    # 3); per-set medians 6.0-7.0, p90s 11.0-12.0. The full rule gives the same outcome as support and lead on
+    # every order, and the same medians and p90s; on 6 of the 3,200 orders it decides later (frame 28-78
+    # instead of 24-32). The one-set seqstop_* values (6, 12 and 0 false) fall inside this eight-set spread.
+    # The bound is the one-sided 95% Clopper-Pearson upper limit for 3 false in 3,200.
+    # r0016 unrefined: support and lead decide on 358-367 of the 400 orders per set and are wrong on 147-165;
+    # the full rule decides on 1-5 per set, 23 in all, 18 of them wrong. At 95d51ce poolgate_bad_wrong_gaponly
+    # (194) is outside the eight-set spread (147-165), and so is poolgate_bad_locks_gaponly (342, against
+    # 358-367); the gated 3 decisions and 2 wrong are inside it.
+    "seqstop8_sets":                    8,
+    "seqstop8_orders":                400,  # per set
+    "seqstop8_trials":               3200,
+    "seqstop8_decided":              3200,
+    "seqstop8_false":                   3,
+    "seqstop8_false_seed0":             0,
+    "seqstop8_false_seed1":             1,
+    "seqstop8_false_seed2":             0,
+    "seqstop8_false_seed3":             2,
+    "seqstop8_false_seed7":             0,
+    "seqstop8_false_seed11":            0,
+    "seqstop8_false_seed42":            0,
+    "seqstop8_false_seed2024":          0,
+    "seqstop8_false_upper95_pct":    0.24,
+    "seqstop8_median_lock_min":       6.0,
+    "seqstop8_median_lock_max":       7.0,
+    "seqstop8_p90_lock_min":         11.0,
+    "seqstop8_p90_lock_max":         12.0,
+    "seqstop8_full_rule_decided":    3200,
+    "seqstop8_full_rule_false":         3,
+    "seqstop8_full_rule_later":         6,  # orders where the full rule decides later, with the same outcome
+    "poolgate8_gaponly_decided_min":  358,
+    "poolgate8_gaponly_decided_max":  367,
+    "poolgate8_gaponly_wrong_min":    147,
+    "poolgate8_gaponly_wrong_max":    165,
+    "poolgate8_gated_decided_min":      1,
+    "poolgate8_gated_decided_max":      5,
+    "poolgate8_gated_decided":         23,  # over the eight sets
+    "poolgate8_gated_wrong":           18,
+    "poolgate8_gated_true":             5,
 }
 
 # Every arm-vs-default discordant split from the n=480 M3 sweep, both channels: (arm-only,
@@ -3536,6 +3669,118 @@ def check_arithmetic() -> list[str]:
             bad.append(f"  FACTS: on {run} the scrambled control's largest group "
                        f"({F[c + 'null_max_group']}) reaches the real mode's support "
                        f"({F[c + 'support']}), so CrystFEL's mode no longer confirms the vote")
+
+    # --- the seventh real-run block: asdf and MOSFLM through CrystFEL, the r51 re-run with the
+    # solution-file guard, and the order replays at eight random states.
+    # asdf and MOSFLM: every arm is a count of the 120 frames, both nulls are quoted as 0, asdf blind is
+    # quoted as finding no correct lattice, and the percentages are exact after rounding.
+    _cx_arms = ("blind_on", "blind_nopeaks", "blind_alloff", "cell_on", "cell_off", "cell_nopeaks",
+                "cell_alloff", "null_blind_alloff", "null_cell_alloff")
+    for ix in ("asdf", "mosflm"):
+        n = whole(f"{ix}_frames")
+        if n != 120:
+            bad.append(f"  FACTS: {ix}_frames = {F[f'{ix}_frames']}, but the {ix}_*_of120 keys count 120 frames")
+        for arm in _cx_arms:
+            k = whole(f"{ix}_{arm}_strict_of120")
+            if not 0 <= k <= n:
+                bad.append(f"  FACTS: {ix}_{arm}_strict_of120 = {k} is not a count within {ix}_frames ({n})")
+        for arm in ("null_blind_alloff", "null_cell_alloff"):
+            if whole(f"{ix}_{arm}_strict_of120") != 0:
+                bad.append(f"  FACTS: the {ix} null {arm} now passes the strict bar on "
+                           f"{F[f'{ix}_{arm}_strict_of120']} frames; the block quotes both nulls as 0, so quote "
+                           "each arm against its null")
+    for arm in ("blind_on", "blind_nopeaks", "blind_alloff"):
+        if whole(f"asdf_{arm}_strict_of120") != 0:
+            bad.append(f"  FACTS: asdf_{arm}_strict_of120 is no longer 0, so 'asdf blind finds no correct "
+                       "lattice in any arm' is false")
+    pct_exact("asdf_cell_on_strict_pct", "asdf_cell_on_strict_of120", "asdf_frames", 1)
+    pct_exact("mosflm_blind_on_strict_pct", "mosflm_blind_on_strict_of120", "mosflm_frames", 1)
+    pct_exact("mosflm_cell_on_strict_pct", "mosflm_cell_on_strict_of120", "mosflm_frames", 1)
+
+    # The r51 re-run: differences against their parts, the split counts, the detection rule (both rows are
+    # read as "not detected"), the acceptance and misorientation percentages, and the blind cells the
+    # first run already scored.
+    g = "merge_r51guard_"
+    diff_exact(g + "cchalf_diff", g + "glint_cchalf", g + "cf_cchalf", 3, 3, 4)
+    diff_exact(g + "glint_minus_null", g + "glint_cchalf", g + "null1_cchalf", 3, 3, 4)
+    diff_exact(g + "cf_minus_null", g + "cf_cchalf", g + "null1_cchalf", 3, 3, 4)
+    diff_exact(g + "known_cchalf_diff", g + "known_glint_cchalf", g + "known_cf_cchalf", 3, 3, 4)
+    for row, sd_key in (("", "cf_cchalf_sd"), ("known_", "known_cf_cchalf_sd")):
+        pos, neg = whole(f"{g}{row}cchalf_diff_pos"), whole(f"{g}{row}cchalf_diff_neg")
+        if pos + neg != whole("merge_splits"):
+            bad.append(f"  FACTS: {g}{row}cchalf_diff_pos + {g}{row}cchalf_diff_neg = {pos + neg}, not the "
+                       f"{F['merge_splits']} splits")
+        if max(pos, neg) >= 8 and abs(float(F[f"{g}{row}cchalf_diff"])) > float(F[g + sd_key]):
+            bad.append(f"  FACTS: the r51 re-run's {'known-cell' if row else 'blind'} GLINT - CrystFEL CC1/2 difference now meets "
+                       f"the detection rule ({max(pos, neg)} of 10 splits, |{F[f'{g}{row}cchalf_diff']}| > "
+                       f"{F[g + sd_key]}), so 'not detected' is false for that row")
+    pct_exact(g + "accepted_pct", g + "accepted", g + "solutions", 1)
+    pct_exact(g + "misorient_le1deg_pct", g + "misorient_le1deg", g + "common_frames", 1)
+    if not whole(g + "ref_lattice") <= whole(g + "solutions"):
+        bad.append(f"  FACTS: {g}ref_lattice exceeds the {g}solutions it is a subset of")
+    if whole(g + "ref_lattice") != whole("merge_r51_correct_lattice"):
+        bad.append(f"  FACTS: {g}ref_lattice ({F[g + 'ref_lattice']}) differs from merge_r51_correct_lattice "
+                   f"({F['merge_r51_correct_lattice']}); the block says the guard changed the writer, not "
+                   "the cells")
+    if whole(g + "shuffled_accepted") != 0:
+        bad.append(f"  FACTS: {g}shuffled_accepted is no longer 0, so 'none of the shuffled solutions' is false")
+
+    # The eight-set order replays.
+    S8 = "seqstop8_"
+    _seeds = (0, 1, 2, 3, 7, 11, 42, 2024)
+    if whole(S8 + "sets") != len(_seeds) or whole(S8 + "trials") != whole(S8 + "sets") * whole(S8 + "orders"):
+        bad.append(f"  FACTS: {S8}trials ({F[S8 + 'trials']}) must be the {len(_seeds)} sets x {S8}orders")
+    _per_seed = [whole(f"{S8}false_seed{s}") for s in _seeds]
+    if sum(_per_seed) != whole(S8 + "false"):
+        bad.append(f"  FACTS: the per-seed false decisions sum to {sum(_per_seed)}, not {S8}false "
+                   f"({F[S8 + 'false']})")
+    if not whole(S8 + "false") <= whole(S8 + "decided") <= whole(S8 + "trials"):
+        bad.append(f"  FACTS: {S8}false <= {S8}decided <= {S8}trials does not hold")
+    # One-sided 95% Clopper-Pearson upper limit for x false decisions in n orders: the p at which
+    # P(X <= x) = 0.05, found by bisection on the exact binomial CDF, then rounded half up to the stored
+    # decimals.
+    _x, _n = whole(S8 + "false"), whole(S8 + "trials")
+
+    def _binom_cdf(p: float) -> float:
+        return sum(math.comb(_n, k) * p ** k * (1.0 - p) ** (_n - k) for k in range(_x + 1))
+
+    _lo, _hi = 0.0, 1.0
+    for _ in range(100):
+        _mid = 0.5 * (_lo + _hi)
+        _lo, _hi = (_mid, _hi) if _binom_cdf(_mid) > 0.05 else (_lo, _mid)
+    _cp = Fraction(math.floor(Fraction(100.0 * _hi) * 100 + Fraction(1, 2)), 100)
+    if Fraction(str(F[S8 + "false_upper95_pct"])) != _cp:
+        bad.append(f"  FACTS: {S8}false_upper95_pct = {F[S8 + 'false_upper95_pct']} but the one-sided 95% "
+                   f"Clopper-Pearson bound for {_x} of {_n} rounds to {float(_cp):.2f}")
+    if whole(S8 + "full_rule_decided") != whole(S8 + "decided") or whole(S8 + "full_rule_false") != whole(S8 + "false"):
+        bad.append("  FACTS: the full rule's decided/false counts on cxidb-17 now differ from support and lead "
+                   "alone; the block says it gives the same outcome on every order")
+    _ranges = [("seqstop8_median_lock", "seqstop_median_lock"), ("seqstop8_p90_lock", "seqstop_p90_lock"),
+               ("poolgate8_gaponly_decided", None), ("poolgate8_gaponly_wrong", None),
+               ("poolgate8_gated_decided", None)]
+    for rng, one_set in _ranges:
+        lo, hi = float(F[rng + "_min"]), float(F[rng + "_max"])
+        if lo > hi:
+            bad.append(f"  FACTS: {rng}_min ({F[rng + '_min']}) exceeds {rng}_max ({F[rng + '_max']})")
+        elif one_set and not lo <= float(F[one_set]) <= hi:
+            bad.append(f"  FACTS: {one_set} ({F[one_set]}) is no longer inside the eight-set spread "
+                       f"{F[rng + '_min']}-{F[rng + '_max']}, as the eight-set block says")
+    if not min(_per_seed) <= int(F["seqstop_false_locks"]) <= max(_per_seed):
+        bad.append(f"  FACTS: seqstop_false_locks ({F['seqstop_false_locks']}) is no longer inside the eight-set "
+                   f"spread {min(_per_seed)}-{max(_per_seed)}, as the eight-set block says")
+    if (float(F["poolgate8_gaponly_wrong_min"]) <= float(F["poolgate_bad_wrong_gaponly"])
+            <= float(F["poolgate8_gaponly_wrong_max"])):
+        bad.append(f"  FACTS: poolgate_bad_wrong_gaponly ({F['poolgate_bad_wrong_gaponly']}) is now inside "
+                   f"the eight-set spread {F['poolgate8_gaponly_wrong_min']}-{F['poolgate8_gaponly_wrong_max']}; "
+                   "the eight-set block says it lies outside")
+    P8 = "poolgate8_gated_"
+    if whole(P8 + "decided") != whole(P8 + "wrong") + whole(P8 + "true"):
+        bad.append(f"  FACTS: {P8}decided must be {P8}wrong + {P8}true "
+                   f"({F[P8 + 'wrong']} + {F[P8 + 'true']})")
+    if not (whole(S8 + "sets") * whole(P8 + "decided_min") <= whole(P8 + "decided")
+            <= whole(S8 + "sets") * whole(P8 + "decided_max")):
+        bad.append(f"  FACTS: {P8}decided ({F[P8 + 'decided']}) cannot come from {F[S8 + 'sets']} sets of "
+                   f"{F[P8 + 'decided_min']}-{F[P8 + 'decided_max']} each")
 
     m = float(F["peakfind_ms"]) / float(F["predict_ms"])
     if float(F["predict_ms"]) >= float(F["peakfind_ms"]):

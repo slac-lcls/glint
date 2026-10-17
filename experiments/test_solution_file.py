@@ -181,6 +181,17 @@ X = relabelings(truth, W)
 check("aP, triclinic cell: one relabeling for every frame (-1 has no proper operator but the identity)",
       n == 30 and all(np.allclose(x, X[0]) for x in X) and not err, err)
 
+HRC = (50.0, 50.0, 50.0, 75.0, 75.0, 75.0)
+bad_runs = []
+for sd in range(7, 13):                              # several runs: some seeds come with mixed column signs
+    truth, res = noisy_run(HRC, 40, seed=sd)
+    n, W, _, err = run(res, "hR")
+    ang = np.array([params(A)[3:] for A, _ in W])
+    if not (n == 40 and (np.ptp(ang, axis=1) < 1.5).all() and ((ang < 90).all() or (ang > 90).all())):
+        bad_runs.append(sd)
+check("hR without a reference: every frame's three angles equal, one sign convention for the run "
+      "(a mixed-sign seed must not set 75/105/105 for all)", not bad_runs, bad_runs)
+
 print("\na frame with no usable cell is skipped; one singular basis used to raise and lose the whole file")
 flat = LYSO.copy(); flat[:, 2] = 0.0                                    # a zero-length axis: det M = 0
 BAD = [{"image": "x.cxi", "event": 10, "M": flat},

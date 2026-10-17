@@ -670,7 +670,13 @@ def _run_setting(Ms, lattice_code):
         G = P.T @ G @ P
         G[u, [p0, p1]] = G[[p0, p1], u] = 0.0                          # a monoclinic cell: alpha = gamma = 90
         return np.linalg.cholesky(G).T                                 # R.T @ R = the placed cell, det R > 0
-    return _canonical_axes(np.linalg.cholesky(G).T, laue=_laue_hint_from_lattice_code(code), centering=code[1:2])
+    R = _canonical_axes(np.linalg.cholesky(G).T, laue=_laue_hint_from_lattice_code(code), centering=code[1:2])
+    if code[:2].lower() == "hr":
+        # _canonical_axes leaves -3m_R as handed in, so a seed with mixed column signs (75/105/105) would make
+        # every frame's setting one the threefold does not preserve: one sign rule, all three angles equal.
+        from glint.refine_sym import standardize_setting
+        R = standardize_setting(R, "trigonal")
+    return R
 
 
 def write_solution_file(results, path, lattice_code="aP", ref_cell=None):

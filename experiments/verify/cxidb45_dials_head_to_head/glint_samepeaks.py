@@ -5,7 +5,7 @@ strict bar together with the DIALS arms (the earlier 32.0% and 97.8% used a leng
 prok_rerun_s3df.py:len_match). Same entry points as that harness: index_blind_fast per frame, and
 hybrid_index(frames) at its defaults. Adds hybrid_index(frames, Mc_known=ProK), GLINT given the same
 target cell as DIALS's K arms, and the three arms again on the azimuth-scrambled lists (the null).
-Saves each frame's M (real basis, columns; NaN when None); score_j12.py applies the gate."""
+Saves each frame's M (real basis, columns; NaN when None); stills_score.py applies the gate."""
 import argparse
 import hashlib
 import json
@@ -117,7 +117,7 @@ def main():
             name, len(frames), sum(M is not None for M in Ms), float(t.sum()),
             json.dumps(jsonable({k: stats.get(k) for k in ("support", "n_idx", "n_blind", "n_rescued", "edges")}))),
             flush=True)
-    print("J12_GLINT_DONE", flush=True)
+    print("GLINT_DONE", flush=True)
 
 
 if __name__ == "__main__":

@@ -57,7 +57,7 @@ are partialator's.
 
 ```
 mkdir -p $VERIFY_OUT/r51_merge_vs_frames/logs && cd $VERIFY_OUT/r51_merge_vs_frames
-sbatch $VERIFY_DIR/r51_merge_vs_frames/j13_sweep.sbatch
+sbatch $VERIFY_DIR/r51_merge_vs_frames/sweep.sbatch
 ```
 
 Not run: stage B (`sbatch --export=ALL,STAGE=B ...`), which reads the r51 CF and GLb streams of

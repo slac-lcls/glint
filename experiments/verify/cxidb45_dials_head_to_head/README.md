@@ -7,9 +7,9 @@ of integer hkl, so at least 43 matched peaks. DIALS gets the peaks through a vir
 (`dials_samepeaks.py`); spot finding and integration are not exercised.
 
 Two runs share this folder:
-- the `stills_process` run (`j12_*`, `submit_j12.sh`): DIALS `stills_process` arms (`phil/`), the GLINT
+- the `stills_process` run (`stills_*`, `submit_stills.sh`): DIALS `stills_process` arms (`phil/`), the GLINT
   arms, the null input, the scorer;
-- the routes run (`j12b_*`, `dials_j12b.py`, `score_j12b.py`): the bare basis-vector routes behind the earlier
+- the routes run (`routes_*`): the bare basis-vector routes behind the earlier
   length-gate DIALS rows (best of 25 candidates, no accept step) and DIALS's own `Indexer`, graded by the
   same scorer, with the `stills_process` outputs read back.
 
@@ -34,9 +34,9 @@ The routes sbatch stops if either hash differs.
 python -u prep_null.py --tree $VERIFY_GLINT --npz $VERIFY_GLINT/experiments/prok_q.npz --out inputs/prok_q_scrambled_s20260928.npz --seed 20260928
 dials.python dials_samepeaks.py --npz <npz> --phil phil/common.phil phil/<ARM>.phil --arm <ARM> --start S --stop E --out dials/<ARM>/frames_S_E.jsonl --workdir ... --rank C
 python -u glint_samepeaks.py --npz <prok_q.npz> --npz-null <scrambled> --out glint
-python -u score_j12.py --npz <prok_q.npz> --npz-null <scrambled> --dials dials --glint glint --out score
-dials.python -u dials_j12b.py --arm <ARM> --npz <prok_q.npz> --npz-null <scrambled> --out dials_routes/out/<ARM>/frames.jsonl
-python -u score_j12b.py --npz ... --npz-null ... --dials dials_routes/out --j12-dials dials --j12-glint glint --out dials_routes/score
+python -u stills_score.py --npz <prok_q.npz> --npz-null <scrambled> --dials dials --glint glint --out score
+dials.python -u routes_dials.py --arm <ARM> --npz <prok_q.npz> --npz-null <scrambled> --out dials_routes/out/<ARM>/frames.jsonl
+python -u routes_score.py --npz ... --npz-null ... --dials dials_routes/out --stills-dials dials --stills-glint glint --out dials_routes/score
 ```
 
 ## Null
@@ -74,11 +74,11 @@ Regression checks the routes scorer prints: `V1` length gate 561 and full gate 5
 ## Run
 
 ```
-bash $VERIFY_DIR/cxidb45_dials_head_to_head/submit_j12.sh
+bash $VERIFY_DIR/cxidb45_dials_head_to_head/submit_stills.sh
 # after it ends:
 mkdir -p $VERIFY_OUT/cxidb45_dials_head_to_head/dials_routes/logs && cd $VERIFY_OUT/cxidb45_dials_head_to_head/dials_routes
-A=$(sbatch --parsable $VERIFY_DIR/cxidb45_dials_head_to_head/j12b_dials.sbatch)
-sbatch --dependency=afterany:$A $VERIFY_DIR/cxidb45_dials_head_to_head/j12b_score.sbatch
+A=$(sbatch --parsable $VERIFY_DIR/cxidb45_dials_head_to_head/routes_dials.sbatch)
+sbatch --dependency=afterany:$A $VERIFY_DIR/cxidb45_dials_head_to_head/routes_score.sbatch
 ```
 
 The two NERSC drivers that the `bvs` route ports are not in this folder. Neither run merges: the FACTS

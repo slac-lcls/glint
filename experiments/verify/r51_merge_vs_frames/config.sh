@@ -2,7 +2,7 @@
 # Every input path was checked to exist on sdfiana027 on 2026-10-16.
 # No defaults: VERIFY_DIR, VERIFY_GLINT and VERIFY_OUT must be exported (../README.md).
 
-J13_HOME=${VERIFY_DIR:?set VERIFY_DIR to experiments/verify}/r51_merge_vs_frames   # scripts (this folder)
+TOOLS_HOME=${VERIFY_DIR:?set VERIFY_DIR to experiments/verify}/r51_merge_vs_frames   # scripts (this folder)
 GLINT_TREE=${VERIFY_GLINT:?set VERIFY_GLINT to the pinned GLINT tree}   # GLINT 95d51ce, plain tree with a COMMIT file, never modified
 OUT=${VERIFY_OUT:?set VERIFY_OUT to the output root}/r51_merge_vs_frames   # all outputs
 CFBIN=/sdf/group/lcls/ds/tools/crystfel/0.10.2/bin              # the CrystFEL of every r51 merge (LUTE rounds 2-7) and of merges_tofile_vs_crystfel
@@ -21,8 +21,8 @@ A_LUTE_HKL=$VAL4/mfx100848724_r51_crystfel.hkl                  # LUTE's own mer
 
 # Stage B (not run; only after merges_tofile_vs_crystfel): its two arms of r51 on the whole run (11,058 frames).
 #   CF  = CrystFEL's own indexing; GLb = GLINT 95d51ce blind orientations -> indexamajig --indexing=file (tofile route)
-J2OUT=$VERIFY_OUT/merges_tofile_vs_crystfel
-B_INPUTS="r51CF_J2:$J2OUT/r51/CF.stream r51GLb_J2:$J2OUT/r51/GLb.stream"
+MERGES_OUT=$VERIFY_OUT/merges_tofile_vs_crystfel
+B_INPUTS="r51CF_merges:$MERGES_OUT/r51/CF.stream r51GLb_merges:$MERGES_OUT/r51/GLb.stream"
 
 # The sweep
 FRACTIONS="0.10 0.20 0.35 0.50 0.75 1.00"  # of the frames with a crystal; nested within a seed. The low end is

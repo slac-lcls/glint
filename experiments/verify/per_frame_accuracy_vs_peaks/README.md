@@ -27,9 +27,9 @@ recorded cell, so their reference is GLINT's vote over every frame's best cell (
 ## argv
 
 ```
-python -u j4_qlists.py <run> $OUT        # r0016 r0278 r0058 r0278z060
-python -u j4_score.py <run> $OUT         # also cxidb45
-python -u j4_bin.py $OUT
+python -u accuracy_qlists.py <run> $OUT        # r0016 r0278 r0058 r0278z060
+python -u accuracy_score.py <run> $OUT         # also cxidb45
+python -u accuracy_bin.py $OUT
 ```
 
 Strict bar: the best cell is the reference lattice (`same_lattice`) and indexes at least 25% and at least
@@ -63,15 +63,15 @@ The frame counts are also checked against the August reads (`<run>_qlists.json`,
 ## Outputs
 
 `<run>_qlists.npz` and `.json`, `<run>_frames.csv`, `<run>_summary.json`, `cxidb45_thin_frames.csv`
-(random thinning of the 170-peak lists, its own table), `J4_bins.csv`, `J4_table.md`,
-`J4_accuracy_vs_peaks.png`, `logs/`.
+(random thinning of the 170-peak lists, its own table), `accuracy_bins.csv`, `accuracy_table.md`,
+`accuracy_vs_peaks.png`, `logs/`.
 
 ## Run
 
 ```
 mkdir -p $VERIFY_OUT/per_frame_accuracy_vs_peaks/logs && cd $VERIFY_OUT/per_frame_accuracy_vs_peaks
-A=$(sbatch --parsable $VERIFY_DIR/per_frame_accuracy_vs_peaks/j4_index.sbatch)
-sbatch --dependency=afterany:${A%%;*} $VERIFY_DIR/per_frame_accuracy_vs_peaks/j4_bin.sbatch
+A=$(sbatch --parsable $VERIFY_DIR/per_frame_accuracy_vs_peaks/accuracy_index.sbatch)
+sbatch --dependency=afterany:${A%%;*} $VERIFY_DIR/per_frame_accuracy_vs_peaks/accuracy_bin.sbatch
 ```
 
 Not run: array task 4 (the 120 cxidb-17 frames, `sbatch --array=4`). The FACTS cxidb-45 merge (CC* 0.90,

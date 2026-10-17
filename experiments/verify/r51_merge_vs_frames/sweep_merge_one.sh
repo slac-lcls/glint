@@ -1,0 +1,36 @@
+#!/bin/bash
+# One merge, in its own directory (partialator writes pr-logs/, partialator.params and pgraph files into the cwd).
+#   subset of a stream (+ optional intensity permutation) -> partialator or process_hkl -> compare_hkl CC, CC*, Rsplit
+#   and check_hkl, in compare_hkl's own range ("auto") and, when DRANGE="dlow dhigh" (A) is set, in that fixed range.
+# usage: sweep_merge_one.sh STREAM TAG FRAC SEED PERM MERGER MDIR [NTHREADS]     (MERGER = partialator | process_hkl)
+# Expects the GLINT conda env (numpy for sweep_tools.py) and CMDLOG; CrystFEL is called by absolute path.
+set -uo pipefail
+source "${VERIFY_DIR:?set VERIFY_DIR to experiments/verify}/r51_merge_vs_frames/config.sh"
+STREAM=$1 TAG=$2 FRAC=$3 SEED=$4 PERM=$5 MERGER=$6 MDIR=$7 NJ=${8:-$NJ}
+mkdir -p "$MDIR" && cd "$MDIR" || exit 1
+[ -s record.json ] && exit 0                                   # restartable: a finished merge is not redone
+python -B "$TOOLS_HOME/sweep_tools.py" subset "$STREAM" "$FRAC" "$SEED" "$PERM" in.stream > subset.log 2>&1 \
+    || { echo "subset failed: $MDIR" >&2; exit 1; }
+if [ "$MERGER" = partialator ]; then
+    run "$CFBIN/partialator" -i in.stream -o merged.hkl -y "$SYM" $MERGE -j "$NJ" > partialator.log 2>&1
+else
+    run "$CFBIN/process_hkl" -i in.stream -o merged.hkl  -y "$SYM" $MC              > process_hkl.log  2>&1
+    run "$CFBIN/process_hkl" -i in.stream -o merged.hkl1 -y "$SYM" $MC --odd-only  > process_hkl1.log 2>&1
+    run "$CFBIN/process_hkl" -i in.stream -o merged.hkl2 -y "$SYM" $MC --even-only > process_hkl2.log 2>&1
+fi
+stats() {                                                      # stats DIR [range flags]
+    local W=$1; shift; mkdir -p "$W"
+    for fom in CC CCstar Rsplit; do
+        run "$CFBIN/compare_hkl" merged.hkl1 merged.hkl2 -y "$SYM" -p "$CELLFILE" --fom=$fom --nshells=$NSHELLS "$@" \
+            --shell-file=$W/shells_$fom.dat > $W/compare_$fom.log 2>&1
+    done
+    run "$CFBIN/check_hkl" merged.hkl -y "$SYM" -p "$CELLFILE" --nshells=$NSHELLS "$@" \
+        --shell-file=$W/shells_check.dat > $W/check.log 2>&1
+}
+stats auto
+if [ -n "${DRANGE:-}" ]; then
+    read -r DLO DHI <<< "$DRANGE"
+    stats fixed --lowres=$DLO --highres=$DHI
+fi
+python -B "$TOOLS_HOME/sweep_tools.py" record "$MDIR" "$TAG" "$FRAC" "$SEED" "$PERM" "$MERGER" > record.log 2>&1
+rm -rf in.stream pr-logs pgraph-iter*.dat                       # the subset is regenerable from STREAM + FRAC + SEED + PERM

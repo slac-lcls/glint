@@ -33,7 +33,7 @@ p = 0.344); and `xgandalf_fast_speedup` 40.8x against GLINT's `blind_ms` (the la
 
 ```
 taskset -c <cpu> bin/xg_driver <frames> blind 2 3          # fast; the defaults arm D1_24 uses: blind 6 4
-python3 j6_analyze.py $RUN --glint $VERIFY_GLINT --f120 <120 list> --f480 <480 list> --sub24 <24-frame subset> --scr120 <scrambled 120>
+python3 xg_analyze.py $RUN --glint $VERIFY_GLINT --f120 <120 list> --f480 <480 list> --sub24 <24-frame subset> --scr120 <scrambled 120>
 ```
 
 Arms: `S1_120`, `S1_480`, `S1_120b` (one core; `S1_120b` repeats `S1_120` at the end as a drift check),
@@ -66,7 +66,7 @@ frame's peaks within 0.15.
 
 ```
 mkdir -p $VERIFY_OUT/xgandalf_fast_cores/logs && cd $VERIFY_OUT/xgandalf_fast_cores
-sbatch $VERIFY_DIR/xgandalf_fast_cores/j6_xg32.sbatch
+sbatch $VERIFY_DIR/xgandalf_fast_cores/xg_cores.sbatch
 ```
 
 `DRYRUN=1` runs every arm on 4 frames with 2 instances.

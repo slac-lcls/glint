@@ -19,7 +19,7 @@ RT_TOL per frame, or the frame is recorded as a build failure and not given to D
 
 Output: one JSON line per frame (resumable: frames already in --out are skipped). The crystal is stored
 as M_glint = R @ [a b c] (real-space basis, columns, GLINT lab frame), so q_glint @ M_glint = hkl, exactly
-GLINT's convention; score_j12.py applies GLINT's own gate to it.
+GLINT's convention; stills_score.py applies GLINT's own gate to it.
 """
 import argparse
 import hashlib
@@ -65,7 +65,7 @@ def build_frame(tag, q):
     d = {"__id__": "ExperimentList",
          "experiment": [{"__id__": "Experiment", "identifier": tag, "beam": 0, "detector": 0, "imageset": 0}],
          "beam": [beam.to_dict()], "detector": [det.to_dict()],
-         "imageset": [{"__id__": "ImageSet", "images": ["/nonexistent/j12/%s.h5" % tag]}]}
+         "imageset": [{"__id__": "ImageSet", "images": ["/nonexistent/cxidb45/%s.h5" % tag]}]}
     expts = ExperimentListFactory.from_dict(d, check_format=False)
     n = len(xy)
     r = flex.reflection_table()
@@ -203,7 +203,7 @@ def main():
                     rec.update(crystal_record(proc.result[0], proc.result[1], q))
             fo.write(json.dumps(rec) + "\n")
             fo.flush()
-    print("J12_DIALS_DONE", a.arm, a.start, stop, flush=True)
+    print("DIALS_DONE", a.arm, a.start, stop, flush=True)
 
 
 if __name__ == "__main__":

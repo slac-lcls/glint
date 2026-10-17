@@ -22,14 +22,14 @@ Reading and GPU calibration are outside it, so this is not a detector readout ra
 ## argv
 
 ```
-python -u j1_stream.py --glint $VERIFY_GLINT --exp mfxx49820 --run 16 --det MfxEndstation.0:Epix10ka2M.0 \
+python -u stream_rate.py --glint $VERIFY_GLINT --exp mfxx49820 --run 16 --det MfxEndstation.0:Epix10ka2M.0 \
   --calib-dir $VERIFY_INPUTS/glint_gt_mfxx49820/calib --geom /sdf/data/lcls/ds/mfx/mfxx49820/results/btx/geom/r0016.geom \
   --zdist 0.102973 --wavelength 1.290757 --cell 79.327,79.461,38.406,90.111,89.981,90.083 \
   --arms defaults,events_off,wrescue,wrescue_pix,known --rescue-pixels 256 \
   --chunk 1024 --warm-events 1024 --check-calib 8 --calib gpu --window 2048 --out-dir $OUT --tag a${TASK}
-python -u $VERIFY_GLINT/experiments/record_stream_replay.py --cupy --input real=$OUT/j1_a${TASK}_q.npz \
-  --input scr=$OUT/j1_a${TASK}_qscr.npz --ref real=<cell> --ref scr=<cell> --B 64 --min-inliers 0 --out $OUT/j1_a${TASK}_null.json
-python -u j1_summary.py $OUT
+python -u $VERIFY_GLINT/experiments/record_stream_replay.py --cupy --input real=$OUT/rate_a${TASK}_q.npz \
+  --input scr=$OUT/rate_a${TASK}_qscr.npz --ref real=<cell> --ref scr=<cell> --B 64 --min-inliers 0 --out $OUT/rate_a${TASK}_null.json
+python -u rate_summary.py $OUT
 ```
 
 Strict bar: `same_lattice(M, ref)` and at least 10 and at least 25% of the frame's peaks within 0.15 of
@@ -56,15 +56,15 @@ which the later checks exclude; FACTS quotes task 1.
 
 ## Outputs
 
-`out/j1_a{0,1}.json` (per arm: steady-state and window rates, lock frame and cell, yields, provenance),
-`j1_a*_frames.npz`, `j1_a*_q.npz` and `j1_a*_qscr.npz` (the null's inputs), `j1_a*_null.json`,
-`j1_summary.json`; logs in `logs/`.
+`out/rate_a{0,1}.json` (per arm: steady-state and window rates, lock frame and cell, yields, provenance),
+`rate_a*_frames.npz`, `rate_a*_q.npz` and `rate_a*_qscr.npz` (the null's inputs), `rate_a*_null.json`,
+`rate_summary.json`; logs in `logs/`.
 
 ## Run
 
 ```
 mkdir -p $VERIFY_OUT/r0016_sustained_rate/logs && cd $VERIFY_OUT/r0016_sustained_rate
-sbatch $VERIFY_DIR/r0016_sustained_rate/j1_stream.sbatch
+sbatch $VERIFY_DIR/r0016_sustained_rate/stream_rate.sbatch
 # after both tasks end, in ana-4.0.58-py3-minipytorch:
-python $VERIFY_DIR/r0016_sustained_rate/j1_summary.py $VERIFY_OUT/r0016_sustained_rate/out
+python $VERIFY_DIR/r0016_sustained_rate/rate_summary.py $VERIFY_OUT/r0016_sustained_rate/out
 ```

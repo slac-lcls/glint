@@ -37,12 +37,12 @@ Reference cell file: `/sdf/data/lcls/ds/mfx/mfxx49820/results/btx/cell/sample2.c
 ## argv
 
 ```
-python -u j5_prep.py all
-python -u j5_scramble.py $SLURM_ARRAY_TASK_ID 4 --G 100 --groups 3333,3333,3334 --long 20 --hours 5.4 --procs 2
-python -u j5_replay.py --procs 32 --orders 400
+python -u stop_prep.py all
+python -u stop_scramble.py $SLURM_ARRAY_TASK_ID 4 --G 100 --groups 3333,3333,3334 --long 20 --hours 5.4 --procs 2
+python -u stop_replay.py --procs 32 --orders 400
 ```
 
-`j5_check120.py` (CPU, seconds) must first reproduce `poolgate_clean_lock_med` 6, `poolgate_clean_lock_max`
+`stop_check120.py` (CPU, seconds) must first reproduce `poolgate_clean_lock_med` 6, `poolgate_clean_lock_max`
 18, `poolgate_clean_maxpool` 54 and `poolgate_clean_diff_72` 0. `prep_summary.json` checks the regenerated
 frames against `indexed_r0278` (1785) and `indexed_r0058` (2319).
 
@@ -68,15 +68,15 @@ keys (342, 194, 3, 2).
 ## Outputs
 
 `prep/` (`q_*.npz`, `votes_*.npz`, `live_*.json`, `prep_summary.json`), `scramble/task<t>/`,
-`replay/J5_results.json`, `replay/J5_tables.md`, `logs/`.
+`replay/stop_results.json`, `replay/stop_tables.md`, `logs/`.
 
 ## Run
 
 ```
 mkdir -p $VERIFY_OUT/stopping_rule_live_and_scrambled/logs && cd $VERIFY_OUT/stopping_rule_live_and_scrambled
-P=$(sbatch --parsable $VERIFY_DIR/stopping_rule_live_and_scrambled/j5_prep.sbatch)
-S=$(sbatch --parsable --dependency=afterok:$P $VERIFY_DIR/stopping_rule_live_and_scrambled/j5_scramble.sbatch)
-sbatch --time=18:00:00 --dependency=afterany:$S $VERIFY_DIR/stopping_rule_live_and_scrambled/j5_replay.sbatch
+P=$(sbatch --parsable $VERIFY_DIR/stopping_rule_live_and_scrambled/stop_prep.sbatch)
+S=$(sbatch --parsable --dependency=afterok:$P $VERIFY_DIR/stopping_rule_live_and_scrambled/stop_scramble.sbatch)
+sbatch --time=18:00:00 --dependency=afterany:$S $VERIFY_DIR/stopping_rule_live_and_scrambled/stop_replay.sbatch
 ```
 
-Not run: `j5_scramble_cpu.sbatch`, the CPU form of the scramble step (submit one or the other).
+Not run: `stop_scramble_cpu.sbatch`, the CPU form of the scramble step (submit one or the other).

@@ -9,8 +9,8 @@ finder (with the shipped batch gate, and ungated), and a histogram of Buerger-re
 
 - Commit 95d51ce. CrystFEL 0.12.0 (`/sdf/group/lcls/ds/tools/crystfel/0.12.0`). Environment
   `ana-4.0.58-py3-minipytorch`; the job stops if any `GLINT_*` variable is set.
-- Recorded run: Slurm 41155327, sdfmilan183, 64 cores, 17 Oct 2026 (as run: `j14.sbatch` md5 875457e4,
-  `cells.py` md5 69f8bfd1, before the path changes in this folder).
+- Recorded run: Slurm 41155327, sdfmilan183, 64 cores, 17 Oct 2026 (as run, before the path changes and renames in
+  this folder: the sbatch file md5 875457e4, `cells.py` md5 69f8bfd1).
 
 ## Inputs
 
@@ -26,7 +26,7 @@ finder (with the shipped batch gate, and ungated), and a histogram of Buerger-re
 ## argv
 
 ```
-python npz2qlist_j4.py $J4OUT/<run>_qlists.npz inputs/<run>_real.txt
+python npz2qlist.py $ACC_OUT/<run>_qlists.npz inputs/<run>_real.txt
 python $VERIFY_GLINT/experiments/scramble_qlist.py inputs/<run>_first400.txt inputs/<run>_scr.txt --seed 20260928
 python ../common/qframes_to_cxi.py ../inputs/<set>.txt <set>
 indexamajig -i <set>_events.lst -g <set>.geom -o <set>.stream --peaks=cxi --no-image-data --no-revalidate \
@@ -61,7 +61,7 @@ the recorded run's output names), `MANIFEST.md5`, `logs/`.
 
 ```
 mkdir -p $VERIFY_OUT/r0278_r0058_crystfel_cell/logs && cd $VERIFY_OUT/r0278_r0058_crystfel_cell
-sbatch $VERIFY_DIR/r0278_r0058_crystfel_cell/j14.sbatch
+sbatch $VERIFY_DIR/r0278_r0058_crystfel_cell/crystfel_cell.sbatch
 ```
 
 `dryrun.sh` runs the chain on 30 frames per set in a temporary directory.

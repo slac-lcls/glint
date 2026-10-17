@@ -5,8 +5,8 @@ The r51 arms of `../merges_tofile_vs_crystfel`, re-run with the solution-file gu
 solution file, because the writer stopped on a degenerate cell. Same chain, r51 only: GLINT blind (`GLb`)
 and known-cell (`GLk`) solution files, `indexamajig --indexing=file` with the shuffled nulls, `B0` and
 `N0` on the common frames, key-paired merges, the reproduction gate on LUTE's r51 merge, and
-`j2_tools.py collect`. CrystFEL's own arms (`CF`, `CFnr`) are the first run's streams, linked, not re-run.
-The tools (`j2_tools.py`, `j2_merge_one.sh`) are read from `../merges_tofile_vs_crystfel`.
+`merge_tools.py collect`. CrystFEL's own arms (`CF`, `CFnr`) are the first run's streams, linked, not re-run.
+The tools (`merge_tools.py`, `merge_one.sh`) are read from `../merges_tofile_vs_crystfel`.
 
 - GLINT abe330c, the head of #263 (95d51ce + #261 docstrings + the guard); its `glint/` package is
   identical to main at b21b165. CrystFEL 0.10.2. GPU exclude list sdfampere002, 003, 038, 042 (site setting).
@@ -58,9 +58,9 @@ With `VERIFY_GLINT` set to an abe330c (or b21b165) tree:
 O=$VERIFY_OUT/r51_blind_arm_with_guard; mkdir -p $O/logs $O/r51 && cd $O
 for f in CF.stream CF.keys CFnr.stream CFnr.keys idx_CF.log idx_CFnr.log; do
   ln -s $VERIFY_OUT/merges_tofile_vs_crystfel/r51/$f r51/$f; done
-G=$(sbatch --parsable $VERIFY_DIR/r51_blind_arm_with_guard/j18_glint.sbatch)
-T=$(sbatch --parsable --dependency=afterok:$G $VERIFY_DIR/r51_blind_arm_with_guard/j18_tofile.sbatch)
-sbatch --dependency=afterok:$T $VERIFY_DIR/r51_blind_arm_with_guard/j18_merge.sbatch
+G=$(sbatch --parsable $VERIFY_DIR/r51_blind_arm_with_guard/glint_solutions.sbatch)
+T=$(sbatch --parsable --dependency=afterok:$G $VERIFY_DIR/r51_blind_arm_with_guard/tofile_index.sbatch)
+sbatch --dependency=afterok:$T $VERIFY_DIR/r51_blind_arm_with_guard/merges.sbatch
 ```
 
-The recorded run also linked `cell.txt`, which `j18_tofile.sbatch` rewrites with the same cell.
+The recorded run also linked `cell.txt`, which `tofile_index.sbatch` rewrites with the same cell.

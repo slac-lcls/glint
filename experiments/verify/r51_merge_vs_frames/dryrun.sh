@@ -13,14 +13,14 @@ for f in "$STREAM" "$A_LUTE_HKL" "${A_LUTE_HKL}1" "${A_LUTE_HKL}2" "$CELLFILE"; 
 done
 md5sum "$CELLFILE"
 for IN in $B_INPUTS; do f=${IN#*:}; [ -s "$f" ] && echo "stage B input present: $f" || echo "stage B input not yet made: $f"; done
-echo "== frames"; time python -B "$J13_HOME/j13_tools.py" frames "$STREAM"
+echo "== frames"; time python -B "$TOOLS_HOME/sweep_tools.py" frames "$STREAM"
 
 echo "== subset writers (10%, seed 1): real and both nulls"
-for P in none all shell; do python -B "$J13_HOME/j13_tools.py" subset "$STREAM" 0.10 1 $P "$DR/s1_$P.stream"; done
+for P in none all shell; do python -B "$TOOLS_HOME/sweep_tools.py" subset "$STREAM" 0.10 1 $P "$DR/s1_$P.stream"; done
 python -B - "$DR" <<'EOF'
 import os, sys, collections
 sys.path.insert(0, os.path.join(os.environ["VERIFY_DIR"], "r51_merge_vs_frames"))
-from j13_tools import read_stream
+from sweep_tools import read_stream
 d = sys.argv[1]
 def refl(path):
     out = []
@@ -45,15 +45,15 @@ EOF
 
 echo "== merges of the 10% seed-1 subset (fixed range from LUTE's full merge: 79.170 2.171 A)"
 export DRANGE="79.170 2.171"
-time "$J13_HOME/j13_merge_one.sh" "$STREAM" r51CF 0.10 1 none partialator "$DR/m_partialator_none" 2
-time "$J13_HOME/j13_merge_one.sh" "$STREAM" r51CF 0.10 1 none process_hkl "$DR/m_process_hkl_none" 2
-time "$J13_HOME/j13_merge_one.sh" "$STREAM" r51CF 0.10 1 all partialator "$DR/m_partialator_all" 2
+time "$TOOLS_HOME/sweep_merge_one.sh" "$STREAM" r51CF 0.10 1 none partialator "$DR/m_partialator_none" 2
+time "$TOOLS_HOME/sweep_merge_one.sh" "$STREAM" r51CF 0.10 1 none process_hkl "$DR/m_process_hkl_none" 2
+time "$TOOLS_HOME/sweep_merge_one.sh" "$STREAM" r51CF 0.10 1 all partialator "$DR/m_partialator_all" 2
 for m in m_partialator_none m_process_hkl_none m_partialator_all; do cat "$DR/$m/record.log"; done
 echo "-- partialator log tail"; tail -n 25 "$DR/m_partialator_none/partialator.log"
 
 echo "== does the order set the half-split? the same frames in stream order (seed 0) and in seed-2 order"
-"$J13_HOME/j13_merge_one.sh" "$DR/s1_none.stream" order 1.00 0 none partialator "$DR/o_s0" 2
-"$J13_HOME/j13_merge_one.sh" "$DR/s1_none.stream" order 1.00 2 none partialator "$DR/o_s2" 2
+"$TOOLS_HOME/sweep_merge_one.sh" "$DR/s1_none.stream" order 1.00 0 none partialator "$DR/o_s0" 2
+"$TOOLS_HOME/sweep_merge_one.sh" "$DR/s1_none.stream" order 1.00 2 none partialator "$DR/o_s2" 2
 for x in merged.hkl merged.hkl1; do
     a=$(grep -E '^ +-?[0-9]+ +-?[0-9]+ +-?[0-9]+ ' "$DR/o_s0/$x" | md5sum | cut -c1-12)
     b=$(grep -E '^ +-?[0-9]+ +-?[0-9]+ +-?[0-9]+ ' "$DR/o_s2/$x" | md5sum | cut -c1-12)

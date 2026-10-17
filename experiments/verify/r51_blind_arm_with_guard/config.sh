@@ -2,9 +2,9 @@
 # and DATASETS. Paths and settings only; no logic beyond two helpers.
 # No defaults: VERIFY_DIR, VERIFY_GLINT and VERIFY_OUT must be exported (../README.md).
 
-J2_HOME=${VERIFY_DIR:?set VERIFY_DIR to experiments/verify}/merges_tofile_vs_crystfel   # the tools (j2_tools.py, j2_merge_one.sh)
+TOOLS_HOME=${VERIFY_DIR:?set VERIFY_DIR to experiments/verify}/merges_tofile_vs_crystfel   # the tools (merge_tools.py, merge_one.sh)
 GLINT_TREE=${VERIFY_GLINT:?set VERIFY_GLINT to the GLINT tree}   # GLINT abe330c = glint#263 head (95d51ce + #261 docstrings + the has_cell guard), plain tree
-OUT=${J2_OUT:-${VERIFY_OUT:?set VERIFY_OUT to the output root}/r51_blind_arm_with_guard}   # outputs; merges_tofile_vs_crystfel's are read, never written
+OUT=${DRYRUN_OUT:-${VERIFY_OUT:?set VERIFY_OUT to the output root}/r51_blind_arm_with_guard}   # outputs; merges_tofile_vs_crystfel's are read, never written
 CFBIN=/sdf/group/lcls/ds/tools/crystfel/0.10.2/bin              # the CrystFEL of every LUTE r51/r194 run (lute.db executables)
 TU=/sdf/group/lcls/ds/tools/lute/test_utilities/sfx            # LUTE test geometry + cells (md5 = the copies the runs used)
 BTX=/sdf/group/lcls/ds/tools/btx/stable                         # btx 0f1af1d (2024-03-03): rebuilds the r0016 .cxi
@@ -15,7 +15,11 @@ DATASETS="r51"                               # r51 only
 
 # mfx100848724 r51, Jungfrau-16M, tetragonal lysozyme. Events 0..17,871 -> 11,058 frames with >= 10 peaks
 # (LUTE FindPeaksSFX round 7, 1 Oct 2026, amax_thr 1000; the .cxi is a virtual dataset over per-rank files).
-r51_LIST=/sdf/data/lcls/ds/prj/prjdat21/scratch/lute_sfx_val7/J2_r51_30k/sfx_mfx100848724_r51_glint_peaks/sfx_mfx100848724_r51_glint.list
+# The run directory carries LUTE's own run label; it is the only *_r51_30k entry in lute_sfx_val7 (checked 17 Oct),
+# so the pattern finds it, and anything other than one match leaves a path that does not exist.
+_r51=(/sdf/data/lcls/ds/prj/prjdat21/scratch/lute_sfx_val7/*_r51_30k)
+[ ${#_r51[@]} -eq 1 ] && R51_VAL7=${_r51[0]} || R51_VAL7=/nonexistent/lute_sfx_val7_r51_30k_not_unique
+r51_LIST=$R51_VAL7/sfx_mfx100848724_r51_glint_peaks/sfx_mfx100848724_r51_glint.list
 r51_GEOM=$TU/mfx100848724_356mm_refined.geom
 r51_CELLFILE=$TU/lyso_tetragonal_p43212.cell
 r51_CELL="79.17 79.17 37.96 90.00 90.00 90.00"
@@ -34,7 +38,7 @@ r194_SYM=2/m_uab
 r194_IDXX=""                                  # none (LUTE)
 
 # mfxx49820 r0016, Epix10ka2M, tetragonal lysozyme. btx's .cxi was purged with the experiment scratch; job 0
-# (j2_r0016_cxi.sbatch) rebuilds it with btx's own PeakFinder and r0016 settings for psana events 0..5,999.
+# (r0016_cxi.sbatch) rebuilds it with btx's own PeakFinder and r0016 settings for psana events 0..5,999.
 # Geometry and cell are btx's (results/btx/geom/r0016.geom, cell/sample2.cell). Unrefined psana geometry is
 # not used anywhere in this check.
 R16_EVENTS=6000

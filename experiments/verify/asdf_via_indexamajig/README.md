@@ -32,7 +32,7 @@ indexamajig -i cf120_events.lst -g cf120.geom [-p lyso.cell] --peaks=cxi --index
   -o <arm>.stream --temp-dir=$OUT
 python ../common/score_arm.py --arm <arm> --kind stream --result <arm>.stream --profile <arm>.out --events <events> \
   --frames <qeff> --out $OUT --meta <json>
-python j15_table.py $OUT
+python asdf_table.py $OUT
 ```
 
 The exact argv of each arm is written to `ARGV.tsv`.
@@ -64,5 +64,5 @@ The exact argv of each arm is written to `ARGV.tsv`.
 
 ```
 mkdir -p $VERIFY_OUT/asdf_via_indexamajig/logs && cd $VERIFY_OUT/asdf_via_indexamajig
-sbatch $VERIFY_DIR/asdf_via_indexamajig/j15.sbatch
+sbatch $VERIFY_DIR/asdf_via_indexamajig/asdf_arms.sbatch
 ```

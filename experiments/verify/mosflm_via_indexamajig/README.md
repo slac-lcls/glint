@@ -6,7 +6,7 @@ MOSFLM through CrystFEL 0.12.0 `indexamajig` on the 120 cxidb-17 frames: the nin
 binary is on PATH. Time per frame is CrystFEL's own `index` time (`--profile`), one core.
 
 - Commit 95d51ce. CrystFEL 0.12.0 (`/sdf/group/lcls/ds/tools/crystfel/0.12.0`).
-- Recorded run: Slurm 41172742, milano (EPYC 7713), 17 Oct 2026 (`j17.sbatch` md5 cf564a79 as run).
+- Recorded run: Slurm 41172742, milano (EPYC 7713), 17 Oct 2026 (the sbatch file as run had md5 cf564a79).
 
 ## Inputs
 
@@ -22,7 +22,7 @@ indexamajig -i cf120_events.lst -g cf120.geom [-p lyso.cell] --peaks=cxi --index
   -o <arm>.stream --temp-dir=$OUT
 python ../common/score_arm.py --arm <arm> --kind stream --result <arm>.stream --profile <arm>.out --events <events> \
   --frames <qeff> --out $OUT --meta <json>
-python j17_table.py $OUT
+python mosflm_table.py $OUT
 ```
 
 ## Null
@@ -52,5 +52,5 @@ python j17_table.py $OUT
 
 ```
 mkdir -p $VERIFY_OUT/mosflm_via_indexamajig/logs && cd $VERIFY_OUT/mosflm_via_indexamajig
-sbatch $VERIFY_DIR/mosflm_via_indexamajig/j17.sbatch
+sbatch $VERIFY_DIR/mosflm_via_indexamajig/mosflm_arms.sbatch
 ```

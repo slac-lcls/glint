@@ -13,7 +13,7 @@ write_qlist(sys.argv[2], load(sys.argv[1])[:30])
 PY
 }
 for r in r0278 r0058; do
-  python $VDIR/npz2qlist_j4.py $J4OUT/${r}_qlists.npz inputs/${r}_full.txt
+  python $VDIR/npz2qlist.py $ACC_OUT/${r}_qlists.npz inputs/${r}_full.txt
   cut30 inputs/${r}_full.txt inputs/${r}_real.txt
   python $GLINT/experiments/scramble_qlist.py inputs/${r}_real.txt inputs/${r}_scr.txt --seed $SCR_SEED
 done

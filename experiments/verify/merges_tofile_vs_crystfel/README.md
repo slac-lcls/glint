@@ -6,7 +6,7 @@ same frames, merged the same way. GLINT writes a solution file (`glint_cli --tof
 routes index, split ten times into half-datasets assigned by frame key (`partialator --custom-split`,
 one seeded assignment shared by every arm). CC1/2, CC* and Rsplit are means over the ten splits; crystals
 merged and the resolution are medians. A difference counts as detected when one sign holds in at least 8
-of 10 splits and the mean exceeds CrystFEL's own split sd (`j2_tools.py verdict`).
+of 10 splits and the mean exceeds CrystFEL's own split sd (`merge_tools.py verdict`).
 
 - Commit 95d51ce. CrystFEL 0.10.2 (`/sdf/group/lcls/ds/tools/crystfel/0.10.2/bin`). GLINT environment
   `ana-4.0.58-py3-minipytorch`; the r0016 `.cxi` is rebuilt with btx 0f1af1d in `ana-4.0.47-py3`.
@@ -22,7 +22,7 @@ of 10 splits and the mean exceeds CrystFEL's own split sd (`j2_tools.py verdict`
 |---|---|---|---|
 | r51, mfx100848724, Jungfrau-16M | 11,058 with >= 10 peaks (events 0-17,871) | LUTE FindPeaksSFX `.cxi` list (round 7) | LUTE `mfx100848724_356mm_refined.geom`, `lyso_tetragonal_p43212.cell` (79.17 79.17 37.96) |
 | r194, mfx101343025, Jungfrau-16M | 278 (first 3,000 events) | LUTE `.cxi` list (round 5) | `mfx101343025_r0139_refined.geom`, `maybe_lyso.cell` (28.0 62.5 60.9, beta 90.8) |
-| r0016, mfxx49820, Epix10ka2M | first 6,000 events | rebuilt by `j2_r0016_cxi.py` (btx PeakFinder, r0016 settings) | btx `r0016.geom` (md5 0deaac06), `sample2.cell` |
+| r0016, mfxx49820, Epix10ka2M | first 6,000 events | rebuilt by `r0016_cxi.py` (btx PeakFinder, r0016 settings) | btx `r0016.geom` (md5 0deaac06), `sample2.cell` |
 
 Reproduction gate (must pass before any comparison merge): LUTE's r51 GLINT stream merged by this
 harness gives CC 0.1751131 on 2,686 pairs.
@@ -83,9 +83,9 @@ the r51 keys come from 41037260's log and orientation stream. r194's GLINT-vs-Cr
 ## Run
 
 ```
-bash $VERIFY_DIR/merges_tofile_vs_crystfel/submit_j2.sh          # the five jobs, chained
+bash $VERIFY_DIR/merges_tofile_vs_crystfel/submit.sh          # the five jobs, chained
 # to repeat only the merges once the streams exist:
-cd $VERIFY_OUT/merges_tofile_vs_crystfel && sbatch --chdir=$PWD $VERIFY_DIR/merges_tofile_vs_crystfel/j2_merge.sbatch
+cd $VERIFY_OUT/merges_tofile_vs_crystfel && sbatch --chdir=$PWD $VERIFY_DIR/merges_tofile_vs_crystfel/merges.sbatch
 ```
 
 `dryrun.sh` is the interactive check on a few frames. Not run here: a cxidb-45 arm (its images are at

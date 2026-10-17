@@ -2162,10 +2162,13 @@ def check_arithmetic() -> list[str]:
     _r0016_strict_pct = round(100.0 * float(F["r0016_strict_of_hits"]) / float(F["r0016_hits"]), 1)
     if float(F["r0016_strict_pct"]) != _r0016_strict_pct:
         bad.append(f'  FACTS: r0016_strict_pct = {F["r0016_strict_pct"]}% but counts round to {_r0016_strict_pct}%')
-    close("r0016_null_strict_pct = 100 * r0016_null_strict_of_hits / r0016_hits", float(F["r0016_null_strict_pct"]),
-          100.0 * float(F["r0016_null_strict_of_hits"]) / float(F["r0016_hits"]), tol=0.005)
-    if int(F["n_dir"]) * int(F["n_len"]) != int(F["floor_K"]):
-        bad.append(f'  FACTS: floor_K must be n_dir * n_len ({F["n_dir"]} * {F["n_len"]})')
+    _r0016_null_pct = round(100.0 * float(F["r0016_null_strict_of_hits"]) / float(F["r0016_hits"]), 1)
+    if float(F["r0016_null_strict_pct"]) != _r0016_null_pct:
+        bad.append(f'  FACTS: r0016_null_strict_pct = {F["r0016_null_strict_pct"]}% but counts round to {_r0016_null_pct}%')
+    _nd, _nl = float(F["n_dir"]), float(F["n_len"])
+    if not (_nd.is_integer() and _nl.is_integer()) or _nd * _nl != float(F["floor_K"]):
+        bad.append(f'  FACTS: n_dir and n_len must be integers whose product is floor_K '
+                   f'({F["n_dir"]} * {F["n_len"]} vs {F["floor_K"]})')
     close("hits_per_s = rep_rate * hit_rate", float(F["hits_per_s"]),
           float(F["rep_rate_hz"]) * float(F["hit_rate"]))
     close("fused_share = index_b40 + integrate", float(F["fused_share_ms"]),

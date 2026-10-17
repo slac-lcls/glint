@@ -787,6 +787,10 @@ DEFAULT_TARGETS = [
     # ⚑ Both were VERIFIED GREEN before being added, so wiring them in blocked nothing; the rules
     # added alongside them are what makes the targets mean something (see the note below).
     HOME / "git/papers/glint/glint_rewrite_JAC_refined.tex",
+    # ...and the revised manuscript, written as a NEW file next to the submitted one. Listed before
+    # it exists so the guard reads it from its first push; until then it is an out-of-repo default
+    # and SKIPs, like the others when absent.
+    HOME / "git/papers/glint/glint_r1.tex",
     # ...and its SI, missed when the manuscript was added: the SI carries PARALLEL copies of the
     # dataset tables, and on 2026-08-26 -- the first day it was ever scanned -- its copy of the
     # Jungfrau row still read the retired `93% (support 54/60)` that the main text had already

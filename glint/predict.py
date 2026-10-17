@@ -360,8 +360,9 @@ def _write_chunk(f, serial, r, panel_name="p0", photon_eV=9392.7, clen_m=0.15, p
     convention CrystFEL uses for its own namespaced keys (``predict_refine/...``); readers skip
     unrecognised ``key = value`` lines, so this stays parseable while a GLINT-aware merger can use it.
     Returns True if the chunk carried an indexed crystal."""
+    from glint.stream import has_cell
     M = r.get("M")
-    valid = M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
+    valid = has_cell(M)
     f.write("----- Begin chunk -----\n")
     f.write(f"Image filename: {r.get('image', 'glint.cxi')}\n")
     ev = r.get('event', 0)
@@ -631,8 +632,13 @@ def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
         but cannot place a monoclinic unique axis -- a monoclinic code without a reference says so
         on stderr.
 
+    A frame with no usable cell (``glint.stream.has_cell``: |det M| < 1 A^3, or non-finite) is skipped and
+    counted on stderr, as the stream writers write it as unindexed. Before, the first singular one raised
+    in the inversion below and no file was written at all.
+
     ``write_fromfile`` is the old name of this function (named after CrystFEL's reader flag, not
     what the function does) and still works."""
+    from glint.stream import MIN_CELL_VOLUME_A3, has_cell
     rows = []
     laue = _laue_hint_from_lattice_code(lattice_code)
     centering = str(lattice_code or "")[1:2]
@@ -641,10 +647,13 @@ def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
         print(f"write_solution_file: lattice code {lattice_code!r} without a reference cell -- the axes get the "
               f"length-only setting of _canonical_axes, which need not put the unique axis where the code says",
               file=sys.stderr)
-    far = 0
+    far = skipped = 0
     for r in results:
         M = r.get("M")
         if M is None:
+            continue
+        if not has_cell(M):
+            skipped += 1
             continue
         if ref is not None and laue not in STANDARD_SETTING_LAUE:
             Are, e = _match_reference_setting(M, ref)
@@ -661,6 +670,9 @@ def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
         print(f"write_solution_file: {far} frame(s) are no signed permutation of the reference cell "
               f"(metric distance > {SETTING_MATCH_RTOL}); written in the setting _canonical_axes gives them",
               file=sys.stderr)
+    if skipped:
+        print(f"write_solution_file: {skipped} frame(s) have no usable cell (|det M| < {MIN_CELL_VOLUME_A3:g} A^3 "
+              f"or non-finite) and are skipped, as the stream writers skip them", file=sys.stderr)
     with open(path, "w") as f:
         f.write("\n".join(rows) + "\n")
     return len(rows)

@@ -2159,8 +2159,9 @@ def check_arithmetic() -> list[str]:
           float(F["xgandalf_fast_blind_ms"]) / float(F["blind_ms"]), tol=0.05)
     close("xgandalf_fast_1core_ms within 15% of the derived xgandalf_fast_blind_ms",
           float(F["xgandalf_fast_1core_ms"]), float(F["xgandalf_fast_blind_ms"]), tol=0.15)
-    close("r0016_strict_pct = 100 * r0016_strict_of_hits / r0016_hits", float(F["r0016_strict_pct"]),
-          100.0 * float(F["r0016_strict_of_hits"]) / float(F["r0016_hits"]), tol=0.002)
+    _r0016_strict_pct = round(100.0 * float(F["r0016_strict_of_hits"]) / float(F["r0016_hits"]), 1)
+    if float(F["r0016_strict_pct"]) != _r0016_strict_pct:
+        bad.append(f'  FACTS: r0016_strict_pct = {F["r0016_strict_pct"]}% but counts round to {_r0016_strict_pct}%')
     close("r0016_null_strict_pct = 100 * r0016_null_strict_of_hits / r0016_hits", float(F["r0016_null_strict_pct"]),
           100.0 * float(F["r0016_null_strict_of_hits"]) / float(F["r0016_hits"]), tol=0.005)
     if int(F["n_dir"]) * int(F["n_len"]) != int(F["floor_K"]):

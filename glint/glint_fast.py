@@ -295,18 +295,21 @@ def index_blind_fast(q, acc=None, starts=None):
     Mt = anneal_batch_t(M0, Qd, max_iter=ANNEAL_ITERS)
     key, ni = score_batch_t(Mt, Qd)
     key = torch.where(plausible_t(Mt), key, torch.full_like(key, -1e9))    # a basis the anneal flattened
-    b = int(torch.argmax(key).item())
-    best = Mt[b].cpu().numpy()
+    order = torch.argsort(key, descending=True, stable=True)
+    keyn = key[order].cpu().numpy(); order = order.cpu().numpy()
     if sync: torch.cuda.synchronize()
     if acc is not None: acc["m4_gpu"] += time.time() - t; acc["ntri"] += int(M0.shape[0])
-    if float(key[b]) <= -1e8:
-        return None
-    cell = primitivize(buerger_reduce(best), q)
-    if cell is None:
-        return None
-    if DETREJ and abs(np.linalg.det(np.asarray(cell, float))) < 1.0:
-        return None                                         # D1: reject degenerate (det~0) cell
-    return cell
+    from glint.stream import has_cell
+    for i, score in zip(order, keyn):
+        if score <= -1e8:
+            break
+        cell = primitivize(buerger_reduce(Mt[int(i)].cpu().numpy()), q)
+        if cell is None or not has_cell(cell):
+            continue
+        if DETREJ and abs(np.linalg.det(np.asarray(cell, float))) < 1.0:
+            continue                                         # D1: reject degenerate (det~0) cell
+        return cell
+    return None
 
 
 def _torch_fft_seeds(q, qmax, n=None, min_len=3.0, max_peaks=300, rel=0.06):
@@ -533,11 +536,12 @@ def index_blind_nbest(q, N=5):
         return []
     Mtn = Mt[reps].cpu().numpy(); keyn = key[reps].cpu().numpy()   # only the few reps hit the CPU reduce
     out = []
+    from glint.stream import has_cell
     for i in range(len(reps)):
         if keyn[i] <= -1e8:
             break
         cell = primitivize(buerger_reduce(Mtn[i]), q)
-        if cell is None or any(same_lattice(cell, c) for c, _ in out):
+        if cell is None or not has_cell(cell) or any(same_lattice(cell, c) for c, _ in out):
             continue
         out.append((cell, float(keyn[i])))
         if len(out) >= N:

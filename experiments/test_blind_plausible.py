@@ -21,6 +21,7 @@ SKIPS, exit 0, without torch or below pyproject's torch floor (>= 1.12), as test
 """
 import os
 import sys
+from unittest.mock import patch
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
@@ -39,6 +40,7 @@ if _ver < (1, 12):
     sys.exit(0)
 
 import numpy as np                                                         # noqa: E402
+import glint.glint_fast as gf                                              # noqa: E402
 from glint.glint_fast import DEV, index_blind_nbest, load, plausible_t     # noqa: E402
 from glint.lattice import cell_to_Ar                                       # noqa: E402
 from glint.stream import has_cell                                          # noqa: E402
@@ -60,6 +62,57 @@ def rot(seed):
     return q if np.linalg.det(q) > 0 else -q
 
 
+def check_primitivize_fallback():
+    seeds = torch.tensor([[1, 0, 0], [0, 1, 0], [0, 0, 1], [1, 1, 1]],
+                         dtype=torch.float32, device=DEV)
+    q = np.arange(1, 25, dtype=float).reshape(8, 3)
+    calls = []
+
+    def fake_primitivize(M, Q):
+        calls.append(None)
+        return np.zeros((3, 3)) if len(calls) == 1 else np.eye(3)
+
+    def fake_refine(starts, Q, w, qmax):
+        return torch.zeros((4, 3, 3), dtype=Q.dtype, device=Q.device)
+
+    def fake_objective(T, Q, **kwargs):
+        return torch.zeros(T.shape[0], dtype=T.dtype, device=T.device), None
+
+    def fake_maxima(T, f, keep):
+        return seeds
+
+    def fake_anneal(M0, Q, **kwargs):
+        return torch.eye(3, dtype=M0.dtype, device=M0.device).expand(M0.shape[0], -1, -1).clone()
+
+    def fake_score(M, Q):
+        return torch.arange(M.shape[0], 0, -1, dtype=M.dtype, device=M.device), torch.full(
+            (M.shape[0],), 8, dtype=M.dtype, device=M.device)
+
+    common = {
+        "_refine": fake_refine,
+        "objective": fake_objective,
+        "distinct_maxima_gpu": fake_maxima,
+        "anneal_batch_t": fake_anneal,
+        "score_batch_t": fake_score,
+        "buerger_reduce": lambda M: M,
+        "primitivize": fake_primitivize,
+    }
+    with patch.multiple(gf, **common):
+        fast_cell = gf.index_blind_fast(q)
+        check("fast search skips a cell flattened by primitivization",
+              fast_cell is not None and has_cell(fast_cell) and len(calls) == 2,
+              f"calls={len(calls)}")
+
+    calls.clear()
+    with patch.multiple(gf, **common):
+        with patch.object(gf, "distinct_cells_gpu",
+                          lambda M, key: torch.arange(M.shape[0], device=M.device)):
+            nbest = gf.index_blind_nbest(q, N=1)
+        check("N-best search skips a cell flattened by primitivization",
+              len(nbest) == 1 and has_cell(nbest[0][0]) and len(calls) == 2,
+              f"calls={len(calls)}")
+
+
 def main():
     LYSO = cell_to_Ar(79.02, 79.02, 37.98, 90, 90, 90)
     flat = LYSO.copy(); flat[:, 2] = 0.0
@@ -75,6 +128,8 @@ def main():
     check("plausible_t agrees with has_cell on every basis", got == want, f"{got} vs {want}")
     check("real cells pass, the four kinds has_cell turns down do not",
           want == [True] * len(good) + [False] * len(bad), want)
+
+    check_primitivize_fallback()
 
     allf = [np.asarray(q, float) for q in load(FRAMES)]
     frames = [allf[i] for i in FRAMES_HIT]

@@ -295,20 +295,19 @@ def index_blind_fast(q, acc=None, starts=None):
     Mt = anneal_batch_t(M0, Qd, max_iter=ANNEAL_ITERS)
     key, ni = score_batch_t(Mt, Qd)
     key = torch.where(plausible_t(Mt), key, torch.full_like(key, -1e9))    # a basis the anneal flattened
-    order = torch.argsort(key, descending=True, stable=True)
-    keyn = key[order].cpu().numpy(); order = order.cpu().numpy()
+    remaining = key.clone()
     if sync: torch.cuda.synchronize()
     if acc is not None: acc["m4_gpu"] += time.time() - t; acc["ntri"] += int(M0.shape[0])
     from glint.stream import has_cell
-    for i, score in zip(order, keyn):
-        if score <= -1e8:
+    while True:
+        b = int(torch.argmax(remaining).item())
+        if float(remaining[b]) <= -1e8:
             break
-        cell = primitivize(buerger_reduce(Mt[int(i)].cpu().numpy()), q)
-        if cell is None or not has_cell(cell):
-            continue
-        if DETREJ and abs(np.linalg.det(np.asarray(cell, float))) < 1.0:
-            continue                                         # D1: reject degenerate (det~0) cell
-        return cell
+        cell = primitivize(buerger_reduce(Mt[b].cpu().numpy()), q)
+        if cell is not None and has_cell(cell):
+            if not DETREJ or abs(np.linalg.det(np.asarray(cell, float))) >= 1.0:
+                return cell
+        remaining[b] = -1e9
     return None
 
 

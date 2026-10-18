@@ -1389,6 +1389,14 @@ FACTS: dict[str, float | str] = {
     "j19_r0016_mosflm_only":            0,
     "j19_r0016_mosflm_glint_only":    909,
     "j19_r0016_null_strict":            0,   # both _alloff nulls on scrambled peaks
+    # correct cell (lattice), any number of indexed peaks, for the data-set table's second column
+    "j7_r0016_glint_lattice":        2000,
+    "j7_r0016_glint_perframe_lattice": 688,
+    "j7_r0016_xgandalf_fast_lattice": 551,
+    "j19_r0016_asdf_blind_lattice":   180,
+    "j19_r0016_mosflm_blind_lattice": 444,
+    "j19_r0016_asdf_cell_lattice":    740,
+    "j19_r0016_mosflm_cell_lattice":  638,
 }
 
 # Every arm-vs-default discordant split from the n=480 M3 sweep, both channels: (arm-only,
@@ -3998,6 +4006,14 @@ def check_arithmetic() -> list[str]:
                      ("xgandalf_over_glint_mean", "xgandalf_ms_mean")):
         if round(float(F[j7 + num]) / float(F[j7 + "glint_ms"])) != whole(j7 + key):
             bad.append(f"  FACTS: {j7}{key} ({F[j7 + key]}) is not {j7}{num} / {j7}glint_ms rounded")
+    for arm, lat in (("glint_strict", "glint_lattice"), ("glint_perframe_strict", "glint_perframe_lattice"),
+                     ("xgandalf_fast_strict", "xgandalf_fast_lattice")):
+        if whole(j7 + arm) > whole(j7 + lat):
+            bad.append(f"  FACTS: {j7}{arm} exceeds {j7}{lat}, which counts a superset of it")
+    for idx in ("asdf", "mosflm"):
+        for mode in ("blind", "cell"):
+            if whole(f"j19_r0016_{idx}_{mode}_strict") > whole(f"j19_r0016_{idx}_{mode}_lattice"):
+                bad.append(f"  FACTS: j19_r0016_{idx}_{mode}_strict exceeds j19_r0016_{idx}_{mode}_lattice")
     for idx in ("asdf", "mosflm"):
         both, only, gonly = (whole(f"j19_r0016_{idx}_both_glint"), whole(f"j19_r0016_{idx}_only"),
                              whole(f"j19_r0016_{idx}_glint_only"))

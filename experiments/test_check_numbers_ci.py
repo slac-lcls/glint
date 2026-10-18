@@ -611,6 +611,8 @@ ARITHMETIC_PERTURBATIONS = [
     ({"j7_r0016_glint_path_rescue": 535},             "paths no longer add up"),
     ({"j7_r0016_xgandalf_over_glint_median": 21},     "j7_r0016_xgandalf_over_glint_median"),
     ({"j19_r0016_mosflm_only": 2},                    "mosflm / GLINT pairing"),
+    ({"j7_r0016_xgandalf_fast_lattice": 500},         "j7_r0016_xgandalf_fast_strict exceeds"),
+    ({"j19_r0016_asdf_cell_lattice": 700},            "j19_r0016_asdf_cell_strict exceeds"),
     # The data-set table (J3), one perturbation per guard.
     ({"j3_r51_val7_at_cap": 12000},                   "j3_r51_val7_at_cap"),
     ({"j3_cxidb17_120_npk_median": 600.0},            "j3_cxidb17_120_npk_median"),

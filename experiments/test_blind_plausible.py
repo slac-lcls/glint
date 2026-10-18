@@ -68,21 +68,22 @@ def check_primitivize_fallback():
     q = np.arange(1, 25, dtype=float).reshape(8, 3)
     calls = []
 
-    def fake_primitivize(M, Q):
+    def fake_primitivize(M, Q):                     # the best basis comes out flat; the others as they went in
         calls.append(None)
-        return np.zeros((3, 3)) if len(calls) == 1 else np.eye(3)
+        return np.zeros((3, 3)) if len(calls) == 1 else M
 
     def fake_refine(starts, Q, w, qmax):
         return torch.zeros((4, 3, 3), dtype=Q.dtype, device=Q.device)
 
-    def fake_objective(T, Q, **kwargs):
+    def fake_objective(T, Q, w, **kwargs):          # called as objective(T, Q, w, sharp=..., tol=...)
         return torch.zeros(T.shape[0], dtype=T.dtype, device=T.device), None
 
     def fake_maxima(T, f, keep):
         return seeds
 
-    def fake_anneal(M0, Q, **kwargs):
-        return torch.eye(3, dtype=M0.dtype, device=M0.device).expand(M0.shape[0], -1, -1).clone()
+    def fake_anneal(M0, Q, **kwargs):               # distinct cells, 10, 11, 12, ... A cubes
+        e = torch.eye(3, dtype=M0.dtype, device=M0.device)
+        return torch.stack([(10.0 + k) * e for k in range(M0.shape[0])])
 
     def fake_score(M, Q):
         return torch.arange(M.shape[0], 0, -1, dtype=M.dtype, device=M.device), torch.full(

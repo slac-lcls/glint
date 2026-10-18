@@ -122,9 +122,13 @@ check("and counted on stderr", "no signed permutation of the reference" in err, 
 
 print("\na frame with no usable cell is skipped; one singular basis used to raise and lose the whole file")
 flat = LYSO.copy(); flat[:, 2] = 0.0                                    # a zero-length axis: det M = 0
+# c = a + b lifted 0.5 A off the ab plane: |det M| = 3122 A^3 passes the singularity test, but the axes nearly lie in
+# a plane, |det M| / (|a||b||c|) = 0.0045
+thin = LYSO.copy(); thin[:, 2] = LYSO[:, 0] + LYSO[:, 1] + 0.5 * LYSO[:, 2] / np.linalg.norm(LYSO[:, 2])
 BAD = [{"image": "x.cxi", "event": 10, "M": flat},
        {"image": "x.cxi", "event": 11, "M": np.full((3, 3), np.nan)},
-       {"image": "x.cxi", "event": 12, "M": 0.5 * np.eye(3)}]           # finite, but 0.125 A^3
+       {"image": "x.cxi", "event": 12, "M": 0.5 * np.eye(3)},           # finite, but 0.125 A^3
+       {"image": "x.cxi", "event": 13, "M": thin}]
 for code, ref, cell in (("tPc", None, LYSO), ("mPb", P21, P21), ("aP", None, LYSO)):
     good = [{"image": "x.cxi", "event": i, "M": rot(40 + i) @ cell} for i in range(3)]
     try:
@@ -135,13 +139,28 @@ for code, ref, cell in (("tPc", None, LYSO), ("mPb", P21, P21), ("aP", None, LYS
     _, _, txt_good, _ = run(good, code, ref=ref)
     check(f"{code}: the 3 good frames are written, byte-identical to a file without the bad ones",
           n == 3 and txt == txt_good, n)
-    check(f"{code}: the 3 skipped frames are counted on stderr", "3 frame(s) have no usable cell" in err, err)
+    check(f"{code}: the 4 skipped frames are counted on stderr", "4 frame(s) have no usable cell" in err, err)
 with tempfile.TemporaryDirectory() as d:
     n_stream = write_stream(good[:1] + BAD + good[1:], os.path.join(d, "o.stream"))
 check("the stream writer holds the same 3 frames", n_stream == 3, n_stream)
-check("has_cell: None, singular, non-finite and sub-1 A^3 bases are not cells; a real one is",
-      [has_cell(M) for M in (None, flat, np.full((3, 3), np.nan), 0.5 * np.eye(3), LYSO)]
-      == [False, False, False, False, True])
+check("has_cell: None, singular, non-finite, sub-1 A^3 and nearly flat bases are not cells; a real one is",
+      [has_cell(M) for M in (None, flat, np.full((3, 3), np.nan), 0.5 * np.eye(3), thin, LYSO)]
+      == [False, False, False, False, False, True])
+check("has_cell: a zero-length axis and a NaN entry are turned down by the singularity test, which comes first "
+      "(the scaled test compares 0 with 0, or NaN with NaN)",
+      not has_cell(flat) and not has_cell(np.where(np.eye(3, dtype=bool), np.nan, LYSO)))
+REAL = {"tetragonal lysozyme": LYSO, "C2 beta 106.2": C2, "P21 beta 90.8": P21, "rhombohedral alpha 75": HR,
+        "hexagonal gamma 120": cell_to_Ar(80.0, 80.0, 200.0, 90, 90, 120),
+        "rhombohedral alpha 30": cell_to_Ar(60.0, 60.0, 60.0, 30, 30, 30),
+        "reduced, all angles 60": cell_to_Ar(50.0, 50.0, 50.0, 60, 60, 60),
+        "triclinic": cell_to_Ar(31.0, 43.0, 57.0, 77, 84, 69),
+        "monoclinic beta 150": cell_to_Ar(40.0, 50.0, 60.0, 90, 150, 90)}
+check("has_cell: real cells in their settings are kept, rotated or not",
+      all(has_cell(A) and has_cell(rot(7) @ A) for A in REAL.values()),
+      [k for k, A in REAL.items() if not has_cell(A)])
+check("has_cell: the scaled test does not depend on size -- lysozyme's shape at 1/10 and 10x is kept, the flat "
+      "basis at 10x is not",
+      has_cell(LYSO / 10) and has_cell(LYSO * 10) and not has_cell(thin * 10))
 
 note = written_note({"n_idx": 300, "n_written": 200})
 check("the run summary names a stream holding 200 of 300 indexed",

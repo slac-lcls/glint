@@ -606,6 +606,15 @@ def _arith(**overrides):
 
 # (what a careless edit does, the substring the guard must answer with)
 ARITHMETIC_PERTURBATIONS = [
+    # The full-socket and known-cell XGANDALF block, one perturbation per guard.
+    ({"j6_glint_blind_over_32core": 1.80},            "j6_glint_blind_over_32core"),
+    ({"j6_xgandalf_fast_queue480_effective_ms": 60.0}, "j6_glint_blind_over_queue480"),
+    ({"j6_xgandalf_fast_32core_effective_ms": 45.9},  "j6_xgandalf_fast_32core_effective_ms"),
+    ({"j8_indexamajig_allflags_ms": 5400.0},          "30-50-fold gap"),
+    ({"mosflm_cell_on_lattice_of120": 30},            "mosflm_cell_on_lattice_of120"),
+    ({"asdf_blind_on_lattice_of120": 28},             "cells asdf returned"),
+    ({"j8_xg_known120_lattice_fast_sampling": 90},    "j8_xg_known120_strict_fast_sampling"),
+    ({"merge_r51guard_cf_d_splits": 11},              "merge_r51guard_cf_d_splits"),
     ({"jungfrau_final_of1563": 1520},                 "must nest"),
     ({"fused_strict_of120": 81},                      "fused_strict_of120"),
     ({"indexing_rate": "79/115"},                     "fused_strict_of120"),

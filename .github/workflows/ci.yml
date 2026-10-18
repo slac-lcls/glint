@@ -655,6 +655,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_nbest_prefix.py
 
+      # The blind searches score out a basis the anneal flattened (glint_fast.plausible_t, has_cell's rule on the
+      # device): the rule agrees with has_cell, and every cell index_blind_nbest returns on 12 real frames passes it.
+      - name: experiments/test_blind_plausible.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_blind_plausible.py
+
       # The known-cell engine's precision defaults (fp32 working precision since 26 Sep 2026, fp64 3x3 solve on
       # the torch path, KC_FP=64 restoring fp64), and the same strict decisions in both on 30 real frames (CPU).
       - name: experiments/test_kc_precision_default.py

@@ -112,6 +112,7 @@ STEPS = [
     "experiments/bench_integrate_fused.py",
     # torch-CPU job: runs for real there (CPU torch), SKIPs here with torch blocked.
     "experiments/test_nbest_prefix.py",
+    "experiments/test_blind_plausible.py",
     "experiments/test_kc_precision_default.py",
     "experiments/test_stage_graph_keeps_params.py",
     "experiments/test_known_depth_args.py",

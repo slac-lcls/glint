@@ -27,9 +27,9 @@ README with the protocol, inputs, argv, outputs and the values that run produced
    says. The `#SBATCH --output` paths are relative to that directory.
 
 Site settings: the account `lcls:prjdat21`, the partitions, the `--exclude` node lists and
-`--constraint=OS_VER:8.10` are the S3DF settings of the recorded runs. Change them for another
-allocation. Conda environments and the CrystFEL, DIALS and CCP4 builds are read from `/sdf/group/lcls/ds`;
-raw data from `/sdf/data/lcls/ds`.
+`--constraint=OS_VER:8.10` are the S3DF settings of the recorded runs (the r0016 rate check now also
+excludes sdfampere038). Change them for another allocation. Conda environments and the CrystFEL, DIALS
+and CCP4 builds are read from `/sdf/group/lcls/ds`; raw data from `/sdf/data/lcls/ds`.
 
 `$VERIFY_INPUTS` holds files that are not in the repository or the facility tree:
 

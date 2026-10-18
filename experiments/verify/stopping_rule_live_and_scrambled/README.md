@@ -63,7 +63,8 @@ frames against `indexed_r0278` (1785) and `indexed_r0058` (2319).
 
 Part C2 (unrefined r0016 in the August `wrong_sweep.py` order scheme) recorded 363 decisions and 140 wrong
 for support and lead only, 4 and 3 for the shipped rule. It does not re-derive the FACTS `poolgate_bad_*`
-keys (342, 194, 3, 2).
+keys (342, 194, 3, 2). That replay repeated at eight random states, a separate run, is in FACTS as
+`poolgate8_*` (and `seqstop8_*` for the 480 cxidb-17 frames).
 
 ## Outputs
 

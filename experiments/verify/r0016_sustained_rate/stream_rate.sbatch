@@ -10,7 +10,9 @@
 #SBATCH --account=lcls:prjdat21
 #SBATCH --partition=ampere
 #SBATCH --gres=gpu:a100:1
-#SBATCH --exclude=sdfampere042,sdfampere003
+# sdfampere038 was added after the recorded run. Its task 0 ran there (255.9 frames/s); that is not the
+# quoted figure, FACTS quotes task 1 on sdfampere020.
+#SBATCH --exclude=sdfampere042,sdfampere003,sdfampere038
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8

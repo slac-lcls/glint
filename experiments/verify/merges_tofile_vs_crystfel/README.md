@@ -73,7 +73,9 @@ Every executed argv is appended to `commands.log`.
 The block also carries d, CC*, Rsplit and completeness for both runs. r51 has no paired row here: the
 solution-file writer stopped on a degenerate cell (fixed in #263; see `../r51_blind_arm_with_guard`), so
 the r51 keys come from 41037260's log and orientation stream. r194's GLINT-vs-CrystFEL misorientation reads
-179.79 degrees because each frame is written in one of two near-equivalent settings; it is not quoted.
+179.79 degrees and is not quoted. It reflects the solution file choosing each frame's setting on its own, so
+frames land in one of two near-equivalent settings; GLINT PR #265 (open on 17 Oct) fixes that split, and with
+it the solution file gives one setting per run.
 
 ## Outputs
 

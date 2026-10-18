@@ -52,7 +52,7 @@ integer hkl (constants imported from `glint.glint_fast`).
 | `r0016_null_strict_of_hits`, `r0016_null_strict_pct` | 2015, 16.6 |
 
 Not in FACTS: the `known` arm locks at frame 0 and reaches 6,716 of 12,133. Task 0 ran on sdfampere038,
-which the later checks exclude; FACTS quotes task 1.
+which the later checks exclude; FACTS quotes task 1. `stream_rate.sbatch` now excludes sdfampere038 too.
 
 ## Outputs
 

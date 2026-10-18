@@ -603,6 +603,11 @@ def _match_reference_setting(M, ref):
 # as it came, with a warning, rather than forced into a setting it does not have.
 SETTING_MATCH_RTOL = 0.1
 
+# _run_setting's seed search, when most frames miss the typical-length frame: this many candidates, each scored on
+# at most this many frames spread over the run (0.4 ms per match, so about 2 s at most, and only then).
+SEED_CANDIDATES = 16
+SEED_POPULATION = 256
+
 # The Laue classes whose lattice code already fixes a standard setting in ``_canonical_axes`` (unique axis c,
 # or a <= b <= c); the solution file keeps that setting, reference cell or not. Every other code -- monoclinic,
 # rhombohedral (``-3m_R``, which ``standardize_axes`` leaves as handed in), triclinic -- takes the reference's,
@@ -630,7 +635,10 @@ def _run_setting(Ms, lattice_code):
     229 frames were written at beta 89.2, 180 degrees from the rest.
 
     The run decides instead, once:
-      1. the seed is the frame whose sorted edge lengths are closest to the median ones (a typical frame);
+      1. the seed is the frame whose sorted edge lengths are closest to the median ones (a typical frame), if
+         most frames match it (``_seed_support``). Lengths alone cannot see an angle: a frame with typical edges
+         and one wrong angle would set the run's cell, and every other frame would miss it. Then the seed is the
+         candidate most frames match, of that frame and up to ``SEED_CANDIDATES - 1`` frames spread over the run;
       2. every frame is put in the seed's labeling (``_match_reference_setting``), and the run's cell is the
          element-wise median of their metric tensors;
       3. for a primitive monoclinic code that cell is placed once: the unique axis is the one outside the pair
@@ -648,7 +656,16 @@ def _run_setting(Ms, lattice_code):
     if not Ms:
         return None
     L = np.sort(np.array([np.linalg.norm(M, axis=0) for M in Ms]), axis=1)
-    seed = Ms[int(np.argmin(np.abs(L / np.median(L, axis=0) - 1.0).max(axis=1)))]
+    first = int(np.argmin(np.abs(L / np.median(L, axis=0) - 1.0).max(axis=1)))
+    pop = Ms if len(Ms) <= SEED_POPULATION else [Ms[i] for i in
+                                                  np.linspace(0, len(Ms) - 1, SEED_POPULATION).astype(int)]
+    seed, best = Ms[first], _seed_support(Ms[first], pop)
+    if 2 * best <= len(pop):
+        spread = np.linspace(0, len(Ms) - 1, min(len(Ms), SEED_CANDIDATES)).astype(int)
+        for i in spread:
+            s = _seed_support(Ms[i], pop)
+            if s > best:
+                seed, best = Ms[i], s
     G = [P.T @ P for P, e in (_match_reference_setting(M, seed) for M in Ms) if e <= SETTING_MATCH_RTOL]
     G = np.median(np.array(G), axis=0)
     if np.linalg.eigvalsh(G)[0] <= 0:                                  # a median that is no metric: the seed's
@@ -674,9 +691,16 @@ def _run_setting(Ms, lattice_code):
     if code[:2].lower() == "hr":
         # _canonical_axes leaves -3m_R as handed in, so a seed with mixed column signs (75/105/105) would make
         # every frame's setting one the threefold does not preserve: one sign rule, all three angles equal.
-        from glint.refine_sym import standardize_setting
-        R = standardize_setting(R, "trigonal")
+        # Without standardize_setting's guard near 90 degrees, which is there for one frame's noise: this cell
+        # is the run's median, and an 89/89/89 cell handed in as (b, a, -c) would otherwise stay 91/91/89.
+        from glint.refine_sym import _fix_signs
+        R = _fix_signs(R.copy(), "trigonal", near90_guard=False)
     return R
+
+
+def _seed_support(seed, frames):
+    """How many of ``frames`` are a signed permutation of ``seed``'s cell (``_match_reference_setting``)."""
+    return sum(_match_reference_setting(M, seed)[1] <= SETTING_MATCH_RTOL for M in frames)
 
 
 def write_solution_file(results, path, lattice_code="aP", ref_cell=None):

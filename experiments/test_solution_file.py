@@ -192,6 +192,32 @@ for sd in range(7, 13):                              # several runs: some seeds 
 check("hR without a reference: every frame's three angles equal, one sign convention for the run "
       "(a mixed-sign seed must not set 75/105/105 for all)", not bad_runs, bad_runs)
 
+# The seed was the frame with the most typical edge lengths. One frame with exactly those edges and a wrong angle
+# (alpha 110) set the run's cell, and the six real frames, 0.32 from it, fell back to the length-only rule.
+g = np.random.default_rng(14)
+res = [{"image": "x.cxi", "event": i, "M": rot(60 + i) @ cell_to_Ar(28.0 * f, 62.5 * f, 60.9 * f, 90, 90.8, 90)
+        @ SIGNED[g.integers(len(SIGNED))]} for i, f in enumerate((0.997, 0.998, 0.999, 1.001, 1.002, 1.003))]
+res.append({"image": "x.cxi", "event": 6, "M": rot(66) @ cell_to_Ar(28.0, 62.5, 60.9, 110, 90.8, 90)})
+n, W, _, err = run(res, "mPb")
+P = np.array([params(A) for A, _ in W[:6]])
+check("mPb, one frame with typical edges and alpha 110: the six others keep the code's setting (beta 90.8 on b)",
+      n == 7 and np.allclose(P[:, :3], [28.0, 62.5, 60.9], atol=0.25) and np.allclose(P[:, 4], 90.8, atol=0.05),
+      np.round(P, 2))
+check("and only the odd frame is reported as no signed permutation of the run's cell",
+      "1 frame(s) are no signed permutation" in err, err)
+
+# standardize_setting skips the rhombohedral sign rule within 2 degrees of 90, for one frame's noise. On the run's
+# median cell it must not: an 89/89/89 cell handed in as (b, a, -c) gave a 91/91/89 reference.
+for alpha in (89.0, 91.0):
+    C = cell_to_Ar(50.0, 50.0, 50.0, alpha, alpha, alpha)
+    res = [{"image": "x.cxi", "event": i, "M": rot(70 + i) @ C[:, [1, 0, 2]] * np.array([1, 1, -1])}
+           for i in range(4)]
+    n, W, _, err = run(res, "hR")
+    ang = np.array([params(A)[3:] for A, _ in W])
+    check(f"hR at {alpha:g} degrees, every frame given mixed signs: the three angles equal, right-handed",
+          n == 4 and np.allclose(ang, alpha, atol=1e-3) and all(np.linalg.det(A) > 0 for A, _ in W),
+          np.round(ang, 2))
+
 print("\na frame with no usable cell is skipped; one singular basis used to raise and lose the whole file")
 flat = LYSO.copy(); flat[:, 2] = 0.0                                    # a zero-length axis: det M = 0
 BAD = [{"image": "x.cxi", "event": 10, "M": flat},

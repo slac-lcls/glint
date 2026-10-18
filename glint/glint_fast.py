@@ -190,6 +190,21 @@ def qband_apod(qn, qmax):
     return a
 
 
+def plausible_t(M):
+    """Per basis of ``M`` (B,3,3; columns a, b, c in A), ``glint.stream.has_cell``'s rule on the device: finite,
+    |det M| >= MIN_CELL_VOLUME_A3, and |det M| >= MIN_CELL_VOLUME_FRACTION * |a||b||c|.
+
+    The triplets entering the anneal already pass the scaled test. On a frame with few peaks the anneal can still
+    pull one onto a plane, and a flat basis fits the peaks as a two-dimensional lattice, so it scores at or above
+    the real cell and wins the frame; reduced, one such basis came out with a 1.01 A axis. The blind searches
+    score these bases out after the anneal, so the next basis wins and none of them enters the consensus vote."""
+    from glint.stream import MIN_CELL_VOLUME_A3, MIN_CELL_VOLUME_FRACTION
+    fin = torch.isfinite(M).all(dim=2).all(dim=1)
+    Mz = torch.where(fin[:, None, None], M, torch.zeros_like(M))
+    d = torch.linalg.det(Mz).abs()
+    return fin & (d >= MIN_CELL_VOLUME_A3) & (d >= MIN_CELL_VOLUME_FRACTION * Mz.norm(dim=1).prod(1))
+
+
 def anneal_batch_t(M0, Q, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02):
     """Batched residual-threshold anneal on GPU. M0:(B,3,3) real-axis cols, Q:(P,3) torch.
     Masked normal equations  (Q^T W Q) M = Q^T W hkl  solved as B 3x3 systems / iter."""
@@ -279,6 +294,7 @@ def index_blind_fast(q, acc=None, starts=None):
         return None
     Mt = anneal_batch_t(M0, Qd, max_iter=ANNEAL_ITERS)
     key, ni = score_batch_t(Mt, Qd)
+    key = torch.where(plausible_t(Mt), key, torch.full_like(key, -1e9))    # a basis the anneal flattened
     b = int(torch.argmax(key).item())
     best = Mt[b].cpu().numpy()
     if sync: torch.cuda.synchronize()
@@ -511,6 +527,7 @@ def index_blind_nbest(q, N=5):
         return []
     Mt = anneal_batch_t(M0, Qd, max_iter=ANNEAL_ITERS)
     key, ni = score_batch_t(Mt, Qd)
+    key = torch.where(plausible_t(Mt), key, torch.full_like(key, -1e9))    # a basis the anneal flattened
     reps = distinct_cells_gpu(Mt, key)                        # GPU metric-dedup: reduce only DISTINCT cells
     if int(reps.numel()) == 0:
         return []

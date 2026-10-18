@@ -1345,6 +1345,50 @@ FACTS: dict[str, float | str] = {
     "j3_r194_npk_median":           23.0,
     "j3_cxidb45_frames":             907,
     "j3_cxidb45_peak_cap":           170,   # every frame at the top-170 extraction cap, so the median is ">= 170"
+
+    # The real-run head-to-head: GLINT and fast XGANDALF on r0016's 2,228 frames (J7, Slurm 41040989 + 41114349 at
+    # 95d51ce; J7/results_J7.json), and asdf and MOSFLM through CrystFEL 0.12.0 on the same frames (J19, Slurm
+    # 41246853 + 41248033; J19/J19_PAIRED.json). One identical peak list (GLINT v4, btx geometry, median 35 peaks),
+    # the strict criterion against btx's cell. GLINT on one A100 (sdfampere026), XGANDALF one instance on the same
+    # node, asdf and MOSFLM one EPYC 7713 core each.
+    "j7_r0016_frames":               2228,
+    "j7_r0016_glint_strict":         1340,   # consensus and rescue, identical over three reps
+    "j7_r0016_glint_perframe_strict": 677,
+    "j7_r0016_xgandalf_fast_strict":  543,
+    "j7_r0016_both":                  511,
+    "j7_r0016_glint_only":            829,
+    "j7_r0016_xgandalf_only":          32,
+    "j7_r0016_neither":               856,
+    "j7_r0016_glint_path_top1":       677,   # GLINT's 1,340 by path: per-frame top cell, lower-ranked pick, rescue
+    "j7_r0016_glint_path_lower":      127,
+    "j7_r0016_glint_path_rescue":     536,
+    "j7_r0016_glint_only_top1":       314,   # the 829 only GLINT indexes, by the same paths
+    "j7_r0016_glint_only_lower":       81,
+    "j7_r0016_glint_only_rescue":     434,
+    "j7_r0016_glint_ms":             27.5,   # whole pipeline, mean per frame over the run (reps 27.1, 27.9, 27.5)
+    "j7_r0016_xgandalf_ms_median":    452,
+    "j7_r0016_xgandalf_ms_mean":      567,
+    "j7_r0016_xgandalf_over_glint_median": 16,   # 452 / 27.5 = 16.4: the convention of xgandalf_fast_speedup
+    "j7_r0016_xgandalf_over_glint_mean":   21,   # 567 / 27.5 = 20.6
+    "j7_cxidb17_xgandalf_ms_median": 1134,   # the control set on the same node
+    "j7_r0016_null_blind_strict":       0,   # scrambled peaks, GLINT blind and XGANDALF alike
+    "j7_r0016_null_cell_strict":      379,   # GLINT given the run's cell on scrambled peaks: all on frames < 60 peaks
+    "j7_r0016_null_cell_floor":         9,   # the same with the cxidb-17 floor
+    "j19_r0016_asdf_blind_strict":    180,
+    "j19_r0016_asdf_cell_strict":     736,
+    "j19_r0016_mosflm_blind_strict":  431,
+    "j19_r0016_mosflm_cell_strict":   615,
+    "j19_r0016_asdf_blind_ms":        127,   # median index time per frame, one core (results/J19.md, from the logs)
+    "j19_r0016_asdf_cell_ms":         257,
+    "j19_r0016_mosflm_blind_ms":     4382,
+    "j19_r0016_mosflm_cell_ms":      2871,
+    "j19_r0016_asdf_both_glint":      179,   # asdf blind vs GLINT consensus + rescue: both / asdf only / GLINT only
+    "j19_r0016_asdf_only":              1,
+    "j19_r0016_asdf_glint_only":     1161,
+    "j19_r0016_mosflm_both_glint":    431,
+    "j19_r0016_mosflm_only":            0,
+    "j19_r0016_mosflm_glint_only":    909,
+    "j19_r0016_null_strict":            0,   # both _alloff nulls on scrambled peaks
 }
 
 # Every arm-vs-default discordant split from the n=480 M3 sweep, both channels: (arm-only,
@@ -3938,6 +3982,27 @@ def check_arithmetic() -> list[str]:
         bad.append("  FACTS: j3_cxidb17_120_npk_median is outside its min and max")
     if whole("j3_r51_val5_frames") > whole("j3_r51_val7_frames"):
         bad.append("  FACTS: the 12,000-event r51 list (j3_r51_val5_frames) has more frames than the full one")
+    # The real-run head-to-head: the pairs add up, the paths add up, and the time ratios follow from the times.
+    j7 = "j7_r0016_"
+    if (whole(j7 + "both") + whole(j7 + "glint_only") != whole(j7 + "glint_strict")
+            or whole(j7 + "both") + whole(j7 + "xgandalf_only") != whole(j7 + "xgandalf_fast_strict")
+            or whole(j7 + "both") + whole(j7 + "glint_only") + whole(j7 + "xgandalf_only") + whole(j7 + "neither")
+            != whole(j7 + "frames")):
+        bad.append("  FACTS: the r0016 GLINT / XGANDALF pairing no longer adds up to the yields and the frames")
+    if (whole(j7 + "glint_path_top1") + whole(j7 + "glint_path_lower") + whole(j7 + "glint_path_rescue")
+            != whole(j7 + "glint_strict")
+            or whole(j7 + "glint_only_top1") + whole(j7 + "glint_only_lower") + whole(j7 + "glint_only_rescue")
+            != whole(j7 + "glint_only")):
+        bad.append("  FACTS: GLINT's r0016 paths no longer add up to its yield or to the frames only it indexes")
+    for key, num in (("xgandalf_over_glint_median", "xgandalf_ms_median"),
+                     ("xgandalf_over_glint_mean", "xgandalf_ms_mean")):
+        if round(float(F[j7 + num]) / float(F[j7 + "glint_ms"])) != whole(j7 + key):
+            bad.append(f"  FACTS: {j7}{key} ({F[j7 + key]}) is not {j7}{num} / {j7}glint_ms rounded")
+    for idx in ("asdf", "mosflm"):
+        both, only, gonly = (whole(f"j19_r0016_{idx}_both_glint"), whole(f"j19_r0016_{idx}_only"),
+                             whole(f"j19_r0016_{idx}_glint_only"))
+        if both + only != whole(f"j19_r0016_{idx}_blind_strict") or both + gonly != whole(j7 + "glint_strict"):
+            bad.append(f"  FACTS: the {idx} / GLINT pairing on r0016 no longer adds up to the two yields")
     # The host bucket exceeds peakfind, but INVESTIGATED 2026-07-22 it is NOT the throughput lever:
     # batching it recovers ~1% and the streaming wall is GPU-compute-bound. No warning is raised for
     # it -- the earlier nag rested on a benchmark artifact (build timed inside the loop).

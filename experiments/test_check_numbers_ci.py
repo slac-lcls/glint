@@ -606,6 +606,11 @@ def _arith(**overrides):
 
 # (what a careless edit does, the substring the guard must answer with)
 ARITHMETIC_PERTURBATIONS = [
+    # The real-run head-to-head (J7, J19), one perturbation per guard.
+    ({"j7_r0016_glint_only": 830},                    "pairing no longer adds up"),
+    ({"j7_r0016_glint_path_rescue": 535},             "paths no longer add up"),
+    ({"j7_r0016_xgandalf_over_glint_median": 21},     "j7_r0016_xgandalf_over_glint_median"),
+    ({"j19_r0016_mosflm_only": 2},                    "mosflm / GLINT pairing"),
     # The data-set table (J3), one perturbation per guard.
     ({"j3_r51_val7_at_cap": 12000},                   "j3_r51_val7_at_cap"),
     ({"j3_cxidb17_120_npk_median": 600.0},            "j3_cxidb17_120_npk_median"),

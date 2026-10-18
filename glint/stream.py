@@ -42,15 +42,36 @@ _FALLBACK_GEOM = ("clen = 0.1\nres = 5000\nadu_per_photon = 1\nphoton_energy = 9
 # one and lose the whole file.
 MIN_CELL_VOLUME_A3 = 1.0
 
+# 1 A^3 is five orders of magnitude below a protein cell, so it only catches the singular case. A basis whose three axes
+# nearly lie in a plane is not a plausible cell at any size: |det M| / (|a||b||c|) is the cell's volume as a fraction of
+# the box with the same edges, 1 for a rectangular cell, 0.87 for a hexagonal one and at least 0.71 for a reduced cell
+# (the three shortest independent lattice vectors; Minkowski's bound). On a sparse run where the consensus declined to
+# establish a cell, 9 of the 2,408 cells GLINT wrote had 27-123 A axes and 3-64 A^3 volumes (fractions below 2e-4);
+# every cell CrystFEL returned in the same comparisons was at 0.52 or above. A conventional setting falls below 0.1 only
+# at a monoclinic beta above 174 degrees or a rhombohedral alpha below 20 degrees (hexagonal c/a above 8.6).
+MIN_CELL_VOLUME_FRACTION = 0.1
+
+# How the run summary and the solution-file writer name the frames ``has_cell`` turns down.
+NO_CELL = (f"non-finite, |det M| < {MIN_CELL_VOLUME_A3:g} A^3, or |det M| < {MIN_CELL_VOLUME_FRACTION:g} "
+           f"|a||b||c|")
+
 
 def has_cell(M):
-    """True when ``M`` (columns a, b, c in A) is a usable basis: finite, with |det M| >= MIN_CELL_VOLUME_A3.
-    The one rule shared by ``write_stream``, ``predict._write_chunk`` and ``predict.write_solution_file``, so
-    the stream and the solution file hold the same frames."""
+    """True when ``M`` (columns a, b, c in A) is a usable basis: finite, |det M| >= MIN_CELL_VOLUME_A3, and
+    |det M| >= MIN_CELL_VOLUME_FRACTION * |a||b||c|. The one rule shared by ``write_stream``,
+    ``predict._write_chunk`` and ``predict.write_solution_file``, so the stream and the solution file hold the
+    same frames.
+
+    The singularity test comes first. With a zero-length axis both sides of the scaled test are 0, and with a
+    non-finite entry both are NaN, so the scaled test alone cannot decide either case, and a basis it let through
+    would raise in the inversion downstream."""
     if M is None:
         return False
     M = np.asarray(M, float)
-    return bool(np.all(np.isfinite(M)) and abs(np.linalg.det(M)) >= MIN_CELL_VOLUME_A3)
+    if not np.all(np.isfinite(M)):
+        return False
+    v = abs(np.linalg.det(M))
+    return bool(v >= MIN_CELL_VOLUME_A3 and v >= MIN_CELL_VOLUME_FRACTION * np.prod(np.linalg.norm(M, axis=0)))
 
 
 def written_note(stats):
@@ -61,7 +82,7 @@ def written_note(stats):
     if w is None or w == stats["n_idx"]:
         return None
     return (f"  written to stream  : {w} crystals, not {stats['n_idx']} -- frames with no usable cell "
-            f"(|det M| < {MIN_CELL_VOLUME_A3:g} A^3) are written as unindexed")
+            f"({NO_CELL}) are written as unindexed")
 
 
 def _header(geom_text, generator="GLINT (fftindex)"):

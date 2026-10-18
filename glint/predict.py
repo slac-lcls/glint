@@ -632,13 +632,13 @@ def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
         but cannot place a monoclinic unique axis -- a monoclinic code without a reference says so
         on stderr.
 
-    A frame with no usable cell (``glint.stream.has_cell``: |det M| < 1 A^3, or non-finite) is skipped and
-    counted on stderr, as the stream writers write it as unindexed. Before, the first singular one raised
-    in the inversion below and no file was written at all.
+    A frame with no usable cell (``glint.stream.has_cell``: non-finite, |det M| < 1 A^3, or axes that nearly lie
+    in a plane) is skipped and counted on stderr, as the stream writers write it as unindexed. Before, the first
+    singular one raised in the inversion below and no file was written at all.
 
     ``write_fromfile`` is the old name of this function (named after CrystFEL's reader flag, not
     what the function does) and still works."""
-    from glint.stream import MIN_CELL_VOLUME_A3, has_cell
+    from glint.stream import NO_CELL, has_cell
     rows = []
     laue = _laue_hint_from_lattice_code(lattice_code)
     centering = str(lattice_code or "")[1:2]
@@ -671,8 +671,8 @@ def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
               f"(metric distance > {SETTING_MATCH_RTOL}); written in the setting _canonical_axes gives them",
               file=sys.stderr)
     if skipped:
-        print(f"write_solution_file: {skipped} frame(s) have no usable cell (|det M| < {MIN_CELL_VOLUME_A3:g} A^3 "
-              f"or non-finite) and are skipped, as the stream writers skip them", file=sys.stderr)
+        print(f"write_solution_file: {skipped} frame(s) have no usable cell ({NO_CELL}) and are skipped, as the "
+              f"stream writers skip them", file=sys.stderr)
     with open(path, "w") as f:
         f.write("\n".join(rows) + "\n")
     return len(rows)

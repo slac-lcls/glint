@@ -1375,6 +1375,13 @@ DEFAULT_TARGETS = [
     REPO / "lute/README.md",
     REPO / "lute/GETTING_STARTED.md",
     REPO / "lute/STATUS.md",
+    # ...and the READMEs of the real-data verifiers (experiments/verify/**/README.md), which quote the
+    # FACTS values each check re-derives and the values its recorded run produced. Found by glob so a new
+    # check folder is guarded from its first commit; if the glob finds nothing, the top README is listed
+    # anyway and fails as a MISSING target, so removing the tree cannot pass as a silent skip. Verified
+    # green before wiring in.
+    *(sorted((REPO / "experiments/verify").glob("**/README.md"))
+      or [REPO / "experiments/verify/README.md"]),
 ]
 PDF_TARGETS = [
     HOME / "git/slides/glint/glint_summary.pdf",

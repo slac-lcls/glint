@@ -606,6 +606,10 @@ def _arith(**overrides):
 
 # (what a careless edit does, the substring the guard must answer with)
 ARITHMETIC_PERTURBATIONS = [
+    # The data-set table (J3), one perturbation per guard.
+    ({"j3_r51_val7_at_cap": 12000},                   "j3_r51_val7_at_cap"),
+    ({"j3_cxidb17_120_npk_median": 600.0},            "j3_cxidb17_120_npk_median"),
+    ({"j3_r51_val5_frames": 12000},                   "j3_r51_val5_frames"),
     # The full-socket and known-cell XGANDALF block, one perturbation per guard.
     ({"j6_glint_blind_over_32core": 1.80},            "j6_glint_blind_over_32core"),
     ({"j6_xgandalf_fast_queue480_effective_ms": 60.0}, "j6_glint_blind_over_queue480"),

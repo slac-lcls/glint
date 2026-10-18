@@ -1321,6 +1321,30 @@ FACTS: dict[str, float | str] = {
     "merge_r51guard_cf_ccstar":        0.602,
     "merge_r51guard_glint_rsplit_pct": 93.7,
     "merge_r51guard_cf_rsplit_pct":    93.8,
+
+    # Peaks per frame, the data-set table (J3 count stage, Slurm 41011491 at 95d51ce, J3/counts/counts.json; it
+    # reproduces the old manuscript's cxidb-17 row 40 / 100 / 554). Medians of the stored or GLINT-found peak lists.
+    "j3_cxidb17_120_frames":         120,
+    "j3_cxidb17_120_npk_min":         40,
+    "j3_cxidb17_120_npk_median":   100.0,
+    "j3_cxidb17_120_npk_max":        554,
+    "j3_cxidb17_480_npk_median":   117.5,   # the 480-frame extension (q480_fix)
+    "j3_r0016_frames":              2228,   # GLINT v4 peaks, btx geometry, >= 6 peaks among the first 6,000 events
+    "j3_r0016_events_read":         6000,
+    "j3_r0016_events_total":       37710,   # psana1 run.times() of mfxx49820 r16
+    "j3_r0016_npk_median":          35.0,
+    "j3_r51_val7_frames":          11058,   # the LUTE list the r51 merges use (J2_r51_30k), hits with >= 10 peaks
+    "j3_r51_val7_npk_median":       26.0,
+    "j3_r51_val7_at_cap":            729,   # frames at LUTE's 2,048-peak limit
+    "j3_r51_val5_frames":           8770,   # an earlier LUTE run of the same settings, first 12,000 events only
+    "j3_r51_val5_npk_median":       24.0,
+    "j3_r51_val5_at_cap":            589,
+    "j3_lute_peak_cap":             2048,
+    "j3_r194_frames":                278,   # LUTE val5, amax_thr 5000, first 3,000 events (2,465 hits at 1000)
+    "j3_r194_events_read":          3000,
+    "j3_r194_npk_median":           23.0,
+    "j3_cxidb45_frames":             907,
+    "j3_cxidb45_peak_cap":           170,   # every frame at the top-170 extraction cap, so the median is ">= 170"
 }
 
 # Every arm-vs-default discordant split from the n=480 M3 sweep, both channels: (arm-only,
@@ -3906,6 +3930,14 @@ def check_arithmetic() -> list[str]:
     for side in ("glint", "cf"):
         if not 0 < whole(f"merge_r51guard_{side}_d_splits") <= whole("merge_splits"):
             bad.append(f"  FACTS: merge_r51guard_{side}_d_splits must be between 1 and the {F['merge_splits']} splits")
+    # The data-set table: frames at the peak cap cannot exceed the frames; a median lies within its min and max.
+    for run in ("r51_val7", "r51_val5"):
+        if not 0 <= whole(f"j3_{run}_at_cap") <= whole(f"j3_{run}_frames"):
+            bad.append(f"  FACTS: j3_{run}_at_cap exceeds j3_{run}_frames")
+    if not whole("j3_cxidb17_120_npk_min") <= float(F["j3_cxidb17_120_npk_median"]) <= whole("j3_cxidb17_120_npk_max"):
+        bad.append("  FACTS: j3_cxidb17_120_npk_median is outside its min and max")
+    if whole("j3_r51_val5_frames") > whole("j3_r51_val7_frames"):
+        bad.append("  FACTS: the 12,000-event r51 list (j3_r51_val5_frames) has more frames than the full one")
     # The host bucket exceeds peakfind, but INVESTIGATED 2026-07-22 it is NOT the throughput lever:
     # batching it recovers ~1% and the streaming wall is GPU-compute-bound. No warning is raised for
     # it -- the earlier nag rested on a benchmark artifact (build timed inside the loop).

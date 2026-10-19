@@ -34,6 +34,14 @@ _NS: dict = {}
 exec("\n".join(l[4:] for l in _body.split("\n")), _NS)          # noqa: S102
 ci_diff, p10_mle = _NS["_ci_diff"], _NS["_p10_mle"]
 
+# The exact McNemar helper, lifted the same way (module level, so no de-indent).
+_MB, _ME = "# --- BEGIN exact McNemar", "# --- END exact McNemar"
+if _MB not in SRC or _ME not in SRC:
+    raise SystemExit("check_numbers.py no longer marks the exact McNemar block -- refusing to run")
+_MNS: dict = {"comb": math.comb}
+exec(SRC[SRC.index(chr(10), SRC.index(_MB)) + 1:SRC.index(_ME)], _MNS)          # noqa: S102
+mcnemar_p = _MNS["_mcnemar_p"]
+
 N = 480
 # The real M3 splits, plus the two degenerate cases the previous interval got wrong.
 CASES = [(29, 54), (31, 45), (29, 27), (18, 24), (24, 27), (18, 20), (21, 18), (30, 24),
@@ -59,6 +67,21 @@ def _brute_p10(n01, n10, n, d, steps=200000):
             best = (v, p)
     return best[1]
 
+
+
+def test_mcnemar_exact_past_1023_discordant_pairs():
+    """The float form 2.0 * sum(...) / 2.0 ** m raised OverflowError once m = a + b passed 1,023: a real run's
+    head-to-head (1,459 discordant frames at the lattice bar) crashed the scorer copied from it. The helper must
+    agree with the float form wherever that form works, give the published values, and return a number, not
+    raise, at any m."""
+    for a in range(0, 61):
+        for b in range(0, 61 - a):
+            m = a + b
+            old = 1.0 if m == 0 else min(1.0, 2.0 * sum(math.comb(m, k) for k in range(min(a, b) + 1)) / 2.0 ** m)
+            assert abs(mcnemar_p(a, b) - old) < 1e-12, (a, b)
+    assert abs(mcnemar_p(7, 3) - 0.34375) < 1e-12 and abs(mcnemar_p(16, 12) - 0.5716) < 1e-4
+    assert 0.0 <= mcnemar_p(1454, 5) < 1e-300 and mcnemar_p(829, 32) < 1e-150
+    assert abs(mcnemar_p(600, 600) - 1.0) < 1e-12 and mcnemar_p(0, 0) == 1.0
 
 
 def test_bare_86_of_120_needs_to_say_whose_it_is():
@@ -1397,6 +1420,7 @@ def test_new_required_rules_stay_silent_without_their_trigger():
 
 if __name__ == "__main__":
     tests = (test_closed_form_mle_matches_brute_force,
+             test_mcnemar_exact_past_1023_discordant_pairs,
              test_bounds_ordered_and_bracket_the_estimate,
              test_zero_discordant_pairs_is_not_certainty,
              test_coverage_is_at_least_nominal,

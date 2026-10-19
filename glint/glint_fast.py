@@ -190,6 +190,21 @@ def qband_apod(qn, qmax):
     return a
 
 
+def plausible_t(M):
+    """Per basis of ``M`` (B,3,3; columns a, b, c in A), ``glint.stream.has_cell``'s rule on the device: finite,
+    |det M| >= MIN_CELL_VOLUME_A3, and |det M| >= MIN_CELL_VOLUME_FRACTION * |a||b||c|.
+
+    The triplets entering the anneal already pass the scaled test. On a frame with few peaks the anneal can still
+    pull one onto a plane, and a flat basis fits the peaks as a two-dimensional lattice, so it scores at or above
+    the real cell and wins the frame; reduced, one such basis came out with a 1.01 A axis. The blind searches
+    score these bases out after the anneal, so the next basis wins and none of them enters the consensus vote."""
+    from glint.stream import MIN_CELL_VOLUME_A3, MIN_CELL_VOLUME_FRACTION
+    fin = torch.isfinite(M).all(dim=2).all(dim=1)
+    Mz = torch.where(fin[:, None, None], M, torch.zeros_like(M))
+    d = torch.linalg.det(Mz).abs()
+    return fin & (d >= MIN_CELL_VOLUME_A3) & (d >= MIN_CELL_VOLUME_FRACTION * Mz.norm(dim=1).prod(1))
+
+
 def anneal_batch_t(M0, Q, thr0=0.25, contract=0.85, max_iter=15, min_thr=0.02):
     """Batched residual-threshold anneal on GPU. M0:(B,3,3) real-axis cols, Q:(P,3) torch.
     Masked normal equations  (Q^T W Q) M = Q^T W hkl  solved as B 3x3 systems / iter."""
@@ -279,17 +294,35 @@ def index_blind_fast(q, acc=None, starts=None):
         return None
     Mt = anneal_batch_t(M0, Qd, max_iter=ANNEAL_ITERS)
     key, ni = score_batch_t(Mt, Qd)
+    key = torch.where(plausible_t(Mt), key, torch.full_like(key, -1e9))    # a basis the anneal flattened
     b = int(torch.argmax(key).item())
-    best = Mt[b].cpu().numpy()
     if sync: torch.cuda.synchronize()
     if acc is not None: acc["m4_gpu"] += time.time() - t; acc["ntri"] += int(M0.shape[0])
     if float(key[b]) <= -1e8:
         return None
-    cell = primitivize(buerger_reduce(best), q)
-    if cell is None:
+    cell = _final_cell(Mt[b].cpu().numpy(), q)
+    if cell is not None:
+        return cell
+    # The best basis came out flat from primitivize. The next DISTINCT cells, best first: tens of them, where
+    # stepping through the triplets would refit hundreds that converged onto the same cell.
+    for i in distinct_cells_gpu(Mt, key).tolist():
+        if i != b:
+            cell = _final_cell(Mt[i].cpu().numpy(), q)
+            if cell is not None:
+                return cell
+    return None
+
+
+def _final_cell(M, q):
+    """The blind searches' last step for one annealed basis: Buerger-reduce and primitivize it, and keep the result
+    only if ``has_cell`` accepts it. primitivize refits the basis by least squares, so a basis ``plausible_t``
+    passed can still come out flat. None when it does."""
+    from glint.stream import has_cell
+    cell = primitivize(buerger_reduce(M), q)
+    if cell is None or not has_cell(cell):
         return None
     if DETREJ and abs(np.linalg.det(np.asarray(cell, float))) < 1.0:
-        return None                                         # D1: reject degenerate (det~0) cell
+        return None                                         # D1 (off by default); has_cell already includes it
     return cell
 
 
@@ -511,6 +544,7 @@ def index_blind_nbest(q, N=5):
         return []
     Mt = anneal_batch_t(M0, Qd, max_iter=ANNEAL_ITERS)
     key, ni = score_batch_t(Mt, Qd)
+    key = torch.where(plausible_t(Mt), key, torch.full_like(key, -1e9))    # a basis the anneal flattened
     reps = distinct_cells_gpu(Mt, key)                        # GPU metric-dedup: reduce only DISTINCT cells
     if int(reps.numel()) == 0:
         return []
@@ -519,7 +553,7 @@ def index_blind_nbest(q, N=5):
     for i in range(len(reps)):
         if keyn[i] <= -1e8:
             break
-        cell = primitivize(buerger_reduce(Mtn[i]), q)
+        cell = _final_cell(Mtn[i], q)
         if cell is None or any(same_lattice(cell, c) for c, _ in out):
             continue
         out.append((cell, float(keyn[i])))

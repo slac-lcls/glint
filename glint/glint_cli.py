@@ -322,9 +322,10 @@ def main():
             # integrate_cxi gives each integrated frame its own photon_eV / clen_m, and its chunk header
             # uses those. These run-level values reach only the chunks with no integrated crystal;
             # --wavelength wins over the .geom there too, as it does in integration (#241).
-            write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
-                                    photon_eV=_stream_photon_eV(args.wavelength, _g.get("photon_energy")),
-                                    clen_m=_num(_g.get("clen"), 0.15), panel_names=_pnames)
+            stats["n_written"] = write_stream_integrated(
+                results, args.out, geom_text=open(args.geom).read(),
+                photon_eV=_stream_photon_eV(args.wavelength, _g.get("photon_energy")),
+                clen_m=_num(_g.get("clen"), 0.15), panel_names=_pnames)
         else:                                                    # per-file images (legacy detectors)
             from glint.predict import integrate_frames
             from glint.geom import parse_geom
@@ -338,14 +339,14 @@ def main():
                                          dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
                                          event_axis=_ev_axis, wavelength_A=args.wavelength)
             _pnames = list(geomd.get("panels", {}).keys())
-            write_stream_integrated(results, args.out, geom_text=open(args.geom).read(),
-                                    photon_eV=_stream_photon_eV(args.wavelength, gg.get("photon_energy"),
-                                                                geomd["wavelength_A"]),
-                                    clen_m=_num(gg.get("clen"), 0.15), panel_names=_pnames or None)
+            stats["n_written"] = write_stream_integrated(
+                results, args.out, geom_text=open(args.geom).read(),
+                photon_eV=_stream_photon_eV(args.wavelength, gg.get("photon_energy"), geomd["wavelength_A"]),
+                clen_m=_num(gg.get("clen"), 0.15), panel_names=_pnames or None)
     else:
         # the .geom is what makes the stream readable at all -- see stream.write_stream
-        write_stream(results, args.out,
-                     geom_text=open(args.geom).read() if args.geom else None)
+        stats["n_written"] = write_stream(results, args.out,
+                                          geom_text=open(args.geom).read() if args.geom else None)
     _report(stats, args.out)
     if args.integrate:
         print(f"  integrated         : {nint} frames / {tot} reflections (real I/sigma) -> {args.out}")

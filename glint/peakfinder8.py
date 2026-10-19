@@ -180,8 +180,17 @@ class PeakFinder8:
         # Runs eager (disables the CUDA-graph fast path).
         self.H, self.W = q_per_pixel.shape
         q = q_per_pixel.astype(xp.float64)
-        self.good = (xp.ones((self.H, self.W), bool) if mask is None else mask.astype(bool)) & (q >= r_min)
-        self.M = RadialIntegrator(q, nbin=nbin, mask=self.good).M.astype(self.dt)   # built ONCE
+        # A pixel with no finite q has no resolution ring, so it is a masked pixel, the same as a NaN/inf
+        # VALUE is (_usable). `q >= r_min` already drops NaN and -inf; +inf passes it, and M holds no weight
+        # for that pixel, so its background and sigma are 0 and its SNR is ~1e6 x its count: a candidate
+        # pixel on every frame. On an all-finite map this term is all True and `good` is unchanged.
+        self.good = ((xp.ones((self.H, self.W), bool) if mask is None else mask.astype(bool))
+                     & xp.isfinite(q) & (q >= r_min))
+        # A q-map with no usable pixel (a dead or unmapped panel, every q non-finite) has no default range, and
+        # RadialIntegrator would refuse it. Every pixel is masked, so any range builds the same empty operator,
+        # and find() returns no peaks.
+        rng = {} if bool(self.good.any()) else {"qmin": 0.0, "qmax": 1.0}
+        self.M = RadialIntegrator(q, nbin=nbin, mask=self.good, **rng).M.astype(self.dt)   # built ONCE
         self._good_f = self.good.ravel().astype(self.dt)
         self._good_flat = self.good.ravel()
         self.yy, self.xx = (g.astype(xp.float64) for g in xp.mgrid[0:self.H, 0:self.W])  # fp64 for centroids

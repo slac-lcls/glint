@@ -74,7 +74,8 @@ class RadialIntegrator:
     nbin : int, optional
         Number of output bins (default ~sqrt(npix)/2).
     qmin, qmax : float, optional
-        Bin range (default the data min/max).
+        Bin range (default the min/max of the finite q). Non-finite q is excluded; with ``split="area"``
+        and inferred half-widths, its finite-difference neighbours are excluded too.
     mask : bool array, optional
         True = keep the pixel.
     norm : array, optional
@@ -90,8 +91,20 @@ class RadialIntegrator:
         xp = _xp(q_per_pixel); self._xp = xp
         q2d = q_per_pixel
         q = q2d.ravel().astype(xp.float64); npix = q.size
-        self.qmin = float(q.min() if qmin is None else qmin)
-        self.qmax = float(q.max() if qmax is None else qmax)
+        qr = q
+        if qmin is None or qmax is None:
+            # The default range is the FINITE q's. q.min() of a map with one NaN pixel is NaN, which made dq
+            # and every bin index NaN: M then held NaN weights (arm64 numpy) or none at all (x86 numpy, CuPy),
+            # and PeakFinder8 found 0 peaks or hundreds of junk ones. Those pixels never reach M
+            # (_linear/_area gate them), so they get no say in the range either. All-finite maps: qr is q.
+            fin = xp.isfinite(q)
+            if not bool(fin.all()):
+                if not bool(fin.any()):
+                    raise ValueError("q_per_pixel has no finite value, so there is no default qmin/qmax; "
+                                     "pass both")
+                qr = q[fin]
+        self.qmin = float(qr.min() if qmin is None else qmin)
+        self.qmax = float(qr.max() if qmax is None else qmax)
         self.nbin = NB = int(nbin if nbin is not None else np.sqrt(npix) / 2)
         self.dq = (self.qmax - self.qmin) / NB
         self.q = self.qmin + (xp.arange(NB) + 0.5) * self.dq       # bin centres
@@ -119,8 +132,16 @@ class RadialIntegrator:
     def _linear(self, q, okmask):
         xp = self._xp; NB = self.nbin
         t = (q - self.qmin) / self.dq - 0.5                       # split about bin CENTRES
-        b0 = xp.floor(t).astype(xp.int64); frac = t - b0
         ok = xp.ones(q.size, bool) if okmask is None else okmask.copy()
+        # A non-finite q has no bin, and nothing below caught it: floor(nan).astype(int64) is UNDEFINED,
+        # and where it lands decides the answer. numpy on arm64 gives 0 -- in range, so ok0 stayed True
+        # and the weights 1 - frac and frac (both NaN) went into M, making two bins NaN for every frame
+        # (experiments/test_radial_nonfinite_q.py, part A). A platform whose cast lands out of range would be
+        # clean by accident; CuPy is not tested here. Gate the pixel BEFORE the cast instead of relying on
+        # where undefined behaviour lands. On a finite q only masked pixels change b0, and their entries stay
+        # (row 0, weight 0), so M is unchanged bit for bit.
+        ok &= xp.isfinite(t)
+        b0 = xp.floor(xp.where(ok, t, 0.0)).astype(xp.int64); frac = t - b0
         ok0 = ok & (b0 >= 0) & (b0 < NB); ok1 = ok & (b0 + 1 >= 0) & (b0 + 1 < NB)
         rows = xp.concatenate([xp.where(ok0, b0, 0), xp.where(ok1, b0 + 1, 0)])
         cols = xp.concatenate([xp.arange(q.size), xp.arange(q.size)])
@@ -135,12 +156,29 @@ class RadialIntegrator:
             g0, g1 = xp.gradient(q2d.astype(xp.float64))
             hw = 0.5 * (xp.abs(g0) + xp.abs(g1)).ravel()          # L1 half-width to a square-pixel corner
         hw = xp.maximum(hw, self.dq * 1e-4)
-        qlo = xp.clip(q - hw, self.qmin, self.qmax)
-        qhi = xp.clip(q + hw, self.qmin, self.qmax)
-        jlo = xp.clip(xp.floor((qlo - self.qmin) / self.dq).astype(xp.int64), 0, NB - 1)
-        jhi = xp.clip(xp.floor((qhi - self.qmin) / self.dq).astype(xp.int64), 0, NB - 1)
+        # q is sanitised for the ARITHMETIC only -- `ok &= fin` drops those pixels below, but inf - inf
+        # would otherwise raise "invalid value encountered" from dead code.
+        fin = xp.isfinite(q)
+        qs = xp.where(fin, q, self.qmin)
+        qlo = xp.clip(qs - hw, self.qmin, self.qmax)
+        qhi = xp.clip(qs + hw, self.qmin, self.qmax)
         ok = xp.ones(q.size, bool) if okmask is None else okmask.copy()
+        ok &= fin
         ok &= (qhi > qlo)
+        # xp.gradient is a FINITE DIFFERENCE, so a non-finite q gives its four NEIGHBOURS a non-finite
+        # half-width too. A NaN one fails `qhi > qlo` above; an INFINITE one does not -- clip() sends its
+        # interval to the full [qmin, qmax], so it emitted an entry in EVERY bin, all of weight 0
+        # (dq / 2 / inf): the answer stayed right, but one infinite pixel added 780 stored entries to M on a
+        # 128x128 map binned 200 ways (experiments/test_radial_nonfinite_q.py, part B, d21de4c, arm64 numpy
+        # 1.26). Drop the contaminated stencil instead. Filling the bad pixel before differencing, to keep the
+        # neighbours, would not help: a global fill invents a local gradient, and the neighbours would smear
+        # their weight across bins nothing should reach.
+        ok &= xp.isfinite(hw)
+        # ...and only now cast: floor() of a non-finite value is undefined, and clip() would turn whatever
+        # it produced into a REAL bin index (see _linear). On a finite q and half-width, `ok` and every kept
+        # pixel's jlo/jhi are as before.
+        jlo = xp.clip(xp.floor(xp.where(ok, (qlo - self.qmin) / self.dq, 0.0)).astype(xp.int64), 0, NB - 1)
+        jhi = xp.clip(xp.floor(xp.where(ok, (qhi - self.qmin) / self.dq, 0.0)).astype(xp.int64), 0, NB - 1)
         counts = xp.where(ok, jhi - jlo + 1, 0).astype(xp.int64)
         total = int(counts.sum())
         csum = xp.cumsum(counts); ranges = xp.arange(total)       # ragged-range expansion, cupy-portable

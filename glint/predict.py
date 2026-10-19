@@ -360,8 +360,9 @@ def _write_chunk(f, serial, r, panel_name="p0", photon_eV=9392.7, clen_m=0.15, p
     convention CrystFEL uses for its own namespaced keys (``predict_refine/...``); readers skip
     unrecognised ``key = value`` lines, so this stays parseable while a GLINT-aware merger can use it.
     Returns True if the chunk carried an indexed crystal."""
+    from glint.stream import has_cell
     M = r.get("M")
-    valid = M is not None and abs(np.linalg.det(np.asarray(M, float))) >= 1.0
+    valid = has_cell(M)
     f.write("----- Begin chunk -----\n")
     f.write(f"Image filename: {r.get('image', 'glint.cxi')}\n")
     ev = r.get('event', 0)
@@ -602,10 +603,104 @@ def _match_reference_setting(M, ref):
 # as it came, with a warning, rather than forced into a setting it does not have.
 SETTING_MATCH_RTOL = 0.1
 
+# _run_setting's seed search, when most frames miss the typical-length frame: this many candidates, each scored on
+# at most this many frames spread over the run (0.4 ms per match, so about 2 s at most, and only then).
+SEED_CANDIDATES = 16
+SEED_POPULATION = 256
+
 # The Laue classes whose lattice code already fixes a standard setting in ``_canonical_axes`` (unique axis c,
 # or a <= b <= c); the solution file keeps that setting, reference cell or not. Every other code -- monoclinic,
-# rhombohedral (``-3m_R``, which ``standardize_axes`` leaves as handed in), triclinic -- takes the reference's.
+# rhombohedral (``-3m_R``, which ``standardize_axes`` leaves as handed in), triclinic -- takes the reference's,
+# or without one the run's own (``_run_setting``).
 STANDARD_SETTING_LAUE = ("4/mmm", "mmm", "6/mmm")
+
+
+def _needs_run_setting(lattice_code):
+    """True for the codes whose setting the length-only rule cannot place and that a run's own frames can:
+    triclinic ``aP``, primitive monoclinic ``mP``/``mPa``/``mPb``/``mPc``, rhombohedral ``hR``. A base-centered
+    code is not among them: without a reference the blind search's frames are primitive cells, which no signed
+    permutation turns into the centered setting the code names."""
+    c = str(lattice_code or "").strip().lower()
+    return c.startswith("a") or c.startswith("mp") or c.startswith("hr")
+
+
+def _run_setting(Ms, lattice_code):
+    """ONE reference basis for a run written without a reference cell, so that every frame of the run gets the
+    same setting. ``Ms``: the frames' bases (columns a, b, c in A). Returns a basis with the run's cell, or None.
+
+    Choosing the setting frame by frame cannot work for these codes. The bases come with arbitrary column signs
+    (reduced cells from the blind search), and the length-only rule keeps them, so for a monoclinic cell a frame
+    can come out as (a, b, c) or as (a, -b, -c): a 2-fold about a, which is not an operator of 2/m. With beta near
+    90 both look like valid cells (beta and 180 - beta). On mfx101343025 r194 (28.0/62.5/60.9 A, beta 90.8) 101 of
+    229 frames were written at beta 89.2, 180 degrees from the rest.
+
+    The run decides instead, once:
+      1. the seed is the frame whose sorted edge lengths are closest to the median ones (a typical frame), if
+         most frames match it (``_seed_support``). Lengths alone cannot see an angle: a frame with typical edges
+         and one wrong angle would set the run's cell, and every other frame would miss it. Then the seed is the
+         candidate most frames match, of that frame and up to ``SEED_CANDIDATES - 1`` frames spread over the run;
+      2. every frame is put in the seed's labeling (``_match_reference_setting``), and the run's cell is the
+         element-wise median of their metric tensors;
+      3. for a primitive monoclinic code that cell is placed once: the unique axis is the one outside the pair
+         with the largest |cos| (the beta pair), at the position the code's last letter names (b by default),
+         the shorter of the other two first, and their angle obtuse; the two angles at the unique axis are set
+         to 90, as in any monoclinic reference cell. Other codes take ``_canonical_axes`` of
+         the run's cell, so a cell the length-only rule could place keeps the setting it gave before.
+
+    ``write_solution_file`` then matches each frame to this basis exactly as it matches a given reference cell.
+    That per-frame match is still decided by the frame's metric, so it holds when the run's cell is separated
+    from its pseudo-symmetric alternatives by more than the per-frame noise (on r194: beta 0.8 degrees from 90,
+    and the two long axes 2.5 A apart). A cell metrically closer to a higher symmetry than that is an indexing
+    ambiguity only the intensities can resolve."""
+    Ms = [np.asarray(M, float) for M in Ms]
+    if not Ms:
+        return None
+    L = np.sort(np.array([np.linalg.norm(M, axis=0) for M in Ms]), axis=1)
+    first = int(np.argmin(np.abs(L / np.median(L, axis=0) - 1.0).max(axis=1)))
+    pop = Ms if len(Ms) <= SEED_POPULATION else [Ms[i] for i in
+                                                  np.linspace(0, len(Ms) - 1, SEED_POPULATION).astype(int)]
+    seed, best = Ms[first], _seed_support(Ms[first], pop)
+    if 2 * best <= len(pop):
+        spread = np.linspace(0, len(Ms) - 1, min(len(Ms), SEED_CANDIDATES)).astype(int)
+        for i in spread:
+            s = _seed_support(Ms[i], pop)
+            if s > best:
+                seed, best = Ms[i], s
+    G = [P.T @ P for P, e in (_match_reference_setting(M, seed) for M in Ms) if e <= SETTING_MATCH_RTOL]
+    G = np.median(np.array(G), axis=0)
+    if np.linalg.eigvalsh(G)[0] <= 0:                                  # a median that is no metric: the seed's
+        G = seed.T @ seed
+    code = str(lattice_code or "").strip()
+    if code[:1].lower() == "m":
+        d = np.sqrt(np.diag(G))
+        C = np.abs(G) / np.outer(d, d)
+        i, j = max(((0, 1), (0, 2), (1, 2)), key=lambda p: C[p])     # the beta pair
+        k = 3 - i - j                                                  # the unique axis
+        if d[j] < d[i]:
+            i, j = j, i                                                # the shorter of the pair first
+        u = "abc".index(code[2].lower()) if len(code) > 2 and code[2].lower() in "abc" else 1
+        p0, p1 = [p for p in range(3) if p != u]
+        P = np.zeros((3, 3))
+        P[k, u], P[i, p0], P[j, p1] = 1.0, 1.0, (-1.0 if G[i, j] > 0 else 1.0)   # beta obtuse
+        if np.linalg.det(P) < 0:
+            P[k, u] = -1.0                                             # right-handed: the unique axis flips
+        G = P.T @ G @ P
+        G[u, [p0, p1]] = G[[p0, p1], u] = 0.0                          # a monoclinic cell: alpha = gamma = 90
+        return np.linalg.cholesky(G).T                                 # R.T @ R = the placed cell, det R > 0
+    R = _canonical_axes(np.linalg.cholesky(G).T, laue=_laue_hint_from_lattice_code(code), centering=code[1:2])
+    if code[:2].lower() == "hr":
+        # _canonical_axes leaves -3m_R as handed in, so a seed with mixed column signs (75/105/105) would make
+        # every frame's setting one the threefold does not preserve: one sign rule, all three angles equal.
+        # Without standardize_setting's guard near 90 degrees, which is there for one frame's noise: this cell
+        # is the run's median, and an 89/89/89 cell handed in as (b, a, -c) would otherwise stay 91/91/89.
+        from glint.refine_sym import _fix_signs
+        R = _fix_signs(R.copy(), "trigonal", near90_guard=False)
+    return R
+
+
+def _seed_support(seed, frames):
+    """How many of ``frames`` are a signed permutation of ``seed``'s cell (``_match_reference_setting``)."""
+    return sum(_match_reference_setting(M, seed)[1] <= SETTING_MATCH_RTOL for M in frames)
 
 
 def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
@@ -625,26 +720,48 @@ def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
         sorted to (long, long, short), which for c > a cells labelled the 4-fold axis "b", not "c".
       * every other code (monoclinic ``mPb``/``mCb``, rhombohedral ``hR``, triclinic ``aP``) with
         ``ref_cell`` given: the setting of the reference cell (``_match_reference_setting``) -- the cell
-        CrystFEL is handed with ``-p``, so its cell check compares like with like. Without ``ref_cell``
-        (or for a frame that is no signed permutation of it) they get ``_canonical_axes``, as before:
-        base-centred cells as they came, the rest by the length-only rule, which can reorder columns
-        but cannot place a monoclinic unique axis -- a monoclinic code without a reference says so
-        on stderr.
+        CrystFEL is handed with ``-p``, so its cell check compares like with like.
+      * ``aP``, primitive monoclinic and ``hR`` without ``ref_cell``: the run's own setting
+        (``_run_setting``), one basis built from all the frames and placed once, which each frame is then
+        matched to as to a reference cell. These used to get the length-only rule frame by frame, which keeps
+        each frame's column signs: on a monoclinic cell with beta near 90 that put about half the frames
+        180 degrees from the others, in a setting 2/m does not relate to theirs. A monoclinic code says on
+        stderr which cell the run's setting has.
+      * base-centered codes without ``ref_cell`` (and a frame that is no signed permutation of the reference
+        or run cell): ``_canonical_axes``, as before -- base-centered cells as they came, which need not be the
+        setting the code names; a base-centered monoclinic code without a reference says so on stderr.
+
+    A frame with no usable cell (``glint.stream.has_cell``: non-finite, |det M| < 1 A^3, or axes that nearly lie
+    in a plane) is skipped and counted on stderr, as the stream writers write it as unindexed. Before, the first
+    singular one raised in the inversion below and no file was written at all.
 
     ``write_fromfile`` is the old name of this function (named after CrystFEL's reader flag, not
     what the function does) and still works."""
+    from glint.stream import NO_CELL, has_cell
     rows = []
     laue = _laue_hint_from_lattice_code(lattice_code)
     centering = str(lattice_code or "")[1:2]
     ref = None if ref_cell is None else np.asarray(ref_cell, float)
-    if laue is None and ref is None and str(lattice_code or "").strip().lower().startswith("m"):
+    run_cell = ref is None and _needs_run_setting(lattice_code)
+    if run_cell:
+        ref = _run_setting([r["M"] for r in results if has_cell(r.get("M"))], lattice_code)
+        if ref is not None and str(lattice_code).strip().lower().startswith("m"):
+            L = np.linalg.norm(ref, axis=0)
+            ang = lambda i, j: np.degrees(np.arccos(ref[:, i] @ ref[:, j] / L[i] / L[j]))   # noqa: E731
+            print(f"write_solution_file: lattice code {lattice_code!r} without a reference cell -- every frame "
+                  f"is written in the run's setting, cell {L[0]:.2f} {L[1]:.2f} {L[2]:.2f} A, "
+                  f"{ang(1, 2):.2f} {ang(0, 2):.2f} {ang(0, 1):.2f} deg (median of the frames)", file=sys.stderr)
+    elif laue is None and ref is None and str(lattice_code or "").strip().lower().startswith("m"):
         print(f"write_solution_file: lattice code {lattice_code!r} without a reference cell -- the axes get the "
               f"length-only setting of _canonical_axes, which need not put the unique axis where the code says",
               file=sys.stderr)
-    far = 0
+    far = skipped = 0
     for r in results:
         M = r.get("M")
         if M is None:
+            continue
+        if not has_cell(M):
+            skipped += 1
             continue
         if ref is not None and laue not in STANDARD_SETTING_LAUE:
             Are, e = _match_reference_setting(M, ref)
@@ -658,9 +775,13 @@ def write_solution_file(results, path, lattice_code="aP", ref_cell=None):
         rows.append("%s //%s %s 0.0 0.0 %s"
                     % (r.get("image", "glint.cxi"), ev, " ".join("%.7f" % x for x in v), lattice_code))
     if far:
-        print(f"write_solution_file: {far} frame(s) are no signed permutation of the reference cell "
+        print(f"write_solution_file: {far} frame(s) are no signed permutation of the "
+              f"{'run' if run_cell else 'reference'} cell "
               f"(metric distance > {SETTING_MATCH_RTOL}); written in the setting _canonical_axes gives them",
               file=sys.stderr)
+    if skipped:
+        print(f"write_solution_file: {skipped} frame(s) have no usable cell ({NO_CELL}) and are skipped, as the "
+              f"stream writers skip them", file=sys.stderr)
     with open(path, "w") as f:
         f.write("\n".join(rows) + "\n")
     return len(rows)

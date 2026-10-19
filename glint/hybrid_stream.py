@@ -25,7 +25,7 @@ from glint.multishot import consensus_cell, group_medoid, same_lattice
 # experiments/test_consensus_gate.py import it from this module (and rebind it here for A/Bs --
 # hybrid_index reads THIS module's globals at call time, so that still works).
 from glint.multishot import CONSENSUS_MIN_FRAC, CONSENSUS_MIN_LEAD   # noqa: F401  (re-export)
-from glint.stream import write_stream
+from glint.stream import write_stream, written_note
 from glint.geom import clean_frames, clean_q
 
 
@@ -422,6 +422,12 @@ def _floor_note(stats):
     return f"; floor {fl[0]:g} n + {fl[1]:g}" + (f" + {fl[2]:g} sqrt(n)" if len(fl) > 2 else "")
 
 
+def _written_note(stats):
+    note = written_note(stats)
+    if note:
+        print(note)
+
+
 def _report(stats, out):
     n = max(stats["n"], 1)
     if stats.get("mode") == "dense":
@@ -430,6 +436,7 @@ def _report(stats, out):
             print(f"  gate ({stats['gate']})      : {stats['n_gated']} registrations withdrawn (written as unindexed)"
                   + _floor_note(stats))
         print(f"  indexed            : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
+        _written_note(stats)
         return
     print(f"=== GLINT hybrid (blind+consensus+general-rescue), N={stats['n']} ===")
     print(f"  blind indexed      : {stats['n_blind']}/{stats['n']} ({100*stats['n_blind']//n}%)")
@@ -459,6 +466,7 @@ def _report(stats, out):
         print(f"  gate ({stats['gate']})      : {stats['n_gated']} registrations withdrawn (written as unindexed)"
               + _floor_note(stats))
     print(f"  FINAL indexed      : {stats['n_idx']}/{stats['n']} ({100*stats['n_idx']//n}%)  -> {out}")
+    _written_note(stats)
 
 
 if __name__ == "__main__":
@@ -469,7 +477,7 @@ if __name__ == "__main__":
     if N: frames = frames[:N]
     images = [{"image": os.path.basename(path), "event": i} for i in range(len(frames))]
     results, stats = hybrid_index(frames, images)
-    write_stream(results, out)
+    stats["n_written"] = write_stream(results, out)
     _report(stats, out)
 
 

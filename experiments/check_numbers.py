@@ -53,6 +53,20 @@ from pathlib import Path
 HOME = Path.home()
 REPO = Path(__file__).resolve().parent.parent   # the checkout this file ships in
 
+
+# --- BEGIN exact McNemar (lifted verbatim by experiments/test_check_numbers_ci.py) ---
+def _mcnemar_p(a, b):
+    """Exact two-sided McNemar p for a and b discordant pairs: 2 P(Bin(a + b, 1/2) <= min(a, b)), capped at 1.
+    Kept in integers until the last division. The float form, 2.0 * sum(...) / 2.0 ** m, overflows past 1,023
+    discordant pairs (a real run's head-to-head has 1,459 at the lattice bar). A p below the smallest float
+    comes out 0.0: print it as p < 1e-300."""
+    a, b = int(a), int(b)
+    m = a + b
+    if m == 0:
+        return 1.0
+    return min(1.0, 2 * sum(comb(m, k) for k in range(min(a, b) + 1)) / 2 ** m)
+# --- END exact McNemar ---
+
 # --------------------------------------------------------------------------------------- the facts
 # Measured, and the single source of truth. Provenance in the trailing comment: PR number where
 # merged, or "open" where it is not yet.
@@ -787,6 +801,10 @@ DEFAULT_TARGETS = [
     # ⚑ Both were VERIFIED GREEN before being added, so wiring them in blocked nothing; the rules
     # added alongside them are what makes the targets mean something (see the note below).
     HOME / "git/papers/glint/glint_rewrite_JAC_refined.tex",
+    # ...and the revised manuscript, written as a NEW file next to the submitted one. Listed before
+    # it exists so the guard reads it from its first push; until then it is an out-of-repo default
+    # and SKIPs, like the others when absent.
+    HOME / "git/papers/glint/glint_r1.tex",
     # ...and its SI, missed when the manuscript was added: the SI carries PARALLEL copies of the
     # dataset tables, and on 2026-08-26 -- the first day it was ever scanned -- its copy of the
     # Jungfrau row still read the retired `93% (support 54/60)` that the main text had already
@@ -2316,10 +2334,7 @@ def check_arithmetic() -> list[str]:
                                 "pw_blind_linear_of480"),
                                ("inverse", "pw_inverse_gained", "pw_inverse_lost",
                                 "pw_blind_inverse_of480")):
-        _m = int(F[_g]) + int(F[_l])
-        _p = 1.0 if _m == 0 else min(1.0, 2.0 * sum(comb(_m, _k)
-                                                    for _k in range(min(int(F[_g]), int(F[_l])) + 1))
-                                     / 2.0 ** _m)
+        _p = _mcnemar_p(F[_g], F[_l])
         if _p > 0.05:
             bad.append(f"  FACTS: blind {_tag} vs binary was MEASURED significantly worse; the "
                        f"stored split {F[_g]}/{F[_l]} now gives p = {_p:.3g}, so glint_fast's "
@@ -2345,9 +2360,6 @@ def check_arithmetic() -> list[str]:
     # significance in either channel, STEPS=2 does, and the interval bounding any true effect stays
     # where glint_fast quotes it. EVERY arm is checked, both channels: the sweep is non-monotonic,
     # so endpoint checks would leave the interior unguarded while looking thorough.
-    def _mcnemar_p(a: int, b: int) -> float:
-        m = a + b
-        return 1.0 if m == 0 else min(1.0, 2.0 * sum(comb(m, k) for k in range(min(a, b) + 1)) / 2.0 ** m)
 
     # Tango (1998) score interval for the paired rate difference d = p01 - p10.
     #
@@ -2785,8 +2797,7 @@ def check_arithmetic() -> list[str]:
     # two-sided McNemar and fail if it stops supporting "indistinguishable". A rate edit that leaves the
     # discordant counts alone would otherwise sail through.
     _b01, _b10 = int(F["mcnemar480_glint_only"]), int(F["mcnemar480_xgandalf_only"])
-    _m = _b01 + _b10
-    _p = 1.0 if _m == 0 else min(1.0, 2.0 * sum(comb(_m, _k) for _k in range(0, min(_b01, _b10) + 1)) / 2.0 ** _m)
+    _p = _mcnemar_p(_b01, _b10)
     if _p <= 0.05:
         bad.append(f"  FACTS: the n=480 blind pair is no longer a tie (exact McNemar p = {_p:.3g} from "
                    f"{_b01} vs {_b10} discordant) -- the synopsis and intro say 'matches ... p=0.7'. "
@@ -2857,8 +2868,7 @@ def check_arithmetic() -> list[str]:
     # 357 against consensus's 361, a tie on the discordant frames. That is a sign-test claim, so check
     # it as one; comparing totals is what let the last four coincidences pass for identities.
     _cs, _ct = int(F["cons_vs_true_strict_cons"]), int(F["cons_vs_true_strict_true"])
-    _m = _cs + _ct
-    _p = 1.0 if _m == 0 else min(1.0, 2.0 * sum(comb(_m, _k) for _k in range(min(_cs, _ct) + 1)) / 2.0 ** _m)
+    _p = _mcnemar_p(_cs, _ct)
     if _p <= 0.05:
         bad.append(f"  FACTS: handing the pipeline the cell is now significant at the strict bar "
                    f"({_cs} vs {_ct}, p={_p:.3g}) -- sec:consensus says 'consensus recovers everything "
@@ -2876,8 +2886,7 @@ def check_arithmetic() -> list[str]:
     for _tag, _a, _b in (("120", "bvp_batched_only_120", "bvp_perframe_only_120"),
                          ("480", "bvp_batched_only_480", "bvp_perframe_only_480")):
         _x, _y = int(F[_a]), int(F[_b])
-        _m = _x + _y
-        _p = 1.0 if _m == 0 else min(1.0, 2.0 * sum(comb(_m, _k) for _k in range(min(_x, _y) + 1)) / 2.0 ** _m)
+        _p = _mcnemar_p(_x, _y)
         if _p <= 0.05:
             bad.append(f"  FACTS: batched vs per-frame is now significant at n={_tag} ({_x} vs {_y}, "
                        f"p={_p:.3g}) -- the paper says the two agree in aggregate to within the "

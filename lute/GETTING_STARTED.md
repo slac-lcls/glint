@@ -346,7 +346,7 @@ Defaults are `v4` and are reasonable. If you are tuning:
 * **`--min-peaks` is coupled to the threshold.** What collapses yield is frames dropping below
   `min-peaks` and never being offered — not the threshold degrading solutions. Tune them together.
 * **`pf8` is not calibrated for your detector until you calibrate it.** The calibrated object is
-  the *pair* (`--thr-*` ADU floor, `--pf8-min-snr`), never the SNR alone. The shipped
+  the *pair* (`--pf8-thr-adu` ADU floor, `--pf8-min-snr`; direct `glint_xtc.py` route only), never the SNR alone. The shipped
   `PF8_MIN_SNR = 15` is well above where practitioners run this hardware (3.5–6). On Jungfrau 16M
   with interior ASIC seams masked the knee is at 6–8 and the corrected pair is (110 ADU, 8) —
   **but that pair is only valid with the mask**, which is not yet wired into any ingest path.

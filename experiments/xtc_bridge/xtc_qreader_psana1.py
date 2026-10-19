@@ -109,7 +109,8 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
                           peakfinder="v4", peaks_out=None,
                           min_pix=xtc_core.PF_MIN_PIX, son_min=xtc_core.PF_SON_MIN,
                           thr_high=xtc_core.PF_THR_HIGH, thr_low=xtc_core.PF_THR_LOW,
-                          pf8_min_snr=xtc_core.PF8_MIN_SNR, gpu_calib=False):
+                          pf8_min_snr=xtc_core.PF8_MIN_SNR, gpu_calib=False,
+                          pf8_thr_adu=xtc_core.PF8_THR_ADU):
     """Peak-find a whole psana1 (LCLS-I) run in-process and return its q-frames -- the psana2
     reader's dict contract {qframes, events, n_events, n_sent, n_skipped_wl}, plus `lams`.
 
@@ -280,7 +281,7 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
             X, Y, Zc, kin, finders = xtc_core.prep_geometry(
                 Xf, Yf, Zf, frame.shape, good, zdist,
                 min_pix=min_pix, son_min=son_min, thr_high=thr_high, thr_low=thr_low,
-                pf8_min_snr=pf8_min_snr,
+                pf8_min_snr=pf8_min_snr, pf8_thr_adu=pf8_thr_adu,
                 peakfinder=peakfinder, lam=lam)
         n_events += 1
         if peaks_out is None:

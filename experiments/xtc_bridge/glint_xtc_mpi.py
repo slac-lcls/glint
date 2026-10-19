@@ -84,8 +84,18 @@ def placement_record(rank, host, environ, retired, identity):
 
 
 def _first_device(cvd):
+    """The first device a mask makes visible, or None when it makes none visible: unset, empty, or a mask
+    whose first entry is a negative ordinal (CUDA_VISIBLE_DEVICES=-1 hides every GPU)."""
     devices = [d.strip() for d in (cvd or "").split(",") if d.strip()]
-    return devices[0] if devices else None
+    if not devices or devices[0].startswith("-"):
+        return None
+    return devices[0]
+
+
+def _key_kind(key):
+    """Which library produced an identity key: CuPy's PCI bus id or torch's UUID. Keys of different kinds name
+    the same GPU in two vocabularies, so they cannot be compared."""
+    return "PCI" if (key or "").startswith("PCI ") else "UUID"
 
 
 def decide_placement(records, share_gpu=False):
@@ -98,7 +108,11 @@ def decide_placement(records, share_gpu=False):
       * two ranks on one host whose GPUs have the same physical key stop the run, unless share_gpu;
       * ranks that cannot identify their GPU ("unknown") are compared by mask: two on one host whose
         first visible device is the same, or unset, stop the run unless share_gpu, because nothing
-        shows they use different GPUs.
+        shows they use different GPUs;
+      * reports that cannot be compared stop the run unless share_gpu: on one host, an identified rank
+        beside an unidentified one, an unidentified rank with an unset mask beside any other rank, or
+        PCI ids beside UUIDs (the two libraries name the same GPU differently). Separate buckets are not
+        proof of separate GPUs.
     """
     problems = [f"rank {r['rank']}: {r['retired']}" for r in records if r["retired"]]
     if problems:
@@ -133,6 +147,25 @@ def decide_placement(records, share_gpu=False):
                 problems.append(f"ranks {names} on {host} cannot identify their GPUs (no CuPy, and torch < 2.5 or "
                                 f"without CUDA) and have {first}, so nothing shows they use different GPUs. "
                                 f"To fix: {LAUNCH_FIX}, {SHARE_FIX}.")
+        if len(rs) < 2:
+            continue
+        # Incomparable reports on one host: separate buckets above are not proof of separate GPUs.
+        known = sorted(r["rank"] for r in rs if r["status"] == "ok")
+        unknown = sorted(r["rank"] for r in rs if r["status"] == "unknown")
+        unset = sorted(r["rank"] for r in rs if r["status"] == "unknown" and r["cvd"] is None)
+        kinds = sorted({_key_kind(r["key"]) for r in rs if r["status"] == "ok"})
+        if known and unknown:
+            problems.append(f"ranks {', '.join(map(str, known))} on {host} identified their GPU and ranks "
+                            f"{', '.join(map(str, unknown))} could not, so the two cannot be compared and nothing "
+                            f"shows they use different GPUs. To fix: {LAUNCH_FIX}, {SHARE_FIX}.")
+        elif unset and len(unknown) >= 2 and len(unset) < len(unknown):
+            problems.append(f"ranks {', '.join(map(str, unset))} on {host} cannot identify their GPU and have an "
+                            f"unset mask, so they may select the same GPU as ranks "
+                            f"{', '.join(str(r) for r in unknown if r not in unset)}. To fix: {LAUNCH_FIX}, {SHARE_FIX}.")
+        if len(kinds) > 1:
+            problems.append(f"ranks on {host} report PCI bus ids and UUIDs, which cannot be compared (CuPy in some "
+                            f"ranks' env, torch only in others). To fix: {LAUNCH_FIX}, with the same env on every rank, "
+                            f"or {SHARE_FIX}.")
     return problems
 
 

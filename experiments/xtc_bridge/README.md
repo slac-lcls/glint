@@ -57,7 +57,7 @@ on a node are compared by their masks' first device instead. Rank 0 logs every r
 and GPU. The reader's own device is inferred from the inherited mask, not checked separately. `--gpus-per-node` / `GLINT_GPUS_PER_NODE`, which
 used to rewrite the mask, are removed and now exit with that fix. A rewrite after `import mpi4py` moves the
 rank only if MPI has not already initialized CUDA; that held in GLINT's conda1 envs but not in psana2-gpu's
-(lcls2#175). Hardware check: `placement_validation/` (S3DF job 40623083). For xtc2 the MPI is only at the conda1
+(lcls2#175, now superseded by lcls2#187, which keeps the same contract). Hardware check: `placement_validation/` (S3DF job 40623083). For xtc2 the MPI is only at the conda1
 level — each rank calls its own conda2 bridge worker with its shard, so there is no MPI inside conda2.
 
 ### Related: the online/streaming counterpart (LCLStreamer)

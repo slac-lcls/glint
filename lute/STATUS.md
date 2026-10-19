@@ -705,7 +705,8 @@ nodes. The *Memory* point below applies to the first experiment too. The boundar
 `9b32dda` (`psexp/tools.py`, `datasource.py`, `psexp/mpi_ds.py`):
 - `PS_PARALLEL` defaults to `mpi`. `DataSource(exp=...)` then returns `MPIDataSource` only when MPI
   reports more than one rank.
-- `MPIDataSource` calls `init_gpu_rank()` on GPU BD ranks.
+- `MPIDataSource` calls `init_gpu_rank()` on GPU BD ranks (the reviewed branch; lcls2#187 removes that
+  export and selects the device during `RunParallel` setup instead, see below).
 - `PS_PARALLEL=none` makes `DataSource(exp=...)` return `SerialDataSource` without asking MPI for
   the world size. It did not keep MPI from starting: at `9b32dda`, `import psana` reaches
   `detector/UtilsJungfrau.py`, which ran `from mpi4py import MPI` at module level.
@@ -776,11 +777,29 @@ from reading the source and has not yet been validated in a launch.
 - select only within each rank's allowed devices;
 - discover the actual GPU-sharing peers across EB groups for the budget.
 
-[lcls2#175](https://github.com/slac-lcls/lcls2/pull/175) (open, against `features/psana2-gpu`)
-implements this. It selects a device within the launcher's mask and does **not** rewrite the variable:
-its design notes measured CUDA already initialized after `import psana` (whose CUDA-aware MPI calls
-`cuInit` when mpi4py loads), so a later write is ignored. @monarin's review of it (9 Oct) has a P1
-open: the selected device does not yet reach the run, so workers can stay on the default GPU.
+[lcls2#175](https://github.com/slac-lcls/lcls2/pull/175) implemented this first; it was closed without
+merging. Its design notes measured CUDA already initialized after `import psana` (whose CUDA-aware MPI
+calls `cuInit` when mpi4py loads), so a later write to the mask is ignored; that measurement stands.
+The replacement is [lcls2#187](https://github.com/slac-lcls/lcls2/pull/187), an open draft against
+`features/psana2-gpu` (head `4b068a8` on 19 Oct; @monarin's update on glint#256). What it changes:
+- selection and discovery happen together during `RunParallel` setup: `discover_peers()` selects the
+  BD's device and makes it current with CuPy `Device.use()`. The `PinnedDevice` handoff from
+  DataSource to Run is gone, so the P1 that #175's review had open (the selected device not reaching
+  the run) does not apply to #187;
+- assignment is by physical identity across the node's BD workers: their visible PCI ids are gathered
+  and each worker gets a deterministic least-loaded device within its allowed set, so reordered or
+  differing visibility lists work without ordinal arithmetic. Sharing groups are keyed by hostname and
+  driver-reported PCI id across EB groups. The launcher's mask is not changed;
+- shared constants are established once per Run and released at teardown (no BeginStep refresh);
+  different selector declarations disable sharing for that device group and use budgeted private
+  copies; an IPC failure aborts instead of falling back silently;
+- the `init_gpu_rank` export is removed. Integration code follows psana's selected device after Run
+  setup rather than calling a helper before `DataSource`.
+Not a readiness sign-off: @monarin's review of #187 found an early-close cleanup-order problem (a
+closing BD can enter the collective constant release before draining its outstanding EB traffic;
+draining through transport termination before the collective release completed a CPU-only real-MPI
+reproducer). That fix and the native GPU validation are still open, and GLINT's bridge smoke test
+does not exercise that path.
 
 The serial GLINT integration does not have to wait for it.
 
@@ -815,9 +834,10 @@ The serial GLINT integration does not have to wait for it.
     use identity, not the string.
 
   The conda2 reader inherits that mask, so the torch indexer and the reader's peak-find share one
-  device. The reader must stay serial (`PS_PARALLEL=none`) whether or not lcls2#175 lands: this
-  serial bridge takes no part in #175's MPI placement. GLINT does not yet set `PS_PARALLEL=none` for
-  the reader itself.
+  device. The reader must stay serial (`PS_PARALLEL=none`) whether or not lcls2#187 lands: this
+  serial bridge takes no part in #187's MPI placement. `xtc_qreader.py` sets `PS_PARALLEL=none` before
+  it imports psana (an explicit value in the environment is kept), so the reader comes up serial
+  whatever the launcher exported.
 - **Native psana2-gpu (follow-up adapter, glint#219; not started).** It replaces the bridge rather
   than nesting under `glint_xtc_mpi.py`'s sharding. Per @monarin's review of glint#256, GLINT then:
   - keeps the launcher's mask and skips `glint_xtc_mpi.py`'s placement check; psana assigns each BD
@@ -837,7 +857,7 @@ The serial GLINT integration does not have to wait for it.
   - submits calibration and peak finding through `GpuTask(function(batch, stream))`, publishing
     compact results first; full indexing inside the BDs can follow, as in glint#219.
 
-  This waits for lcls2#175, including its P1.
+  This waits for lcls2#187 (which supersedes #175 and its P1) and its own open cleanup-order fix.
 - **Memory.** psana's per-worker quota does not cap GLINT's own allocations: the torch indexer, cupy
   peak-finder scratch and the ring. Neither psana's current EB-group count nor the peer discovery
   planned in lcls2#155 can see GLINT's indexer processes or independent serial readers. This applies

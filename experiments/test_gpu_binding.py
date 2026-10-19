@@ -82,12 +82,30 @@ for name, records, share, run in [
     ("unknown: both unset, --share-gpu",          [rec(0, cvd=None, **UNK), rec(1, cvd=None, **UNK)], True, True),
     ("unknown: empty mask",                       [rec(0, cvd="", **UNK)], False, False),
     ("a retired option on one rank stops all",    [rec(0), rec(1, key=B, retired="GLINT_GPUS_PER_NODE=2 was removed")], False, False),
+    # incomparable reports (Copilot, 18 Oct): separate buckets are not proof of separate GPUs
+    ("unknown: unset and '0' on one host",        [rec(0, cvd=None, **UNK), rec(1, cvd="0", **UNK)], False, False),
+    ("unknown: unset and '0', --share-gpu",       [rec(0, cvd=None, **UNK), rec(1, cvd="0", **UNK)], True, True),
+    ("identified and unidentified on one host",   [rec(0, key=A), rec(1, cvd="0", **UNK)], False, False),
+    ("identified and unidentified, --share-gpu",  [rec(0, key=A), rec(1, cvd="0", **UNK)], True, True),
+    ("identified and unidentified, two hosts",    [rec(0, key=A), rec(1, host="n2", cvd="0", **UNK)], False, True),
+    ("PCI id and UUID on one host",               [rec(0, key=A), rec(1, key="GPU-aaaa-1111-0")], False, False),
+    ("PCI id and UUID, --share-gpu",              [rec(0, key=A), rec(1, key="GPU-aaaa-1111-0")], True, True),
+    ("PCI id and UUID on different hosts",        [rec(0, key=A), rec(1, host="n2", key="GPU-aaaa-1111-0")], False, True),
 ]:
     probs = W.decide_placement(records, share)
     ok = (not probs) == run and all(FIX in p or "removed" in p for p in probs)
     if any(r["status"] == "no-gpu" for r in records):   # the specific reason, not just any refusal
         ok = ok and any("sees no GPU" in p for p in probs)
     report(f"rule: {name}", ok, "runs" if not probs else "stops: " + probs[0][:70] + "...")
+
+# CUDA_VISIBLE_DEVICES=-1 hides every GPU: an unidentified rank with it must stop, with or without --share-gpu
+for share in (False, True):
+    probs = W.decide_placement([rec(0, cvd="-1", **UNK), rec(1, cvd="0", key=A, host="n2")], share)
+    ok = bool(probs) and any("sees no GPU" in p and "'-1'" in p for p in probs)
+    report(f"rule: mask '-1' hides every GPU (unknown report){', --share-gpu' if share else ''}", ok,
+           "stops: " + probs[0][:70] + "..." if probs else "runs")
+report("rule: _first_device treats -1 and '' and None alike", all(W._first_device(c) is None for c in ("-1", "-1,0", "", None, " "))
+       and W._first_device("2,3") == "2")
 
 summary = W.placement_summary([rec(r, key=f"PCI {r}") for r in range(20)])
 report("summary: one line per rank, no cap", len(summary) == 20 and all(f"rank {r}:" in summary[r] for r in range(20)))

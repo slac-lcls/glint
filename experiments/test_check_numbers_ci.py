@@ -495,6 +495,22 @@ def _required_fires(text: str, name: str) -> bool:
     return any(f"[REQUIRED/{name}]" in f for f in _cn.check_required(Path("probe.tex"), text))
 
 
+def test_fast_execution_rules_accept_the_r0016_comparison():
+    """The fast-execution rules were written for the cxidb-17 comparison (96 and 88 of 120, ~40x, 7:3 at
+    p = 0.344). The revised manuscript leads with r0016 (1,340 against 543 of 2,228, a sixteenth of the time),
+    so a sentence carrying those numbers must satisfy all three; a bare mention with neither set must still
+    fire, and so must the cxidb-17 wording without its numbers."""
+    r0016 = ("On 2,228 frames of a free-electron laser run GLINT indexes 1,340 and one fast-execution XGANDALF "
+             "instance 543, in a sixteenth of the time per frame.")
+    cxidb = ("On cxidb-17 one fast-execution XGANDALF instance indexes 88/120 (96/120 correct cell) against the "
+             "defaults' 86/120 and 94/120, about 40 times slower; 7:3 discordant, p = 0.344.")
+    bare = "One fast-execution XGANDALF instance is quick."
+    for name in ("xgandalf-fast-accuracy-facts", "xgandalf-fast-speedup-facts", "xgandalf-fast-mcnemar-facts"):
+        assert not _required_fires(r0016, name), name
+        assert not _required_fires(cxidb, name), name
+        assert _required_fires(bare, name), name
+
+
 def _jungfrau_row(**edit) -> str:
     v = dict(MERGE_RENDERED, **edit)
     return (f"Jungfrau-4M lysozyme & {v['jungfrau_final_of1563']} & ${v['jungfrau_ccstar']}$ & "
@@ -1485,6 +1501,7 @@ def test_new_required_rules_stay_silent_without_their_trigger():
 
 if __name__ == "__main__":
     tests = (test_closed_form_mle_matches_brute_force,
+             test_fast_execution_rules_accept_the_r0016_comparison,
              test_bounds_ordered_and_bracket_the_estimate,
              test_zero_discordant_pairs_is_not_certainty,
              test_coverage_is_at_least_nominal,

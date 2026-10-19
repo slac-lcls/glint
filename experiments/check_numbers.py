@@ -2555,12 +2555,19 @@ REQUIRED = [
              "partialator merge. The abstract, sec:realdata, the S12 note and the cover letter all "
              "quote this CC*, so a cell edited here silently disagrees with four other sites",
              window=120),
+    # The three fast-execution rules accept either comparison: the cxidb-17 one they were written for (120 frames,
+    # parity, ~40x), or the real-run one on r0016 (j7_*: 1,340 against 543 of 2,228, 16x on medians), which now
+    # leads the revised manuscript and its abstract. Each required pattern is an alternation of the two.
     Required("xgandalf-fast-accuracy-facts",
              r"xgandalf-fast-execution|fast[- ]execution",
-             (_lit(f"{int(FACTS['xgandalf_fast_lattice_of120'])}") + r"/120",
-              _lit(f"{int(FACTS['xgandalf_fast_strict_of120'])}") + r"/120",
-              _lit(f"{int(FACTS['xgandalf_lattice_of120'])}") + r"/120",
-              _lit(f"{int(FACTS['xgandalf_blind_strict_of120'])}") + r"/120"),
+             ("(?:" + _lit(f"{int(FACTS['xgandalf_fast_lattice_of120'])}") + r"/120|"
+              + _lit(f"{int(FACTS['j7_r0016_glint_strict']):,}") + ")",
+              "(?:" + _lit(f"{int(FACTS['xgandalf_fast_strict_of120'])}") + r"/120|"
+              + _lit(f"{int(FACTS['j7_r0016_xgandalf_fast_strict'])}") + ")",
+              "(?:" + _lit(f"{int(FACTS['xgandalf_lattice_of120'])}") + r"/120|"
+              + _lit(f"{int(FACTS['j7_r0016_frames']):,}") + ")",
+              "(?:" + _lit(f"{int(FACTS['xgandalf_blind_strict_of120'])}") + r"/120|"
+              + _lit(f"{int(FACTS['j7_r0016_frames']):,}") + ")"),
              f"any deliverable that mentions xgandalf fast execution must tie it to the measured "
              f"120-frame result it exists to support: fast {FACTS['xgandalf_fast_lattice_of120']}/120 "
              f"at the lattice bar and {FACTS['xgandalf_fast_strict_of120']}/120 at the strict gate, "
@@ -2570,7 +2577,8 @@ REQUIRED = [
              window=1200),
     Required("xgandalf-fast-speedup-facts",
              r"xgandalf-fast-execution|fast[- ]execution",
-             (r"(?:~|about\s+)?(?:40(?:\.8)?|41)\s*(?:x|times)\b",),
+             (r"(?:~|about\s+)?(?:40(?:\.8)?|41)\s*(?:x|times)\b|"
+              + _lit(f"{int(FACTS['j7_r0016_xgandalf_over_glint_median'])}") + r"\s*(?:x|times)\b|\bsixteenth\b",),
              f"any deliverable that mentions xgandalf fast execution must tie it to the FACTS-derived "
              f"speedup claim: xgandalf_fast_speedup = xgandalf_fast_blind_ms / blind_ms = "
              f"{float(FACTS['xgandalf_fast_speedup']):.1f}, i.e. about 40x. Without that, the ~40x "
@@ -2578,7 +2586,8 @@ REQUIRED = [
              window=1200),
     Required("xgandalf-fast-mcnemar-facts",
              r"xgandalf-fast-execution|fast[- ]execution",
-             (r"\b0\.344\b", r"\b7\s*:\s*3\b|\b7\s+vs\s+3\b"),
+             (r"\b0\.344\b|" + _lit(f"{int(FACTS['j7_r0016_glint_strict']):,}"),
+              r"\b7\s*:\s*3\b|\b7\s+vs\s+3\b|" + _lit(f"{int(FACTS['j7_r0016_xgandalf_fast_strict'])}")),
              f"any deliverable that mentions xgandalf fast execution must tie the parity claim to the "
              f"measured discordant split ({int(FACTS['mcnemar120_fast_glint_only'])}:"
              f"{int(FACTS['mcnemar120_fast_xgandalf_only'])}) and exact two-sided McNemar p = 0.344. "

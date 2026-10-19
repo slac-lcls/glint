@@ -67,12 +67,15 @@ def build_parser():
                          "different geometry than the one a trusted refinement was built on; --zdist "
                          "only replaces Z, so X/Y still come from whatever psana picks.")
     ap.add_argument("--geom", default=None,
-                    help="CrystFEL .geom to take per-pixel X/Y from INSTEAD of psana (psana1 only). "
+                    help="CrystFEL .geom to take per-pixel X/Y from INSTEAD of psana (psana1 and psana2). "
                          "Use when the trusted geometry is a refinement that was never written back "
                          "into psana: on mfxx49820 r0016 psana's deployed 0-end.data is the "
                          "unrefined 2021 start, and against btx's refined r0016.geom it is off by a "
                          "median 3.16%% in |q|, signed per detector quadrant -- which no --zdist can "
-                         "absorb, and which is enough to stop blind indexing finding the true cell.")
+                         "absorb, and which is enough to stop blind indexing finding the true cell. "
+                         "On psana2 the alternative is calibconst's geometry, which is a placeholder "
+                         "(\"EXPERIMENT any\", no module offsets or tilts) wherever no refinement was "
+                         "deployed.")
     pf = ap.add_argument_group(
         "peak finder (PeakFinderV4)",
         "Defaults are calibrated on Epix10ka2M at MFX to match CrystFEL peakfinder8's hit rate; "
@@ -103,6 +106,12 @@ def build_parser():
                     help=f"pf8 ONLY: min per-peak max-pixel SNR. Not tied to --thr-high; it stands "
                          f"in for the integrated-SNR cut pf8 lacks, and is sharp -- 10 turns this "
                          f"into a pass-through (default {xtc_core.PF8_MIN_SNR})")
+    pf.add_argument("--pf8-thr-adu", type=float, default=xtc_core.PF8_THR_ADU,
+                    help="pf8 ONLY: absolute ADU floor a pixel must clear to join a peak, on top of "
+                         "the SNR test -- CrystFEL peakfinder8's --threshold (LUTE's FindPeaksSFX "
+                         "amax_thr). Default off, as every shipped number was measured. Compare with "
+                         "practitioner settings only with both set: their (floor, SNR) pair is one "
+                         "gate.")
     ig = ap.add_argument_group(
         "integration (xtc route, psana1)",
         "Off by default, in which case the stream is ORIENTATION-ONLY: every reflection row carries "
@@ -133,6 +142,7 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
     {qframes, events, n_events, n_sent, n_skipped_wl}, plus the per-frame wavelengths `lams` on the
     psana1 route. Dispatches xtc1 in-process vs xtc2 over the bridge; identical q-core either way."""
     pf_kw = dict(min_pix=args.min_pix, son_min=args.son_min, pf8_min_snr=args.pf8_min_snr,
+                 pf8_thr_adu=args.pf8_thr_adu,
                  thr_high=args.thr_high, thr_low=args.thr_low, peakfinder=args.peakfinder)
     if args.psana == "1":
         # LCLS-I: psana1 is in THIS env with torch -- read in-process, no bridge.
@@ -164,13 +174,16 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
     reader_env = envbridge.Env.conda(args.reader_env, stack="conda2", pythonpath=[bridge_dir])
     if verbose:
         print(f"peak-finding {args.exp} run {args.run} in conda2 env {args.reader_env} (psana2) ...", flush=True)
-    if args.calib_dir or args.geom:
-        sys.exit("--calib-dir/--geom are psana1-only (psana2 takes geometry from calibconst)")
+    if args.calib_dir:
+        sys.exit("--calib-dir is psana1-only (psana2 takes its calibration from calibconst; use "
+                 "--geom to override the geometry)")
+    geom = str(Path(args.geom).resolve()) if args.geom else None   # the worker's cwd is not ours
     return envbridge.call(
         reader_env, "xtc_qreader:run_to_qframes",
         args.exp, args.run, args.det, args.zdist, args.wavelength, args.energy_det,
         args.min_peaks, args.max_events, rank, nranks, args.peakfinder,
-        args.min_pix, args.son_min, args.thr_high, args.thr_low, args.pf8_min_snr)
+        args.min_pix, args.son_min, args.thr_high, args.thr_low, args.pf8_min_snr,
+        geom, args.pf8_thr_adu)
 
 
 def index_and_write(out, args, out_path, report=True):

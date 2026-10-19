@@ -108,6 +108,14 @@ Z spread ~0.1 mm), and real frames peak-find to sane ring `|q|`. The reader is *
 coords (`get_pixel_coords`) and data (`raw.calib`) are both psana-native order, so there is no internal
 segment permutation.
 
+That holds only where a refinement was deployed into psana. On another Jungfrau16M experiment the
+calibconst geometry is a placeholder (`EXPERIMENT any`, "Manually created as an example", no per-module
+offsets or tilts) while the refinement exists only as a CrystFEL `.geom`. `--geom` now works on psana2
+as on psana1. Measured on one of its runs (one A100, October 2026) with the same `coords_from_geom` substitution
+before this flag existed, over the 438 frames indexed both ways: median max cell-length error 0.0170 ->
+0.0094, median max angle error 1.56 -> 0.79 deg, crystals within 2 % and 2 deg 43 % -> 84 %. Check
+the calibconst geometry's header before trusting it.
+
 **xtc1 / psana1 — VALIDATED, and the lesson is that psana's geometry may be the UNREFINED one.**
 On `mfx/mfxx49820` r0016 (Epix10ka2M, 6000 events, 2228 frames with peaks), fully **blind** — no
 `--cell`:

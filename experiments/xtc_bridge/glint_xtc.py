@@ -210,7 +210,7 @@ def stream_records(results, out, geom_text):
     for r in results:
         r = dict(r)
         hit = by_event.get(int(r.get("event", -1)))
-        if hit is not None and len(hit[0]) == len(hit[1]):
+        if geom_text and hit is not None and len(hit[0]) == len(hit[1]):
             r["peaks"], r["peaks_invd"] = hit
         if geom_text and r.get("M") is not None:
             import geom_coords

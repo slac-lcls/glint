@@ -104,7 +104,8 @@ def fake_prep(Xf, Yf, Zf, shape, good, zdist, **kw):
 
 
 xtc_core.prep_geometry = fake_prep
-xtc_core.frame_q = lambda *a, **k: np.zeros((0, 3))
+xtc_core.frame_q = lambda *a, return_px=False, **k: (
+    (np.zeros((0, 3)), np.zeros((0, 3), int), np.zeros(0)) if return_px else np.zeros((0, 3)))
 
 tmp = tempfile.mkdtemp()
 geom = os.path.join(tmp, "tiny.geom")

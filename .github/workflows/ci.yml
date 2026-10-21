@@ -614,6 +614,11 @@ jobs:
         run: python test_shard.py
         working-directory: experiments/xtc_bridge
 
+      - name: experiments/xtc_bridge/test_stream_peaks.py
+        if: ${{ !cancelled() }}
+        run: python test_stream_peaks.py
+        working-directory: experiments/xtc_bridge
+
   torch-cpu-tests:
     name: torch-CPU tests (${{ matrix.torch }}, Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

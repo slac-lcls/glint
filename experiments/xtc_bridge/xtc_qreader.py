@@ -25,7 +25,7 @@ def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_d
                    thr_high=xtc_core.PF_THR_HIGH, thr_low=xtc_core.PF_THR_LOW,
                    pf8_min_snr=xtc_core.PF8_MIN_SNR, geom=None, pf8_thr_adu=xtc_core.PF8_THR_ADU):
     """Peak-find a whole psana2 run in conda2 and return its q-frames (see xtc_qreader_psana1 for the
-    identical psana1 return contract): dict of qframes / events / counts, all envbridge-sendable.
+    identical psana1 return contract): dict of qframes / events / peaks / counts, all envbridge-sendable.
 
     rank/nranks shard events round-robin for the MPI wrapper (each rank's conda1 process calls this over
     its own bridge worker with its shard, so there is no MPI inside conda2). Default rank=0/nranks=1 owns
@@ -85,7 +85,7 @@ def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_d
 
     X = Y = Zc = kin = None
     finders = []
-    qframes, events = [], []
+    qframes, events, peaks = [], [], []
     n_events = n_skipped_wl = 0
     for i, evt in enumerate(prun.events()):
         if max_events and i >= max_events:
@@ -112,10 +112,12 @@ def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_d
                 pf8_min_snr=pf8_min_snr, pf8_thr_adu=pf8_thr_adu,
                 peakfinder=peakfinder, lam=lam)
         n_events += 1
-        q = xtc_core.frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks)
+        q, px, inten = xtc_core.frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks, return_px=True)
         if len(q):
             qframes.append(np.ascontiguousarray(q))
+            # the observed peaks behind q, row for row, so the stream can carry a peak list
+            peaks.append(xtc_core.slab_peaks(px, inten, frame.shape[1]))
             events.append(i)
 
-    return {"qframes": qframes, "events": events,
+    return {"qframes": qframes, "events": events, "peaks": peaks,
             "n_events": n_events, "n_sent": len(qframes), "n_skipped_wl": n_skipped_wl}

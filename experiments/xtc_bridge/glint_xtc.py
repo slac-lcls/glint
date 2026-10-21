@@ -186,6 +186,45 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
         geom, args.pf8_thr_adu)
 
 
+def stream_records(results, out, geom_text):
+    """hybrid_index results -> write_stream records that a strict score can be computed from.
+
+    Two things the plain records lacked:
+      * the OBSERVED peaks: the reader's per-frame `peaks` ([fs, ss, intensity] in the .geom's slab
+        coordinates, row for row with its q), matched to each result by event, plus |q|. Without them
+        every chunk said num_peaks = 0 and only same_lattice could be checked;
+      * on the --geom route, the orientation in CrystFEL's frame. Pass 1 builds q with the detector
+        at Z_SIGN*zdist (geom_coords), so M fits q_pass1 = S q_CrystFEL and the crystal is
+        orientation_to_crystfel(M) in the frame a reader of these peaks and this .geom uses -- the
+        conversion the --integrate route already makes. When that flips M's sign the hkl labels
+        flip with it, so q_CrystFEL . M_written = hkl still holds row for row.
+    A reader without `peaks` (an older bridge worker) still gets a valid stream, without peak lists."""
+    peaks = out.get("peaks")
+    by_event = {}
+    if peaks is not None:
+        if len(peaks) != len(out["qframes"]):
+            raise ValueError(f"reader returned {len(peaks)} peak lists for {len(out['qframes'])} q-frames")
+        by_event = {int(e): (np.asarray(p, float), np.linalg.norm(np.asarray(q, float), axis=1))
+                    for e, p, q in zip(out["events"], peaks, out["qframes"])}
+    recs = []
+    for r in results:
+        r = dict(r)
+        hit = by_event.get(int(r.get("event", -1)))
+        if hit is not None and len(hit[0]) == len(hit[1]):
+            r["peaks"], r["peaks_invd"] = hit
+        if geom_text and r.get("M") is not None:
+            import geom_coords
+            M = np.asarray(r["M"], float)
+            Mc = geom_coords.orientation_to_crystfel(M)
+            # orientation_to_crystfel returns S@M or -(S@M); the second relabels every hkl to -hkl
+            flipped = np.allclose(Mc, -np.diag([1.0, 1.0, geom_coords.Z_SIGN]) @ M)
+            r["M"] = Mc
+            if flipped and r.get("hkl") is not None:
+                r["hkl"] = -np.asarray(r["hkl"])
+        recs.append(r)
+    return recs
+
+
 def index_and_write(out, args, out_path, report=True):
     """Index the reader's q-frames (blind, or --cell known) in conda1/torch and write a CrystFEL
     .stream. Always writes a valid (possibly header-only) stream so an empty shard still produces a
@@ -215,7 +254,7 @@ def index_and_write(out, args, out_path, report=True):
         lam_by_event = dict(zip((int(e) for e in out["events"]), lams or ()))
         n_idx = integrate_and_write(results, args, out_path, report=report, lam_by_event=lam_by_event)
     else:
-        n_idx = write_stream(results, out_path, geom_text=geom_text)
+        n_idx = write_stream(stream_records(results, out, geom_text), out_path, geom_text=geom_text)
     if report:
         _report(stats, out_path)
     return results, stats, n_idx

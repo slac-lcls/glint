@@ -194,7 +194,7 @@ def write_stream(results, path, geom_text=None, panel=None, photon_eV=9392.7, cl
             # 'file', not 'glint': CrystFEL validates this against its own indexer list, and from
             # its side the orientation IS externally supplied.
             f.write(f"indexed_by = {'file' if valid else 'none'}\n")
-            f.write(f"photon_energy_eV = {float(photon_eV):.2f}\n")
+            f.write(f"photon_energy_eV = {float(r.get('photon_eV', photon_eV)):.2f}\n")
             f.write("beam_divergence = 0.00e+00 rad\nbeam_bandwidth = 1.00e-08 %\n")
             f.write(f"average_camera_length = {float(r.get('clen_m', clen_m)):.6f} m\n")
             # A chunk needs a peak-list block even when empty, or the reader reports the chunk

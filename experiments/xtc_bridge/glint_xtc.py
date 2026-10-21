@@ -186,7 +186,33 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
         geom, args.pf8_thr_adu)
 
 
-def stream_records(results, out, geom_text):
+def stream_geometry(geom_text, zdist):
+    """Return the stream geometry with every panel on the plane used to build pass-1 q.
+
+    Pass 1 replaces each pixel's Z with --zdist, so the exported geometry must not retain per-panel
+    coffsets or a path-valued camera length from the source .geom.
+    """
+    if geom_text is None:
+        return None
+    lines = []
+    has_clen = False
+    for raw in geom_text.splitlines():
+        line, sep, comment = raw.partition(";")
+        if "=" in line:
+            key, _ = line.split("=", 1)
+            prop = key.strip().rsplit("/", 1)[-1]
+            if prop == "clen":
+                line = f"{key}= {float(zdist):.12g}"
+                has_clen |= key.strip() == "clen"
+            elif prop == "coffset":
+                line = f"{key}= 0"
+        lines.append(line + (sep + comment if sep else ""))
+    if not has_clen:
+        lines.append(f"clen = {float(zdist):.12g}")
+    return "\n".join(lines) + "\n"
+
+
+def stream_records(results, out, geom_text, zdist=None, wavelength=0.0):
     """hybrid_index results -> write_stream records that a strict score can be computed from.
 
     Two things the plain records lacked:
@@ -197,21 +223,34 @@ def stream_records(results, out, geom_text):
         at Z_SIGN*zdist (geom_coords), so M fits q_pass1 = S q_CrystFEL and the crystal is
         orientation_to_crystfel(M) in the frame a reader of these peaks and this .geom uses -- the
         conversion the --integrate route already makes. When that flips M's sign the hkl labels
-        flip with it, so q_CrystFEL . M_written = hkl still holds row for row.
+        flip with it, so q_CrystFEL . M_written = hkl still holds row for row;
+      * per-event photon energy and the run distance, so a reader reconstructs q at the same
+        wavelength and plane pass 1 used.
     A reader without `peaks` (an older bridge worker) still gets a valid stream, without peak lists."""
     peaks = out.get("peaks")
+    lams = out.get("lams")
+    if lams is not None and len(lams) != len(out["qframes"]):
+        raise ValueError(f"reader returned {len(lams)} wavelengths for {len(out['qframes'])} q-frames")
+    if peaks is not None and len(peaks) != len(out["qframes"]):
+        raise ValueError(f"reader returned {len(peaks)} peak lists for {len(out['qframes'])} q-frames")
     by_event = {}
-    if peaks is not None:
-        if len(peaks) != len(out["qframes"]):
-            raise ValueError(f"reader returned {len(peaks)} peak lists for {len(out['qframes'])} q-frames")
-        by_event = {int(e): (np.asarray(p, float), np.linalg.norm(np.asarray(q, float), axis=1))
-                    for e, p, q in zip(out["events"], peaks, out["qframes"])}
+    for i, (e, q) in enumerate(zip(out["events"], out["qframes"])):
+        by_event[int(e)] = {
+            "peaks": np.asarray(peaks[i], float) if peaks is not None else None,
+            "invd": np.linalg.norm(np.asarray(q, float), axis=1),
+            "lam": float(lams[i]) if lams is not None else float(wavelength or 0.0),
+        }
     recs = []
     for r in results:
         r = dict(r)
         hit = by_event.get(int(r.get("event", -1)))
-        if geom_text and hit is not None and len(hit[0]) == len(hit[1]):
-            r["peaks"], r["peaks_invd"] = hit
+        if hit is not None:
+            if geom_text and hit["peaks"] is not None and len(hit["peaks"]) == len(hit["invd"]):
+                r["peaks"], r["peaks_invd"] = hit["peaks"], hit["invd"]
+            if zdist is not None:
+                r["clen_m"] = float(zdist)
+            if hit["lam"] > 0:
+                r["photon_eV"] = xtc_core.HC_EV_A / hit["lam"]
         if geom_text and r.get("M") is not None:
             import geom_coords
             M = np.asarray(r["M"], float)
@@ -254,7 +293,9 @@ def index_and_write(out, args, out_path, report=True):
         lam_by_event = dict(zip((int(e) for e in out["events"]), lams or ()))
         n_idx = integrate_and_write(results, args, out_path, report=report, lam_by_event=lam_by_event)
     else:
-        n_idx = write_stream(stream_records(results, out, geom_text), out_path, geom_text=geom_text)
+        export_geom = stream_geometry(geom_text, args.zdist)
+        n_idx = write_stream(stream_records(results, out, export_geom, args.zdist, args.wavelength),
+                             out_path, geom_text=export_geom)
     if report:
         _report(stats, out_path)
     return results, stats, n_idx

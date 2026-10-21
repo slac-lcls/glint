@@ -31,16 +31,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))     # repo root, for 
 import geom_coords
 import glint_xtc
 import xtc_core
-from glint.lute_bridge import peaks_to_q
+from glint.lute_bridge import HC_EV_A, peaks_to_q
 from glint.stream import write_stream
 
 H, W = 64, 96                       # two panels stacked in ss, as a 2-segment detector
 ZDIST = 0.12                        # m
-LAM = 1.3                           # A
 GEOM = f"""res = 13333.3
-clen = {ZDIST}
+clen = /LCLS/detector_z
 photon_energy = 9537
-coffset = 0.0
+coffset = 0.025
 p0/min_fs = 0
 p0/max_fs = {W - 1}
 p0/min_ss = 0
@@ -49,6 +48,7 @@ p0/fs = +1.0x +0.0y
 p0/ss = +0.0x +1.0y
 p0/corner_x = -48.0
 p0/corner_y = -70.0
+p0/coffset = 0.012
 p1/min_fs = 0
 p1/max_fs = {W - 1}
 p1/min_ss = {H}
@@ -57,10 +57,11 @@ p1/fs = -1.0x +0.0y
 p1/ss = +0.0x -1.0y
 p1/corner_x = 48.0
 p1/corner_y = 70.0
+p1/coffset = -0.017
 """
 
 
-def pass1_q(geom_path, seg, ss, fs):
+def pass1_q(geom_path, seg, ss, fs, wavelength):
     """Pixels -> q exactly as the reader builds it (geom_coords + xtc_core.frame_q's arithmetic)."""
     Xf, Yf, Zf = geom_coords.coords_from_geom(geom_path, (2, H, W), ZDIST)
     X = Xf.reshape(2, H, W) * 1e-6
@@ -69,7 +70,7 @@ def pass1_q(geom_path, seg, ss, fs):
     kin = np.array([0.0, 0.0, np.sign(Zc)])
     r = np.stack([X[seg, ss, fs], Y[seg, ss, fs], np.full(seg.size, Zc)], axis=1)
     s = r / np.linalg.norm(r, axis=1, keepdims=True)
-    return (s - kin) / LAM
+    return (s - kin) / wavelength
 
 
 def read_peaks(stream_text):
@@ -77,9 +78,13 @@ def read_peaks(stream_text):
     chunks, cur, inpk = [], None, False
     for line in stream_text.splitlines():
         if line.startswith("----- Begin chunk"):
-            cur = {"rows": [], "panels": [], "num_peaks": None}
+            cur = {"rows": [], "panels": [], "num_peaks": None, "energy": None, "clen": None}
         elif line.startswith("num_peaks = ") and cur is not None:
             cur["num_peaks"] = int(line.split("=")[1])
+        elif line.startswith("photon_energy_eV = ") and cur is not None:
+            cur["energy"] = float(line.split("=")[1])
+        elif line.startswith("average_camera_length = ") and cur is not None:
+            cur["clen"] = float(line.split("=")[1].split()[0])
         elif line.startswith("  fs/px   ss/px"):
             inpk = True
         elif line.startswith("End of peak list"):
@@ -93,24 +98,27 @@ def read_peaks(stream_text):
     return chunks
 
 
+def serialized_geom(stream_text):
+    return stream_text.split("----- Begin geometry file -----\n", 1)[1].split(
+        "\n----- End geometry file -----", 1)[0]
+
+
 def main():
     rng = np.random.default_rng(7)
     fails = 0
     with tempfile.TemporaryDirectory() as td:
         gpath = os.path.join(td, "two.geom")
         open(gpath, "w").write(GEOM)
-        panels = list(geom_coords.parse_geom(gpath).values())
-        for p in panels:
-            p.update(coffset=0.0, cx=p["corner_x"], cy=p["corner_y"])   # lute_bridge schema
 
-        out = {"qframes": [], "events": [], "peaks": []}
+        out = {"qframes": [], "events": [], "peaks": [], "lams": []}
         results = []
-        for ev in (3, 11):
+        wavelengths = (1.3, 1.1)
+        for ev, wavelength in zip((3, 11), wavelengths):
             n = 40
             seg = rng.integers(0, 2, n)
             ss = rng.integers(0, H, n)
             fs = rng.integers(0, W, n)
-            q1 = pass1_q(gpath, seg, ss, fs)
+            q1 = pass1_q(gpath, seg, ss, fs, wavelength)
             # A basis that indexes these q to integers: M = inv(B) for a random real-space cell B
             # whose reciprocal rows we fit to... simpler and exact -- pick M, then hkl = q1 @ M is
             # whatever it is; the invariant tested is q_CF . M_written == q1 . M (+-), row for row.
@@ -118,11 +126,27 @@ def main():
             out["qframes"].append(q1)
             out["events"].append(ev)
             out["peaks"].append(xtc_core.slab_peaks(np.stack([seg, ss, fs], 1), rng.random(n) * 100, H))
+            out["lams"].append(wavelength)
             results.append({"image": "xtc://x_r1", "event": ev, "M": M, "q": q1, "hkl": q1 @ M})
-        recs = glint_xtc.stream_records(results, out, GEOM)
+        export_geom = glint_xtc.stream_geometry(GEOM, ZDIST)
+        recs = glint_xtc.stream_records(results, out, export_geom, ZDIST)
         spath = os.path.join(td, "x.stream")
-        write_stream(recs, spath, geom_text=GEOM)
-        chunks = read_peaks(open(spath).read())
+        write_stream(recs, spath, geom_text=export_geom)
+        stream_text = open(spath).read()
+        chunks = read_peaks(stream_text)
+        geom_path_out = os.path.join(td, "stream.geom")
+        geom_text_out = serialized_geom(stream_text)
+        open(geom_path_out, "w").write(geom_text_out)
+        geom_keys = [(line.split("=", 1)[0].strip(), line.split("=", 1)[1].split(";")[0].strip())
+                     for line in geom_text_out.splitlines() if "=" in line]
+        clens = [value for key, value in geom_keys if key == "clen"]
+        offsets = [float(value) for key, value in geom_keys if key.rsplit("/", 1)[-1] == "coffset"]
+        if clens != [f"{ZDIST:.12g}"] or not offsets or any(offset != 0 for offset in offsets):
+            print("FAIL: serialized geometry does not match pass-1 distance / zero offsets")
+            fails += 1
+        panels_out = list(geom_coords.parse_geom(geom_path_out).values())
+        for p in panels_out:
+            p.update(cx=p["corner_x"], cy=p["corner_y"])
 
         for k, (ch, rec, q1, res) in enumerate(zip(chunks, recs, out["qframes"], results)):
             n = len(q1)
@@ -139,7 +163,7 @@ def main():
             if not np.allclose(invd, np.linalg.norm(q1, axis=1), atol=2e-5):
                 print(f"FAIL chunk {k}: (1/d) column is not |q|")
                 fails += 1
-            qcf = peaks_to_q(rows[:, 0], rows[:, 1], panels, ZDIST, LAM)
+            qcf = peaks_to_q(rows[:, 0], rows[:, 1], panels_out, ch["clen"], HC_EV_A / ch["energy"])
             S = np.diag([1.0, 1.0, geom_coords.Z_SIGN])
             if not np.allclose(qcf, q1 @ S, atol=1e-6):
                 print(f"FAIL chunk {k}: peaks read back through the .geom are not S q_pass1 "
@@ -157,7 +181,7 @@ def main():
 
         # An older reader (no `peaks`) still yields a valid stream with empty peak lists.
         old = {"qframes": out["qframes"], "events": out["events"]}
-        write_stream(glint_xtc.stream_records(results, old, GEOM), spath, geom_text=GEOM)
+        write_stream(glint_xtc.stream_records(results, old, export_geom), spath, geom_text=export_geom)
         if any(c["num_peaks"] != 0 for c in read_peaks(open(spath).read())):
             print("FAIL: a reader without peaks should give num_peaks = 0")
             fails += 1

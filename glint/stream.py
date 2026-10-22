@@ -113,6 +113,7 @@ def panel_at(bounds, fs, ss, default="p0"):
     OBSERVED peaks carry real positions, so labelling them with a fixed 'p0' is not merely a name
     CrystFEL rejects -- it is the wrong panel. Linear over panels because a frame has tens of peaks
     and a detector has tens of panels."""
+    fs, ss = np.floor(fs), np.floor(ss)
     for name, f0, f1, s0, s1 in bounds:
         if f0 <= fs <= f1 and s0 <= ss <= s1:
             return name

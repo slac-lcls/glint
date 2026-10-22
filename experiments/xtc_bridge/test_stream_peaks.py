@@ -106,6 +106,14 @@ def serialized_geom(stream_text):
 def main():
     rng = np.random.default_rng(7)
     fails = 0
+    normalized = glint_xtc.stream_geometry(
+        "panel1z/fs = +1x +0y +z\npanel1z/ss = +0x +1y -0.25z\n", ZDIST)
+    directions = {line.split("=", 1)[0].strip(): line.split("=", 1)[1].split()
+                  for line in normalized.splitlines() if "=" in line}
+    if (directions.get("panel1z/fs") != ["+1x", "+0y", "+0z"] or
+            directions.get("panel1z/ss") != ["+0x", "+1y", "+0z"]):
+        print("FAIL: geometry normalization must only flatten z direction values")
+        fails += 1
     with tempfile.TemporaryDirectory() as td:
         gpath = os.path.join(td, "two.geom")
         open(gpath, "w").write(GEOM)

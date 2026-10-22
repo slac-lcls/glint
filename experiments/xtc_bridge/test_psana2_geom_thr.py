@@ -49,13 +49,24 @@ class FakeRaw:
         return np.zeros((NSEG, H, W), np.float32)
 
 
+class FakeEnergyRaw:
+    def ebeamPhotonEnergy(self, evt):
+        return (10000.0, 11000.0, 12000.0)[evt]
+
+
 class FakeDetector:
     calibconst = {"geometry": ["# EXPERIMENT any (placeholder)"]}
     raw = FakeRaw()
 
 
+class FakeEnergyDetector:
+    raw = FakeEnergyRaw()
+
+
 class FakeRun:
     def Detector(self, name):
+        if name == "ebeamh":
+            return FakeEnergyDetector()
         return FakeDetector()
 
     def events(self):
@@ -104,7 +115,9 @@ def fake_prep(Xf, Yf, Zf, shape, good, zdist, **kw):
 
 
 xtc_core.prep_geometry = fake_prep
-xtc_core.frame_q = lambda *a, **k: np.zeros((0, 3))
+xtc_core.frame_q = lambda *a, return_px=False, **k: (
+    (np.ones((1, 3)), np.array([[0, 1, 2]]), np.array([5.0]))
+    if return_px else np.ones((1, 3)))
 
 tmp = tempfile.mkdtemp()
 geom = os.path.join(tmp, "tiny.geom")
@@ -113,11 +126,17 @@ want_X, _, _ = geom_coords.coords_from_geom(geom, (NSEG, H, W), 0.1)
 
 print("psana2 reader: geometry source")
 seen.clear(); FakeGeometryAccess.loaded = 0
-xtc_qreader.run_to_qframes("exp", 1, zdist=0.1, wavelength=1.3, geom=geom)
+fixed_wl = xtc_qreader.run_to_qframes("exp", 1, zdist=0.1, wavelength=1.3, geom=geom)
 check("--geom: X comes from the .geom", len(seen) == 1 and np.array_equal(seen[0]["Xf"], want_X),
       f"got {seen[0]['Xf'][:3] if seen else None}")
 check("--geom: calibconst geometry not loaded", FakeGeometryAccess.loaded == 0,
       f"loaded {FakeGeometryAccess.loaded}x")
+check("psana2 returns q-frame wavelengths", fixed_wl["lams"] == [1.3] * 3, fixed_wl["lams"])
+
+event_wl = xtc_qreader.run_to_qframes("exp", 1, zdist=0.1)
+want_lams = xtc_core.HC_EV_A / np.array([10000.0, 11000.0, 12000.0])
+check("psana2 returns each event's wavelength", np.allclose(event_wl["lams"], want_lams),
+      event_wl["lams"])
 
 seen.clear(); FakeGeometryAccess.loaded = 0
 xtc_qreader.run_to_qframes("exp", 1, zdist=0.1, wavelength=1.3)

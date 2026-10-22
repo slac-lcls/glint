@@ -264,6 +264,16 @@ def prep_geometry(Xf, Yf, Zf, shape, good, zdist, *, min_pix=PF_MIN_PIX, son_min
     return X, Y, Zc, kin, finders
 
 
+def slab_peaks(px, inten, H):
+    """frame_q's (M,3) [seg, ss, fs] pixels + (M,) intensities -> (M,3) float [fs, ss, intensity] in
+    CrystFEL SLAB coordinates (fs_slab = fs, ss_slab = seg*H + ss; the geometry loader enforces
+    n_cols == W), row for row with frame_q's q. This is what a .stream peak list carries."""
+    if not len(px):
+        return np.zeros((0, 3))
+    px = np.asarray(px)
+    return np.stack([px[:, 2], px[:, 0] * H + px[:, 1], np.asarray(inten, float)], axis=1).astype(float)
+
+
 def frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks, return_px=False):
     """One calibrated (nseg,H,W) frame -> its reciprocal q-vectors (M,3) in 1/A, or an empty (0,3).
 

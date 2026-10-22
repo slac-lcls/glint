@@ -274,6 +274,8 @@ def index_and_write(out, args, out_path, report=True):
     geom_text = open(args.geom).read() if getattr(args, "geom", None) else None
     frames = [np.asarray(q, float) for q in out["qframes"]]
     if not frames:
+        if not getattr(args, "integrate", False):
+            geom_text = stream_geometry(geom_text, args.zdist)
         n_idx = write_stream([], out_path, geom_text=geom_text)   # header-only, valid empty stream
         return None, None, n_idx
     from glint.hybrid_stream import hybrid_index, _report

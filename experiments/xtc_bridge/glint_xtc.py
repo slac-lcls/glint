@@ -208,8 +208,11 @@ def stream_geometry(geom_text, zdist):
             elif prop == "coffset":
                 line = f"{key}= 0"
             elif prop in ("fs", "ss"):
-                line = re.sub(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\s*z",
-                              "0z", line)
+                prefix, direction = line.split("=", 1)
+                direction = re.sub(
+                    r"[+-]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?\s*z",
+                    " +0z", direction)
+                line = prefix + "=" + direction
         lines.append(line + (sep + comment if sep else ""))
     if not has_clen:
         lines.append(f"clen = {float(zdist):.12g}")

@@ -50,16 +50,20 @@ def main():
 
     import glint_xtc_mpi
     out = str(HERE / "_mpi_smoke.stream")
-    # GPU pinning is left to the launcher / GLINT_GPUS_PER_NODE (portable across 1- and N-GPU nodes);
-    # --zdist is required by the parser but unused here (the reader is stubbed).
-    argv = ["--exp", "sim", "--run", "1", "--zdist", "0.1", "--psana", "1", "-o", out]
+    # This checks sharding and the merge, not placement: its documented launch puts 2 ranks on one GPU,
+    # which the wrapper refuses unless --share-gpu says so. --zdist is required by the parser but unused
+    # here (the reader is stubbed).
+    argv = ["--exp", "sim", "--run", "1", "--zdist", "0.1", "--psana", "1", "-o", out, "--share-gpu"]
     rc = glint_xtc_mpi.main(argv)
+    if rc != 0:   # a placement refusal (or any failure) is reported by main() itself; say so, do not read
+        if rank == 0:
+            print(f"  FAIL  glint_xtc_mpi.main returned {rc}; see its message above")
+        return rc
 
     if rank != 0:
         return rc
     # rank 0: verify the merged stream
     text = Path(out).read_text()
-    from glint.stream import HEADER
     ok = True
 
     def check(name, cond):
@@ -67,11 +71,11 @@ def main():
         ok = ok and cond
         print(f"  {'PASS' if cond else 'FAIL'}  {name}")
 
-    check("header appears exactly once", text.count(HEADER) == 1)
+    check("header appears exactly once", text.count("CrystFEL stream format") == 1)
     present = [text.count(f"Event: //{i}\n") for i in range(N_EVENTS)]
     check(f"all {N_EVENTS} events present exactly once (sharding covered + disjoint)",
           all(c == 1 for c in present))
-    n_idx = text.count("indexed_by = glint")
+    n_idx = text.count("indexed_by = file")   # glint.stream writes "file" for an indexed frame
     check(f"planted cell indexed on a majority across ranks ({n_idx}/{N_EVENTS})",
           n_idx >= 0.6 * N_EVENTS)
     try:

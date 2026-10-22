@@ -44,8 +44,8 @@ p0/min_fs = 0
 p0/max_fs = {W - 1}
 p0/min_ss = 0
 p0/max_ss = {H - 1}
-p0/fs = +1.0x +0.0y
-p0/ss = +0.0x +1.0y
+p0/fs = +1.0x +0.0y +0.2z
+p0/ss = +0.0x +1.0y -0.1z
 p0/corner_x = -48.0
 p0/corner_y = -70.0
 p0/coffset = 0.012
@@ -53,8 +53,8 @@ p1/min_fs = 0
 p1/max_fs = {W - 1}
 p1/min_ss = {H}
 p1/max_ss = {2 * H - 1}
-p1/fs = -1.0x +0.0y
-p1/ss = +0.0x -1.0y
+p1/fs = -1.0x +0.0y -0.3z
+p1/ss = +0.0x -1.0y +0.4z
 p1/corner_x = 48.0
 p1/corner_y = 70.0
 p1/coffset = -0.017
@@ -145,6 +145,12 @@ def main():
             print("FAIL: serialized geometry does not match pass-1 distance / zero offsets")
             fails += 1
         panels_out = list(geom_coords.parse_geom(geom_path_out).values())
+        panels_in = list(geom_coords.parse_geom(gpath).values())
+        for pin, pout in zip(panels_in, panels_out):
+            if (not np.allclose(pout["fs"][:2], pin["fs"][:2]) or pout["fs"][2] != 0 or
+                    not np.allclose(pout["ss"][:2], pin["ss"][:2]) or pout["ss"][2] != 0):
+                print("FAIL: exported panel vectors must preserve x/y and flatten z")
+                fails += 1
         for p in panels_out:
             p.update(cx=p["corner_x"], cy=p["corner_y"])
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -190,7 +191,7 @@ def stream_geometry(geom_text, zdist):
     """Return the stream geometry with every panel on the plane used to build pass-1 q.
 
     Pass 1 replaces each pixel's Z with --zdist, so the exported geometry must not retain per-panel
-    coffsets or a path-valued camera length from the source .geom.
+    coffsets, z components in panel vectors, or a path-valued camera length from the source .geom.
     """
     if geom_text is None:
         return None
@@ -206,6 +207,9 @@ def stream_geometry(geom_text, zdist):
                 has_clen |= key.strip() == "clen"
             elif prop == "coffset":
                 line = f"{key}= 0"
+            elif prop in ("fs", "ss"):
+                line = re.sub(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\s*z",
+                              "0z", line)
         lines.append(line + (sep + comment if sep else ""))
     if not has_clen:
         lines.append(f"clen = {float(zdist):.12g}")

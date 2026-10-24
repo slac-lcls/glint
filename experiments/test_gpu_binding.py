@@ -75,9 +75,24 @@ for name, records, share, run in [
     ("a rank sees no GPU, --share-gpu",           [rec(0), rec(1, cvd="", status="no-gpu", key=None)], True, False),
     ("a rank's GPU check raised",                 [rec(0), rec(1, status="error", key=None, detail="RuntimeError: x")], False, False),
     ("lone rank, mask 0,1",                       [rec(0, cvd="0,1")], False, True),
-    ("unknown: masks '0' and '1'",                [rec(0, cvd="0", **UNK), rec(1, cvd="1", **UNK)], False, True),
-    ("unknown: disjoint masks '0,1' and '2,3'",   [rec(0, cvd="0,1", **UNK), rec(1, cvd="2,3", **UNK)], False, True),
-    ("unknown: both mask '0'",                    [rec(0, cvd="0", **UNK), rec(1, cvd="0", **UNK)], False, False),
+    # unidentified ranks (Mona, 24 Oct): different mask strings are not proof of different GPUs, so two or
+    # more on one host stop unless --share-gpu, whatever their masks
+    ("unknown: masks '0' and '1'",                [rec(0, cvd="0", **UNK), rec(1, cvd="1", **UNK)], False, False),
+    ("unknown: masks '0' and '1', --share-gpu",   [rec(0, cvd="0", **UNK), rec(1, cvd="1", **UNK)], True, True),
+    ("unknown: disjoint masks '0,1' and '2,3'",   [rec(0, cvd="0,1", **UNK), rec(1, cvd="2,3", **UNK)], False, False),
+    ("unknown: full UUID and its prefix",         [rec(0, cvd="GPU-8932f937-d72c-4106-c12f-20bd9faed9f6", **UNK),
+                                                   rec(1, cvd="GPU-8932f937", **UNK)], False, False),
+    ("unknown: full UUID and its prefix, --share-gpu", [rec(0, cvd="GPU-8932f937-d72c-4106-c12f-20bd9faed9f6", **UNK),
+                                                   rec(1, cvd="GPU-8932f937", **UNK)], True, True),
+    ("unknown: ordinal '0' and a UUID",           [rec(0, cvd="0", **UNK),
+                                                   rec(1, cvd="GPU-8932f937-d72c-4106-c12f-20bd9faed9f6", **UNK)], False, False),
+    ("unknown: ordinal '0' and a UUID, --share-gpu", [rec(0, cvd="0", **UNK),
+                                                   rec(1, cvd="GPU-8932f937-d72c-4106-c12f-20bd9faed9f6", **UNK)], True, True),
+    ("unknown: masks '0' and '1' on different hosts", [rec(0, cvd="0", **UNK), rec(1, host="n2", cvd="1", **UNK)], False, True),
+    ("unknown: lone rank on a host",              [rec(0, cvd="0", **UNK), rec(1, host="n2", key=A)], False, True),
+    # the documented launch: srun --gpus-per-task=1 gives every task mask '0'; this was refused before
+    # 24 Oct too, so the change does not alter it
+    ("unknown: both mask '0' (srun --gpus-per-task=1)", [rec(0, cvd="0", **UNK), rec(1, cvd="0", **UNK)], False, False),
     ("unknown: both unset",                       [rec(0, cvd=None, **UNK), rec(1, cvd=None, **UNK)], False, False),
     ("unknown: both unset, --share-gpu",          [rec(0, cvd=None, **UNK), rec(1, cvd=None, **UNK)], True, True),
     ("unknown: empty mask",                       [rec(0, cvd="", **UNK)], False, False),

@@ -52,8 +52,9 @@ plain header-once concatenation. GPU placement: the launcher gives each rank its
 indexer and its reader inherit the same mask and both use its first device. Before reading, every rank
 identifies that device physically (CuPy's PCI bus id; torch's UUID, torch >= 2.5, if CuPy is missing),
 and the wrapper stops with the launch fix if a rank sees no GPU, or if two ranks on a node would use the
-same GPU, unless `--share-gpu` says they share it on purpose. If neither can identify the device, ranks
-on a node are compared by their masks' first device instead. Rank 0 logs every rank's hostname, mask
+same GPU, unless `--share-gpu` says they share it on purpose. If neither can identify the device, two
+or more such ranks on a node also stop the run unless `--share-gpu`: different mask strings can name the
+same GPU (a UUID and its prefix, an ordinal and a UUID), so masks are not compared. Rank 0 logs every rank's hostname, mask
 and GPU. The reader's own device is inferred from the inherited mask, not checked separately. `--gpus-per-node` / `GLINT_GPUS_PER_NODE`, which
 used to rewrite the mask, are removed and now exit with that fix. A rewrite after `import mpi4py` moves the
 rank only if MPI has not already initialized CUDA; that held in GLINT's conda1 envs but not in psana2-gpu's

@@ -106,13 +106,14 @@ def decide_placement(records, share_gpu=False):
       * a rank that sees no GPU, or whose GPU check raised, stops the run (the reader's peak finders
         run on the GPU, cupy);
       * two ranks on one host whose GPUs have the same physical key stop the run, unless share_gpu;
-      * ranks that cannot identify their GPU ("unknown") are compared by mask: two on one host whose
-        first visible device is the same, or unset, stop the run unless share_gpu, because nothing
-        shows they use different GPUs;
+      * two or more ranks on one host that cannot identify their GPU ("unknown") stop the run unless
+        share_gpu, whatever their masks say. Different mask strings can name the same GPU (a full UUID
+        and its unique prefix; an ordinal and that device's UUID), and an ordinal cannot be mapped to a
+        physical device without a hardware query (CUDA's default FASTEST_FIRST order need not match
+        nvidia-smi's PCI order), so distinct masks are not proof of distinct GPUs;
       * reports that cannot be compared stop the run unless share_gpu: on one host, an identified rank
-        beside an unidentified one, an unidentified rank with an unset mask beside any other rank, or
-        PCI ids beside UUIDs (the two libraries name the same GPU differently). Separate buckets are not
-        proof of separate GPUs.
+        beside an unidentified one, or PCI ids beside UUIDs (the two libraries name the same GPU
+        differently). Separate buckets are not proof of separate GPUs.
     """
     problems = [f"rank {r['rank']}: {r['retired']}" for r in records if r["retired"]]
     if problems:
@@ -135,7 +136,7 @@ def decide_placement(records, share_gpu=False):
             if r["status"] == "ok":
                 groups.setdefault(("key", r["key"]), []).append(r["rank"])
             elif r["status"] == "unknown":
-                groups.setdefault(("mask", _first_device(r["cvd"])), []).append(r["rank"])
+                groups.setdefault(("unknown", None), []).append(r["rank"])
         for (kind, val), ranks in sorted(groups.items(), key=lambda kv: (kv[0][0], str(kv[0][1]))):
             if len(ranks) < 2:
                 continue
@@ -143,25 +144,21 @@ def decide_placement(records, share_gpu=False):
             if kind == "key":
                 problems.append(f"ranks {names} on {host} would all use {val}. To fix: {LAUNCH_FIX}, {SHARE_FIX}.")
             else:
-                first = "an unset mask" if val is None else f"first visible device {val!r}"
+                masks = ", ".join(sorted({repr(r["cvd"]) for r in rs if r["status"] == "unknown"}))
                 problems.append(f"ranks {names} on {host} cannot identify their GPUs (no CuPy, and torch < 2.5 or "
-                                f"without CUDA) and have {first}, so nothing shows they use different GPUs. "
-                                f"To fix: {LAUNCH_FIX}, {SHARE_FIX}.")
+                                f"without CUDA), and their masks ({masks}) do not show they use different GPUs: "
+                                f"different mask strings can name the same device. To fix: put CuPy, or torch >= 2.5 with "
+                                f"CUDA, in each rank's env so it can identify its GPU, and {LAUNCH_FIX}, {SHARE_FIX}.")
         if len(rs) < 2:
             continue
         # Incomparable reports on one host: separate buckets above are not proof of separate GPUs.
         known = sorted(r["rank"] for r in rs if r["status"] == "ok")
         unknown = sorted(r["rank"] for r in rs if r["status"] == "unknown")
-        unset = sorted(r["rank"] for r in rs if r["status"] == "unknown" and r["cvd"] is None)
         kinds = sorted({_key_kind(r["key"]) for r in rs if r["status"] == "ok"})
         if known and unknown:
             problems.append(f"ranks {', '.join(map(str, known))} on {host} identified their GPU and ranks "
                             f"{', '.join(map(str, unknown))} could not, so the two cannot be compared and nothing "
                             f"shows they use different GPUs. To fix: {LAUNCH_FIX}, {SHARE_FIX}.")
-        elif unset and len(unknown) >= 2 and len(unset) < len(unknown):
-            problems.append(f"ranks {', '.join(map(str, unset))} on {host} cannot identify their GPU and have an "
-                            f"unset mask, so they may select the same GPU as ranks "
-                            f"{', '.join(str(r) for r in unknown if r not in unset)}. To fix: {LAUNCH_FIX}, {SHARE_FIX}.")
         if len(kinds) > 1:
             problems.append(f"ranks on {host} report PCI bus ids and UUIDs, which cannot be compared (CuPy in some "
                             f"ranks' env, torch only in others). To fix: {LAUNCH_FIX}, with the same env on every rank, "

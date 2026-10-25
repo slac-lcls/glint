@@ -113,6 +113,7 @@ def panel_at(bounds, fs, ss, default="p0"):
     OBSERVED peaks carry real positions, so labelling them with a fixed 'p0' is not merely a name
     CrystFEL rejects -- it is the wrong panel. Linear over panels because a frame has tens of peaks
     and a detector has tens of panels."""
+    fs, ss = np.floor(fs), np.floor(ss)
     for name, f0, f1, s0, s1 in bounds:
         if f0 <= fs <= f1 and s0 <= ss <= s1:
             return name
@@ -172,11 +173,14 @@ def escalation_lines(r):
 
 
 def write_stream(results, path, geom_text=None, panel=None, photon_eV=9392.7, clen_m=0.15):
-    """results: list of dicts {image, event, M (3x3 or None), q (N,3), hkl (N,3 int) or None}.
+    """results: list of dicts {image, event, M (3x3 or None), q (N,3), hkl (N,3 int) or None}, and
+    optionally `peaks` (n,3) [fs, ss, intensity] in the .geom's slab coordinates with `peaks_invd`
+    (n,) |q| in 1/A: the OBSERVED peaks the frame was indexed from, written as the chunk's peak list.
 
     geom_text: contents of the .geom this run was indexed against. Pass it whenever the caller has
     one -- it is what makes the stream readable at all, and it names the panels."""
     panel = panel or _origin_panel(geom_text)
+    bounds = panel_bounds(geom_text)
     n_idx = 0
     with open(path, "w") as f:
         f.write(_header(geom_text))
@@ -191,13 +195,23 @@ def write_stream(results, path, geom_text=None, panel=None, photon_eV=9392.7, cl
             # 'file', not 'glint': CrystFEL validates this against its own indexer list, and from
             # its side the orientation IS externally supplied.
             f.write(f"indexed_by = {'file' if valid else 'none'}\n")
-            f.write(f"photon_energy_eV = {float(photon_eV):.2f}\n")
+            f.write(f"photon_energy_eV = {float(r.get('photon_eV', photon_eV)):.2f}\n")
             f.write("beam_divergence = 0.00e+00 rad\nbeam_bandwidth = 1.00e-08 %\n")
             f.write(f"average_camera_length = {float(r.get('clen_m', clen_m)):.6f} m\n")
             # A chunk needs a peak-list block even when empty, or the reader reports the chunk
-            # incomplete. This writer has hkl but no detector positions, hence none to list.
-            f.write("num_peaks = 0\nnum_saturated_peaks = 0\n")
+            # incomplete. The peaks, when the caller has them, are what a strict score needs: the
+            # reflection rows below are only predicted labels.
+            pks = r.get("peaks")
+            npk = 0 if pks is None else len(pks)
+            f.write(f"num_peaks = {npk}\nnum_saturated_peaks = 0\n")
             f.write("Peaks from peak search\n  fs/px   ss/px (1/d)/nm^-1   Intensity  Panel\n")
+            if npk:
+                pks = np.asarray(pks, float)
+                invd = r.get("peaks_invd")
+                invd = np.zeros(npk) if invd is None else np.asarray(invd, float) * 10.0   # 1/A -> 1/nm
+                for (pfs, pss, pI), d in zip(pks[:, :3].tolist(), invd.tolist()):
+                    f.write("%7.2f %7.2f %10.5f %10.2f %s\n"
+                            % (pfs, pss, d, pI, panel_at(bounds, pfs, pss, panel) if bounds else panel))
             f.write("End of peak list\n")
             if valid:
                 n_idx += 1

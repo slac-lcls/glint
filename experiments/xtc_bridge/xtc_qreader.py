@@ -23,14 +23,22 @@ def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_d
                    min_peaks=6, max_events=0, rank=0, nranks=1, peakfinder="v4",
                    min_pix=xtc_core.PF_MIN_PIX, son_min=xtc_core.PF_SON_MIN,
                    thr_high=xtc_core.PF_THR_HIGH, thr_low=xtc_core.PF_THR_LOW,
-                   pf8_min_snr=xtc_core.PF8_MIN_SNR):
+                   pf8_min_snr=xtc_core.PF8_MIN_SNR, geom=None, pf8_thr_adu=xtc_core.PF8_THR_ADU):
     """Peak-find a whole psana2 run in conda2 and return its q-frames (see xtc_qreader_psana1 for the
-    identical psana1 return contract): dict of qframes / events / counts, all envbridge-sendable.
+    identical psana1 return contract): dict of qframes / events / peaks / lams / counts, all envbridge-sendable.
 
     rank/nranks shard events round-robin for the MPI wrapper (each rank's conda1 process calls this over
     its own bridge worker with its shard, so there is no MPI inside conda2). Default rank=0/nranks=1 owns
     everything -- single-call behaviour unchanged; `events` are global enumerate indices, so shards are
-    disjoint and the partial streams merge by concatenation."""
+    disjoint and the partial streams merge by concatenation.
+
+    `geom` (a CrystFEL .geom path) replaces psana's per-pixel X/Y, exactly as on the psana1 reader
+    (geom_coords.coords_from_geom). Without it the geometry is calibconst["geometry"][0], which for an
+    experiment with no deployed refinement is a placeholder: on one Jungfrau16M experiment it reads
+    "EXPERIMENT any" with no per-module offsets or tilts, and the refined .geom halved the cell error
+    (median max length error 0.0170 -> 0.0094; 43% -> 84% of crystals within 2% and 2 deg).
+    `pf8_thr_adu` is peakfinder8's absolute ADU floor (xtc_core.PF8_THR_ADU, None = off).
+    Both are appended after the old positional parameters, so existing envbridge calls are unchanged."""
     if zdist <= 0:
         raise ValueError("zdist (sample-detector distance, m) is REQUIRED: psana per-pixel Z is nominal")
 
@@ -51,9 +59,12 @@ def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_d
         except Exception:
             raise ValueError(f"no wavelength and energy detector {energy_det!r} unavailable")
 
-    geo = GeometryAccess()
-    geo.load_pars_from_str(detector.calibconst["geometry"][0])
-    Xf, Yf, Zf = geo.get_pixel_coords()
+    if geom:
+        Xf = Yf = Zf = None                  # built from the .geom at the first frame (needs its shape)
+    else:
+        geo = GeometryAccess()
+        geo.load_pars_from_str(detector.calibconst["geometry"][0])
+        Xf, Yf, Zf = geo.get_pixel_coords()
 
     def good_mask(shape):
         nseg, H, W = shape
@@ -78,7 +89,7 @@ def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_d
 
     X = Y = Zc = kin = None
     finders = []
-    qframes, events = [], []
+    qframes, events, peaks, lams = [], [], [], []
     n_events = n_skipped_wl = 0
     for i, evt in enumerate(prun.events()):
         if max_events and i >= max_events:
@@ -95,16 +106,23 @@ def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_d
             n_skipped_wl += 1
             continue
         if X is None:
+            if geom:
+                import geom_coords
+                Xf, Yf, Zf = geom_coords.coords_from_geom(geom, frame.shape, zdist)
+                print(f"geometry: X/Y from {geom} (not psana calibconst)", flush=True)
             X, Y, Zc, kin, finders = xtc_core.prep_geometry(
                 Xf, Yf, Zf, frame.shape, good_mask(frame.shape), zdist,
                 min_pix=min_pix, son_min=son_min, thr_high=thr_high, thr_low=thr_low,
-                pf8_min_snr=pf8_min_snr,
+                pf8_min_snr=pf8_min_snr, pf8_thr_adu=pf8_thr_adu,
                 peakfinder=peakfinder, lam=lam)
         n_events += 1
-        q = xtc_core.frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks)
+        q, px, inten = xtc_core.frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks, return_px=True)
         if len(q):
             qframes.append(np.ascontiguousarray(q))
+            # the observed peaks behind q, row for row, so the stream can carry a peak list
+            peaks.append(xtc_core.slab_peaks(px, inten, frame.shape[1]))
             events.append(i)
+            lams.append(float(lam))
 
-    return {"qframes": qframes, "events": events,
+    return {"qframes": qframes, "events": events, "peaks": peaks, "lams": lams,
             "n_events": n_events, "n_sent": len(qframes), "n_skipped_wl": n_skipped_wl}

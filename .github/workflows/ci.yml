@@ -611,9 +611,19 @@ jobs:
         run: python test_gpu_calib_wiring.py
         working-directory: experiments/xtc_bridge
 
+      - name: experiments/xtc_bridge/test_psana2_geom_thr.py
+        if: ${{ !cancelled() }}
+        run: python test_psana2_geom_thr.py
+        working-directory: experiments/xtc_bridge
+
       - name: experiments/xtc_bridge/test_shard.py
         if: ${{ !cancelled() }}
         run: python test_shard.py
+        working-directory: experiments/xtc_bridge
+
+      - name: experiments/xtc_bridge/test_stream_peaks.py
+        if: ${{ !cancelled() }}
+        run: python test_stream_peaks.py
         working-directory: experiments/xtc_bridge
 
   torch-cpu-tests:

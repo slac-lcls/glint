@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -67,12 +68,15 @@ def build_parser():
                          "different geometry than the one a trusted refinement was built on; --zdist "
                          "only replaces Z, so X/Y still come from whatever psana picks.")
     ap.add_argument("--geom", default=None,
-                    help="CrystFEL .geom to take per-pixel X/Y from INSTEAD of psana (psana1 only). "
+                    help="CrystFEL .geom to take per-pixel X/Y from INSTEAD of psana (psana1 and psana2). "
                          "Use when the trusted geometry is a refinement that was never written back "
                          "into psana: on mfxx49820 r0016 psana's deployed 0-end.data is the "
                          "unrefined 2021 start, and against btx's refined r0016.geom it is off by a "
                          "median 3.16%% in |q|, signed per detector quadrant -- which no --zdist can "
-                         "absorb, and which is enough to stop blind indexing finding the true cell.")
+                         "absorb, and which is enough to stop blind indexing finding the true cell. "
+                         "On psana2 the alternative is calibconst's geometry, which is a placeholder "
+                         "(\"EXPERIMENT any\", no module offsets or tilts) wherever no refinement was "
+                         "deployed.")
     pf = ap.add_argument_group(
         "peak finder (PeakFinderV4)",
         "Defaults are calibrated on Epix10ka2M at MFX to match CrystFEL peakfinder8's hit rate; "
@@ -103,6 +107,12 @@ def build_parser():
                     help=f"pf8 ONLY: min per-peak max-pixel SNR. Not tied to --thr-high; it stands "
                          f"in for the integrated-SNR cut pf8 lacks, and is sharp -- 10 turns this "
                          f"into a pass-through (default {xtc_core.PF8_MIN_SNR})")
+    pf.add_argument("--pf8-thr-adu", type=float, default=xtc_core.PF8_THR_ADU,
+                    help="pf8 ONLY: absolute ADU floor a pixel must clear to join a peak, on top of "
+                         "the SNR test -- CrystFEL peakfinder8's --threshold (LUTE's FindPeaksSFX "
+                         "amax_thr). Default off, as every shipped number was measured. Compare with "
+                         "practitioner settings only with both set: their (floor, SNR) pair is one "
+                         "gate.")
     ig = ap.add_argument_group(
         "integration (xtc route, psana1)",
         "Off by default, in which case the stream is ORIENTATION-ONLY: every reflection row carries "
@@ -133,6 +143,7 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
     {qframes, events, n_events, n_sent, n_skipped_wl}, plus the per-frame wavelengths `lams` on the
     psana1 route. Dispatches xtc1 in-process vs xtc2 over the bridge; identical q-core either way."""
     pf_kw = dict(min_pix=args.min_pix, son_min=args.son_min, pf8_min_snr=args.pf8_min_snr,
+                 pf8_thr_adu=args.pf8_thr_adu,
                  thr_high=args.thr_high, thr_low=args.thr_low, peakfinder=args.peakfinder)
     if args.psana == "1":
         # LCLS-I: psana1 is in THIS env with torch -- read in-process, no bridge.
@@ -164,13 +175,100 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
     reader_env = envbridge.Env.conda(args.reader_env, stack="conda2", pythonpath=[bridge_dir])
     if verbose:
         print(f"peak-finding {args.exp} run {args.run} in conda2 env {args.reader_env} (psana2) ...", flush=True)
-    if args.calib_dir or args.geom:
-        sys.exit("--calib-dir/--geom are psana1-only (psana2 takes geometry from calibconst)")
+    if args.calib_dir:
+        sys.exit("--calib-dir is psana1-only (psana2 takes its calibration from calibconst; use "
+                 "--geom to override the geometry)")
+    geom = str(Path(args.geom).resolve()) if args.geom else None   # the worker's cwd is not ours
     return envbridge.call(
         reader_env, "xtc_qreader:run_to_qframes",
         args.exp, args.run, args.det, args.zdist, args.wavelength, args.energy_det,
         args.min_peaks, args.max_events, rank, nranks, args.peakfinder,
-        args.min_pix, args.son_min, args.thr_high, args.thr_low, args.pf8_min_snr)
+        args.min_pix, args.son_min, args.thr_high, args.thr_low, args.pf8_min_snr,
+        geom, args.pf8_thr_adu)
+
+
+def stream_geometry(geom_text, zdist):
+    """Return the stream geometry with every panel on the plane used to build pass-1 q.
+
+    Pass 1 replaces each pixel's Z with --zdist, so the exported geometry must not retain per-panel
+    coffsets, z components in panel vectors, or a path-valued camera length from the source .geom.
+    """
+    if geom_text is None:
+        return None
+    lines = []
+    has_clen = False
+    for raw in geom_text.splitlines():
+        line, sep, comment = raw.partition(";")
+        if "=" in line:
+            key, _ = line.split("=", 1)
+            prop = key.strip().rsplit("/", 1)[-1]
+            if prop == "clen":
+                line = f"{key}= {float(zdist):.12g}"
+                has_clen |= key.strip() == "clen"
+            elif prop == "coffset":
+                line = f"{key}= 0"
+            elif prop in ("fs", "ss"):
+                prefix, direction = line.split("=", 1)
+                direction = re.sub(
+                    r"[+-]?(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?\s*z",
+                    " +0z", direction)
+                line = prefix + "=" + direction
+        lines.append(line + (sep + comment if sep else ""))
+    if not has_clen:
+        lines.append(f"clen = {float(zdist):.12g}")
+    return "\n".join(lines) + "\n"
+
+
+def stream_records(results, out, geom_text, zdist=None, wavelength=0.0):
+    """hybrid_index results -> write_stream records that a strict score can be computed from.
+
+    Two things the plain records lacked:
+      * the OBSERVED peaks: the reader's per-frame `peaks` ([fs, ss, intensity] in the .geom's slab
+        coordinates, row for row with its q), matched to each result by event, plus |q|. Without them
+        every chunk said num_peaks = 0 and only same_lattice could be checked;
+      * on the --geom route, the orientation in CrystFEL's frame. Pass 1 builds q with the detector
+        at Z_SIGN*zdist (geom_coords), so M fits q_pass1 = S q_CrystFEL and the crystal is
+        orientation_to_crystfel(M) in the frame a reader of these peaks and this .geom uses -- the
+        conversion the --integrate route already makes. When that flips M's sign the hkl labels
+        flip with it, so q_CrystFEL . M_written = hkl still holds row for row;
+      * per-event photon energy and the run distance, so a reader reconstructs q at the same
+        wavelength and plane pass 1 used.
+    A reader without `peaks` (an older bridge worker) still gets a valid stream, without peak lists."""
+    peaks = out.get("peaks")
+    lams = out.get("lams")
+    if lams is not None and len(lams) != len(out["qframes"]):
+        raise ValueError(f"reader returned {len(lams)} wavelengths for {len(out['qframes'])} q-frames")
+    if peaks is not None and len(peaks) != len(out["qframes"]):
+        raise ValueError(f"reader returned {len(peaks)} peak lists for {len(out['qframes'])} q-frames")
+    by_event = {}
+    for i, (e, q) in enumerate(zip(out["events"], out["qframes"])):
+        by_event[int(e)] = {
+            "peaks": np.asarray(peaks[i], float) if peaks is not None else None,
+            "invd": np.linalg.norm(np.asarray(q, float), axis=1),
+            "lam": float(lams[i]) if lams is not None else float(wavelength or 0.0),
+        }
+    recs = []
+    for r in results:
+        r = dict(r)
+        hit = by_event.get(int(r.get("event", -1)))
+        if hit is not None:
+            if geom_text and hit["peaks"] is not None and len(hit["peaks"]) == len(hit["invd"]):
+                r["peaks"], r["peaks_invd"] = hit["peaks"], hit["invd"]
+            if zdist is not None:
+                r["clen_m"] = float(zdist)
+            if hit["lam"] > 0:
+                r["photon_eV"] = xtc_core.HC_EV_A / hit["lam"]
+        if geom_text and r.get("M") is not None:
+            import geom_coords
+            M = np.asarray(r["M"], float)
+            Mc = geom_coords.orientation_to_crystfel(M)
+            # orientation_to_crystfel returns S@M or -(S@M); the second relabels every hkl to -hkl
+            flipped = np.allclose(Mc, -np.diag([1.0, 1.0, geom_coords.Z_SIGN]) @ M)
+            r["M"] = Mc
+            if flipped and r.get("hkl") is not None:
+                r["hkl"] = -np.asarray(r["hkl"])
+        recs.append(r)
+    return recs
 
 
 def index_and_write(out, args, out_path, report=True):
@@ -183,6 +281,8 @@ def index_and_write(out, args, out_path, report=True):
     geom_text = open(args.geom).read() if getattr(args, "geom", None) else None
     frames = [np.asarray(q, float) for q in out["qframes"]]
     if not frames:
+        if not getattr(args, "integrate", False):
+            geom_text = stream_geometry(geom_text, args.zdist)
         n_idx = write_stream([], out_path, geom_text=geom_text)   # header-only, valid empty stream
         return None, None, n_idx
     from glint.hybrid_stream import hybrid_index, _report
@@ -202,7 +302,9 @@ def index_and_write(out, args, out_path, report=True):
         lam_by_event = dict(zip((int(e) for e in out["events"]), lams or ()))
         n_idx = integrate_and_write(results, args, out_path, report=report, lam_by_event=lam_by_event)
     else:
-        n_idx = write_stream(results, out_path, geom_text=geom_text)
+        export_geom = stream_geometry(geom_text, args.zdist)
+        n_idx = write_stream(stream_records(results, out, export_geom, args.zdist, args.wavelength),
+                             out_path, geom_text=export_geom)
     if report:
         _report(stats, out_path)
     return results, stats, n_idx

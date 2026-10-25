@@ -109,9 +109,13 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
                           peakfinder="v4", peaks_out=None,
                           min_pix=xtc_core.PF_MIN_PIX, son_min=xtc_core.PF_SON_MIN,
                           thr_high=xtc_core.PF_THR_HIGH, thr_low=xtc_core.PF_THR_LOW,
-                          pf8_min_snr=xtc_core.PF8_MIN_SNR, gpu_calib=False):
+                          pf8_min_snr=xtc_core.PF8_MIN_SNR, gpu_calib=False,
+                          pf8_thr_adu=xtc_core.PF8_THR_ADU):
     """Peak-find a whole psana1 (LCLS-I) run in-process and return its q-frames -- the psana2
-    reader's dict contract {qframes, events, n_events, n_sent, n_skipped_wl}, plus `lams`.
+    reader's dict contract {qframes, events, peaks, n_events, n_sent, n_skipped_wl}, plus `lams`.
+
+    `peaks[k]` is (n,3) [fs, ss, intensity] in CrystFEL slab coordinates, row for row with
+    `qframes[k]` (xtc_core.slab_peaks): the observed peaks the stream writes as each chunk's peak list.
 
     `lams[k]` is the wavelength (A) `qframes[k]` was built with: `wavelength` when given, else that
     event's EBeam photon energy. `--integrate` re-predicts each indexed event in a second pass and
@@ -227,7 +231,7 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
 
     X = Y = Zc = kin = None
     finders = []
-    qframes, events, lams = [], [], []
+    qframes, events, lams, peaks = [], [], [], []
     n_events = n_skipped_wl = 0
     for i, evt in enumerate(ds.events()):
         if max_events and i >= max_events:
@@ -280,11 +284,12 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
             X, Y, Zc, kin, finders = xtc_core.prep_geometry(
                 Xf, Yf, Zf, frame.shape, good, zdist,
                 min_pix=min_pix, son_min=son_min, thr_high=thr_high, thr_low=thr_low,
-                pf8_min_snr=pf8_min_snr,
+                pf8_min_snr=pf8_min_snr, pf8_thr_adu=pf8_thr_adu,
                 peakfinder=peakfinder, lam=lam)
         n_events += 1
         if peaks_out is None:
-            q = xtc_core.frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks)
+            q, px, inten = xtc_core.frame_q(frame, finders, X, Y, Zc, kin, lam, min_peaks,
+                                            return_px=True)
         else:
             # CrystFEL slab coordinates for consumers that need detector pixels (the streaming
             # monitor's geometry check, a .stream peak list). n_cols == W is enforced by the geom
@@ -301,8 +306,10 @@ def run_to_qframes_psana1(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0,
                              if len(q) else np.zeros((0, 4), np.float32))
         if len(q):
             qframes.append(np.ascontiguousarray(q))
+            # the observed peaks behind q, row for row (aligned with qframes, unlike peaks_out)
+            peaks.append(xtc_core.slab_peaks(px, inten, frame.shape[1]))
             events.append(i)
             lams.append(float(lam))
 
-    return {"qframes": qframes, "events": events, "lams": lams,
+    return {"qframes": qframes, "events": events, "lams": lams, "peaks": peaks,
             "n_events": n_events, "n_sent": len(qframes), "n_skipped_wl": n_skipped_wl}

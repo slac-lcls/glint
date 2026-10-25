@@ -43,9 +43,11 @@ def run_to_qframes(exp, run, det="jungfrau", zdist=0.0, wavelength=0.0, energy_d
         raise ValueError("zdist (sample-detector distance, m) is REQUIRED: psana per-pixel Z is nominal")
 
     # This reader is the serial bridge: it takes no part in psana's MPI placement (lcls2#187), whatever
-    # PS_PARALLEL the launcher exported. Set before psana is imported; an explicit value is kept.
+    # PS_PARALLEL the launcher exported. Set before psana is imported, and overridden: an inherited
+    # PS_PARALLEL=mpi would make each independently spawned reader try to join an MPI job it is not part
+    # of (glint#273). Coordinated psana MPI input is glint#273's work, not a value to pass through here.
     import os
-    os.environ.setdefault("PS_PARALLEL", "none")
+    os.environ["PS_PARALLEL"] = "none"
     from psana import DataSource
     from psana.pscalib.geometry.GeometryAccess import GeometryAccess
 

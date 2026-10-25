@@ -836,8 +836,8 @@ The serial GLINT integration does not have to wait for it.
   The conda2 reader inherits that mask, so the torch indexer and the reader's peak-find share one
   device. The reader must stay serial (`PS_PARALLEL=none`) whether or not lcls2#187 lands: this
   serial bridge takes no part in #187's MPI placement. `xtc_qreader.py` sets `PS_PARALLEL=none` before
-  it imports psana (an explicit value in the environment is kept), so the reader comes up serial
-  whatever the launcher exported.
+  it imports psana, overriding any inherited value, so the reader comes up serial whatever the
+  launcher exported. Coordinated psana MPI input (SMD0/EB/BD) is tracked in glint#273.
 - **Native psana2-gpu (follow-up adapter, glint#219; not started).** It replaces the bridge rather
   than nesting under `glint_xtc_mpi.py`'s sharding. Per @monarin's review of glint#256, GLINT then:
   - keeps the launcher's mask and skips `glint_xtc_mpi.py`'s placement check; psana assigns each BD

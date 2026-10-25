@@ -9,6 +9,8 @@ coordinates and which ADU floor reach the peak-finder setup. Checks:
     a deployed refinement silently used calibconst's placeholder.
   * psana2 without --geom: calibconst's coordinates, exactly as before.
   * pf8_thr_adu reaches prep_geometry from both readers, and None stays the default.
+  * the psana2 reader is serial whatever PS_PARALLEL it inherits: psana sees 'none' at DataSource even
+    when the launcher exported 'mpi' (glint#256 review; coordinated MPI input is glint#273).
   * the CLI: --pf8-thr-adu parses, defaults to None, and travels with --geom over the bridge as the
     two LAST positional arguments, so older callers of run_to_qframes are unaffected; --calib-dir is
     still refused on psana2.
@@ -74,8 +76,10 @@ class FakeRun:
 
 
 class FakeDataSource:
+    ps_parallel = []          # PS_PARALLEL as psana would read it, at DataSource construction
+
     def __init__(self, **kw):
-        pass
+        FakeDataSource.ps_parallel.append(os.environ.get("PS_PARALLEL"))
 
     def runs(self):
         return iter([FakeRun()])
@@ -157,6 +161,18 @@ check("psana1 reader accepts pf8_thr_adu (default None)",
       "pf8_thr_adu" in sig.parameters and sig.parameters["pf8_thr_adu"].default is None)
 src = inspect.getsource(xtc_qreader_psana1.run_to_qframes_psana1)
 check("psana1 reader passes it to prep_geometry", "pf8_thr_adu=pf8_thr_adu" in src)
+
+print("psana2 reader stays serial (PS_PARALLEL)")
+for inherited in (None, "mpi", "none"):
+    if inherited is None:
+        os.environ.pop("PS_PARALLEL", None)
+    else:
+        os.environ["PS_PARALLEL"] = inherited
+    FakeDataSource.ps_parallel.clear()
+    xtc_qreader.run_to_qframes("exp", 1, zdist=0.1, wavelength=1.3)
+    check(f"inherited PS_PARALLEL={inherited!r} -> 'none' at DataSource", FakeDataSource.ps_parallel == ["none"],
+          repr(FakeDataSource.ps_parallel))
+os.environ.pop("PS_PARALLEL", None)
 
 print("CLI")
 import glint_xtc

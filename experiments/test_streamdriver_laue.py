@@ -468,9 +468,10 @@ def test_identity_classes_relabel_the_frame_into_the_reference_order():
         d._integrate_one(0, shortest_first, d.grid, d.acc, known_cell=True)
         assert _same_M(seen["M"], ref), (laue, np.linalg.norm(seen["M"], axis=0))
 
-    # a BLIND candidate is not relabelled: it comes through primitivize(buerger_reduce(...)) and can
-    # differ from the reference by a general integer change of basis, not a permutation, so undoing a
-    # length sort would be a guess (glint#186 review, glint#188).
+    # _standardize itself never relabels without a reference: a BLIND candidate can differ from the
+    # reference by a general integer change of basis, not a permutation, so undoing a length sort
+    # would be a guess (glint#186 review). _integrate_one rebases blind candidates by the metric
+    # instead (_rebase_like, glint#188; tested below).
     d_blind = _driver(ref, laue="2/m_uab")
     assert _same_M(d_blind._standardize(shortest_first), shortest_first), "no ref -> no relabel"
 
@@ -483,6 +484,110 @@ def test_identity_classes_relabel_the_frame_into_the_reference_order():
     d4 = _driver(TET, laue="4/mmm")
     M = cell_to_Ar(25.0, 40.0, 40.0, 90, 90, 90)
     assert _same_M(d4._standardize(M), d4._standardize(M, ref=d4.Mc))
+
+
+def _rot(rng):
+    Q, R = np.linalg.qr(rng.normal(size=(3, 3)))
+    Q = Q * np.sign(np.diag(R))
+    return Q if np.linalg.det(Q) > 0 else -Q
+
+
+def _metric(M):
+    L = np.linalg.norm(M, axis=0)
+    return L, (M.T @ M) / np.outer(L, L)
+
+
+def _same_metric(A, B, tol=1e-6):
+    (La, Ca), (Lb, Cb) = _metric(A), _metric(B)
+    return np.allclose(La, Lb, atol=tol) and np.allclose(Ca, Cb, atol=tol)
+
+
+def _is_lattice_basis_of(B, M, n=1):
+    """B = M @ T with T integral and |det T| = n."""
+    T = np.linalg.solve(M, B)
+    return np.allclose(T, np.round(T), atol=1e-6) and round(abs(np.linalg.det(np.round(T)))) == n
+
+
+SHEARS = [np.array(t, float) for t in (
+    [[1, 1, 0], [0, 1, 0], [0, 0, 1]],          # a' = a, b' = a + b: not a permutation
+    [[0, 1, 0], [1, 0, 1], [0, 0, 1]],          # permutation + shear, det -1
+    [[1, 0, -1], [0, -1, 0], [0, 0, 1]],
+    [[1, 0, 0], [0, 1, 0], [0, 0, 1]],          # identity: already in the setting
+)]
+
+
+def test_rebase_like_recovers_the_reference_setting_from_a_general_integer_basis():
+    """_rebase_like (glint#188): a blind basis that is the reference's lattice in another orientation
+    AND another integer basis comes back with the reference's metric and handedness, as a lattice
+    basis of the frame's own lattice."""
+    rng = np.random.default_rng(188)
+    refs = (cell_to_Ar(50.0, 30.0, 32.0, 90, 100.0, 90),            # monoclinic, b unique, out of order
+            cell_to_Ar(31.0, 37.0, 44.0, 81.0, 97.0, 103.0),        # triclinic
+            cell_to_Ar(40.0, 40.0, 40.0, 75.0, 75.0, 75.0))         # rhombohedral setting
+    for ref in refs:
+        for T0 in SHEARS:
+            M = _rot(rng) @ ref @ T0                                # the frame: rotated, other basis
+            B = sd._rebase_like(M, ref)
+            assert B is not None, (np.linalg.norm(ref, axis=0), T0)
+            assert _same_metric(B, ref), (_metric(B)[0], _metric(ref)[0])
+            assert np.linalg.det(B) * np.linalg.det(ref) > 0, "handedness of the reference"
+            assert _is_lattice_basis_of(B, M), "must stay a basis of the frame's own lattice"
+    # a C-centered conventional reference vs a primitive frame basis: |det T| = 2
+    conv = cell_to_Ar(60.0, 34.0, 41.0, 90, 105.0, 90)
+    P = conv @ np.array([[0.5, 0.5, 0], [-0.5, 0.5, 0], [0, 0, 1]])  # primitive of the C lattice
+    M = _rot(rng) @ P
+    B = sd._rebase_like(M, conv)
+    assert B is not None and _same_metric(B, conv) and _is_lattice_basis_of(B, M, n=2)
+    # not the reference's lattice: a 6% longer axis, or a different volume, has no basis -> None
+    assert sd._rebase_like(_rot(rng) @ cell_to_Ar(53.0, 30.0, 32.0, 90, 100.0, 90), refs[0]) is None
+    assert sd._rebase_like(_rot(rng) @ cell_to_Ar(50.0, 30.0, 32.0, 90, 110.0, 90), refs[0]) is None
+
+
+def _spy_integrate(d, M, **kw):
+    seen = {}
+    real = d.grid.predict
+
+    def spy(Mx, *a, _real=real, **k):
+        seen["M"] = np.array(Mx, float)
+        return _real(Mx, *a, **k)
+
+    d.grid.predict = spy
+    d._q[0] = np.zeros((0, 3)); d._ring[0] = np.zeros((N, N), np.uint16); d._pk[0] = None
+    ok = d._integrate_one(0, M, d.grid, d.acc, **kw)
+    return ok, seen.get("M")
+
+
+def test_blind_candidates_are_rebased_into_the_reference_setting():
+    """The call site (glint#188): a BLIND candidate (known_cell=False) in a class with no canonical
+    setting reaches the grid with the reference's metric -- before this it was integrated in whatever
+    basis primitivize(buerger_reduce(...)) left it. A candidate no integer basis can put there is
+    refused (returns False, counted in n_setting_refused, nothing integrated or counted as indexed)."""
+    rng = np.random.default_rng(1880)
+    ref = cell_to_Ar(50.0, 30.0, 32.0, 90, 100.0, 90)
+    for laue in ("2/m_uab", "-1"):
+        d = _driver(ref, laue=laue)
+        M = _rot(rng) @ ref @ SHEARS[0]
+        assert not _same_metric(M, ref), "fixture must actually be in another basis"
+        ok, got = _spy_integrate(d, M)
+        assert ok and got is not None and _same_metric(got, ref), (laue, _metric(got)[0] if got is not None else None)
+        assert _is_lattice_basis_of(got, M)
+
+    d = _driver(ref, laue="2/m_uab")
+    n0 = d.n_indexed
+    ok, got = _spy_integrate(d, _rot(rng) @ cell_to_Ar(53.0, 30.0, 32.0, 90, 100.0, 90))
+    assert ok is False and got is None and d.n_setting_refused == 1 and d.n_indexed == n0
+    assert d.stats().get("n_setting_refused") == 1
+
+    # classes with a canonical setting are untouched: the standardizer imposes it, no rebase
+    d4 = _driver(TET, laue="4/mmm")
+    M = cell_to_Ar(25.0, 40.0, 40.0, 90, 90, 90)
+    ok, got = _spy_integrate(d4, M)
+    assert ok and _same_M(got, d4._standardize(M)) and d4.n_setting_refused == 0
+    # ...and the known-cell path keeps the exact relabel (no metric search)
+    d = _driver(ref, laue="2/m_uab")
+    order = np.argsort(np.linalg.norm(ref, axis=0), kind="stable")
+    ok, got = _spy_integrate(d, ref[:, order], known_cell=True)
+    assert ok and _same_M(got, ref)
 
 
 if __name__ == "__main__":
@@ -498,7 +603,9 @@ if __name__ == "__main__":
              test_explicit_ops_skip_header_derivation_entirely,
              test_the_laue_label_does_not_permute_axes_when_ops_are_explicit,
              test_frames_are_canonicalized_in_the_reference_setting,
-             test_identity_classes_relabel_the_frame_into_the_reference_order)
+             test_identity_classes_relabel_the_frame_into_the_reference_order,
+             test_rebase_like_recovers_the_reference_setting_from_a_general_integer_basis,
+             test_blind_candidates_are_rebased_into_the_reference_setting)
     ok = 0
     for t in tests:
         try:

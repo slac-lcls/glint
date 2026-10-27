@@ -190,8 +190,15 @@ class Worker:
         """Run `module:qualname` in the target env with these args; return its result (or raise)."""
         if self._conn is None:
             raise RuntimeError("worker not started; use `with Worker(env) as w:` or call .start()")
-        _codec.send(self._conn, {"func": func, "args": list(args), "kwargs": kwargs})
-        resp = _codec.recv(self._conn)
+        try:
+            _codec.send(self._conn, {"func": func, "args": list(args), "kwargs": kwargs})
+            resp = _codec.recv(self._conn)
+        except OSError:
+            try:
+                self.close(kill=True)
+            finally:
+                self._conn = None
+            raise
         if resp.get("ok"):
             return resp["value"]
         raise RemoteError(resp.get("error", "unknown remote error")

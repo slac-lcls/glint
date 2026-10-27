@@ -538,6 +538,13 @@ def test_rebase_like_recovers_the_reference_setting_from_a_general_integer_basis
     M = _rot(rng) @ P
     B = sd._rebase_like(M, conv)
     assert B is not None and _same_metric(B, conv) and _is_lattice_basis_of(B, M, n=2)
+    # A reduced monoclinic basis can require a coefficient larger than two to recover the
+    # reference setting (here c is replaced by c + 3a).
+    ref_large = cell_to_Ar(10.0, 30.0, 100.0, 90.0, 110.0, 90.0)
+    shear_large = np.array([[1, 0, 3], [0, 1, 0], [0, 0, 1]], float)
+    M = ref_large @ shear_large
+    B = sd._rebase_like(M, ref_large)
+    assert B is not None and _same_metric(B, ref_large) and _is_lattice_basis_of(B, M)
     # not the reference's lattice: a 6% longer axis, or a different volume, has no basis -> None
     assert sd._rebase_like(_rot(rng) @ cell_to_Ar(53.0, 30.0, 32.0, 90, 100.0, 90), refs[0]) is None
     assert sd._rebase_like(_rot(rng) @ cell_to_Ar(50.0, 30.0, 32.0, 90, 110.0, 90), refs[0]) is None
@@ -588,6 +595,13 @@ def test_blind_candidates_are_rebased_into_the_reference_setting():
     order = np.argsort(np.linalg.norm(ref, axis=0), kind="stable")
     ok, got = _spy_integrate(d, ref[:, order], known_cell=True)
     assert ok and _same_M(got, ref)
+    # A per-lattice candidate already rebased into reference order must not be relabelled as
+    # shortest-first known-cell output a second time.
+    d = _driver(ref, laue="2/m_uab")
+    M = sd._rebase_like(_rot(rng) @ ref, ref)
+    assert M is not None and _same_metric(M, ref)
+    ok, got = _spy_integrate(d, M, known_cell=True, reference_setting=True)
+    assert ok and np.allclose(got.T @ got, ref.T @ ref), (np.linalg.norm(got, axis=0), np.linalg.norm(ref, axis=0))
 
 
 if __name__ == "__main__":

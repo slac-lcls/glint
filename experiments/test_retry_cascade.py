@@ -200,6 +200,41 @@ def test_known_perframe_retry_relabels_back_to_the_reference_order():
     assert drv.stats()["n_cascade_by_arm"] == {"known_perframe": 1}
 
 
+def test_setting_incompatible_blind_candidates_do_not_stop_the_cascade():
+    """A same-lattice candidate can pass the 5% live comparison but fail the stricter reference
+    setting check. N-best must continue, and the known-cell arm must remain available as fallback."""
+    rng = np.random.default_rng(SEED + 30)
+    ref = cell_to_Ar(50.0, 30.0, 32.0, 90, 100.0, 90)
+    near = ref * 1.032
+    assert same_lattice(near, ref), "fixture must pass the same-lattice tolerance"
+    assert sd._rebase_like(near, ref) is None, "fixture must fail reference-setting compatibility"
+    q = frame_on(ref, rng)
+
+    def driver():
+        drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                           use_gpu=False, retry_cascade=True, laue="2/m_uab")
+        drv._fits = lambda q, M: same_lattice(M, ref)
+        return drv
+
+    drv = driver()
+    drv._blind_index = lambda q, k: [(near.copy(), 1.0), (ref.copy(), 0.9)]
+    calls = _instrument(drv)
+    _load(drv, [q])
+    drv.flush()
+    assert calls == [(0, 0)], f"the compatible second candidate should be integrated: {calls}"
+    assert drv.stats()["n_cascade_by_arm"] == {"blind_nbest_k10": 1}
+
+    drv = driver()
+    order = np.argsort(np.linalg.norm(ref, axis=0), kind="stable")
+    drv._blind_index = lambda q, k: [(near.copy(), 1.0)]
+    drv._known_perframe = lambda q, Mc: ref[:, order].copy()
+    calls = _instrument(drv)
+    _load(drv, [q])
+    drv.flush()
+    assert calls == [(0, 0)], f"the known-cell fallback should rescue the frame: {calls}"
+    assert drv.stats()["n_cascade_by_arm"] == {"known_perframe": 1}
+
+
 def test_wrong_lattice_candidate_is_refused():
     """A blind candidate can FIT a frame and still be the wrong lattice. Accepting it would add a
     different crystal's reflections to this cell's merge -- corruption, not a recovered frame."""
@@ -419,6 +454,7 @@ def test_default_off_touches_nothing():
 
 TESTS = (test_fixture_is_a_real_gate_failure, test_flag_off_frame_is_missed,
          test_flag_on_frame_indexed_exactly_once, test_arms_are_complementary,
+         test_setting_incompatible_blind_candidates_do_not_stop_the_cascade,
          test_wrong_lattice_candidate_is_refused, test_unrescued_frame_still_reaches_the_miss_buffer,
          test_watchdog_reuses_the_cascade_blind_solve,
          test_one_blind_solve_even_when_the_fanout_raises,

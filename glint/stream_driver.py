@@ -41,6 +41,7 @@ Refused frames are counted in stats()["refused_frames"].
 import os
 import warnings
 from collections import Counter, OrderedDict, deque
+from itertools import product
 import numpy as np
 
 try:
@@ -655,23 +656,23 @@ def _relabel_like(M, ref):
     return out
 
 
-_REBASE_VECS = np.array([(h, k, l) for h in range(-2, 3) for k in range(-2, 3) for l in range(-2, 3)
-                         if (h, k, l) != (0, 0, 0)], float)                   # (124, 3) integer combos
-
-
 def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
     """Put a BLIND basis in the reference's setting by an integer change of basis (glint#188).
 
     A blind candidate comes through primitivize(buerger_reduce(...)), so it can differ from the
     reference by a general integer change of basis, not a permutation of its columns: `_relabel_like`
     cannot repair it. The frame and the reference are in different orientations, so the basis is
-    found from the METRIC: integer combinations T (entries in -2..2) whose columns M @ T have the
-    reference's lengths (within `ltol`, relative) and angles (cosines within `ctol`), with |det T|
+    found from the METRIC: integer combinations T whose columns M @ T have the reference's lengths
+    (within `ltol`, relative) and angles (cosines within `ctol`), with |det T|
     equal to the reference/frame volume ratio, rounded (1 for a primitive reference; 2 for a C-, A-,
     B- or I-centered conventional one). The sign of T is chosen so M @ T has the handedness of `ref`;
     -T is still a basis of the lattice. Among several T, the one with the smallest metric residual
     wins; ties are the lattice's own symmetries (its holohedry), which no geometry can split -- the
     same indexing ambiguity the known-cell path has.
+
+    The coefficient bounds follow from `u = inv(M) @ (M @ u)`: any candidate vector no longer than
+    the longest reference axis plus tolerance must have each integer coefficient bounded by the
+    corresponding row norm of `inv(M)` times that length.
 
     Returns M @ T, or None when no such T exists: the candidate is then not the reference's lattice at
     this tolerance, and the caller refuses the frame instead of integrating it in a guessed setting."""
@@ -686,7 +687,9 @@ def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
         return None
     Lr = np.linalg.norm(ref, axis=0)
     Cr = (ref.T @ ref) / np.outer(Lr, Lr)
-    V = M @ _REBASE_VECS.T                                   # (3, 124) lattice vectors of the frame
+    bounds = np.ceil(np.linalg.norm(np.linalg.inv(M), axis=1) * Lr.max() * (1 + ltol)).astype(int)
+    vecs = np.asarray([v for v in product(*(range(-b, b + 1) for b in bounds)) if any(v)], float)
+    V = M @ vecs.T
     L = np.linalg.norm(V, axis=0)
     cand = [np.flatnonzero(np.abs(L - Lr[j]) <= ltol * Lr[j]) for j in range(3)]
     best, best_err = None, np.inf
@@ -701,7 +704,7 @@ def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
                     continue
                 if abs(V[:, b] @ V[:, c] / (L[b] * L[c]) - Cr[1, 2]) > ctol:
                     continue
-                T = _REBASE_VECS[[a, b, c]].T
+                T = vecs[[a, b, c]].T
                 if int(round(abs(np.linalg.det(T)))) != n:
                     continue
                 B = M @ T
@@ -2236,9 +2239,11 @@ class StreamDriver:
                 self._integrate_one(i, M, grid, acc, cell_id=k, known_cell=True, outcome="rescued_per_lattice")
             else:                                           # already rebased above, so known_cell=True: no 2nd rebase
                 self.n_pl_swapped += 1
-                self._integrate_one(i, M2, grid, acc, cell_id=k, known_cell=True, outcome="rescued_per_lattice")
+                self._integrate_one(i, M2, grid, acc, cell_id=k, known_cell=True,
+                                    reference_setting=not self._setting_imposed(), outcome="rescued_per_lattice")
         return still
-    def _integrate_one(self, i, M, grid, acc, cell_id=0, known_cell=False, outcome="indexed", retro=False):
+    def _integrate_one(self, i, M, grid, acc, cell_id=0, known_cell=False, outcome="indexed", retro=False,
+                       reference_setting=False):
         """Canonicalize + predict + integrate slot i under an ALREADY-ACCEPTED matrix M into acc.
         Split out of _index_integrate so _watchdog's individual rescue can integrate a validated
         blind candidate directly, without re-registering it through known-cell (which could just
@@ -2257,9 +2262,10 @@ class StreamDriver:
         (known_cell=False) in a class with no canonical setting is put in the reference's setting by
         `_rebase_like`, and when no integer change of basis does that the frame is refused (counted in
         n_setting_refused) instead of being integrated in a setting the grid and operators were not
-        built for (glint#188). The caller then treats the frame as not rescued."""
+        built for (glint#188). `reference_setting=True` says the matrix is already in the grid's column
+        order, so it must neither be rebased nor treated as shortest-first known-cell output."""
         ref = getattr(grid, "Mc_ref", None)
-        if not known_cell and ref is not None and not self._setting_imposed():
+        if not known_cell and not reference_setting and ref is not None and not self._setting_imposed():
             Mr = _rebase_like(M, ref)
             if Mr is None:
                 self.n_setting_refused = getattr(self, "n_setting_refused", 0) + 1
@@ -2288,7 +2294,7 @@ class StreamDriver:
         # undoing a sort would be a guess (glint#186 review). For those, M was put in the reference's
         # setting above by an integer change of basis found from the metric (_rebase_like, glint#188),
         # so here it needs no relabel.
-        Mcan = self._standardize(M, ref=ref if known_cell else None)
+        Mcan = self._standardize(M, ref=ref if known_cell and not reference_setting else None)
         if not retro:
             self._attribute(cell_id, self._idx[i])          # registry: this cell took this frame
         pl_on = getattr(self, "per_lattice", False)
@@ -2704,9 +2710,15 @@ class StreamDriver:
 
             def blind_gate(c, q=q, hit=hit):
                 """Accept candidate `c` for WHICHEVER active cell it is a registration of, and
-                remember which -- so the frame lands in that cell's accumulator, not cell 0's."""
+                remember which -- so the frame lands in that cell's accumulator, not cell 0's.
+                A candidate that cannot be put in that cell's reference setting is not a match:
+                leave N-best and the known-cell arm free to try the next registration."""
                 for k, Mk in enumerate(cells):
                     if self._cascade_accept(q, c, Mk):
+                        if not self._setting_imposed():
+                            grid, _ = self._cell_sink(k)
+                            if grid.Mc_ref is not None and _rebase_like(c, grid.Mc_ref) is None:
+                                continue
                         hit["k"] = k
                         return True
                 return False

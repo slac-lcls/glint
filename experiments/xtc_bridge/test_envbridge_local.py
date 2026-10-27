@@ -125,8 +125,65 @@ check("Env.shell still inherits", Env.shell("true").inherit_pythonpath is True)
 check("conda worker PYTHONPATH carries no :$PYTHONPATH",
       "$PYTHONPATH" not in Env.conda("x", stack="conda2")._worker_pythonpath("/eb"))
 check("spack worker PYTHONPATH keeps :$PYTHONPATH",
-      Env.spack(env="x")._worker_pythonpath("/eb").endswith(":$PYTHONPATH"))
+      Env.spack(env="x")._worker_pythonpath("/eb").endswith(':"$PYTHONPATH"'))
 shutil.rmtree(_tmp, ignore_errors=True)
+
+# --- review fixes (glint#275) -----------------------------------------------------------------------
+import glob as _glob
+import time as _time
+
+
+def _try(fn):
+    """fn() or the exception it raised -- so one broken check cannot hide the ones after it."""
+    try:
+        return fn()
+    except Exception as e:                                  # noqa: BLE001
+        return e
+
+# a directory with a space in a pythonpath= entry, and envbridge itself under such a path
+_sp = tempfile.mkdtemp(prefix="envbridge space ")
+with open(os.path.join(_sp, "ebspace.py"), "w") as fh:
+    fh.write("def f():\n    return 'ok'\n")
+check("a pythonpath dir with a space still starts the worker",
+      _try(lambda: call(Env.shell("true", pythonpath=[_sp]), "ebspace:f")) == "ok")
+_eb_copy = os.path.join(_sp, "eb parent")
+shutil.copytree(os.path.join(os.path.dirname(os.path.abspath(__file__)), "envbridge"),
+                os.path.join(_eb_copy, "envbridge"))
+_r = _try(lambda: __import__("subprocess").run(
+    [__import__("sys").executable, "-c",
+     "import envbridge as e; print(e.call(e.Env.shell('true'), 'envbridge._selftest:add', 2, 2))"],
+    cwd=_eb_copy, capture_output=True, text=True, timeout=60))
+check("envbridge itself under a path with a space starts the worker",
+      (getattr(_r, "stdout", None) or "").strip() == "4")
+shutil.rmtree(_sp, ignore_errors=True)
+
+# the socket file is removed on close
+_socks = lambda: set(_glob.glob(os.path.join(tempfile.gettempdir(), "envbridge-*.sock")))
+_before = _socks()
+_try(lambda: call(SAME, "envbridge._selftest:add", 1, 1))
+check("no envbridge-*.sock left behind after close", _socks() - _before == set())
+
+# a hung activation is torn down: the subprocess is reaped and the socket file removed
+_w = Worker(Env.shell("sleep 30", label="hung"), timeout=1.0)
+_t0 = _time.time()
+try:
+    _w.start()
+    _raised = False
+except RemoteError:
+    _raised = True
+check("a hung activation raises RemoteError", _raised)
+check("...and its worker process is gone", _w._proc is not None and _w._proc.poll() is not None)
+check("...and its socket file is removed", _socks() - _before == set())
+check("...promptly (not after the 30 s sleep)", _time.time() - _t0 < 15)
+
+# arrays: 0-d shape kept; object and structured dtypes refused at encode
+_z = _try(lambda: call(SAME, "envbridge._selftest:echo", np.array(7.0)))
+check("0-d array keeps shape ()", isinstance(_z, np.ndarray) and _z.shape == () and _z == 7.0)
+for _bad, _what in ((np.zeros(2, dtype=[("a", "<i4"), ("b", "<f8")]), "structured"),
+                    (np.array([1, "x"], dtype=object), "object")):
+    _e = _try(lambda: call(SAME, "envbridge._selftest:echo", _bad))
+    check(f"{_what} dtype refused at encode",
+          isinstance(_e, TypeError) and "cannot send an array of dtype" in str(_e))
 
 # --- call_timeout: a long call must not be cut off by the activation timeout ------------------------
 # REGRESSION TEST: the activation timeout (120 s) also bounded every call, and glint_xtc's psana2 reader

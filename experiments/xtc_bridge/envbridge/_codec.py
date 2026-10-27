@@ -28,9 +28,13 @@ def _walk_encode(obj, blobs):
     tname = type(obj).__module__ + "." + type(obj).__qualname__
     if tname == "numpy.ndarray":
         import numpy as np
-        a = np.ascontiguousarray(obj)
+        if obj.dtype.hasobject or obj.dtype.fields is not None:
+            raise TypeError(
+                f"envbridge: cannot send an array of dtype {obj.dtype} -- object and structured "
+                f"dtypes do not survive the (dtype string, shape, bytes) wire. Send plain arrays.")
+        a = np.ascontiguousarray(obj)            # may turn a 0-d array into shape (1,) ...
         blobs.append(a.tobytes())
-        return {_ND: [a.dtype.str, list(a.shape), len(blobs) - 1]}
+        return {_ND: [a.dtype.str, list(obj.shape), len(blobs) - 1]}   # ... so record obj's shape
     if obj is None or isinstance(obj, (bool, int, float, str)):
         return obj
     if isinstance(obj, (list, tuple)):

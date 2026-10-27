@@ -216,6 +216,10 @@ check("--bridge-timeout defaults to no limit on the reader call", worker_timeout
 a = ap.parse_args(base + ["--psana", "2", "--bridge-timeout", "21600"])
 glint_xtc.read_qframes(a, verbose=False)
 check("--bridge-timeout 21600 reaches the worker", worker_timeouts[-1] == 21600.0, repr(worker_timeouts[-1]))
+_launch = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lute",
+                            "glint_launch.sh")).read()
+check("lute/glint_launch.sh forwards --bridge-timeout on the xtc route",
+      " --bridge-timeout " in _launch.split("XTC_FLAGS=", 1)[1].split('"')[1])
 a = ap.parse_args(base + ["--psana", "2", "--calib-dir", tmp])
 try:
     glint_xtc.read_qframes(a, verbose=False)

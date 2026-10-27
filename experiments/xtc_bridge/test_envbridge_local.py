@@ -185,6 +185,37 @@ for _bad, _what in ((np.zeros(2, dtype=[("a", "<i4"), ("b", "<f8")]), "structure
     check(f"{_what} dtype refused at encode",
           isinstance(_e, TypeError) and "cannot send an array of dtype" in str(_e))
 
+# @remote used as a decorator: the worker resolves module:qualname to the WRAPPER, which must run the
+# body there instead of calling call() again (that recursed, one new worker per level). Run in a child
+# process group with a time limit, so the broken version is killed rather than left spawning workers.
+import signal as _signal
+import subprocess as _subprocess
+import sys as _sys
+_dd = tempfile.mkdtemp(prefix="envbridge-deco-")
+with open(os.path.join(_dd, "ebdeco.py"), "w") as fh:
+    fh.write("import os\nfrom envbridge import Env, remote\n\n\n"
+             "@remote(Env.shell('true'))\ndef pid_plus(x):\n    return [os.getpid(), x + 1]\n")
+_p = _subprocess.Popen(
+    [_sys.executable, "-c", "import os, ebdeco; pid, y = ebdeco.pid_plus(1); "
+                            "print(y, pid != os.getpid())"],
+    cwd=_dd, env={**os.environ, "PYTHONPATH": os.path.dirname(os.path.abspath(__file__)) + ":" + _dd},
+    stdout=_subprocess.PIPE, stderr=_subprocess.DEVNULL, text=True, start_new_session=True)
+try:
+    _out, _ = _p.communicate(timeout=30)
+except _subprocess.TimeoutExpired:
+    os.killpg(_p.pid, _signal.SIGKILL)
+    _out = "timeout"
+check("@remote as a decorator runs the body in the worker (no recursion)", _out.strip() == "2 True")
+shutil.rmtree(_dd, ignore_errors=True)
+
+# a user dict holding the array marker key is refused at encode (the decoder would misread it)
+with Worker(SAME) as w:
+    _e = _try(lambda: w.call("envbridge._selftest:echo", {"__nd__": 1}))
+    check("a dict with the reserved '__nd__' key is refused at encode",
+          isinstance(_e, TypeError) and "reserved" in str(_e))
+    check("...and the same worker still serves the next call",
+          _try(lambda: w.call("envbridge._selftest:add", 1, 2)) == 3)
+
 # --- call_timeout: a long call must not be cut off by the activation timeout ------------------------
 # REGRESSION TEST: the activation timeout (120 s) also bounded every call, and glint_xtc's psana2 reader
 # reads the whole run in ONE call, so any `--psana 2` run longer than 2 min died on a socket timeout.
@@ -202,6 +233,16 @@ with Worker(SAME, timeout=1.0, call_timeout=None) as w:
           w.call("envbridge._selftest:sleep", 2.5) == 2.5)
 with Worker(SAME, timeout=1.0, call_timeout=5.0) as w:
     check("an explicit call_timeout replaces it", w.call("envbridge._selftest:sleep", 2.5) == 2.5)
+
+# after a call times out, its reply is still pending on the socket: the worker must not be reused, or
+# the NEXT call would return this one's late reply (3d6661e, Copilot Autofix on #275)
+with Worker(SAME, timeout=1.0, call_timeout=1.0) as w:
+    _first = _try(lambda: w.call("envbridge._selftest:sleep", 2.5))
+    _time.sleep(2.0)                                       # let the late reply arrive
+    _second = _try(lambda: w.call("envbridge._selftest:add", 1, 2))
+check("a timed-out call raises", isinstance(_first, OSError))
+check("...and the worker is not reused (no stale reply for the next call)",
+      isinstance(_second, RuntimeError) and "not started" in str(_second))
 
 # with no call limit, a worker that dies mid-call must still raise, not hang
 import threading as _threading

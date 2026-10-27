@@ -250,5 +250,9 @@ def remote(env: Env):
         wrapper.__name__ = fn.__name__
         wrapper.__doc__ = fn.__doc__
         wrapper._envbridge_spec = spec
+        # The worker imports `module:qualname` and gets THIS wrapper back (the decorator rebinds the
+        # module attribute), so it must be able to reach the original body, or it would call() again
+        # and start another worker, recursively. _worker._resolve unwraps through __wrapped__.
+        wrapper.__wrapped__ = fn
         return wrapper
     return deco

@@ -30,6 +30,8 @@ def _resolve(spec: str):
     obj = importlib.import_module(mod_name)
     for part in qual.split("."):
         obj = getattr(obj, part)
+    if getattr(obj, "_envbridge_spec", None):    # an @remote wrapper: run the body, not call() again
+        obj = obj.__wrapped__
     return obj
 
 

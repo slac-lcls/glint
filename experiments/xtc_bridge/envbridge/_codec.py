@@ -42,6 +42,9 @@ def _walk_encode(obj, blobs):
     if isinstance(obj, dict):
         if not all(isinstance(k, str) for k in obj):
             raise TypeError("envbridge: dict keys must be strings to cross the boundary")
+        if _ND in obj:
+            # the decoder reads any dict holding this key as an array placeholder
+            raise TypeError(f"envbridge: a dict key {_ND!r} is reserved for arrays on the wire")
         return {k: _walk_encode(v, blobs) for k, v in obj.items()}
     raise TypeError(
         f"envbridge: cannot send a {tname!r} across the env boundary. The wire is restricted to "

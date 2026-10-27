@@ -25,5 +25,9 @@ behave as before; `glint_xtc.py --bridge-timeout` sets it (default: no limit).
   `__wrapped__`); before, the worker got the wrapper back and called `call()` again, recursively;
 - a dict holding the reserved key `__nd__` is refused at encode (the decoder read it as an array
   placeholder, and the failure happened outside the worker's error handling).
+- the handshake read has the activation timeout (an accepted socket does not inherit the listener's),
+  so a worker that connects and stalls cannot hang `start()`;
+- the worker runs in its own process group and cleanup kills the group, so a hung activation's
+  children (a stuck `conda activate`) do not outlive the timeout.
 
 API and design notes: the upstream README. Tests: `../test_envbridge_local.py`.

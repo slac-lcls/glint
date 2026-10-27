@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import signal
 import socket
 import subprocess
 import tempfile
@@ -168,11 +169,16 @@ class Worker:
         # losing the parent's active env -- so a no-op prelude (Env.shell) must run in a plain shell
         # that INHERITS this process's environment (parent's active conda env stays on PATH, so
         # `python` is the parent's). Real conda/spack preludes still override PATH and win.
-        self._proc = subprocess.Popen(["bash", "-c", cmd])
+        # Its own process group, so cleanup can kill whatever the prelude started (a hung `conda activate`
+        # or `spack load` is a child of the shell, and killing the shell alone leaves it running).
+        self._proc = subprocess.Popen(["bash", "-c", cmd], start_new_session=True)
         # A failure here raises out of __enter__, so __exit__ never runs: tear down the subprocess and
         # the socket before re-raising, or a hung activation outlives the caller's error.
         try:
             self._conn, _ = self._sock.accept()
+            # the accepted socket does not inherit the listener's timeout: without this, a worker that
+            # connects and then stalls before its handshake makes start() wait forever
+            self._conn.settimeout(self.timeout)
             if self._conn.recv(2) != b"HI":
                 raise RemoteError(f"worker for {self.env.label} did not hand-shake")
         except socket.timeout:
@@ -219,12 +225,22 @@ class Worker:
             self._path = None
         if self._proc:
             if kill:
-                self._proc.kill()
+                self._kill_group()
             try:
                 self._proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self._proc.kill()
+                self._kill_group()
                 self._proc.wait()
+
+    def _kill_group(self):
+        """SIGKILL the worker's whole process group (the shell, the prelude's children, the worker)."""
+        try:
+            os.killpg(self._proc.pid, signal.SIGKILL)
+        except OSError:                          # group already gone
+            try:
+                self._proc.kill()
+            except OSError:
+                pass
 
     def __enter__(self):
         return self.start()

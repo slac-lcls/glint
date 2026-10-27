@@ -176,6 +176,46 @@ check("...and its worker process is gone", _w._proc is not None and _w._proc.pol
 check("...and its socket file is removed", _socks() - _before == set())
 check("...promptly (not after the 30 s sleep)", _time.time() - _t0 < 15)
 
+# ...including what the prelude started: killing only the shell left the prelude's `sleep` running
+_tag = "41.25"                                             # a sleep no other process is running
+_w = Worker(Env.shell(f"sleep {_tag}", label="hung-child"), timeout=1.0)
+_try(_w.start)
+_time.sleep(0.5)
+_left = __import__("subprocess").run(["pgrep", "-f", f"sleep {_tag}"], capture_output=True, text=True).stdout.split()
+check("a hung activation's child process is killed too", _left == [])
+for _pid in _left:
+    _try(lambda: os.kill(int(_pid), 9))
+
+# a worker that connects but never sends its handshake must still time out (the accepted socket had
+# no timeout, so start() waited forever). A fake `envbridge` package earlier on the worker's
+# PYTHONPATH plays the stalled worker.
+_fd = tempfile.mkdtemp(prefix="envbridge-stall-")
+os.makedirs(os.path.join(_fd, "envbridge"))
+open(os.path.join(_fd, "envbridge", "__init__.py"), "w").close()
+with open(os.path.join(_fd, "envbridge", "_worker.py"), "w") as fh:
+    fh.write("import socket, sys, time\ns = socket.socket(socket.AF_UNIX)\ns.connect(sys.argv[1])\n"
+             "time.sleep(30)\n")
+_res = {}
+
+
+def _stall():
+    _res["e"] = _try(Worker(Env.shell("true", label="stall", pythonpath=[_fd]), timeout=1.0).start)
+
+
+# `python -m` puts the CURRENT directory first on sys.path, and this directory holds the real envbridge,
+# so run the stalled worker from the fake's directory
+_cwd = os.getcwd()
+os.chdir(_fd)
+
+
+import threading as _thr
+_t = _thr.Thread(target=_stall, daemon=True)
+_t.start(); _t.join(15)
+check("a worker that connects but never hand-shakes times out",
+      not _t.is_alive() and isinstance(_res.get("e"), (RemoteError, OSError)))
+os.chdir(_cwd)
+shutil.rmtree(_fd, ignore_errors=True)
+
 # arrays: 0-d shape kept; object and structured dtypes refused at encode
 _z = _try(lambda: call(SAME, "envbridge._selftest:echo", np.array(7.0)))
 check("0-d array keeps shape ()", isinstance(_z, np.ndarray) and _z.shape == () and _z == 7.0)

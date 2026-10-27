@@ -576,6 +576,11 @@ jobs:
       # experiments/xtc_bridge. Each gets its own step so a failure is attributed
       # to a file; `if: ${{ !cancelled() }}` keeps later files running after an earlier
       # failure, and the job still fails overall.
+      - name: experiments/xtc_bridge/test_envbridge_local.py
+        if: ${{ !cancelled() }}
+        run: python test_envbridge_local.py
+        working-directory: experiments/xtc_bridge
+
       - name: experiments/xtc_bridge/test_geom_manifest.py
         if: ${{ !cancelled() }}
         run: python test_geom_manifest.py

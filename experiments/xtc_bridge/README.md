@@ -9,7 +9,7 @@ command**, for both data eras.
 | data | framework | where the reader runs | bridge? |
 |---|---|---|---|
 | **xtc1** (LCLS-I: MFX/CXI, the bulk of existing data) | psana1 | **in the GLINT env** — psana1 + torch coexist | **no** — in-process |
-| **xtc2** (LCLS-II) | psana2 | conda2 — numpy 2.3, no torch | **yes** — [envbridge](https://github.com/slac-lcls/drp-benchmarks/tree/main/envbridge) |
+| **xtc2** (LCLS-II) | psana2 | conda2 — numpy 2.3, no torch | **yes** — [envbridge](envbridge/), vendored here |
 
 psana1 lives in the GLINT env (`ana-4.0.58`) alongside torch, so xtc1 is read **in one interpreter, no
 bridge** — the simpler path, and where most data is. xtc2's psana2 needs numpy 2.3 and cannot co-import
@@ -25,12 +25,13 @@ conda activate ana-4.0.58-py3-minipytorch
 # xtc1 (LCLS-I) — in-process, the default
 python glint_xtc.py --exp <exp> --run <run> --det jungfrau --zdist 0.246 -o out.stream
 
-# xtc2 (LCLS-II) — over the bridge (needs envbridge, below)
+# xtc2 (LCLS-II) — over the bridge (envbridge ships in ./envbridge)
 python glint_xtc.py --exp <exp> --run <run> --zdist 0.246 --psana 2 -o out.stream
 ```
 
-`--psana 2` needs envbridge in the GLINT env:
-`pip install 'git+https://github.com/slac-lcls/drp-benchmarks.git#subdirectory=envbridge'`.
+`--psana 2` needs nothing extra installed: envbridge is vendored in [`envbridge/`](envbridge/).
+The reader reads the whole run in one call, so it has no time limit by default; `--bridge-timeout
+SECONDS` sets one.
 Add `--cell "a b c al be ga"` for known-cell; `--reader-env` picks the conda2 env (default `xpp_drp_gpu_311`).
 
 ## Scale out (MPI) — how a LUTE/slurm task runs it
@@ -94,7 +95,9 @@ device-resident streaming driver at network scale.
 - **Sharding + merge** `test_shard.py`: round-robin ownership is a disjoint + complete + balanced
   partition (nranks 1–64); the stream merge keeps one header + every chunk, tolerates empty shards, and
   preserves global event ids — all psana/MPI/GPU-free.
-- **envbridge** (its home): conda1 numpy 1.26 ↔ conda2 numpy 2.3, float64 bit-exact.
+- **envbridge** `test_envbridge_local.py`: codec, transport, worker, error propagation, the PYTHONPATH
+  regression and the call timeout, in one env. Cross-env (checked in drp-benchmarks): conda1 numpy
+  1.26 ↔ conda2 numpy 2.3, float64 bit-exact.
 
 ## The real-data gate — xtc2 VALIDATED, xtc1 pending
 

@@ -919,7 +919,8 @@ FACTS: dict[str, float | str] = {
     "r0016_known_null_of2228":        330,
     # cxidb-45 (907 frames, every one at the lists' 170-peak cap), same two indexers; counts from
     # cxidb45_summary.json. The head-to-head block below re-measures the per-frame row (324 again) and runs
-    # a separate cell-supplied GLINT pass (805, one frame from this 806).
+    # a separate cell-supplied GLINT pass (805, one frame from this 806). These two keys are 95d51ce's; the
+    # head-to-head block's per-frame row moved to 336 at 8143f8d, so the paper quotes that block's key.
     "pk45_sf_strict_of907":           324,
     "pk45_sf_strict_pct":              36,
     "pk45_sf_known_of907":            806,
@@ -1021,14 +1022,22 @@ FACTS: dict[str, float | str] = {
     # cell-supplied rows are one batch call's wall time / 907 (offline by construction: consensus needs the
     # pool); the GLINT per-frame row is a per-frame median. Single runs, no spread on the times. DIALS runs
     # at its defaults plus the cctbx.xfel second-pass settings and is not tuned.
+    # ⚑ Re-run at 8143f8d (27 Oct, S.M.'s GO; ~/jac_r1_jobs_20261015/rerun/INVENTORY_8143f8d.md; J12/glint/
+    # provenance.json: tree glint_rerun_8143f8d, sdfampere001; a repeat run is bit-identical). #268 (a flattened
+    # basis scored out) moves two GLINT rows: per-frame 324 -> 336, consensus and rescue 804 -> 803; the
+    # cell-supplied row and every null are unchanged. Rescored 28 Oct with the pinned (95d51ce) gate, the same
+    # ruler as the 16 Oct scoring (Mac session 9c7d5c03; mac_check_20261028/J12_8143f8d/results.json). The
+    # counts below are the 8143f8d ones. The times are the 16 Oct run's (41011689, sdfampere035): the re-run
+    # read 6.5 and 23.2 ms on sdfampere001, and times depend on the node and its load, so they are not
+    # restated.
     "pk45_frames":                    907,
     "pk45_peaks_per_frame":           170,
     "pk45_strict_min_matched":         43,  # = max(gate_min, ceil(gate_frac * 170))
-    "pk45_glint_perframe_strict":     324,  # single-frame blind, no consensus
-    "pk45_glint_perframe_pct":       35.7,
+    "pk45_glint_perframe_strict":     336,  # single-frame blind, no consensus (324 at 95d51ce)
+    "pk45_glint_perframe_pct":       37.0,
     "pk45_glint_perframe_ms":         6.0,
-    "pk45_glint_consensus_strict":    804,  # consensus and rescue, no cell given
-    "pk45_glint_consensus_pct":      88.6,
+    "pk45_glint_consensus_strict":    803,  # consensus and rescue, no cell given (804 at 95d51ce)
+    "pk45_glint_consensus_pct":      88.5,
     "pk45_glint_consensus_ms":      24.15,
     "pk45_glint_known_strict":        805,  # the same cell handed in buys one frame
     "pk45_glint_known_ms":          21.35,
@@ -1053,16 +1062,16 @@ FACTS: dict[str, float | str] = {
     "pk45_dials_grid_norefine_ms":  319.0,
     # Paired on the 907 frames: GLINT with consensus and no cell against the best DIALS row with the cell.
     "pk45_mcnemar_glint_only":        138,
-    "pk45_mcnemar_dials_only":          9,
-    "pk45_mcnemar_p":             8.2e-31,  # exact two-sided, recomputed in check_arithmetic
+    "pk45_mcnemar_dials_only":         10,  # 9 at 95d51ce
+    "pk45_mcnemar_p":             6.1e-30,  # exact two-sided, recomputed in check_arithmetic (8.2e-31 at 95d51ce)
     "pk45_null_strict":                 0,  # every GLINT and DIALS arm on the scrambled lists
     # Why the strict criterion and not the cell alone: handed the cell, GLINT on SCRAMBLED peaks still
     # returns the correct lattice on 896 of 907 frames, and the length-only gate (three sorted axes within
     # 5%, no angles, no peak fraction) passes 895. A cell-agreement score cannot tell a known-cell result
     # from noise. The real arms at that length-only gate, for a table note:
     "pk45_glint_known_null_lattice":  896,
-    "pk45_glint_perframe_lengate":    333,
-    "pk45_glint_consensus_lengate":   895,
+    "pk45_glint_perframe_lengate":    347,  # 333 at 95d51ce
+    "pk45_glint_consensus_lengate":   894,  # 895 at 95d51ce
     "pk45_glint_known_lengate":       893,
     "pk45_dials_xfel_lengate":        682,
     "pk45_dials_defaults_lengate":    605,

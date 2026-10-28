@@ -33,5 +33,11 @@ behave as before; `glint_xtc.py --bridge-timeout` sets it (default: no limit).
   of straight in the shared temp dir, where it took the umask's mode: under umask 002 any group
   member could connect first and play the worker. On Linux the connecting process must also run as
   this user (`SO_PEERCRED`).
+- any interruption of `Worker.call` (not only a socket error: also an exception from a signal
+  handler, or Ctrl-C the caller catches) kills the worker, so the next call cannot receive the
+  interrupted call's reply. The request is encoded before anything is sent, so data the codec
+  refuses still leaves the worker usable;
+- `@remote` applied to an `@remote` wrapper raises `TypeError` (each worker unwrapped one layer and
+  started another worker, without end).
 
 API and design notes: the upstream README. Tests: `../test_envbridge_local.py`.

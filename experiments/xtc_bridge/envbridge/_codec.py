@@ -86,7 +86,10 @@ def _recvn(sock, n: int) -> bytes:
 
 
 def send(sock, obj) -> None:
-    payload = encode(obj)
+    send_encoded(sock, encode(obj))
+
+
+def send_encoded(sock, payload: bytes) -> None:
     sock.sendall(struct.pack("<Q", len(payload)) + payload)
 
 

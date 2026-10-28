@@ -280,6 +280,15 @@ except _subprocess.TimeoutExpired:
 check("@remote as a decorator runs the body in the worker (no recursion)", _out.strip() == "2 True")
 shutil.rmtree(_dd, ignore_errors=True)
 
+# @remote stacked on @remote: each worker unwrapped one layer, got the inner wrapper and started another
+# worker, without end. Refused at decoration time (never called here, so the broken version cannot spawn).
+def _plain(x):
+    return x
+
+
+_e = _try(lambda: remote(SAME)(remote(SAME)(_plain)))
+check("@remote applied twice is refused at decoration", isinstance(_e, TypeError) and "twice" in str(_e))
+
 # a user dict holding the array marker key is refused at encode (the decoder would misread it)
 with Worker(SAME) as w:
     _e = _try(lambda: w.call("envbridge._selftest:echo", {"__nd__": 1}))
@@ -335,6 +344,33 @@ _t.start(); _t.join(30)
 check("a worker dying mid-call raises even with call_timeout=None",
       not _t.is_alive() and _res.get("r") not in (None, "returned"))
 print(f"        (raised {_res.get('r')})")
+
+# a call interrupted by something other than a socket error (here a signal handler's exception, as
+# Ctrl-C would be) left its reply in flight, and the next call on the same Worker received it
+class _Interrupt(Exception):
+    pass
+
+
+def _raise_interrupt(*_):
+    raise _Interrupt()
+
+
+_old_h = _signal.signal(_signal.SIGALRM, _raise_interrupt)
+_w = Worker(SAME, call_timeout=None)
+try:
+    _try(_w.start)
+    _signal.setitimer(_signal.ITIMER_REAL, 0.5)
+    _first = _try(lambda: _w.call("envbridge._selftest:sleep", 1.5))
+    _signal.setitimer(_signal.ITIMER_REAL, 0)
+    _time.sleep(1.5)                                     # the stale reply has arrived by now
+    _second = _try(lambda: _w.call("envbridge._selftest:add", 1, 2))
+finally:
+    _signal.setitimer(_signal.ITIMER_REAL, 0)
+    _signal.signal(_signal.SIGALRM, _old_h)
+    _w.close(kill=True)
+check("an interrupted call raises the interruption", isinstance(_first, _Interrupt))
+check("...and the next call on that Worker gets no stale reply",
+      isinstance(_second, RuntimeError) and "not started" in str(_second))
 
 print("ALL PASS" if ok else "FAILURES ABOVE")
 raise SystemExit(0 if ok else 1)

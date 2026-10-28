@@ -211,10 +211,14 @@ class Worker:
         """Run `module:qualname` in the target env with these args; return its result (or raise)."""
         if self._conn is None:
             raise RuntimeError("worker not started; use `with Worker(env) as w:` or call .start()")
+        # encode first: data the codec refuses raises here, before anything is sent, so the worker stays usable
+        payload = _codec.encode({"func": func, "args": list(args), "kwargs": kwargs})
         try:
-            _codec.send(self._conn, {"func": func, "args": list(args), "kwargs": kwargs})
+            _codec.send_encoded(self._conn, payload)
             resp = _codec.recv(self._conn)
-        except OSError:
+        except BaseException:
+            # Any interruption (a socket error, a call timeout, Ctrl-C caught by the caller) can leave
+            # this call's reply in flight; the worker is killed so a later call cannot receive it.
             try:
                 self.close(kill=True)
             finally:
@@ -280,6 +284,9 @@ def remote(env: Env):
     """Decorator: the wrapped function's BODY runs in `env`. The function must live in an importable
     module (so the worker can resolve it by `module:qualname`) -- not a closure or __main__-only def."""
     def deco(fn):
+        if getattr(fn, "_envbridge_spec", None):
+            # each worker unwraps one layer, lands on the inner wrapper and starts another worker, forever
+            raise TypeError(f"@remote applied twice to {fn.__qualname__}; use a single @remote(env)")
         spec = f"{fn.__module__}:{fn.__qualname__}"
 
         def wrapper(*args, **kwargs):

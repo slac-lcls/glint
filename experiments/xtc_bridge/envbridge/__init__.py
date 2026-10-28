@@ -104,14 +104,14 @@ class Env:
             src = _LCLS_STACKS.get(stack)
             if not src:
                 raise ValueError(f"unknown LCLS stack {stack!r}; use one of {sorted(_LCLS_STACKS)}")
-            pre = f"source {src}"
+            pre = f"source {shlex.quote(src)}"
         else:
             base = base or os.environ.get("CONDA_PREFIX_1") or os.environ.get("CONDA_PREFIX", "")
-            pre = f"source {base}/etc/profile.d/conda.sh"
+            pre = f"source {shlex.quote(base + '/etc/profile.d/conda.sh')}"
         # inherit_pythonpath=False: see the Env docstring. A conda env serves its packages from its own
         # site-packages, and the LCLS stacks' psconda.sh leaves behind a PYTHONPATH for the wrong
         # interpreter, which is what broke `glint_xtc.py --psana 2` over this bridge.
-        return cls(f"{pre} && conda activate {env}", label=f"conda:{env}",
+        return cls(f"{pre} && conda activate {shlex.quote(env)}", label=f"conda:{env}",
                    pythonpath=tuple(pythonpath), inherit_pythonpath=False)
 
     @classmethod
@@ -122,9 +122,11 @@ class Env:
         setup = setup or (os.environ.get("SPACK_ROOT", "") + "/share/spack/setup-env.sh")
         pp = tuple(pythonpath)
         if env:
-            return cls(f"source {setup} && spack env activate {env}", label=f"spack-env:{env}", pythonpath=pp)
+            return cls(f"source {shlex.quote(setup)} && spack env activate {shlex.quote(env)}",
+                       label=f"spack-env:{env}", pythonpath=pp)
         if spec:
-            return cls(f"source {setup} && spack load {spec}", label=f"spack:{spec}", pythonpath=pp)
+            # the spec stays unquoted: it is spack syntax and may be several words (`py-numpy %gcc`)
+            return cls(f"source {shlex.quote(setup)} && spack load {spec}", label=f"spack:{spec}", pythonpath=pp)
         raise ValueError("Env.spack needs either env= or spec=")
 
     @classmethod
@@ -295,8 +297,10 @@ def remote(env: Env):
         wrapper.__doc__ = fn.__doc__
         wrapper._envbridge_spec = spec
         # The worker imports `module:qualname` and gets THIS wrapper back (the decorator rebinds the
-        # module attribute), so it must be able to reach the original body, or it would call() again
-        # and start another worker, recursively. _worker._resolve unwraps through __wrapped__.
+        # module attribute), or an outer decorator's wrapper on top of it. It must reach the original
+        # body, or it would call() again and start another worker, recursively. _worker._resolve runs
+        # `_envbridge_body`, which a functools.wraps decorator on top copies along with __dict__.
+        wrapper._envbridge_body = fn
         wrapper.__wrapped__ = fn
         return wrapper
     return deco

@@ -38,6 +38,11 @@ behave as before; `glint_xtc.py --bridge-timeout` sets it (default: no limit).
   interrupted call's reply. The request is encoded before anything is sent, so data the codec
   refuses still leaves the worker usable;
 - `@remote` applied to an `@remote` wrapper raises `TypeError` (each worker unwrapped one layer and
-  started another worker, without end).
+  started another worker, without end);
+- the worker runs an `@remote` function's body through `_envbridge_body`, not `__wrapped__`, so an
+  ordinary `functools.wraps` decorator on top of `@remote` no longer sends it back to the `@remote`
+  wrapper (which started another worker, without end);
+- `Env.conda` and `Env.spack` shell-quote the conda base, the env name or path, and spack's setup
+  script, so a path with a space activates; a spack `spec=` stays unquoted, since it is spack syntax.
 
 API and design notes: the upstream README. Tests: `../test_envbridge_local.py`.

@@ -12,6 +12,7 @@ separately on a machine that has those stacks -- see README.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import tempfile
 
@@ -288,6 +289,44 @@ def _plain(x):
 
 _e = _try(lambda: remote(SAME)(remote(SAME)(_plain)))
 check("@remote applied twice is refused at decoration", isinstance(_e, TypeError) and "twice" in str(_e))
+
+# an ordinary functools.wraps decorator ON TOP of @remote: the worker unwrapped one layer, landed on the
+# @remote wrapper and started another worker, without end (~130 workers in 8 s). Checked by resolving
+# the name the way the worker does, without calling it, so the broken version spawns nothing.
+from envbridge import _worker as _wk
+_do = tempfile.mkdtemp(prefix="envbridge-outer-")
+with open(os.path.join(_do, "ebouter.py"), "w") as fh:
+    fh.write("import functools\nfrom envbridge import Env, remote\n\n\n"
+             "def logged(f):\n    @functools.wraps(f)\n    def w(*a, **k):\n        return f(*a, **k)\n"
+             "    return w\n\n\n"
+             "@logged\n@remote(Env.shell('true'))\ndef plus_one(x):\n    return x + 1\n")
+_sys.path.insert(0, _do)
+_fn = _try(lambda: _wk._resolve("ebouter:plus_one"))
+_sys.path.remove(_do)
+check("a decorator on top of @remote: the worker resolves to the body, not to a wrapper",
+      callable(_fn) and not hasattr(_fn, "_envbridge_spec") and _fn.__name__ == "plus_one")
+_is_body = callable(_fn) and not hasattr(_fn, "_envbridge_spec")   # never call a wrapper: it would spawn
+check("...and the body runs locally there", _is_body and _try(lambda: _fn(1)) == 2)
+shutil.rmtree(_do, ignore_errors=True)
+
+# conda / spack activation with spaces in the paths (they went into the shell unquoted). Fake
+# conda.sh / setup-env.sh define `conda` / `spack` functions that succeed only if they get the env
+# path as ONE argument; the worker then runs in this env.
+_fk = tempfile.mkdtemp(prefix="envbridge base ")
+os.makedirs(os.path.join(_fk, "etc", "profile.d"))
+_envp = os.path.join(_fk, "my env")
+with open(os.path.join(_fk, "etc", "profile.d", "conda.sh"), "w") as fh:
+    fh.write(f'conda() {{ [ "$1" = activate ] && [ "$2" = {shlex.quote(_envp)} ] && [ $# -eq 2 ]; }}\n')
+with open(os.path.join(_fk, "setup env.sh"), "w") as fh:
+    fh.write(f'spack() {{ [ "$1 $2" = "env activate" ] && [ "$3" = {shlex.quote(_envp)} ] && [ $# -eq 3 ]; }}\n')
+check("Env.conda with spaces in base and env path activates",
+      _try(lambda: call(Env.conda(_envp, base=_fk), "envbridge._selftest:add", 1, 1)) == 2)
+check("Env.spack with spaces in setup and env path activates",
+      _try(lambda: call(Env.spack(env=_envp, setup=os.path.join(_fk, "setup env.sh")),
+                        "envbridge._selftest:add", 2, 2)) == 4)
+check("Env.spack leaves a multi-word spec unquoted (spack syntax)",
+      Env.spack(spec="py-numpy %gcc", setup="/s").prelude.endswith("spack load py-numpy %gcc"))
+shutil.rmtree(_fk, ignore_errors=True)
 
 # a user dict holding the array marker key is refused at encode (the decoder would misread it)
 with Worker(SAME) as w:

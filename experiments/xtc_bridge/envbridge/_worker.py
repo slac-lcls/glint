@@ -30,8 +30,11 @@ def _resolve(spec: str):
     obj = importlib.import_module(mod_name)
     for part in qual.split("."):
         obj = getattr(obj, part)
-    if getattr(obj, "_envbridge_spec", None):    # an @remote wrapper: run the body, not call() again
-        obj = obj.__wrapped__
+    # an @remote wrapper, possibly under other decorators: run the body, not call() again. __wrapped__
+    # is not enough: a functools.wraps decorator on top points it at the @remote wrapper.
+    body = getattr(obj, "_envbridge_body", None)
+    if body is not None:
+        obj = body
     return obj
 
 

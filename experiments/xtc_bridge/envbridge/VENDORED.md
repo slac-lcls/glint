@@ -29,5 +29,9 @@ behave as before; `glint_xtc.py --bridge-timeout` sets it (default: no limit).
   so a worker that connects and stalls cannot hang `start()`;
 - the worker runs in its own process group and cleanup kills the group, so a hung activation's
   children (a stuck `conda activate`) do not outlive the timeout.
+- the socket is bound in a private 0700 directory (`tempfile.mkdtemp`), removed on close, instead
+  of straight in the shared temp dir, where it took the umask's mode: under umask 002 any group
+  member could connect first and play the worker. On Linux the connecting process must also run as
+  this user (`SO_PEERCRED`).
 
 API and design notes: the upstream README. Tests: `../test_envbridge_local.py`.

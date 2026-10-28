@@ -157,11 +157,43 @@ check("envbridge itself under a path with a space starts the worker",
       (getattr(_r, "stdout", None) or "").strip() == "4")
 shutil.rmtree(_sp, ignore_errors=True)
 
-# the socket file is removed on close
-_socks = lambda: set(_glob.glob(os.path.join(tempfile.gettempdir(), "envbridge-*.sock")))
+# the socket file (and its directory) is removed on close
+_socks = lambda: set(_glob.glob(os.path.join(tempfile.gettempdir(), "envbridge-*.sock"))
+                     + _glob.glob(os.path.join(tempfile.gettempdir(), "envbridge-sock-*")))
 _before = _socks()
 _try(lambda: call(SAME, "envbridge._selftest:add", 1, 1))
-check("no envbridge-*.sock left behind after close", _socks() - _before == set())
+check("no envbridge socket or socket directory left behind after close", _socks() - _before == set())
+
+# the socket sits in a private directory, not straight in the shared temp dir: there it took the
+# umask's mode, and under umask 002 a group member could connect first and play the worker
+_um = os.umask(0o002)
+_w = Worker(SAME)
+try:
+    _try(_w.start)
+    _d = os.path.dirname(_w._path or "")
+    check("the socket is not bound directly in the shared temp dir", bool(_d) and _d != tempfile.gettempdir())
+    check("...its directory is private (no group/other bits) under umask 002",
+          bool(_d) and os.stat(_d).st_mode & 0o077 == 0)
+    check("...and the worker still works", _try(lambda: _w.call("envbridge._selftest:add", 2, 2)) == 4)
+finally:
+    os.umask(_um)
+    _w.close()
+
+# on Linux, a connection from another user is refused (SO_PEERCRED); faked here by changing what the
+# bridge believes its own uid is
+import socket as _socket
+import envbridge as _eb
+if hasattr(_socket, "SO_PEERCRED"):
+    _real_getuid = _eb.os.getuid
+    _eb.os.getuid = lambda: _real_getuid() + 1
+    try:
+        _e = _try(Worker(SAME, timeout=10.0).start)
+    finally:
+        _eb.os.getuid = _real_getuid
+    check("a connection from another uid is refused", isinstance(_e, RemoteError) and "another user" in str(_e))
+    check("...and leaves no socket directory", _socks() - _before == set())
+else:
+    print("  (not run here: no SO_PEERCRED on this platform; the Linux CI runs the peer-uid check)")
 
 # a hung activation is torn down: the subprocess is reaped and the socket file removed
 _w = Worker(Env.shell("sleep 30", label="hung"), timeout=1.0)

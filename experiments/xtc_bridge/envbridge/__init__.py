@@ -34,9 +34,9 @@ import os
 import shlex
 import signal
 import socket
+import struct
 import subprocess
 import tempfile
-import uuid
 from dataclasses import dataclass
 
 from . import _codec
@@ -133,6 +133,16 @@ class Env:
         return cls(prelude, label=label, pythonpath=tuple(pythonpath))
 
 
+def _peer_is_me(conn) -> bool:
+    """Whether the process on the other end of `conn` runs as this user. Linux only (SO_PEERCRED);
+    elsewhere True, and the 0700 socket directory is the only guard."""
+    opt = getattr(socket, "SO_PEERCRED", None)
+    if opt is None:
+        return True
+    _pid, uid, _gid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, opt, struct.calcsize("3i")))
+    return uid == os.getuid()
+
+
 class Worker:
     """A persistent subprocess in the target env. Reuse it to amortise the (seconds-long) activation."""
 
@@ -148,10 +158,13 @@ class Worker:
         self.timeout = timeout
         self.call_timeout = timeout if call_timeout == "same" else call_timeout
         self._sock = self._conn = self._proc = None
-        self._path = None
+        self._path = self._dir = None
 
     def start(self) -> "Worker":
-        path = self._path = os.path.join(tempfile.gettempdir(), f"envbridge-{uuid.uuid4().hex}.sock")
+        # The socket lives in a private 0700 directory: bound straight in a shared /tmp it takes the
+        # umask's mode, and under umask 002 any group member could connect first and play the worker.
+        self._dir = tempfile.mkdtemp(prefix="envbridge-sock-")
+        path = self._path = os.path.join(self._dir, "sock")
         self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._sock.bind(path)
         self._sock.listen(1)
@@ -179,6 +192,8 @@ class Worker:
             # the accepted socket does not inherit the listener's timeout: without this, a worker that
             # connects and then stalls before its handshake makes start() wait forever
             self._conn.settimeout(self.timeout)
+            if not _peer_is_me(self._conn):
+                raise RemoteError(f"a process of another user connected to the {self.env.label} worker socket")
             if self._conn.recv(2) != b"HI":
                 raise RemoteError(f"worker for {self.env.label} did not hand-shake")
         except socket.timeout:
@@ -223,6 +238,12 @@ class Worker:
             except OSError:
                 pass
             self._path = None
+        if self._dir:
+            try:
+                os.rmdir(self._dir)
+            except OSError:
+                pass
+            self._dir = None
         if self._proc:
             if kill:
                 self._kill_group()

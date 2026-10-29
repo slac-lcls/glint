@@ -1278,46 +1278,20 @@ FACTS: dict[str, float | str] = {
     "poolgate8_gated_wrong":           18,
     "poolgate8_gated_true":             5,
 
-    # Fast XGANDALF on a full socket, XGANDALF with the cell, the asdf/MOSFLM correct-cell counts, and the r51
-    # merge's resolution, CC* and Rsplit ------------------------------------------------------------------
-    # XGANDALF fast execution (CrystFEL 0.12.0's indexing function, called directly) on the 120 and 480 cxidb-17
+    # Fast XGANDALF on a full socket (480 frames), and the r51 merge's resolution, CC* and Rsplit --------------
+    # XGANDALF fast execution (CrystFEL 0.12.0's indexing function, called directly) on the 480 cxidb-17
     # frames, one AMD EPYC 7542 socket: 32 pinned instances started together, the frames split statically
     # (P32_) or handed to idle instances (Q32_); throughput read over the steady-state window. Slurm 41011531;
-    # results/J6.md, run_41011531/summary.json. The single-core arm reproduces xgandalf_fast_strict_of120 and
-    # _lattice_of120 with 0 basis mismatches.
-    "j6_xgandalf_fast_32core_fps":       22.287,  # P32_120 frames per second
-    "j6_xgandalf_fast_32core_effective_ms": 44.87,  # P32_120, = 1000 / fps
-    "j6_xgandalf_fast_32core_strict_of120": 88,
-    "j6_xgandalf_fast_32core_lattice_of120": 96,
+    # results/J6.md, run_41011531/summary.json.
+    # RETIRED 2026-10-29 (S.M.'s ruling, after the section 5 table built on the smaller set was dropped on
+    # 28 Oct): the 32-instance keys on that set (P32_ fps, effective ms, strict and lattice counts, the 1.75
+    # ratio), the single-core mean, all of J8 (XGANDALF with the cell, indexamajig) and the asdf/MOSFLM
+    # lattice counts beside them (records: J6 Slurm 41011531, J8 Slurm 41006724, results/J6.md and J8.md). The
+    # distinctive values are RETIRED rules (dropped-table-*), so they cannot come back as text; the counts
+    # equal live keys and are retired as keys only.
     "j6_xgandalf_fast_32core_strict_of480": 340,   # P32_480 (Q32_480 the same)
-    "j6_glint_blind_over_32core":         1.75,   # blind_fps / j6_xgandalf_fast_32core_fps = 39.0 / 22.287
     "j6_xgandalf_fast_queue480_effective_ms": 56.41,  # Q32_480
     "j6_glint_blind_over_queue480":        2.2,   # queue480_effective_ms / blind_ms = 56.41 / 25.7 = 2.195
-    "xgandalf_fast_1core_mean_ms":       1392.2,  # S1_120 mean; the median is xgandalf_fast_1core_ms
-    # XGANDALF with the lysozyme cell, called directly on one AMD EPYC 7702 node (sdfrome080), 120 cxidb-17
-    # frames, default (h1_A) and fast-execution (h1_B) sampling, scored with GLINT's gate. Times per frame are
-    # the harness's; mean and median both kept. indexamajig with --no-retry --no-refine --no-check-cell, fast
-    # (h2_7_off_fast) and default (h2_2_off) sampling: a different harness, counts not comparable. Slurm 41006724;
-    # results/J8.md, run_41006724/*_summary.json.
-    "j8_xg_known120_strict_published_harness": 96,
-    "j8_xg_known120_lattice_published_harness": 111,
-    "j8_xg_known120_ms_published_harness":     7660.01,  # mean
-    "j8_xg_known120_ms_median_published_harness": 6297.3,
-    "j8_xg_known120_strict_fast_sampling":     95,
-    "j8_xg_known120_lattice_fast_sampling":    111,
-    "j8_xg_known120_ms_fast_sampling":         673.95,   # mean
-    "j8_xg_known120_ms_median_fast_sampling":  559.74,
-    "j8_indexamajig_fast_allflags_ms":         605.48,   # mean (median 502.5)
-    "j8_indexamajig_fast_allflags_strict":     45,
-    "j8_indexamajig_allflags_ms":              5114.87,  # mean (median 4293.0), default sampling
-    # Gevorkov et al. 2019 report 19-106 ms with the cell supplied: 5114.87 / 106 = 48 and 605.48 / 19 = 32,
-    # the "30-50-fold gap".
-    # asdf and MOSFLM correct-cell (lattice) counts beside the strict counts above, same runs.
-    "asdf_blind_on_lattice_of120":       0,
-    "asdf_blind_on_returned_of120":     27,   # cells returned, none on the reference lattice
-    "asdf_cell_on_lattice_of120":       43,
-    "mosflm_blind_on_lattice_of120":    27,
-    "mosflm_cell_on_lattice_of120":     35,
     # r51 merge with the guard (Slurm 41172814/16/17): resolution where the median CC1/2 over the splits falls to
     # 0.143, and CC* and Rsplit, mean over the ten splits (results/J18.md, merges/common_*_s*/compare_*.log).
     # The resolution median is over the splits whose lowest shell is above 0.143: 6 of 10 for GLINT, 4 for
@@ -2090,6 +2064,43 @@ RETIRED = [
          f"of the blind figure retired by blind-34ms; the measured {FACTS['blind_ms']} ms gives "
          f"{FACTS['blind_fps']:.0f} f/s",
          f"{FACTS['blind_fps']:.0f}"),
+    # The section 5 table on the smaller cxidb-17 set, dropped 2026-10-28 and its FACTS keys retired 2026-10-29
+    # (S.M.'s ruling). Only the values no live key shares are rules; the counts (88, 96, 95, 111, 43, 35, 27)
+    # equal live keys and could not be told apart in text. A record that says "retired" in the same clause
+    # (the verifier README's Expected table) is not a reuse.
+    Rule("dropped-table-xg32-fps",
+         r"(?<![\d.])22\.287(?!\d)|(?<![\d.])22\.(?:29|3)(?!\d)"
+         r"(?=[^.\n]{0,40}?(?:frames?\s*(?:per\s*second|/\s*s)|f/s|fps))",
+         "22.3 frames/s is XGANDALF on 32 cores on the dropped table's set; its keys were retired 2026-10-29",
+         f"the 480-frame work-queue figure ({FACTS['j6_xgandalf_fast_queue480_effective_ms']} ms/frame, "
+         f"GLINT {FACTS['j6_glint_blind_over_queue480']}x), or the r0016 run",
+         exempt=("retired",), clause_exempt=True),
+    Rule("dropped-table-xg32-ms", r"(?<![\d.])44\.87(?!\d)",
+         "44.87 ms is 1000/22.287, the retired 32-core figure on the dropped table's set",
+         f"{FACTS['j6_xgandalf_fast_queue480_effective_ms']} ms (480 frames, work queue)",
+         exempt=("retired",), clause_exempt=True),
+    Rule("dropped-table-blind-over-32core", r"(?<![\d.])1\.75\s*(?:x\b|times\b|-?fold)",
+         "1.75x is GLINT over XGANDALF on 32 cores on the dropped table's set; retired 2026-10-29",
+         f"{FACTS['j6_glint_blind_over_queue480']}x (480 frames, work queue)",
+         exempt=("retired",), clause_exempt=True),
+    Rule("dropped-table-xg-1core-mean", r"(?<![\d.,])1,?392(?:\.2)?(?![\d.,])",
+         "1,392 ms is the single-core XGANDALF mean on the dropped table's set; retired 2026-10-29",
+         "the r0016 times (median, mean) on the same node",
+         exempt=("retired",), clause_exempt=True),
+    Rule("dropped-table-xg-known-cell",
+         r"(?<![\d.,])(?:7,?660(?:\.01)?|6,?297(?:\.3)?|673\.95|559\.74)(?![\d.,])"
+         r"|(?<![\d.,])674(?:\s|~)*ms\b",
+         "XGANDALF with the cell (J8: 7,660 / 674 ms means, 6,297 / 560 medians) ran on the dropped table's "
+         "set; its keys were retired 2026-10-29",
+         "a known-cell XGANDALF figure measured on a real run (r0016)",
+         exempt=("retired",), clause_exempt=True),
+    Rule("dropped-table-indexamajig",
+         r"(?<![\d.,])(?:605\.48|5,?114\.87|5,?115)(?![\d.,])|(?<![\d.,])605(?:\s|~)*ms\b"
+         r"|(?<![\d.])45\s*(?:/|of)\s*120\b|(?<!\d)30\s*-{1,2}\s*50\s*-?\s*fold",
+         "indexamajig with the cell (J8: 605 ms at 45/120, 5,115 ms, the '30-50-fold gap' to Gevorkov et al.) "
+         "ran on the dropped table's set; its keys were retired 2026-10-29",
+         "an indexamajig figure measured on a real run (r0016)",
+         exempt=("retired",), clause_exempt=True),
 ]
 
 # ---- 2. overclaims ---------------------------------------------------------------------------
@@ -3973,30 +3984,14 @@ def check_arithmetic() -> list[str]:
                     "(experiments/remeasure_stream_ms.py, A100): the warmed steady-state wall is "
                     "3.49-3.66 ms, not 4.16, which would leave only 1-5% un-attributed. Held at 4.16 "
                     "pending a confirmation run on the original hardware -- see the FACTS comment.")
-    # Fast XGANDALF on a full socket and XGANDALF with the cell: each derived figure against its parts at the
-    # printed precision, the correct-cell counts against the strict counts they contain, and the r51 merge's
-    # resolution split counts against the ten splits.
+    # Fast XGANDALF on a full socket (480 frames): the derived ratio against its parts at the printed
+    # precision, and the r51 merge's resolution split counts against the ten splits.
     for key, value, nd in (
-            ("j6_glint_blind_over_32core", float(F["blind_fps"]) / float(F["j6_xgandalf_fast_32core_fps"]), 2),
             ("j6_glint_blind_over_queue480",
-             float(F["j6_xgandalf_fast_queue480_effective_ms"]) / float(F["blind_ms"]), 1),
-            ("j6_xgandalf_fast_32core_effective_ms", 1000.0 / float(F["j6_xgandalf_fast_32core_fps"]), 2)):
+             float(F["j6_xgandalf_fast_queue480_effective_ms"]) / float(F["blind_ms"]), 1),):
         if round(value, nd) != float(F[key]):
             bad.append(f"  FACTS: {key} = {F[key]}, but its parts give {value:.4f} ({round(value, nd)} at the "
                        f"printed precision)")
-    gaps = (float(F["j8_indexamajig_allflags_ms"]) / 106.0, float(F["j8_indexamajig_fast_allflags_ms"]) / 19.0)
-    if not all(30.0 <= x <= 50.0 for x in gaps):
-        bad.append(f"  FACTS: indexamajig's {F['j8_indexamajig_allflags_ms']} and "
-                   f"{F['j8_indexamajig_fast_allflags_ms']} ms against Gevorkov et al.'s 106 and 19 ms give "
-                   f"{gaps[0]:.1f}x and {gaps[1]:.1f}x, outside the '30-50-fold gap'")
-    for arm in ("asdf_blind_on", "asdf_cell_on", "mosflm_blind_on", "mosflm_cell_on"):
-        if whole(f"{arm}_lattice_of120") < whole(f"{arm}_strict_of120"):
-            bad.append(f"  FACTS: {arm}_lattice_of120 is below {arm}_strict_of120, which counts a subset of it")
-    if whole("asdf_blind_on_lattice_of120") > whole("asdf_blind_on_returned_of120"):
-        bad.append("  FACTS: asdf_blind_on_lattice_of120 exceeds the cells asdf returned")
-    for arm in ("published_harness", "fast_sampling"):
-        if whole(f"j8_xg_known120_strict_{arm}") > whole(f"j8_xg_known120_lattice_{arm}"):
-            bad.append(f"  FACTS: j8_xg_known120_strict_{arm} exceeds j8_xg_known120_lattice_{arm}")
     for side in ("glint", "cf"):
         if not 0 < whole(f"merge_r51guard_{side}_d_splits") <= whole("merge_splits"):
             bad.append(f"  FACTS: merge_r51guard_{side}_d_splits must be between 1 and the {F['merge_splits']} splits")

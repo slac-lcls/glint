@@ -205,6 +205,24 @@ def _fires(text: str, rule_name: str) -> bool:
 
 # (rule name, text that MUST fire, text that must NOT)
 INJECTIONS = [
+    # the dropped section 5 table's values, retired 2026-10-29: the live sentences as the paper had them,
+    # then the same sentence on the 480-frame figures
+    ("dropped-table-xg32-fps",
+     "XGANDALF on 32 CPU cores processes 22.3 frames per second at the same yield",
+     "XGANDALF on 32 CPU cores takes 56.41 ms per frame with a work queue"),
+    ("dropped-table-xg32-ms", "an effective 44.87~ms per frame", "an effective 56.41~ms per frame"),
+    # the verifier README's record row, marked retired in the same clause, is not a reuse
+    ("dropped-table-xg32-ms", "| not in FACTS | `P32_120` 22.287 frames/s (44.87 ms effective per frame);",
+     "| not in FACTS (retired 2026-10-29) | `P32_120` 22.287 frames/s (44.87 ms effective per frame);"),
+    ("dropped-table-blind-over-32core", "and the A100 39, 1.75 times as many", "and the A100 39, 2.2 times as many"),
+    ("dropped-table-xg-1core-mean", "fast execution takes 1,138~ms (median; mean 1,392) on the same core",
+     "fast execution takes 452~ms (median) on the same core"),
+    ("dropped-table-xg-known-cell", "XGANDALF, default sampling & 96 & 111 & 397 & 7,660 & one instance",
+     "MOSFLM & 35 & 35 & --- & 3,674 & one core"),
+    ("dropped-table-xg-known-cell", "7,660 and 674~ms on one EPYC~7702 node", "on one EPYC~7702 node"),
+    ("dropped-table-indexamajig", "the frames take 605~ms at 45 of 120 (a different harness",
+     "682, 605 and 577 for the three DIALS rows with the cell"),
+    ("dropped-table-indexamajig", "the settings tested leave a 30--50-fold gap", "the settings tested leave a gap"),
     ("jungfrau-93pct",
      r"Jungfrau-4M & lysozyme & tetragonal & $93\%$ blind (support $54/60$) & --- \\",
      # the corrected row, plus enough trailing float to reach cxidb-45's legitimate 93% footnote
@@ -633,14 +651,8 @@ ARITHMETIC_PERTURBATIONS = [
     ({"j3_r51_val7_at_cap": 12000},                   "j3_r51_val7_at_cap"),
     ({"j3_cxidb17_120_npk_median": 600.0},            "j3_cxidb17_120_npk_median"),
     ({"j3_r51_val5_frames": 12000},                   "j3_r51_val5_frames"),
-    # The full-socket and known-cell XGANDALF block, one perturbation per guard.
-    ({"j6_glint_blind_over_32core": 1.80},            "j6_glint_blind_over_32core"),
+    # The full-socket XGANDALF block (480 frames).
     ({"j6_xgandalf_fast_queue480_effective_ms": 60.0}, "j6_glint_blind_over_queue480"),
-    ({"j6_xgandalf_fast_32core_effective_ms": 45.9},  "j6_xgandalf_fast_32core_effective_ms"),
-    ({"j8_indexamajig_allflags_ms": 5400.0},          "30-50-fold gap"),
-    ({"mosflm_cell_on_lattice_of120": 30},            "mosflm_cell_on_lattice_of120"),
-    ({"asdf_blind_on_lattice_of120": 28},             "cells asdf returned"),
-    ({"j8_xg_known120_lattice_fast_sampling": 90},    "j8_xg_known120_strict_fast_sampling"),
     ({"merge_r51guard_cf_d_splits": 11},              "merge_r51guard_cf_d_splits"),
     ({"jungfrau_final_of1563": 1520},                 "must nest"),
     ({"fused_strict_of120": 81},                      "fused_strict_of120"),

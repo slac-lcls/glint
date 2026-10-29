@@ -53,9 +53,9 @@ frame's peaks within 0.15.
 
 | key | value |
 |---|---|
-| `xgandalf_fast_1core_ms` | 1137.7 (median per frame of `S1_120`; mean 1392.2) |
+| `xgandalf_fast_1core_ms` | 1137.7 (median per frame of `S1_120`; retired mean 1392.2) |
 | `xgandalf_fast_strict_of120`, `xgandalf_fast_lattice_of120` | 88, 96 in every 120-frame arm, bases identical to `S1_120` |
-| not in FACTS | `P32_120` 22.287 frames/s (44.87 ms effective per frame); `N32_120` 0 of 120 strict and lattice; `S1_120b` / `S1_120` mean 1.006 |
+| not in FACTS (retired 2026-10-29 with the section 5 table) | `P32_120` 22.287 frames/s (44.87 ms effective per frame); `N32_120` 0 of 120 strict and lattice; `S1_120b` / `S1_120` mean 1.006 |
 
 ## Outputs
 

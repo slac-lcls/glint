@@ -11,12 +11,14 @@ mkdir -p "$MDIR" && cd "$MDIR" || exit 1
 [ -s record.json ] && exit 0                                   # restartable: a finished merge is not redone
 python -B "$TOOLS_HOME/sweep_tools.py" subset "$STREAM" "$FRAC" "$SEED" "$PERM" in.stream > subset.log 2>&1 \
     || { echo "subset failed: $MDIR" >&2; exit 1; }
+# a failed merger stops here, before record.json exists, so a rerun of the sweep retries this merge
+merge_failed() { echo "$MERGER failed: $MDIR (see $1)" >&2; exit 2; }
 if [ "$MERGER" = partialator ]; then
-    run "$CFBIN/partialator" -i in.stream -o merged.hkl -y "$SYM" $MERGE -j "$NJ" > partialator.log 2>&1
+    run "$CFBIN/partialator" -i in.stream -o merged.hkl -y "$SYM" $MERGE -j "$NJ" > partialator.log 2>&1 || merge_failed partialator.log
 else
-    run "$CFBIN/process_hkl" -i in.stream -o merged.hkl  -y "$SYM" $MC              > process_hkl.log  2>&1
-    run "$CFBIN/process_hkl" -i in.stream -o merged.hkl1 -y "$SYM" $MC --odd-only  > process_hkl1.log 2>&1
-    run "$CFBIN/process_hkl" -i in.stream -o merged.hkl2 -y "$SYM" $MC --even-only > process_hkl2.log 2>&1
+    run "$CFBIN/process_hkl" -i in.stream -o merged.hkl  -y "$SYM" $MC              > process_hkl.log  2>&1 || merge_failed process_hkl.log
+    run "$CFBIN/process_hkl" -i in.stream -o merged.hkl1 -y "$SYM" $MC --odd-only  > process_hkl1.log 2>&1 || merge_failed process_hkl1.log
+    run "$CFBIN/process_hkl" -i in.stream -o merged.hkl2 -y "$SYM" $MC --even-only > process_hkl2.log 2>&1 || merge_failed process_hkl2.log
 fi
 stats() {                                                      # stats DIR [range flags]
     local W=$1; shift; mkdir -p "$W"

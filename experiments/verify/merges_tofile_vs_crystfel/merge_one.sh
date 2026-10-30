@@ -35,10 +35,15 @@ case "$(basename "$MDIR")" in
     ;;
 esac
 grep -c "^----- Begin chunk" in.stream > n_in.txt
-run "$CFBIN/partialator" -i in.stream -o merged.hkl -y "$SYM" $MERGE $SPLITARG "$@" -j "$NJ" > partialator.log 2>&1
+run "$CFBIN/partialator" -i in.stream -o merged.hkl -y "$SYM" $MERGE $SPLITARG "$@" -j "$NJ" > partialator.log 2>&1 \
+    || { echo "partialator failed: $MDIR (see partialator.log)" >&2; exit 3; }
 # with --custom-split the KEY-paired halves are merged-halfA/halfB.hkl; hkl1/hkl2 remain the
-# order-based split and are left in place for continuity with the 16 Oct run.
-if [ -s merged-halfA.hkl ] && [ -s merged-halfB.hkl ]; then
+# order-based split and are left in place for continuity with the 16 Oct run. The order-based halves
+# are used ONLY when no custom split was asked for: falling back to them would report unpaired halves
+# as paired.
+if [ -n "$SPLITARG" ]; then
+    [ -s merged-halfA.hkl ] && [ -s merged-halfB.hkl ] \
+        || { echo "custom split requested but merged-halfA/B.hkl missing or empty: $MDIR" >&2; exit 4; }
     H1=merged-halfA.hkl; H2=merged-halfB.hkl; echo "paired on: key-paired halves (--custom-split)"
 else
     H1=merged.hkl1; H2=merged.hkl2; echo "paired on: order-based halves (no custom split)"

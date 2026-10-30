@@ -22,6 +22,10 @@
 set -uo pipefail
 source "${VERIFY_DIR:?set VERIFY_DIR to experiments/verify}/r51_blind_arm_with_guard/config.sh"
 glint_env || exit 1
+# merge_one.sh re-sources merges_tofile_vs_crystfel/config.sh, which would reset OUT to that check's
+# directory and append this job's argv to ITS commands.log. DRYRUN_OUT is that config's OUT override,
+# so exporting it keeps every merge of this job, and its provenance, under this job's OUT.
+export DRYRUN_OUT=$OUT
 echo "host $(hostname)  job ${SLURM_JOB_ID:-}  start $(date -u +%FT%TZ)"
 TASKS=$OUT/merge_tasks.txt; aside "$TASKS"; : > "$TASKS"
 

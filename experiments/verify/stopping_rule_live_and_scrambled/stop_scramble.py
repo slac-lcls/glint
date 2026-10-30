@@ -147,6 +147,7 @@ def main():
                 units.append(("long", r, l, [l]))
     print(f"[scramble] task {a.task}/{a.ntasks}: {len(units)} units, {a.procs} workers, G={a.G}, "
           f"groups per run {ngroups}, long {a.long} per run", flush=True)
+    failed = []
     if a.procs <= 1:
         work(a, units, 0, t_start)
     else:
@@ -157,10 +158,17 @@ def main():
             p_.start()
         for p_ in ps:
             p_.join()
+        # join() does not raise a worker's exception: read each exit code, so a worker that died
+        # fails the task (Slurm then reports it) while a worker that stopped on --hours returns 0
+        failed = [w for w, p_ in enumerate(ps) if p_.exitcode != 0]
     done = sum(os.path.exists(os.path.join(out, f"{k}_r{r}_{c:04d}.npz")) for k, r, c, _ in units)
     C.dump_json(os.path.join(out, "status.json"), dict(units=len(units), done=done,
-                                                       secs=time.time() - t_start))
+                                                       secs=time.time() - t_start,
+                                                       failed_workers=failed))
     print(f"[scramble] task {a.task}: {done}/{len(units)} units done", flush=True)
+    if failed:
+        sys.exit(f"[scramble] task {a.task}: worker(s) {failed} failed "
+                 f"(exit codes {[ps[w].exitcode for w in failed]})")
 
 
 if __name__ == "__main__":

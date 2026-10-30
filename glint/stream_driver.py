@@ -2718,6 +2718,7 @@ class StreamDriver:
                         if not self._setting_imposed():
                             grid, _ = self._cell_sink(k)
                             if grid.Mc_ref is not None and _rebase_like(c, grid.Mc_ref) is None:
+                                self.n_setting_refused = getattr(self, "n_setting_refused", 0) + 1
                                 continue
                         hit["k"] = k
                         return True

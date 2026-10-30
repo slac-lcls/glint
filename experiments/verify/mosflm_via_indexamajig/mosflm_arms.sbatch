@@ -47,7 +47,9 @@ run() {   # run <arm> <cmd...>: one core each, all at once (the harness's patter
     printf '%s\t%s\n' "$arm" "$*" >> ARGV.tsv
     srun --exact -n1 -c1 --cpu-bind=cores --mem=3G \
         /usr/bin/time -o "$arm.time" -f "wall_s %e user_s %U maxrss_kb %M" "$@" > "$arm.out" 2> "$arm.err" &
+    PIDS+=("$!"); ARMS+=("$arm")
 }
+PIDS=(); ARMS=()
 E=$IN/cf120_events.lst; G=$IN/cf120.geom; Es=$IN/cf120scr_events.lst; Gs=$IN/cf120scr.geom
 run blind_on       indexamajig -i $E -g $G $BASE                                  -o $OUT/blind_on.stream       --temp-dir=$OUT
 run blind_nopeaks  indexamajig -i $E -g $G $BASE --no-check-peaks                 -o $OUT/blind_nopeaks.stream  --temp-dir=$OUT
@@ -58,18 +60,26 @@ run cell_off       indexamajig -i $E -g $G -p $CELL $BASE $OFF                  
 run cell_alloff    indexamajig -i $E -g $G -p $CELL $BASE $OFF --no-check-peaks   -o $OUT/cell_alloff.stream    --temp-dir=$OUT
 run null_blind_alloff indexamajig -i $Es -g $Gs $BASE $OFF --no-check-peaks       -o $OUT/null_blind_alloff.stream --temp-dir=$OUT
 run null_cell_alloff  indexamajig -i $Es -g $Gs -p $CELL $BASE $OFF --no-check-peaks -o $OUT/null_cell_alloff.stream --temp-dir=$OUT
-wait
+# a bare `wait` returns 0 even when an arm failed: wait on each PID, and stop before scoring
+FAILED=()
+for i in "${!PIDS[@]}"; do wait "${PIDS[$i]}" || FAILED+=("${ARMS[$i]}"); done
+if [ ${#FAILED[@]} -gt 0 ]; then
+    echo "ARMS FAILED: ${FAILED[*]} (see <arm>.err); not scoring $(date -Is)" | tee -a PROVENANCE.txt
+    exit 1
+fi
 echo "all arms done $(date -Is)" >> PROVENANCE.txt
 meta() { printf '{"argv": %s, "time": "%s", "node": "%s", "job": "%s", "glint_commit": "%s", "crystfel": "0.12.0"}' \
     "$(grep -P "^$1\t" ARGV.tsv | cut -f2- | python -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')" \
     "$(cat $1.time 2>/dev/null | tail -1)" "$(hostname)" "$SLURM_JOB_ID" "$(cat $P/COMMIT)"; }
 for arm in blind_on blind_nopeaks blind_alloff cell_on cell_nopeaks cell_off cell_alloff; do
     python $SCORE --arm $arm --kind stream --result $arm.stream --profile $arm.out --events $E \
-        --frames $IN/cf120_qeff.txt --out $OUT --meta "$(meta $arm)" || echo "score failed: $arm"
+        --frames $IN/cf120_qeff.txt --out $OUT --meta "$(meta $arm)" || { echo "score failed: $arm"; SFAIL=1; }
 done
 for arm in null_blind_alloff null_cell_alloff; do
     python $SCORE --arm $arm --kind stream --result $arm.stream --profile $arm.out --events $Es \
-        --frames $IN/cf120scr_qeff.txt --out $OUT --meta "$(meta $arm)" || echo "score failed: $arm"
+        --frames $IN/cf120scr_qeff.txt --out $OUT --meta "$(meta $arm)" || { echo "score failed: $arm"; SFAIL=1; }
 done
-python $J/mosflm_table.py $OUT
+SFAIL=${SFAIL:-0}
+python $J/mosflm_table.py $OUT || SFAIL=1
 echo "end $(date -Is)" >> PROVENANCE.txt
+[ "$SFAIL" = 0 ] || { echo "scoring failed for at least one arm; the table is incomplete"; exit 1; }

@@ -54,7 +54,8 @@ for IN in $INPUTS; do
         for P in $NULLS; do echo "$STREAM $TAG $F $S $P partialator $M/partialator_${P}_f${F}_s$S" >> "$T"; done
     done; done
     echo "$TAG: $(wc -l < "$T") merges"
-    DRANGE="$DR" xargs -P "$NPAR" -L 1 "$TOOLS_HOME/sweep_merge_one.sh" < "$T"        # NJ threads each (config.sh)
+    DRANGE="$DR" xargs -P "$NPAR" -L 1 "$TOOLS_HOME/sweep_merge_one.sh" < "$T" \
+        || { echo "$TAG: SWEEP_FAILED: at least one merge failed; resubmit to retry it (finished merges are kept)"; exit 1; }   # NJ threads each (config.sh)
     echo "$TAG: $(ls "$M"/*/record.json 2>/dev/null | wc -l) records"
 done
 

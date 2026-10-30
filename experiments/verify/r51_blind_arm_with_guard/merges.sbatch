@@ -100,7 +100,10 @@ echo "repro gate PASSED"
 # ==============================================================================================
 
 SECONDS=0
-xargs -P 64 -L 1 "$TOOLS_HOME/merge_one.sh" < "$TASKS"
+# a failed merge (merge_one.sh exits nonzero) must stop the job: collect would average the seeds that
+# remain and report an incomplete comparison
+xargs -P 64 -L 1 "$TOOLS_HOME/merge_one.sh" < "$TASKS" \
+    || { echo "MERGES_FAILED: at least one merge failed (see its partialator.log); not collecting"; exit 1; }
 echo "merges done in ${SECONDS} s"
 
 python - <<EOF > "$OUT/provenance.json"

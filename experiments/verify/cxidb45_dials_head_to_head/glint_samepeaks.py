@@ -81,6 +81,14 @@ def arm_hyb(frames, Mc_known=None):
     return [r["M"] for r in results], np.array([wall]), stats
 
 
+def _match(prov):
+    """The provenance fields a cached arm must share with this invocation to be reused: the input hashes
+    (not their paths), the commit, the GPU and the GLINT settings read from the environment."""
+    env = {k: v for k, v in (prov.get("env") or {}).items() if k != "PYTHONPATH"}
+    return dict(commit=prov.get("commit"), gpu=prov.get("gpu"), env=env,
+                inputs=list((prov.get("npz_sha256") or {}).values()))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--npz", required=True)
@@ -98,7 +106,15 @@ def main():
                 time=time.strftime("%Y-%m-%dT%H:%M:%S"))
     print("glint_samepeaks", json.dumps(prov), flush=True)
     assert prov["cuda"], "no GPU: refusing to time GLINT on CPU"
-    json.dump(prov, open(os.path.join(a.out, "provenance.json"), "w"), indent=1)
+    # provenance.json is the run that first computed the arms; a resumed run keeps it and logs itself to
+    # provenance_resume.jsonl. Each arm's npz carries the provenance of the invocation that computed it,
+    # and an existing arm is reused only if it was computed from the same inputs, commit, GPU and settings.
+    pfile = os.path.join(a.out, "provenance.json")
+    if os.path.exists(pfile):
+        with open(os.path.join(a.out, "provenance_resume.jsonl"), "a") as f:
+            f.write(json.dumps(prov) + "\n")
+    else:
+        json.dump(prov, open(pfile, "w"), indent=1)
     real, null = load(a.npz), load(a.npz_null)
     arms = [("G_pf", real, lambda f: arm_pf(f)),
             ("G_hyb", real, lambda f: arm_hyb(f)),
@@ -109,10 +125,15 @@ def main():
     for name, frames, fn in arms:
         dst = os.path.join(a.out, name + ".npz")
         if os.path.exists(dst):
-            print("skip (exists)", dst, flush=True)
+            with np.load(dst) as Z:     # arms written before the per-arm record fall back to provenance.json
+                old = json.loads(str(Z["prov"])) if "prov" in Z.files else json.load(open(pfile))
+            bad = [k for k in sorted(_match(prov)) if _match(old).get(k) != _match(prov)[k]]
+            if bad:
+                raise SystemExit(f"{dst} was computed with different {bad}; move it aside to recompute it")
+            print("skip (exists, same inputs and settings)", dst, flush=True)
             continue
         Ms, t, stats = fn(frames)
-        np.savez(dst, M=stack(Ms), t=t, stats=json.dumps(jsonable(stats)))
+        np.savez(dst, M=stack(Ms), t=t, stats=json.dumps(jsonable(stats)), prov=json.dumps(prov))
         print("%-11s frames %d  M not None %d  time %.1f s  stats %s" % (
             name, len(frames), sum(M is not None for M in Ms), float(t.sum()),
             json.dumps(jsonable({k: stats.get(k) for k in ("support", "n_idx", "n_blind", "n_rescued", "edges")}))),

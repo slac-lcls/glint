@@ -40,7 +40,9 @@ common = dict(flat=flat, nper=nper, voted=voted, npk=np.array([len(q) for q in f
               commit=C.commit())
 for name in ("r0278", "r0058", "r0016ref", "r0016unref"):
     np.savez(os.path.join(P, f"votes_{name}.npz"), **common)
-for name in ("r0278", "r0058", "r0016ref"):          # q-frames the scramble arm reads
+# q-frames the scramble arm reads, and r0016unref's so that stop_replay's device-parity check
+# (stop_prep.load_frames) re-indexes the same stand-ins these votes came from, not the real unrefined cache
+for name in ("r0278", "r0058", "r0016ref", "r0016unref"):
     np.savez(os.path.join(P, f"q_{name}.npz"), n=N, events=np.arange(N), lams=np.zeros(N),
              **{f"q{i}": q for i, q in enumerate(fr)})
 b = np.load(os.path.join(C.GLINT, "experiments", "nbest_120.npz"))

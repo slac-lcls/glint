@@ -60,6 +60,8 @@ def load_frames(name):
         fr = [np.asarray(q, float) for q in load(QFILES[name])]
         return fr, np.arange(len(fr)), dict(source=QFILES[name], md5=C.md5(QFILES[name]))
     path = qpath(name) if name in EXTRACT else QFILES[name]
+    if name not in EXTRACT and os.path.exists(qpath(name)):
+        path = qpath(name)      # only stop_dryrun.py writes q_<name> for a QFILES name: its stand-ins
     z = np.load(path, allow_pickle=False)
     n = int(z["n"]) if "n" in z.files else len([k for k in z.files if k[0] == "q" and k[1:].isdigit()])
     fr = [np.asarray(z[f"q{i}"], float) for i in range(n)]

@@ -545,6 +545,9 @@ def test_rebase_like_recovers_the_reference_setting_from_a_general_integer_basis
     M = ref_large @ shear_large
     B = sd._rebase_like(M, ref_large)
     assert B is not None and _same_metric(B, ref_large) and _is_lattice_basis_of(B, M)
+    ref_elongated = cell_to_Ar(10.0, 10.0, 5000.0, 90.0, 90.0, 90.0)
+    B = sd._rebase_like(ref_elongated, ref_elongated)
+    assert B is not None and _same_metric(B, ref_elongated)
     # not the reference's lattice: a 6% longer axis, or a different volume, has no basis -> None
     assert sd._rebase_like(_rot(rng) @ cell_to_Ar(53.0, 30.0, 32.0, 90, 100.0, 90), refs[0]) is None
     assert sd._rebase_like(_rot(rng) @ cell_to_Ar(50.0, 30.0, 32.0, 90, 110.0, 90), refs[0]) is None

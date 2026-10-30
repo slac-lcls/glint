@@ -223,6 +223,8 @@ def test_setting_incompatible_blind_candidates_do_not_stop_the_cascade():
     drv.flush()
     assert calls == [(0, 0)], f"the compatible second candidate should be integrated: {calls}"
     assert drv.stats()["n_cascade_by_arm"] == {"blind_nbest_k10": 1}
+    assert drv.stats()["n_setting_refused"] == 1, \
+        "this statistic counts rejected candidate/reference-setting checks, even when rescued"
 
     drv = driver()
     order = np.argsort(np.linalg.norm(ref, axis=0), kind="stable")
@@ -233,6 +235,53 @@ def test_setting_incompatible_blind_candidates_do_not_stop_the_cascade():
     drv.flush()
     assert calls == [(0, 0)], f"the known-cell fallback should rescue the frame: {calls}"
     assert drv.stats()["n_cascade_by_arm"] == {"known_perframe": 1}
+
+
+def test_primitive_blind_candidate_rescues_a_centered_reference():
+    """A primitive candidate for a centered reference must pass the live rescue gate and reach the
+    integration grid in the conventional reference setting, both in the cascade and watchdog."""
+    ref = cell_to_Ar(60.0, 34.0, 41.0, 90.0, 105.0, 90.0)
+    primitive = ref @ np.array([[0.5, 0.5, 0], [-0.5, 0.5, 0], [0, 0, 1]])
+    assert not same_lattice(primitive, ref), "the volume-sensitive gate must reject the primitive basis"
+    rng = np.random.default_rng(SEED + 31)
+
+    def run(retry_cascade, adaptive_relock):
+        drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                           use_gpu=False, retry_cascade=retry_cascade, adaptive_relock=adaptive_relock,
+                           laue="2/m_uab")
+        drv._blind_index = lambda q, k: [(primitive.copy(), 0.9)]
+        q = frame_on(primitive, rng)
+        seen = {}
+        predict = drv.grid.predict
+
+        def capture(M, *args, **kwargs):
+            seen["M"] = np.asarray(M, float).copy()
+            return predict(M, *args, **kwargs)
+
+        drv.grid.predict = capture
+        _load(drv, [q])
+        rebase = sd._rebase_like
+        rebase_calls = []
+
+        def count_rebase(*args, **kwargs):
+            rebase_calls.append(1)
+            return rebase(*args, **kwargs)
+
+        sd._rebase_like = count_rebase
+        try:
+            drv.flush()
+        finally:
+            sd._rebase_like = rebase
+        assert "M" in seen, "the primitive candidate should rescue the missed frame"
+        assert np.allclose(seen["M"].T @ seen["M"], ref.T @ ref, rtol=0.03, atol=1e-6)
+        assert drv.n_indexed == 1
+        assert len(rebase_calls) == 1, "the accepted rebased matrix must be reused for integration"
+        return drv
+
+    cascade = run(True, False)
+    assert cascade.stats()["n_cascade_rescued"] == 1
+    watchdog = run(False, True)
+    assert watchdog.stats()["n_watchdog_rescued"] == 1
 
 
 def test_wrong_lattice_candidate_is_refused():
@@ -455,6 +504,7 @@ def test_default_off_touches_nothing():
 TESTS = (test_fixture_is_a_real_gate_failure, test_flag_off_frame_is_missed,
          test_flag_on_frame_indexed_exactly_once, test_arms_are_complementary,
          test_setting_incompatible_blind_candidates_do_not_stop_the_cascade,
+         test_primitive_blind_candidate_rescues_a_centered_reference,
          test_wrong_lattice_candidate_is_refused, test_unrescued_frame_still_reaches_the_miss_buffer,
          test_watchdog_reuses_the_cascade_blind_solve,
          test_one_blind_solve_even_when_the_fanout_raises,

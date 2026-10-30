@@ -81,6 +81,8 @@ check("both panels parsed", len(b) == 2, str(b))
 check("origin resolves to q0, not the first panel listed", _origin_panel(GEOM) == "q0",
       _origin_panel(GEOM))
 check("panel_at picks by position", panel_at(b, 700, 10) == "q1", panel_at(b, 700, 10))
+check("panel_at floors fractional pixel coordinates",
+      panel_at(b, 511.7, 10, "fallback") == "q0", panel_at(b, 511.7, 10, "fallback"))
 check("panel_at falls back off-detector", panel_at(b, 9999, 9999, "zz") == "zz")
 check("no geometry -> p0", _origin_panel(None) == "p0")
 

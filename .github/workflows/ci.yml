@@ -604,9 +604,19 @@ jobs:
         run: python test_gpu_calib_wiring.py
         working-directory: experiments/xtc_bridge
 
+      - name: experiments/xtc_bridge/test_psana2_geom_thr.py
+        if: ${{ !cancelled() }}
+        run: python test_psana2_geom_thr.py
+        working-directory: experiments/xtc_bridge
+
       - name: experiments/xtc_bridge/test_shard.py
         if: ${{ !cancelled() }}
         run: python test_shard.py
+        working-directory: experiments/xtc_bridge
+
+      - name: experiments/xtc_bridge/test_stream_peaks.py
+        if: ${{ !cancelled() }}
+        run: python test_stream_peaks.py
         working-directory: experiments/xtc_bridge
 
   torch-cpu-tests:
@@ -617,6 +627,7 @@ jobs:
         include:
           - python-version: '3.10'
             torch: torch==1.11.0+cpu
+            numpy: numpy<2
           - python-version: '3.11'
             torch: torch
     steps:
@@ -627,9 +638,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # torch 1.11 wheels are built against NumPy 1.x. Under NumPy 2 every `import torch` printed a NumPy 1.x
+      # warning and torch.from_numpy / Tensor.numpy raised "Numpy is not available", so the 1.11 leg pins
+      # numpy<2. The other leg takes the latest numpy.
       - name: Install dependencies (CPU-only torch)
         run: |
-          python -m pip install --upgrade pip numpy scipy
+          python -m pip install --upgrade pip "${{ matrix.numpy || 'numpy' }}" scipy
           python -m pip install "${{ matrix.torch }}" --index-url https://download.pytorch.org/whl/cpu
 
       # The scatter_reduce_(amin) shim under lattice-candidate dedup: a wrong answer does not
@@ -654,6 +668,12 @@ jobs:
       - name: experiments/test_nbest_prefix.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_nbest_prefix.py
+
+      # The blind searches score out a basis the anneal flattened (glint_fast.plausible_t, has_cell's rule on the
+      # device): the rule agrees with has_cell, and every cell index_blind_nbest returns on 12 real frames passes it.
+      - name: experiments/test_blind_plausible.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_blind_plausible.py
 
       # The known-cell engine's precision defaults (fp32 working precision since 26 Sep 2026, fp64 3x3 solve on
       # the torch path, KC_FP=64 restoring fp64), and the same strict decisions in both on 30 real frames (CPU).

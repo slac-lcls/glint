@@ -42,15 +42,36 @@ _FALLBACK_GEOM = ("clen = 0.1\nres = 5000\nadu_per_photon = 1\nphoton_energy = 9
 # one and lose the whole file.
 MIN_CELL_VOLUME_A3 = 1.0
 
+# 1 A^3 is five orders of magnitude below a protein cell, so it only catches the singular case. A basis whose three axes
+# nearly lie in a plane is not a plausible cell at any size: |det M| / (|a||b||c|) is the cell's volume as a fraction of
+# the box with the same edges, 1 for a rectangular cell, 0.87 for a hexagonal one and at least 0.71 for a reduced cell
+# (the three shortest independent lattice vectors; Minkowski's bound). On a sparse run where the consensus declined to
+# establish a cell, 9 of the 2,408 cells GLINT wrote had 27-123 A axes and 3-64 A^3 volumes (fractions below 2e-4);
+# every cell CrystFEL returned in the same comparisons was at 0.52 or above. A conventional setting falls below 0.1 only
+# at a monoclinic beta above 174 degrees or a rhombohedral alpha below 20 degrees (hexagonal c/a above 8.6).
+MIN_CELL_VOLUME_FRACTION = 0.1
+
+# How the run summary and the solution-file writer name the frames ``has_cell`` turns down.
+NO_CELL = (f"non-finite, |det M| < {MIN_CELL_VOLUME_A3:g} A^3, or |det M| < {MIN_CELL_VOLUME_FRACTION:g} "
+           f"|a||b||c|")
+
 
 def has_cell(M):
-    """True when ``M`` (columns a, b, c in A) is a usable basis: finite, with |det M| >= MIN_CELL_VOLUME_A3.
-    The one rule shared by ``write_stream``, ``predict._write_chunk`` and ``predict.write_solution_file``, so
-    the stream and the solution file hold the same frames."""
+    """True when ``M`` (columns a, b, c in A) is a usable basis: finite, |det M| >= MIN_CELL_VOLUME_A3, and
+    |det M| >= MIN_CELL_VOLUME_FRACTION * |a||b||c|. The one rule shared by ``write_stream``,
+    ``predict._write_chunk`` and ``predict.write_solution_file``, so the stream and the solution file hold the
+    same frames.
+
+    The singularity test comes first. With a zero-length axis both sides of the scaled test are 0, and with a
+    non-finite entry both are NaN, so the scaled test alone cannot decide either case, and a basis it let through
+    would raise in the inversion downstream."""
     if M is None:
         return False
     M = np.asarray(M, float)
-    return bool(np.all(np.isfinite(M)) and abs(np.linalg.det(M)) >= MIN_CELL_VOLUME_A3)
+    if not np.all(np.isfinite(M)):
+        return False
+    v = abs(np.linalg.det(M))
+    return bool(v >= MIN_CELL_VOLUME_A3 and v >= MIN_CELL_VOLUME_FRACTION * np.prod(np.linalg.norm(M, axis=0)))
 
 
 def written_note(stats):
@@ -61,7 +82,7 @@ def written_note(stats):
     if w is None or w == stats["n_idx"]:
         return None
     return (f"  written to stream  : {w} crystals, not {stats['n_idx']} -- frames with no usable cell "
-            f"(|det M| < {MIN_CELL_VOLUME_A3:g} A^3) are written as unindexed")
+            f"({NO_CELL}) are written as unindexed")
 
 
 def _header(geom_text, generator="GLINT (fftindex)"):
@@ -92,6 +113,7 @@ def panel_at(bounds, fs, ss, default="p0"):
     OBSERVED peaks carry real positions, so labelling them with a fixed 'p0' is not merely a name
     CrystFEL rejects -- it is the wrong panel. Linear over panels because a frame has tens of peaks
     and a detector has tens of panels."""
+    fs, ss = np.floor(fs), np.floor(ss)
     for name, f0, f1, s0, s1 in bounds:
         if f0 <= fs <= f1 and s0 <= ss <= s1:
             return name
@@ -151,11 +173,14 @@ def escalation_lines(r):
 
 
 def write_stream(results, path, geom_text=None, panel=None, photon_eV=9392.7, clen_m=0.15):
-    """results: list of dicts {image, event, M (3x3 or None), q (N,3), hkl (N,3 int) or None}.
+    """results: list of dicts {image, event, M (3x3 or None), q (N,3), hkl (N,3 int) or None}, and
+    optionally `peaks` (n,3) [fs, ss, intensity] in the .geom's slab coordinates with `peaks_invd`
+    (n,) |q| in 1/A: the OBSERVED peaks the frame was indexed from, written as the chunk's peak list.
 
     geom_text: contents of the .geom this run was indexed against. Pass it whenever the caller has
     one -- it is what makes the stream readable at all, and it names the panels."""
     panel = panel or _origin_panel(geom_text)
+    bounds = panel_bounds(geom_text)
     n_idx = 0
     with open(path, "w") as f:
         f.write(_header(geom_text))
@@ -170,13 +195,23 @@ def write_stream(results, path, geom_text=None, panel=None, photon_eV=9392.7, cl
             # 'file', not 'glint': CrystFEL validates this against its own indexer list, and from
             # its side the orientation IS externally supplied.
             f.write(f"indexed_by = {'file' if valid else 'none'}\n")
-            f.write(f"photon_energy_eV = {float(photon_eV):.2f}\n")
+            f.write(f"photon_energy_eV = {float(r.get('photon_eV', photon_eV)):.2f}\n")
             f.write("beam_divergence = 0.00e+00 rad\nbeam_bandwidth = 1.00e-08 %\n")
             f.write(f"average_camera_length = {float(r.get('clen_m', clen_m)):.6f} m\n")
             # A chunk needs a peak-list block even when empty, or the reader reports the chunk
-            # incomplete. This writer has hkl but no detector positions, hence none to list.
-            f.write("num_peaks = 0\nnum_saturated_peaks = 0\n")
+            # incomplete. The peaks, when the caller has them, are what a strict score needs: the
+            # reflection rows below are only predicted labels.
+            pks = r.get("peaks")
+            npk = 0 if pks is None else len(pks)
+            f.write(f"num_peaks = {npk}\nnum_saturated_peaks = 0\n")
             f.write("Peaks from peak search\n  fs/px   ss/px (1/d)/nm^-1   Intensity  Panel\n")
+            if npk:
+                pks = np.asarray(pks, float)
+                invd = r.get("peaks_invd")
+                invd = np.zeros(npk) if invd is None else np.asarray(invd, float) * 10.0   # 1/A -> 1/nm
+                for (pfs, pss, pI), d in zip(pks[:, :3].tolist(), invd.tolist()):
+                    f.write("%7.2f %7.2f %10.5f %10.2f %s\n"
+                            % (pfs, pss, d, pI, panel_at(bounds, pfs, pss, panel) if bounds else panel))
             f.write("End of peak list\n")
             if valid:
                 n_idx += 1

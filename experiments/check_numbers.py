@@ -168,25 +168,10 @@ FACTS: dict[str, float | str] = {
     "glint1_lattice_rate_pct":     96,  # = round(100 * glint1_lattice_of120 / 120)
     "xgandalf_lattice_of120":      94,  # xgandalf blind, same bar, same peak list
     "xgandalf_lattice_rate_pct":   78,  # = round(100 * xgandalf_lattice_of120 / 120)
-    # XGANDALF IN ITS FAST-EXECUTION MODE. Measured 2026-09-05, S3DF job 37187585, sdfrome041
-    # (EPYC 7702): the same 120 frames, the same xg_driver, the same gate, both arms in one job on
-    # one node. CrystFEL's --xgandalf-fast-execution is documented as a shortcut for sampling-pitch
-    # 2 (standard) + grad-desc-iterations 3 (many), against the defaults of 6
-    # (denseWithSeondaryMillerIndices; spelling matches IndexerPlain enum) + 4 (manyMany) that xg_driver.cpp sets.
-    # ⚠ THE POINT: fast execution is ~11x FASTER **AND** indexes MORE frames on both bars. It is not
-    # a speed-for-accuracy trade on this benchmark, which is the opposite of the natural assumption
-    # -- a manuscript sentence asserting the trade was written and had to be retracted. The default
-    # arm of the same job reproduced the published 94 and 86 EXACTLY, which is what makes these
-    # trustworthy.
-    "xgandalf_fast_strict_of120":   88,  # fast execution, strict gate (vs 86 at the defaults)
-    "xgandalf_fast_lattice_of120":  96,  # fast execution, correct-lattice bar (vs 94)
-    # Paired per-frame McNemar against GLINT-(1)'s 92/120, job 37192335, same gate. Parity holds
-    # against the baseline's BEST configuration and more comfortably than against its default
-    # (p = 0.070 at the defaults, discordant 7:1). Note the default-arm control gave 7:1 where the
-    # paper records 8:2 -- same margin, one frame-pair differs, which is GLINT's per-frame consensus
-    # varying between runs rather than a scoring error.
-    "mcnemar120_fast_glint_only":    7,  # discordant: GLINT indexes, fast-execution xgandalf does not
-    "mcnemar120_fast_xgandalf_only": 3,  # and the other way -- exact two-sided McNemar p = 0.344
+    # XGANDALF IN ITS FAST-EXECUTION MODE on this set (job 37187585: fast 88/120 strict, 96/120 lattice; against
+    # GLINT-(1) 7:3 discordant, exact McNemar p = 0.344; job 37192335). RETIRED 2026-10-31 (S.M.'s ruling, with
+    # the timing keys below): the fast-execution comparison now rests on r0016 (j7_*). The submitted manuscript
+    # still prints these values, so they are retired as keys only, not as RETIRED text rules.
     # THE SINGLE-FRAME BLIND FRONT END -- which is NOT the GLINT-(1) pair above: no cross-frame
     # consensus, no known-cell rescue. These are the rates Sec. 4.2 (sec:ceiling) and the SI's
     # tab:negatives are about, and nothing guarded them until 2026-09-01. That is how tab:negatives'
@@ -699,20 +684,10 @@ FACTS: dict[str, float | str] = {
     "gpus_at_10pct":       0.6,     # = rep_rate_hz * hit_rate * fused_b120_ms/1000
     "xgandalf_blind_ms":   11542.0,  # CrystFEL DEFAULT settings (pitch 6, grad-desc 4)
     "xgandalf_speedup":    449.0,   # = xgandalf_blind_ms / blind_ms
-    # The same baseline in --xgandalf-fast-execution. The RATIO is the measured quantity: both arms
-    # ran on one node (job 37187585, EPYC 7702) so the host cancels -- median 12620 ms at the
-    # defaults against 1147 ms fast. xgandalf_blind_ms above was measured on a different host
-    # (EPYC 7542), so the fast latency is carried as the default divided by that same-host ratio
-    # rather than as a raw millisecond figure from the wrong machine.
-    "xgandalf_fast_ratio":    11.003,  # = 12620/1147 (default median / fast median), SAME host, measured
-    "xgandalf_fast_blind_ms": 1049.0,  # = xgandalf_blind_ms / xgandalf_fast_ratio
-    "xgandalf_fast_speedup":  40.8,    # = xgandalf_fast_blind_ms / blind_ms; paper says "~40x"
-    # Fast execution timed DIRECTLY on one pinned AMD EPYC 7542 core (Slurm 41011531, on sdfampere002's CPUs):
-    # xg_driver over libxgandalf from CrystFEL 0.12.0, pitch 2 / 3 iterations, the 120 cxidb-17 lists, 88/120
-    # strict and 96/120 lattice as above. Median per frame; the mean is 1392.2. It is 8% slower than the
-    # derived xgandalf_fast_blind_ms, whose ratio was measured on an EPYC 7702, so the ~40x is conservative
-    # (1137.7 / blind_ms = 44x).
-    "xgandalf_fast_1core_ms": 1137.7,
+    # Fast execution on this set: the same-host ratio 11.003 (job 37187585), the derived 1049 ms, the ~40x
+    # (xgandalf_fast_speedup 40.8) and the one-core median 1137.7 ms (Slurm 41011531). RETIRED 2026-10-31 (S.M.'s
+    # ruling): the fast-execution timing now rests on r0016 (j7_r0016_xgandalf_ms_median, 16x on medians).
+    # Retired as keys only; the submitted manuscript still prints the ~40x.
     "ffbidx_latency_ms":   4.4,     # per single call -- a LATENCY
     "ffbidx_pipelined_ms": 3.1,     # persistent indexer -- the THROUGHPUT comparator
     "ffbidx_speedup":      18.0,    # = ffbidx_pipelined_ms / fused_b120_ms (throughput vs throughput)
@@ -1365,9 +1340,9 @@ FACTS: dict[str, float | str] = {
     "j7_r0016_glint_ms":             27.5,   # whole pipeline, mean per frame over the run (reps 27.1, 27.9, 27.5)
     "j7_r0016_xgandalf_ms_median":    452,
     "j7_r0016_xgandalf_ms_mean":      567,
-    "j7_r0016_xgandalf_over_glint_median": 16,   # 452 / 27.5 = 16.4: the convention of xgandalf_fast_speedup
+    "j7_r0016_xgandalf_over_glint_median": 16,   # 452 / 27.5 = 16.4: median over GLINT's per-frame time
     "j7_r0016_xgandalf_over_glint_mean":   21,   # 567 / 27.5 = 20.6
-    "j7_cxidb17_xgandalf_ms_median": 1134,   # the control set on the same node
+    # j7_cxidb17_xgandalf_ms_median (1134 ms, the smaller cxidb-17 set on the same node) RETIRED 2026-10-31 as a key.
     "j7_r0016_null_blind_strict":       0,   # scrambled peaks, GLINT blind and XGANDALF alike
     "j7_r0016_null_cell_strict":      379,   # GLINT given the run's cell on scrambled peaks: all on frames < 60 peaks
     "j7_r0016_null_cell_floor":         9,   # the same with the cxidb-17 floor
@@ -2591,43 +2566,40 @@ REQUIRED = [
              "partialator merge. The abstract, sec:realdata, the S12 note and the cover letter all "
              "quote this CC*, so a cell edited here silently disagrees with four other sites",
              window=120),
-    # The three fast-execution rules accept either comparison: the cxidb-17 one they were written for (120 frames,
-    # parity, ~40x), or the real-run one on r0016 (j7_*: 1,340 against 543 of 2,228, 16x on medians), which now
-    # leads the revised manuscript and its abstract. Each required pattern is an alternation of the two.
+    # The three fast-execution rules tie a mention of fast execution to the real-run comparison on r0016 (j7_*:
+    # 1,340 against 543 of 2,228, 16x on medians). The cxidb-17 comparison they were first written for (fast 96/120
+    # and 88/120, ~40x, 7:3 at p = 0.344) was retired as keys 2026-10-31; its values are still accepted as literal
+    # text, not keys, because the submitted manuscript (a target, not edited) prints them. A revision quoting them
+    # passes these rules, so a reviewer has to catch it there.
     Required("xgandalf-fast-accuracy-facts",
              r"xgandalf-fast-execution|fast[- ]execution",
-             ("(?:" + _lit(f"{int(FACTS['xgandalf_fast_lattice_of120'])}") + r"/120|"
-              + _lit(f"{int(FACTS['j7_r0016_glint_strict']):,}") + ")",
-              "(?:" + _lit(f"{int(FACTS['xgandalf_fast_strict_of120'])}") + r"/120|"
-              + _lit(f"{int(FACTS['j7_r0016_xgandalf_fast_strict'])}") + ")",
+             ("(?:96/120|" + _lit(f"{int(FACTS['j7_r0016_glint_strict']):,}") + ")",
+              "(?:88/120|" + _lit(f"{int(FACTS['j7_r0016_xgandalf_fast_strict'])}") + ")",
               "(?:" + _lit(f"{int(FACTS['xgandalf_lattice_of120'])}") + r"/120|"
               + _lit(f"{int(FACTS['j7_r0016_frames']):,}") + ")",
               "(?:" + _lit(f"{int(FACTS['xgandalf_blind_strict_of120'])}") + r"/120|"
               + _lit(f"{int(FACTS['j7_r0016_frames']):,}") + ")"),
-             f"any deliverable that mentions xgandalf fast execution must tie it to the measured "
-             f"120-frame result it exists to support: fast {FACTS['xgandalf_fast_lattice_of120']}/120 "
-             f"at the lattice bar and {FACTS['xgandalf_fast_strict_of120']}/120 at the strict gate, "
-             f"against the default arm's {FACTS['xgandalf_lattice_of120']}/120 and "
-             f"{FACTS['xgandalf_blind_strict_of120']}/120. Otherwise the 'fast is better on both bars' "
-             f"claim is decorative and can drift green",
+             f"any deliverable that mentions xgandalf fast execution must tie it to the measured r0016 "
+             f"comparison: GLINT {FACTS['j7_r0016_glint_strict']:,} and one fast-execution instance "
+             f"{FACTS['j7_r0016_xgandalf_fast_strict']} of {FACTS['j7_r0016_frames']:,} frames at the strict "
+             f"criterion. Otherwise the comparison is decorative and can drift green",
              window=1200),
     Required("xgandalf-fast-speedup-facts",
              r"xgandalf-fast-execution|fast[- ]execution",
              (r"(?:~|about\s+)?(?:40(?:\.8)?|41)\s*(?:x|times)\b|"
               + _lit(f"{int(FACTS['j7_r0016_xgandalf_over_glint_median'])}") + r"\s*(?:x|times)\b|\bsixteenth\b",),
-             f"any deliverable that mentions xgandalf fast execution must tie it to the FACTS-derived "
-             f"speedup claim: xgandalf_fast_speedup = xgandalf_fast_blind_ms / blind_ms = "
-             f"{float(FACTS['xgandalf_fast_speedup']):.1f}, i.e. about 40x. Without that, the ~40x "
-             f"comparison that motivated these keys can drift unchecked",
+             f"any deliverable that mentions xgandalf fast execution must give the r0016 time ratio: "
+             f"{FACTS['j7_r0016_xgandalf_ms_median']} ms median against GLINT's {FACTS['j7_r0016_glint_ms']} ms, "
+             f"{FACTS['j7_r0016_xgandalf_over_glint_median']} times (a sixteenth of the time)",
              window=1200),
     Required("xgandalf-fast-mcnemar-facts",
              r"xgandalf-fast-execution|fast[- ]execution",
              (r"\b0\.344\b|" + _lit(f"{int(FACTS['j7_r0016_glint_strict']):,}"),
               r"\b7\s*:\s*3\b|\b7\s+vs\s+3\b|" + _lit(f"{int(FACTS['j7_r0016_xgandalf_fast_strict'])}")),
-             f"any deliverable that mentions xgandalf fast execution must tie the parity claim to the "
-             f"measured discordant split ({int(FACTS['mcnemar120_fast_glint_only'])}:"
-             f"{int(FACTS['mcnemar120_fast_xgandalf_only'])}) and exact two-sided McNemar p = 0.344. "
-             f"Otherwise the p-value can drift away from its supporting counts",
+             f"any deliverable that mentions xgandalf fast execution must give the paired r0016 counts "
+             f"({FACTS['j7_r0016_glint_only']} frames only GLINT indexes, {FACTS['j7_r0016_xgandalf_only']} only "
+             f"XGANDALF) or at least both totals ({FACTS['j7_r0016_glint_strict']:,} and "
+             f"{FACTS['j7_r0016_xgandalf_fast_strict']})",
              window=1200),
 ]
 
@@ -2846,14 +2818,6 @@ def check_arithmetic() -> list[str]:
           float(F["integ_before_ms"]) / float(F["integ_after_ms"]))
     close("xgandalf_speedup = xgandalf_ms/blind_ms", float(F["xgandalf_speedup"]),
           float(F["xgandalf_blind_ms"]) / float(F["blind_ms"]), tol=0.05)
-    close("xgandalf_fast_blind_ms = xgandalf_blind_ms/xgandalf_fast_ratio",
-          float(F["xgandalf_fast_blind_ms"]),
-          float(F["xgandalf_blind_ms"]) / float(F["xgandalf_fast_ratio"]), tol=0.05)
-    close("xgandalf_fast_speedup = xgandalf_fast_blind_ms/blind_ms",
-          float(F["xgandalf_fast_speedup"]),
-          float(F["xgandalf_fast_blind_ms"]) / float(F["blind_ms"]), tol=0.05)
-    close("xgandalf_fast_1core_ms within 15% of the derived xgandalf_fast_blind_ms",
-          float(F["xgandalf_fast_1core_ms"]), float(F["xgandalf_fast_blind_ms"]), tol=0.15)
     _r0016_strict_pct = round(100.0 * float(F["r0016_strict_of_hits"]) / float(F["r0016_hits"]), 1)
     if float(F["r0016_strict_pct"]) != _r0016_strict_pct:
         bad.append(f'  FACTS: r0016_strict_pct = {F["r0016_strict_pct"]}% but counts round to {_r0016_strict_pct}%')
@@ -3469,39 +3433,6 @@ def check_arithmetic() -> list[str]:
         bad.append("  FACTS: GLINT-(1) no longer leads xgandalf on the 120-frame subset -- sec:comparison "
                    "discusses that lead and its 8:2 discordant split explicitly. Rewrite that passage, "
                    "do not renumber it")
-    _fast_strict = int(F["xgandalf_fast_strict_of120"])
-    _fast_lattice = int(F["xgandalf_fast_lattice_of120"])
-    _fast_glint_only = int(F["mcnemar120_fast_glint_only"])
-    _fast_xgandalf_only = int(F["mcnemar120_fast_xgandalf_only"])
-    for _name, _value in (("xgandalf_fast_strict_of120", _fast_strict),
-                          ("xgandalf_fast_lattice_of120", _fast_lattice),
-                          ("mcnemar120_fast_glint_only", _fast_glint_only),
-                          ("mcnemar120_fast_xgandalf_only", _fast_xgandalf_only)):
-        if not 0 <= _value <= 120:
-            bad.append(f"  FACTS: {_name} must be an integer count in [0, 120], got {_value}")
-    if _fast_glint_only + _fast_xgandalf_only > 120:
-        bad.append("  FACTS: the fast-vs-GLINT discordant counts exceed the 120-frame benchmark")
-    if _fast_lattice < _fast_strict:
-        bad.append("  FACTS: xgandalf fast execution has fewer correct-lattice frames than strict-gate "
-                   "frames on the same 120-frame set. The looser bar cannot be smaller")
-    if _fast_strict <= int(F["xgandalf_blind_strict_of120"]):
-        bad.append("  FACTS: xgandalf fast execution no longer beats the default arm at the strict gate "
-                   f"({_fast_strict} vs {F['xgandalf_blind_strict_of120']}) -- rewrite the claim, do not "
-                   "renumber it")
-    if _fast_lattice <= int(F["xgandalf_lattice_of120"]):
-        bad.append("  FACTS: xgandalf fast execution no longer beats the default arm at the lattice bar "
-                   f"({_fast_lattice} vs {F['xgandalf_lattice_of120']}) -- rewrite the claim, do not "
-                   "renumber it")
-    _fast_p = _mcnemar_p(_fast_glint_only, _fast_xgandalf_only)
-    if abs(_fast_p - 0.344) > 0.001:
-        bad.append(f"  FACTS: the fast-vs-GLINT 120-frame discordant split now gives exact McNemar "
-                   f"p = {_fast_p:.3f}, not the recorded 0.344")
-    if _fast_p <= 0.05:
-        bad.append(f"  FACTS: xgandalf fast execution is no longer at parity with GLINT-(1) on the "
-                   f"120-frame subset ({_fast_glint_only} vs {_fast_xgandalf_only}, p={_fast_p:.3g})")
-    if _fast_glint_only - _fast_xgandalf_only != int(F["glint1_strict_of120"]) - _fast_strict:
-        bad.append("  FACTS: the fast-vs-GLINT discordant counts and strict totals disagree -- their "
-                   "difference must equal 92 - 88 on the same 120-frame set")
     # THE claim the paper now leads with: at n=480 the two are INDISTINGUISHABLE. That is a statement
     # about the discordant pairs, not about the rates, so check it where it lives -- recompute the exact
     # two-sided McNemar and fail if it stops supporting "indistinguishable". A rate edit that leaves the

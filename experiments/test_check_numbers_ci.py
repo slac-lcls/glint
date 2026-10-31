@@ -541,10 +541,10 @@ def _required_fires(text: str, name: str) -> bool:
 
 
 def test_fast_execution_rules_accept_the_r0016_comparison():
-    """The fast-execution rules were written for the cxidb-17 comparison (96 and 88 of 120, ~40x, 7:3 at
-    p = 0.344). The revised manuscript leads with r0016 (1,340 against 543 of 2,228, a sixteenth of the time),
-    so a sentence carrying those numbers must satisfy all three; a bare mention with neither set must still
-    fire, and so must the cxidb-17 wording without its numbers."""
+    """The fast-execution rules tie a mention to the r0016 comparison (1,340 against 543 of 2,228, a sixteenth
+    of the time), so a sentence carrying those numbers must satisfy all three. The cxidb-17 comparison (96 and 88
+    of 120, ~40x, 7:3 at p = 0.344) was retired as keys on 31 Oct but is still accepted as literal text, because
+    the submitted manuscript prints it. A bare mention with neither set must still fire."""
     r0016 = ("On 2,228 frames of a free-electron laser run GLINT indexes 1,340 and one fast-execution XGANDALF "
              "instance 543, in a sixteenth of the time per frame.")
     cxidb = ("On cxidb-17 one fast-execution XGANDALF instance indexes 88/120 (96/120 correct cell) against the "

@@ -61,7 +61,7 @@ Keys not yet on main come from #264 (the r0016 rate and fast XGANDALF) and from 
 | check | FACTS keys | expected | recorded run (Slurm) | commit |
 |---|---|---|---|---|
 | [`r0016_sustained_rate`](r0016_sustained_rate/) | `r0016_sustained_fps`, `r0016_hits`, `r0016_lock_frame`, `r0016_strict_of_hits`, `r0016_strict_pct`, `r0016_null_strict_of_hits`, `r0016_null_strict_pct` | 231.1 f/s; 12,133 hits; lock at frame 24; 6,653 strict (54.8%); null 2,015 (16.6%) | 41040988 | 95d51ce |
-| [`xgandalf_fast_cores`](xgandalf_fast_cores/) | `xgandalf_fast_1core_ms` | 1137.7 ms per frame, one EPYC 7542 core | 41011531 | 95d51ce |
+| [`xgandalf_fast_cores`](xgandalf_fast_cores/) | none (`xgandalf_fast_1core_ms` retired 2026-10-31) | 1137.7 ms per frame, one EPYC 7542 core | 41011531 | 95d51ce |
 | [`merges_tofile_vs_crystfel`](merges_tofile_vs_crystfel/) | `merge_*` except `merge_r51guard_*` | r0016 CC1/2 0.370 (GLINT) against 0.323 (CrystFEL) on 998 frames, not detected as different; shuffled orientations accepted 0 of 1,778; r51 250 correct-lattice cells of 11,058 frames | 41037259-41037262, 41130408 | 95d51ce |
 | [`per_frame_accuracy_vs_peaks`](per_frame_accuracy_vs_peaks/) | `r0016_sf_*`, `r0016_known_*`, `pk45_sf_*`, `r0278_*`, `r0058_*` | r0016 679 of 2,228 strict (30%), 0 in the null; cell supplied 1,234 (55%) | 41006499, 41006500 | 95d51ce |
 | [`stopping_rule_live_and_scrambled`](stopping_rule_live_and_scrambled/) | `decide_*` | decides after 10, 6, 8 and 5 frames (r0278, r0058, refined r0016, 480 cxidb-17); 8 decisions in 10,000 scrambled groups of 100 | 41011615, 41011616, 41056365 | 95d51ce |

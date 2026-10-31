@@ -5,9 +5,11 @@ on the cxidb-17 peak lists. XGANDALF is `libxgandalf.so` of CrystFEL 0.12.0 call
 (`indexamajig` is not run); fast = sampling pitch 2 and 3 gradient-descent iterations, as CrystFEL's
 `--xgandalf-fast-execution`. Host: S3DF ampere node, 2 x AMD EPYC 7542, CPUs only.
 
-Existing keys this check sits beside: fast 96/120 at the lattice bar and 88/120 strict against the
-defaults' 94/120 and 86/120 (re-scored here); against GLINT-(1)'s 92/120, 7:3 discordant frames (McNemar
-p = 0.344); and `xgandalf_fast_speedup` 40.8x against GLINT's `blind_ms` (the last two not re-derived here).
+Keys this check sat beside: fast 96/120 at the lattice bar and 88/120 strict against the defaults' 94/120
+and 86/120 (re-scored here); against GLINT-(1)'s 92/120, 7:3 discordant frames (McNemar p = 0.344); and
+`xgandalf_fast_speedup` 40.8x against GLINT's `blind_ms` (the last two not re-derived here). The fast-execution
+keys on this set, its own `xgandalf_fast_1core_ms` included, were retired 2026-10-31; the defaults' keys stay.
+The scripts read FACTS from the pinned tree (95d51ce), where the retired keys still exist.
 
 - Commit 95d51ce (FACTS values and the scorer are read from the pinned tree; no GLINT indexing runs).
 - CrystFEL 0.12.0 (`/sdf/group/lcls/ds/tools/crystfel/0.12.0`).
@@ -53,8 +55,8 @@ frame's peaks within 0.15.
 
 | key | value |
 |---|---|
-| `xgandalf_fast_1core_ms` | 1137.7 (median per frame of `S1_120`; retired mean 1392.2) |
-| `xgandalf_fast_strict_of120`, `xgandalf_fast_lattice_of120` | 88, 96 in every 120-frame arm, bases identical to `S1_120` |
+| `xgandalf_fast_1core_ms` (retired 2026-10-31) | 1137.7 (median per frame of `S1_120`; retired mean 1392.2) |
+| `xgandalf_fast_strict_of120`, `xgandalf_fast_lattice_of120` (retired 2026-10-31) | 88, 96 in every 120-frame arm, bases identical to `S1_120` |
 | not in FACTS (retired 2026-10-29 with the section 5 table) | `P32_120` 22.287 frames/s (44.87 ms effective per frame); `N32_120` 0 of 120 strict and lattice; `S1_120b` / `S1_120` mean 1.006 |
 
 ## Outputs

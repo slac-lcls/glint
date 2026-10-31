@@ -41,6 +41,7 @@ Refused frames are counted in stats()["refused_frames"].
 import os
 import warnings
 from collections import Counter, OrderedDict, deque
+from itertools import permutations, product
 import numpy as np
 
 try:
@@ -653,6 +654,187 @@ def _relabel_like(M, ref):
     out = np.empty_like(M)
     out[:, order] = M
     return out
+
+
+def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
+    """Put a BLIND basis in the reference's setting by an integer change of basis (glint#188).
+
+    A blind candidate comes through primitivize(buerger_reduce(...)), so it can differ from the
+    reference by a general integer change of basis, not a permutation of its columns: `_relabel_like`
+    cannot repair it. The frame and the reference are in different orientations, so the basis is
+    found from the METRIC: integer combinations T whose columns M @ T have the reference's lengths
+    (within `ltol`, relative) and angles (cosines within `ctol`), with |det T|
+    equal to the reference/frame volume ratio, rounded (1 for a primitive reference; 2 for a C-, A-,
+    B- or I-centered conventional one). The sign of T is chosen so M @ T has the handedness of `ref`;
+    -T is still a basis of the lattice. Among several T, the one with the smallest metric residual
+    wins; ties are the lattice's own symmetries (its holohedry), which no geometry can split -- the
+    same indexing ambiguity the known-cell path has.
+
+    Integer vectors are enumerated depth-first inside each requested length ellipsoid using the
+    Cholesky factor of `M.T @ M`; vectors outside the length window are never materialized, and the
+    search keeps only the current basis in memory. Matching signed permutations are checked first,
+    which avoids enumerating large ellipsoids for elongated cells already in an equivalent setting.
+
+    Returns M @ T, or None when no such T exists: the candidate is then not the reference's lattice at
+    this tolerance, and the caller refuses the frame instead of integrating it in a guessed setting."""
+    M = np.asarray(M, float)
+    ref = np.asarray(ref, float)
+    dM, dR = np.linalg.det(M), np.linalg.det(ref)
+    if abs(dM) < 1e-9 or abs(dR) < 1e-9:
+        return None
+    ratio = abs(dR) / abs(dM)
+    n = int(round(ratio))
+    if n < 1 or abs(ratio - n) > 0.1 * n:
+        return None
+    Lr = np.linalg.norm(ref, axis=0)
+    Cr = (ref.T @ ref) / np.outer(Lr, Lr)
+    if n == 1:
+        for order in permutations(range(3)):
+            for signs in product((-1, 1), repeat=3):
+                B = M[:, order] * signs
+                LB = np.linalg.norm(B, axis=0)
+                CB = (B.T @ B) / np.outer(LB, LB)
+                if (np.all(np.abs(LB - Lr) <= 1e-10 * Lr)
+                        and np.all(np.abs(CB - Cr) <= 1e-10)):
+                    return B if np.linalg.det(B) * dR > 0 else -B
+    try:
+        U = np.linalg.cholesky(M.T @ M).T
+    except np.linalg.LinAlgError:
+        return None
+
+    def vectors(target, dot_constraints=(), det_row=None):
+        lower = target * (1 - ltol)
+        upper2 = (target * (1 + ltol)) ** 2
+        perm = list(range(3))
+        if det_row is not None:
+            pivot = int(np.argmax(np.abs(det_row)))
+            perm = [pivot] + [j for j in range(3) if j != pivot]
+        if perm == [0, 1, 2]:
+            Ui = U
+        else:
+            try:
+                Ui = np.linalg.cholesky(M[:, perm].T @ M[:, perm]).T
+            except np.linalg.LinAlgError:
+                return
+        Q = M[:, perm] @ np.linalg.inv(Ui)
+        projections = [(Q.T @ np.asarray(anchor, float), low, high)
+                       for anchor, low, high in dot_constraints]
+        drow = np.asarray(det_row, dtype=np.int64)[perm] if det_row is not None else None
+        x = [0, 0, 0]
+        y = [0.0, 0.0, 0.0]
+
+        def visit(k, partial):
+            radius2 = max(0.0, upper2 - partial)
+            for projection, low, high in projections:
+                fixed = sum(projection[j] * y[j] for j in range(k + 1, 3))
+                possible = np.linalg.norm(projection[:k + 1]) * np.sqrt(radius2)
+                if fixed + possible < low or fixed - possible > high:
+                    return
+            if k < 0:
+                if any(x) and lower <= np.sqrt(partial) <= target * (1 + ltol):
+                    original = [0, 0, 0]
+                    for j, value in enumerate(x):
+                        original[perm[j]] = value
+                    yield tuple(original)
+                return
+            tail = sum(Ui[k, j] * x[j] for j in range(k + 1, 3))
+            radius = np.sqrt(radius2) / abs(Ui[k, k])
+            center = -tail / Ui[k, k]
+            lo, hi = int(np.ceil(center - radius)), int(np.floor(center + radius))
+            if drow is not None and k == 0:
+                fixed_det = sum(int(drow[j]) * x[j] for j in range(1, 3))
+                values = sorted({(sign * n - fixed_det) // int(drow[0])
+                                 for sign in (-1, 1)
+                                 if (sign * n - fixed_det) % int(drow[0]) == 0})
+                values = [value for value in values if lo <= value <= hi]
+            else:
+                values = range(lo, hi + 1)
+            for value in values:
+                x[k] = value
+                component = tail + Ui[k, k] * value
+                next_partial = partial + component * component
+                if next_partial <= upper2:
+                    y[k] = component
+                    yield from visit(k - 1, next_partial)
+
+        yield from visit(2, 0.0)
+
+    def dot_bounds(anchor, cosine):
+        length = np.linalg.norm(anchor)
+        cosines = (cosine - ctol, cosine + ctol)
+        lengths = (Lr[axis_order[2]] * (1 - ltol),
+                   Lr[axis_order[2]] * (1 + ltol))
+        products = [length * c * ell for c in cosines for ell in lengths]
+        return min(products), max(products)
+
+    axis_order = sorted(range(3), key=lambda j: Lr[j])
+    target_vectors = [None, None, None]
+    best, best_err = None, np.inf
+    for va in vectors(Lr[axis_order[0]]):
+        target_vectors[axis_order[0]] = va
+        A = M @ np.asarray(va, float)
+        La = np.linalg.norm(A)
+        for vb in vectors(Lr[axis_order[1]]):
+            if vb == va:
+                continue
+            vecB = M @ np.asarray(vb, float)
+            Lb = np.linalg.norm(vecB)
+            ia, ib = axis_order[:2]
+            if abs(A @ vecB / (La * Lb) - Cr[ia, ib]) > ctol:
+                continue
+            target_vectors[ib] = vb
+            ic = axis_order[2]
+            det_row = np.cross(np.asarray(target_vectors[(ic + 1) % 3], dtype=np.int64),
+                               np.asarray(target_vectors[(ic + 2) % 3], dtype=np.int64))
+            if not np.any(det_row):
+                continue
+            constraints = ((A, *dot_bounds(A, Cr[ia, ic])),
+                           (vecB, *dot_bounds(vecB, Cr[ib, ic])))
+            for vc in vectors(Lr[ic], constraints, det_row):
+                if vc in (va, vb):
+                    continue
+                C = M @ np.asarray(vc, float)
+                Lc = np.linalg.norm(C)
+                if abs(A @ C / (La * Lc) - Cr[ia, ic]) > ctol:
+                    continue
+                if abs(vecB @ C / (Lb * Lc) - Cr[ib, ic]) > ctol:
+                    continue
+                target_vectors[ic] = vc
+                T = np.asarray(target_vectors, float).T
+                if int(round(abs(np.linalg.det(T)))) != n:
+                    continue
+                BM = M @ T
+                Lbest = np.linalg.norm(BM, axis=0)
+                err = (np.abs(Lbest - Lr) / Lr).sum() + np.abs((BM.T @ BM) / np.outer(Lbest, Lbest) - Cr).sum()
+                if err < best_err:
+                    best, best_err = BM, err
+    if best is None:
+        return None
+    return best if np.linalg.det(best) * dR > 0 else -best
+
+
+def _has_centering_translations(M, ref, centering):
+    """Whether the candidate basis contains the named conventional-cell translations."""
+    translations = {
+        "A": ((0, 0.5, 0.5),),
+        "B": ((0.5, 0, 0.5),),
+        "C": ((0.5, 0.5, 0),),
+        "I": ((0.5, 0.5, 0.5),),
+        "F": ((0.5, 0.5, 0), (0.5, 0, 0.5), (0, 0.5, 0.5)),
+        "R": ((2 / 3, 1 / 3, 1 / 3), (1 / 3, 2 / 3, 2 / 3)),
+        "H": ((2 / 3, 1 / 3, 1 / 3), (1 / 3, 2 / 3, 2 / 3)),
+    }
+    centering = str(centering or "P").strip().upper()
+    if centering not in translations:
+        return centering == "P"
+    try:
+        for translation in translations[centering]:
+            coords = np.linalg.solve(M, ref @ np.asarray(translation, float))
+            if not np.allclose(coords, np.rint(coords), rtol=0, atol=1e-6):
+                return False
+    except np.linalg.LinAlgError:
+        return False
+    return True
 
 
 def _conventional_tetragonal(M):
@@ -1359,6 +1541,7 @@ class StreamDriver:
         # ALREADY-active cell(s) first is nearly free on top of it, and rescues a same-cell miss
         # immediately instead of only ever detecting a genuinely different cell (see _watchdog).
         self.n_watchdog_rescued = 0
+        self.n_setting_refused = 0                # failed blind-candidate/reference-setting checks (glint#188)
         # A dead fan-out (dead GPU worker, poisoned queue) must degrade to the miss path, not
         # take flush() down with it -- glint#147. _fanout_guarded counts every invocation that
         # raised; the consecutive-failure streak is what tells a persistent failure from a
@@ -1521,14 +1704,19 @@ class StreamDriver:
         # centering letter names the face by the axes, so a permuted oC cell is an oA cell wearing
         # the wrong label (glint#185). standardize_axes refuses it; this mirrors the refusal so the
         # reference relabel still runs, which is the only setting such a cell can get.
-        base_centered = str(self.stream_symmetry.get("centering", "")).upper() in ("A", "B", "C")
-        imposed = (not self._ops_explicit) and (not base_centered) and (
-            self.laue in UNIQUE_C_LAUE or self.laue in LENGTH_ORDER_LAUE)
+        imposed = self._setting_imposed()
         out = M if self._ops_explicit else standardize_axes(
             M, laue=self.laue, centering=self.stream_symmetry.get("centering"))
         if ref is not None and not imposed:
             out = _relabel_like(out, ref)
         return out
+
+    def _setting_imposed(self):
+        """True when _standardize imposes a canonical setting by class (unique-c and length-ordered
+        classes, no explicit ops, not base-centered); False when the reference supplies the setting."""
+        base_centered = str(self.stream_symmetry.get("centering", "")).upper() in ("A", "B", "C")
+        return (not self._ops_explicit) and (not base_centered) and (
+            self.laue in UNIQUE_C_LAUE or self.laue in LENGTH_ORDER_LAUE)
 
     def _lock(self, Mc, support=None, standardize=False):
         """Fix the cell: build the hkl grid + theoretical-unique count, and leave blind mode.
@@ -1547,6 +1735,7 @@ class StreamDriver:
         self.grid = HKLGrid(self.Mc, self.dmin, gpu=self.gpu,   # built once, reused every frame
                             panels=self.panels, clen_m=self.clen_m, wavelength_A=self.wavelength_A,
                             )
+        self.grid.reference_centering = (self.stream_symmetry.get("centering") or "P") if source == "given" else "P"
         self.n_theoretical = theoretical_unique(self.Mc, self.dmin, self.ops)
         self._blind = False
         self._register_cell(0, self.Mc, source)
@@ -2156,18 +2345,26 @@ class StreamDriver:
             if not self._gate_count(nd, len(q) - no):
                 still.append(i)                             # a double hit, but the stronger lattice is too weak even alone
                 continue
+            grid, acc = self._cell_sink(k)
+            if rec["dominant"] != "first":                  # the residual held the stronger crystal: keep THAT one,
+                M2 = _rebase_like(np.asarray(v["M2"], float), grid.Mc_ref) if not self._setting_imposed() \
+                    else np.asarray(v["M2"], float)
+                if M2 is None:                              # not in the reference's setting by any integer basis
+                    self.n_setting_refused = getattr(self, "n_setting_refused", 0) + 1     # change (glint#188)
+                    still.append(i)
+                    continue
             rec["kept"] = rec["dominant"]
             self._pl_v[i] = (v, resid, M)                   # _integrate_one must not search this frame again
             self.n_pl_rescued += 1
-            grid, acc = self._cell_sink(k)
             if rec["dominant"] == "first":                  # the registration in hand is the frame's crystal
                 self._integrate_one(i, M, grid, acc, cell_id=k, known_cell=True, outcome="rescued_per_lattice")
-            else:                                           # the residual held the stronger crystal: keep THAT one
+            else:                                           # already rebased above, so known_cell=True: no 2nd rebase
                 self.n_pl_swapped += 1
-                self._integrate_one(i, np.asarray(v["M2"], float), grid, acc, cell_id=k, known_cell=False,
-                                    outcome="rescued_per_lattice")
+                self._integrate_one(i, M2, grid, acc, cell_id=k, known_cell=True,
+                                    reference_setting=not self._setting_imposed(), outcome="rescued_per_lattice")
         return still
-    def _integrate_one(self, i, M, grid, acc, cell_id=0, known_cell=False, outcome="indexed", retro=False):
+    def _integrate_one(self, i, M, grid, acc, cell_id=0, known_cell=False, outcome="indexed", retro=False,
+                       reference_setting=False):
         """Canonicalize + predict + integrate slot i under an ALREADY-ACCEPTED matrix M into acc.
         Split out of _index_integrate so _watchdog's individual rescue can integrate a validated
         blind candidate directly, without re-registering it through known-cell (which could just
@@ -2180,7 +2377,23 @@ class StreamDriver:
         retro=True: a retroactive rescue integrated from the pixel store (_integrate_stored). The caller
         has already counted it (n_warmup_rescued / n_rescued), attributed it to its cell and emitted its
         rescued_* record, so it is only integrated here: no n_indexed, no registry count, no second
-        record, and no second-lattice search (that runs on the live batch)."""
+        record, and no second-lattice search (that runs on the live batch).
+
+        Returns True when the frame was integrated, False when it was refused: a BLIND candidate
+        (known_cell=False) in a class with no canonical setting is put in the reference's setting by
+        `_rebase_like`, and when no integer change of basis does that the candidate is refused instead
+        of being integrated in a setting the grid and operators were not built for (glint#188).
+        `n_setting_refused` counts failed candidate/reference-setting checks, not unique frames; a
+        rejected candidate may be followed by a successful candidate for the same frame.
+        `reference_setting=True` says the matrix is already in the grid's column order, so it must
+        neither be rebased nor treated as shortest-first known-cell output."""
+        ref = getattr(grid, "Mc_ref", None)
+        if not known_cell and not reference_setting and ref is not None and not self._setting_imposed():
+            Mr = _rebase_like(M, ref)
+            if Mr is None:
+                self.n_setting_refused = getattr(self, "n_setting_refused", 0) + 1
+                return False
+            M = Mr
         if not retro:
             self.n_indexed += 1
         # ONE setting for the reference and every frame (glint#186 review). This used to be
@@ -2201,9 +2414,10 @@ class StreamDriver:
         # _both_hands / _ref_setting now return the reference setting when its metric distinguishes that
         # setting; pseudo-symmetric ties can remain inequivalent. A BLIND candidate cannot: it arrives through primitivize(buerger_reduce(...)) and
         # may differ from the reference by a general integer change of basis, not a permutation, so
-        # undoing a sort would be a guess (glint#186 review). Those paths keep the canonical-setting
-        # behaviour only -- see glint#188.
-        Mcan = self._standardize(M, ref=getattr(grid, "Mc_ref", None) if known_cell else None)
+        # undoing a sort would be a guess (glint#186 review). For those, M was put in the reference's
+        # setting above by an integer change of basis found from the metric (_rebase_like, glint#188),
+        # so here it needs no relabel.
+        Mcan = self._standardize(M, ref=ref if known_cell and not reference_setting else None)
         if not retro:
             self._attribute(cell_id, self._idx[i])          # registry: this cell took this frame
         pl_on = getattr(self, "per_lattice", False)
@@ -2258,10 +2472,10 @@ class StreamDriver:
                 low_conf = (qc < self.qc_frac_threshold) if self.qc_frac_threshold is not None else None
                 self._writer.write(self._stream_record(i, Mcan, None, None, None, None, None, None,
                                                        cell_id, frac, low_conf))
-            return
+            return True
         pred = grid.predict(Mcan, self.panels, self.clen_m, self.wavelength_A, tol=self.tol)
         if len(pred) == 0:
-            return
+            return True
         if self._grefiner is not None and self._pk[i] is not None:
             self._grefiner.add_frame(recip_from_M(Mcan), self._pk[i], pred)
         if self.gpu:
@@ -2300,6 +2514,7 @@ class StreamDriver:
                 if pl is not None and pl[i] is not None and pl[i]["kept"] == pl[i]["dominant"]:
                     rec["frac_per_lattice"] = pl[i]["frac_per_lattice"]
                 self._emit(rec)
+        return True
 
     def _integrate_stored(self, ev, q, M, grid, acc, cell_id, outcome):
         """Integrate a frame the pixel store kept (rescue_pixels) under the rescue's matrix M, through the
@@ -2552,7 +2767,7 @@ class StreamDriver:
         return ((self.grid, self.acc) if k == 0
                 else (self.extra[k - 1]["grid"], self.extra[k - 1]["acc"]))
 
-    def _cascade_accept(self, q, M, Mk):
+    def _cascade_accept(self, q, M, Mk, lattice_matrix=None, fit_checked=False):
         """Is candidate `M` an acceptable registration of frame `q` under ACTIVE cell `Mk`?
 
         Three bars, and all three are needed:
@@ -2562,7 +2777,8 @@ class StreamDriver:
             some other lattice would be integrated into cell k's merge as if it were cell k, which is
             corruption rather than a miss. (This is the same rule _watchdog's individual rescue
             applies to its blind candidates, and it mirrors the strict research gate's own
-            same_lattice term.)
+            same_lattice term.) `lattice_matrix` is an equivalent reference-setting basis when a
+            centered conventional cell was recovered from a primitive blind basis.
           * `_fits` -- THE live accept gate, identical to the one the frame just failed. A retry that
             accepted on a looser bar than the batch pass would not be recovering frames, it would be
             lowering the gate.
@@ -2572,7 +2788,52 @@ class StreamDriver:
         M = np.asarray(M, float)
         if abs(np.linalg.det(M)) < 1.0:
             return False
-        return same_lattice(M, Mk) and self._fits(q, M)
+        return (same_lattice(M if lattice_matrix is None else lattice_matrix, Mk)
+                and (fit_checked or self._fits(q, M)))
+
+    def _centering_index(self, centering=None):
+        """Lattice points per conventional cell, from the stream header's centering: 2 for A, B, C or
+        I, 4 for F, 3 for R or H on hexagonal (triple-cell) axes, else 1 -- including when no
+        centering is given, so an unknown centering never admits a smaller primitive candidate."""
+        cen = str(centering or self.stream_symmetry.get("centering") or "P").strip().upper()
+        if cen in ("A", "B", "C", "I"):
+            return 2
+        if cen == "F":
+            return 4
+        lattice = str(self.stream_symmetry.get("lattice_type") or "").strip().lower()
+        if cen in ("R", "H") and lattice == "hexagonal":
+            return 3
+        return 1
+
+    def _rescue_matrix(self, q, M, Mk, grid):
+        """Return a blind rescue candidate and whether it is reference-set, or None if it cannot match."""
+        M = np.asarray(M, float)
+        if abs(np.linalg.det(M)) < 1.0 or not self._fits(q, M):
+            return None, False
+        ref = getattr(grid, "Mc_ref", None)
+        if ref is None:
+            return (M, False) if same_lattice(M, Mk) else (None, False)
+        same = same_lattice(M, Mk)
+        # A smaller primitive candidate is accepted only for a reference whose header NAMES its
+        # centering, and only at that centering's index. Inferred from the volume ratio alone, a P
+        # reference would take a 1/2, 1/3 or 1/4-volume superlattice, whose peaks cannot tell the
+        # metric-equal index-n sublattices apart: the index-2 alias case.
+        ratio = abs(np.linalg.det(ref)) / abs(np.linalg.det(M))
+        centering = getattr(grid, "reference_centering", None)
+        n = self._centering_index(centering)
+        centered = n > 1 and abs(ratio - n) <= 0.1 * n
+        if not same and not centered:
+            return None, False
+        if centered and not _has_centering_translations(M, ref, centering):
+            return None, False
+        if self._setting_imposed() and same:
+            return M, False
+        rebased = _rebase_like(M, ref)
+        if rebased is None:
+            self.n_setting_refused = getattr(self, "n_setting_refused", 0) + 1
+            return None, False
+        return ((rebased, True) if same_lattice(rebased, Mk) and self._fits(q, rebased)
+                else (None, False))
 
     def _cascade_retry(self, slots):
         """glint#75: run the measured retry arms on frames that fit NO active cell, integrating any
@@ -2618,10 +2879,17 @@ class StreamDriver:
 
             def blind_gate(c, q=q, hit=hit):
                 """Accept candidate `c` for WHICHEVER active cell it is a registration of, and
-                remember which -- so the frame lands in that cell's accumulator, not cell 0's."""
+                remember which -- so the frame lands in that cell's accumulator, not cell 0's.
+                A candidate that cannot be put in that cell's reference setting is not a match:
+                leave N-best and the known-cell arm free to try the next registration."""
                 for k, Mk in enumerate(cells):
-                    if self._cascade_accept(q, c, Mk):
+                    grid, _ = self._cell_sink(k)
+                    checked, reference_setting = self._rescue_matrix(q, c, Mk, grid)
+                    if checked is not None and self._cascade_accept(q, c, Mk, lattice_matrix=checked,
+                                                                   fit_checked=True):
                         hit["k"] = k
+                        hit["M"] = checked
+                        hit["reference_setting"] = reference_setting
                         return True
                 return False
 
@@ -2645,8 +2913,12 @@ class StreamDriver:
                 continue
             k = hit.get("k", 0)
             grid, acc = self._cell_sink(k)
-            self._integrate_one(i, M, grid, acc, cell_id=k, known_cell=(arm == "known_perframe"),
-                                outcome="rescued_cascade")
+            M = hit.get("M", M)
+            if not self._integrate_one(i, M, grid, acc, cell_id=k, known_cell=(arm == "known_perframe"),
+                                       reference_setting=hit.get("reference_setting", False),
+                                       outcome="rescued_cascade"):
+                still.append(i)                             # refused: no integer basis to the reference (glint#188)
+                continue
             self.n_cascade_rescued += 1
             self.n_cascade_by_arm[arm] = self.n_cascade_by_arm.get(arm, 0) + 1
         # Only the UNRESCUED slots can reach the watchdog, so only their candidates are worth
@@ -2781,12 +3053,14 @@ class StreamDriver:
             rescued = False
             for c, _ in nb:
                 c = np.asarray(c, float)
-                if abs(np.linalg.det(c)) < 1.0 or not self._fits(q, c):
-                    continue
                 for k, Mk in enumerate(cells):
-                    if same_lattice(c, Mk):
-                        grid, acc = self._cell_sink(k)
-                        self._integrate_one(i, c, grid, acc, cell_id=k, outcome="rescued_watchdog")
+                    grid, acc = self._cell_sink(k)
+                    checked, reference_setting = self._rescue_matrix(q, c, Mk, grid)
+                    if checked is not None:
+                        if not self._integrate_one(i, checked, grid, acc, cell_id=k,
+                                                   reference_setting=reference_setting,
+                                                   outcome="rescued_watchdog"):
+                            continue                        # refused (glint#188): try the next cell/candidate
                         self.n_watchdog_rescued += 1
                         if getattr(self, "_pix", None) is not None:
                             self._pix.release([self._idx[i]])   # integrated now: a relock must not do it again
@@ -2870,9 +3144,10 @@ class StreamDriver:
             if self._lock_min_z is not None and lock_z < self._lock_min_z:
                 return
         k_new = len(self.extra) + 1
-        self.extra.append(dict(Mc=Mn, grid=HKLGrid(Mn, self.dmin, gpu=self.gpu, panels=self.panels,
-                                                   clen_m=self.clen_m, wavelength_A=self.wavelength_A,
-                                                   ),
+        grid = HKLGrid(Mn, self.dmin, gpu=self.gpu, panels=self.panels,
+                       clen_m=self.clen_m, wavelength_A=self.wavelength_A)
+        grid.reference_centering = "P"
+        self.extra.append(dict(Mc=Mn, grid=grid,
                                nth=theoretical_unique(Mn, self.dmin, self.ops),
                                acc=MergeAccumulator(self.snr_bins, self.ops), lock_z=lock_z,
                                name=self._cell_name(Mn, k_new)))
@@ -3007,6 +3282,7 @@ class StreamDriver:
         self._rej = {}
 
     def stats(self, thr=-np.inf):
+        """Return stream statistics; `n_setting_refused` counts failed candidate checks, not unique frames."""
         if self._blind:                                         # not yet locked -- warm-up in progress
             _, sup, lead = self._rc.verdict()
             # gate_refused belongs HERE most of all. `_gate_lock` runs only on the blind path
@@ -3082,6 +3358,8 @@ class StreamDriver:
         if self.qc_frac_threshold is not None:
             s["n_low_confidence"] = self.n_low_confidence          # integrated but below qc_frac_threshold -- sent, flagged
             s["low_conf_frac"] = self.n_low_confidence / max(self.n_integrated, 1)
+        if getattr(self, "n_setting_refused", 0):                  # failed candidate/reference-setting checks
+            s["n_setting_refused"] = self.n_setting_refused        # not unique frames; absent when 0
         if self._writer is not None:                               # offline-merge handoff
             s["stream_out"] = self.stream_out
             s["stream_chunks"] = self._writer.n_chunks

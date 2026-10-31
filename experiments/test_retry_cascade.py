@@ -200,6 +200,144 @@ def test_known_perframe_retry_relabels_back_to_the_reference_order():
     assert drv.stats()["n_cascade_by_arm"] == {"known_perframe": 1}
 
 
+def test_setting_incompatible_blind_candidates_do_not_stop_the_cascade():
+    """A same-lattice candidate can pass the 5% live comparison but fail the stricter reference
+    setting check. N-best must continue, and the known-cell arm must remain available as fallback."""
+    rng = np.random.default_rng(SEED + 30)
+    ref = cell_to_Ar(50.0, 30.0, 32.0, 90, 100.0, 90)
+    near = ref * 1.032
+    assert same_lattice(near, ref), "fixture must pass the same-lattice tolerance"
+    assert sd._rebase_like(near, ref) is None, "fixture must fail reference-setting compatibility"
+    q = frame_on(ref, rng)
+
+    def driver():
+        drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                           use_gpu=False, retry_cascade=True, laue="2/m_uab")
+        drv._fits = lambda q, M: same_lattice(M, ref)
+        return drv
+
+    drv = driver()
+    drv._blind_index = lambda q, k: [(near.copy(), 1.0), (ref.copy(), 0.9)]
+    calls = _instrument(drv)
+    _load(drv, [q])
+    drv.flush()
+    assert calls == [(0, 0)], f"the compatible second candidate should be integrated: {calls}"
+    assert drv.stats()["n_cascade_by_arm"] == {"blind_nbest_k10": 1}
+    assert drv.stats()["n_setting_refused"] == 1, \
+        "this statistic counts rejected candidate/reference-setting checks, even when rescued"
+
+    drv = driver()
+    order = np.argsort(np.linalg.norm(ref, axis=0), kind="stable")
+    drv._blind_index = lambda q, k: [(near.copy(), 1.0)]
+    drv._known_perframe = lambda q, Mc: ref[:, order].copy()
+    calls = _instrument(drv)
+    _load(drv, [q])
+    drv.flush()
+    assert calls == [(0, 0)], f"the known-cell fallback should rescue the frame: {calls}"
+    assert drv.stats()["n_cascade_by_arm"] == {"known_perframe": 1}
+
+
+def test_primitive_blind_candidate_rescues_a_centered_reference():
+    """A primitive candidate for a centered reference must pass the live rescue gate and reach the
+    integration grid in the conventional reference setting, both in the cascade and watchdog."""
+    ref = cell_to_Ar(60.0, 34.0, 41.0, 90.0, 105.0, 90.0)
+    primitive = ref @ np.array([[0.5, 0.5, 0], [-0.5, 0.5, 0], [0, 0, 1]])
+    assert not same_lattice(primitive, ref), "the volume-sensitive gate must reject the primitive basis"
+    rng = np.random.default_rng(SEED + 31)
+
+    def run(retry_cascade, adaptive_relock):
+        drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                           use_gpu=False, retry_cascade=retry_cascade, adaptive_relock=adaptive_relock,
+                           laue="2/m_uab", stream_symmetry=dict(lattice_type="monoclinic", centering="C",
+                                                                unique_axis="b"))
+        drv._blind_index = lambda q, k: [(primitive.copy(), 0.9)]
+        q = frame_on(primitive, rng)
+        seen = {}
+        predict = drv.grid.predict
+
+        def capture(M, *args, **kwargs):
+            seen["M"] = np.asarray(M, float).copy()
+            return predict(M, *args, **kwargs)
+
+        drv.grid.predict = capture
+        _load(drv, [q])
+        rebase = sd._rebase_like
+        rebase_calls = []
+
+        def count_rebase(*args, **kwargs):
+            rebase_calls.append(1)
+            return rebase(*args, **kwargs)
+
+        sd._rebase_like = count_rebase
+        try:
+            drv.flush()
+        finally:
+            sd._rebase_like = rebase
+        assert "M" in seen, "the primitive candidate should rescue the missed frame"
+        assert np.allclose(seen["M"].T @ seen["M"], ref.T @ ref, rtol=0.03, atol=1e-6)
+        assert drv.n_indexed == 1
+        assert len(rebase_calls) == 1, "the accepted rebased matrix must be reused for integration"
+        return drv
+
+    cascade = run(True, False)
+    assert cascade.stats()["n_cascade_rescued"] == 1
+    watchdog = run(False, True)
+    assert watchdog.stats()["n_watchdog_rescued"] == 1
+
+
+def test_centered_rescue_checks_translations_and_active_reference_convention():
+    """Volume alone cannot distinguish the named centered lattice from an equal-metric alias.
+    Blind locks and relocks are primitive references even when the stream header names a centering."""
+    ref = cell_to_Ar(60.0, 34.0, 41.0, 90.0, 105.0, 90.0)
+    drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                       use_gpu=False, retry_cascade=True, laue="2/m_uab",
+                       stream_symmetry=dict(lattice_type="monoclinic", centering="C", unique_axis="b"))
+    assert drv.grid.reference_centering == "C"
+    drv._fits = lambda q, M: True
+    alias = ref @ np.diag([0.5, 1, 1])
+    assert drv._rescue_matrix(np.zeros((1, 3)), alias, ref, drv.grid) == (None, False)
+
+    primitive_ref = ref @ np.array([[0.5, 0.5, 0], [-0.5, 0.5, 0], [0, 0, 1]])
+    drv._blind = True
+    drv._lock(primitive_ref, standardize=True)
+    assert drv.grid.reference_centering == "P"
+    smaller = primitive_ref @ np.diag([0.5, 1, 1])
+    assert drv._rescue_matrix(np.zeros((1, 3)), smaller, primitive_ref, drv.grid) == (None, False)
+
+
+def test_rebased_candidate_must_still_pass_the_fit_gate():
+    """The componentwise fit gate is basis-dependent, so check the reference-setting result too."""
+    ref = cell_to_Ar(10.0, 30.0, 100.0, 90.0, 110.0, 90.0)
+    drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                       use_gpu=False, retry_cascade=True, laue="2/m_uab")
+    candidate = ref @ np.array([[1, 0, 3], [0, 1, 0], [0, 0, 1]], float)
+    drv._fits = lambda q, M: np.allclose(M, candidate)
+    assert drv._rescue_matrix(np.zeros((1, 3)), candidate, ref, drv.grid) == (None, False)
+
+
+def test_smaller_candidate_is_refused_unless_the_header_names_a_centering():
+    """Without a centering in the stream header, a candidate of 1/2, 1/3 or 1/4 the reference volume
+    is a superlattice, not a primitive basis of a centered cell. Its peaks cannot tell the
+    metric-equal index-n sublattices apart (the index-2 alias case), so neither the cascade nor the
+    watchdog may rebase it into the reference and integrate it."""
+    ref = cell_to_Ar(50.0, 30.0, 32.0, 90.0, 100.0, 90.0)
+    rng = np.random.default_rng(SEED + 32)
+    for T in (np.diag([0.5, 1, 1]), np.diag([1, 0.5, 1]), np.diag([1 / 3, 1, 1]),
+              np.array([[0.5, 0.5, 0], [-0.5, 0.5, 0], [0, 0, 1]])):
+        small = ref @ T
+        assert sd._rebase_like(small, ref) is not None, "fixture: an integer basis to the reference exists"
+        for sym in (None, dict(lattice_type="monoclinic", centering="P", unique_axis="b")):
+            for retry_cascade, adaptive_relock in ((True, False), (False, True)):
+                drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                                   use_gpu=False, retry_cascade=retry_cascade,
+                                   adaptive_relock=adaptive_relock, laue="2/m_uab", stream_symmetry=sym)
+                drv._blind_index = lambda q, k, small=small: [(small.copy(), 0.9)]
+                drv._fits = lambda q, M, small=small: same_lattice(M, small)   # only the candidate fits
+                _load(drv, [frame_on(small, rng)])
+                drv.flush()
+                assert drv.n_indexed == 0, (T.round(3).tolist(), sym, retry_cascade)
+
+
 def test_wrong_lattice_candidate_is_refused():
     """A blind candidate can FIT a frame and still be the wrong lattice. Accepting it would add a
     different crystal's reflections to this cell's merge -- corruption, not a recovered frame."""
@@ -419,6 +557,11 @@ def test_default_off_touches_nothing():
 
 TESTS = (test_fixture_is_a_real_gate_failure, test_flag_off_frame_is_missed,
          test_flag_on_frame_indexed_exactly_once, test_arms_are_complementary,
+         test_setting_incompatible_blind_candidates_do_not_stop_the_cascade,
+         test_primitive_blind_candidate_rescues_a_centered_reference,
+         test_centered_rescue_checks_translations_and_active_reference_convention,
+         test_rebased_candidate_must_still_pass_the_fit_gate,
+         test_smaller_candidate_is_refused_unless_the_header_names_a_centering,
          test_wrong_lattice_candidate_is_refused, test_unrescued_frame_still_reaches_the_miss_buffer,
          test_watchdog_reuses_the_cascade_blind_solve,
          test_one_blind_solve_even_when_the_fanout_raises,

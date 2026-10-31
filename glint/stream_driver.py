@@ -694,35 +694,78 @@ def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
                 B = M[:, order] * signs
                 LB = np.linalg.norm(B, axis=0)
                 CB = (B.T @ B) / np.outer(LB, LB)
-                if (np.all(np.abs(LB - Lr) <= ltol * Lr)
-                        and np.all(np.abs(CB - Cr) <= ctol)):
+                if (np.all(np.abs(LB - Lr) <= 1e-10 * Lr)
+                        and np.all(np.abs(CB - Cr) <= 1e-10)):
                     return B if np.linalg.det(B) * dR > 0 else -B
     try:
         U = np.linalg.cholesky(M.T @ M).T
     except np.linalg.LinAlgError:
         return None
 
-    def vectors(target):
+    def vectors(target, dot_constraints=(), det_row=None):
         lower = target * (1 - ltol)
         upper2 = (target * (1 + ltol)) ** 2
+        perm = list(range(3))
+        if det_row is not None:
+            pivot = int(np.argmax(np.abs(det_row)))
+            perm = [pivot] + [j for j in range(3) if j != pivot]
+        if perm == [0, 1, 2]:
+            Ui = U
+        else:
+            try:
+                Ui = np.linalg.cholesky(M[:, perm].T @ M[:, perm]).T
+            except np.linalg.LinAlgError:
+                return
+        Q = M[:, perm] @ np.linalg.inv(Ui)
+        projections = [(Q.T @ np.asarray(anchor, float), low, high)
+                       for anchor, low, high in dot_constraints]
+        drow = np.asarray(det_row, dtype=np.int64)[perm] if det_row is not None else None
         x = [0, 0, 0]
+        y = [0.0, 0.0, 0.0]
 
         def visit(k, partial):
+            radius2 = max(0.0, upper2 - partial)
+            for projection, low, high in projections:
+                fixed = sum(projection[j] * y[j] for j in range(k + 1, 3))
+                possible = np.linalg.norm(projection[:k + 1]) * np.sqrt(radius2)
+                if fixed + possible < low or fixed - possible > high:
+                    return
             if k < 0:
                 if any(x) and lower <= np.sqrt(partial) <= target * (1 + ltol):
-                    yield tuple(x)
+                    original = [0, 0, 0]
+                    for j, value in enumerate(x):
+                        original[perm[j]] = value
+                    yield tuple(original)
                 return
-            tail = sum(U[k, j] * x[j] for j in range(k + 1, 3))
-            radius = np.sqrt(max(0.0, upper2 - partial)) / abs(U[k, k])
-            center = -tail / U[k, k]
-            for value in range(int(np.ceil(center - radius)), int(np.floor(center + radius)) + 1):
+            tail = sum(Ui[k, j] * x[j] for j in range(k + 1, 3))
+            radius = np.sqrt(radius2) / abs(Ui[k, k])
+            center = -tail / Ui[k, k]
+            lo, hi = int(np.ceil(center - radius)), int(np.floor(center + radius))
+            if drow is not None and k == 0:
+                fixed_det = sum(int(drow[j]) * x[j] for j in range(1, 3))
+                values = sorted({(sign * n - fixed_det) // int(drow[0])
+                                 for sign in (-1, 1)
+                                 if (sign * n - fixed_det) % int(drow[0]) == 0})
+                values = [value for value in values if lo <= value <= hi]
+            else:
+                values = range(lo, hi + 1)
+            for value in values:
                 x[k] = value
-                component = tail + U[k, k] * value
+                component = tail + Ui[k, k] * value
                 next_partial = partial + component * component
                 if next_partial <= upper2:
+                    y[k] = component
                     yield from visit(k - 1, next_partial)
 
         yield from visit(2, 0.0)
+
+    def dot_bounds(anchor, cosine):
+        length = np.linalg.norm(anchor)
+        cosines = (cosine - ctol, cosine + ctol)
+        lengths = (Lr[axis_order[2]] * (1 - ltol),
+                   Lr[axis_order[2]] * (1 + ltol))
+        products = [length * c * ell for c in cosines for ell in lengths]
+        return min(products), max(products)
 
     axis_order = sorted(range(3), key=lambda j: Lr[j])
     target_vectors = [None, None, None]
@@ -740,12 +783,18 @@ def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
             if abs(A @ vecB / (La * Lb) - Cr[ia, ib]) > ctol:
                 continue
             target_vectors[ib] = vb
-            for vc in vectors(Lr[axis_order[2]]):
+            ic = axis_order[2]
+            det_row = np.cross(np.asarray(target_vectors[(ic + 1) % 3], dtype=np.int64),
+                               np.asarray(target_vectors[(ic + 2) % 3], dtype=np.int64))
+            if not np.any(det_row):
+                continue
+            constraints = ((A, *dot_bounds(A, Cr[ia, ic])),
+                           (vecB, *dot_bounds(vecB, Cr[ib, ic])))
+            for vc in vectors(Lr[ic], constraints, det_row):
                 if vc in (va, vb):
                     continue
                 C = M @ np.asarray(vc, float)
                 Lc = np.linalg.norm(C)
-                ic = axis_order[2]
                 if abs(A @ C / (La * Lc) - Cr[ia, ic]) > ctol:
                     continue
                 if abs(vecB @ C / (Lb * Lc) - Cr[ib, ic]) > ctol:
@@ -762,6 +811,30 @@ def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
     if best is None:
         return None
     return best if np.linalg.det(best) * dR > 0 else -best
+
+
+def _has_centering_translations(M, ref, centering):
+    """Whether the candidate basis contains the named conventional-cell translations."""
+    translations = {
+        "A": ((0, 0.5, 0.5),),
+        "B": ((0.5, 0, 0.5),),
+        "C": ((0.5, 0.5, 0),),
+        "I": ((0.5, 0.5, 0.5),),
+        "F": ((0.5, 0.5, 0), (0.5, 0, 0.5), (0, 0.5, 0.5)),
+        "R": ((2 / 3, 1 / 3, 1 / 3), (1 / 3, 2 / 3, 2 / 3)),
+        "H": ((2 / 3, 1 / 3, 1 / 3), (1 / 3, 2 / 3, 2 / 3)),
+    }
+    centering = str(centering or "P").strip().upper()
+    if centering not in translations:
+        return centering == "P"
+    try:
+        for translation in translations[centering]:
+            coords = np.linalg.solve(M, ref @ np.asarray(translation, float))
+            if not np.allclose(coords, np.rint(coords), rtol=0, atol=1e-6):
+                return False
+    except np.linalg.LinAlgError:
+        return False
+    return True
 
 
 def _conventional_tetragonal(M):
@@ -1662,6 +1735,7 @@ class StreamDriver:
         self.grid = HKLGrid(self.Mc, self.dmin, gpu=self.gpu,   # built once, reused every frame
                             panels=self.panels, clen_m=self.clen_m, wavelength_A=self.wavelength_A,
                             )
+        self.grid.reference_centering = (self.stream_symmetry.get("centering") or "P") if source == "given" else "P"
         self.n_theoretical = theoretical_unique(self.Mc, self.dmin, self.ops)
         self._blind = False
         self._register_cell(0, self.Mc, source)
@@ -2717,11 +2791,11 @@ class StreamDriver:
         return (same_lattice(M if lattice_matrix is None else lattice_matrix, Mk)
                 and (fit_checked or self._fits(q, M)))
 
-    def _centering_index(self):
+    def _centering_index(self, centering=None):
         """Lattice points per conventional cell, from the stream header's centering: 2 for A, B, C or
         I, 4 for F, 3 for R or H on hexagonal (triple-cell) axes, else 1 -- including when no
         centering is given, so an unknown centering never admits a smaller primitive candidate."""
-        cen = str(self.stream_symmetry.get("centering") or "P").strip().upper()
+        cen = str(centering or self.stream_symmetry.get("centering") or "P").strip().upper()
         if cen in ("A", "B", "C", "I"):
             return 2
         if cen == "F":
@@ -2745,9 +2819,12 @@ class StreamDriver:
         # reference would take a 1/2, 1/3 or 1/4-volume superlattice, whose peaks cannot tell the
         # metric-equal index-n sublattices apart: the index-2 alias case.
         ratio = abs(np.linalg.det(ref)) / abs(np.linalg.det(M))
-        n = self._centering_index()
+        centering = getattr(grid, "reference_centering", None)
+        n = self._centering_index(centering)
         centered = n > 1 and abs(ratio - n) <= 0.1 * n
         if not same and not centered:
+            return None, False
+        if centered and not _has_centering_translations(M, ref, centering):
             return None, False
         if self._setting_imposed() and same:
             return M, False
@@ -3067,9 +3144,10 @@ class StreamDriver:
             if self._lock_min_z is not None and lock_z < self._lock_min_z:
                 return
         k_new = len(self.extra) + 1
-        self.extra.append(dict(Mc=Mn, grid=HKLGrid(Mn, self.dmin, gpu=self.gpu, panels=self.panels,
-                                                   clen_m=self.clen_m, wavelength_A=self.wavelength_A,
-                                                   ),
+        grid = HKLGrid(Mn, self.dmin, gpu=self.gpu, panels=self.panels,
+                       clen_m=self.clen_m, wavelength_A=self.wavelength_A)
+        grid.reference_centering = "P"
+        self.extra.append(dict(Mc=Mn, grid=grid,
                                nth=theoretical_unique(Mn, self.dmin, self.ops),
                                acc=MergeAccumulator(self.snr_bins, self.ops), lock_z=lock_z,
                                name=self._cell_name(Mn, k_new)))

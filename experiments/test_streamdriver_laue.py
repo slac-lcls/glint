@@ -545,9 +545,19 @@ def test_rebase_like_recovers_the_reference_setting_from_a_general_integer_basis
     M = ref_large @ shear_large
     B = sd._rebase_like(M, ref_large)
     assert B is not None and _same_metric(B, ref_large) and _is_lattice_basis_of(B, M)
+    # An approximate signed permutation must not hide an exact basis match farther into the search.
+    ref_near_orthogonal = cell_to_Ar(10.0, 30.0, 1000.0, 90.0, 90.6, 90.0)
+    M = ref_near_orthogonal @ np.array([[1, 0, 1], [0, 1, 0], [0, 0, 1]], float)
+    B = sd._rebase_like(M, ref_near_orthogonal)
+    assert B is not None and _same_metric(B, ref_near_orthogonal) and _is_lattice_basis_of(B, M)
     ref_elongated = cell_to_Ar(10.0, 10.0, 5000.0, 90.0, 90.0, 90.0)
     B = sd._rebase_like(ref_elongated, ref_elongated)
     assert B is not None and _same_metric(B, ref_elongated)
+    # Pair-angle and determinant pruning keep the long-axis search practical for large shears.
+    ref_very_elongated = cell_to_Ar(10.0, 10.0, 5000.0, 90.0, 110.0, 90.0)
+    M = ref_very_elongated @ np.array([[1, 0, 171], [0, 1, 0], [0, 0, 1]], float)
+    B = sd._rebase_like(M, ref_very_elongated)
+    assert B is not None and _same_metric(B, ref_very_elongated) and _is_lattice_basis_of(B, M)
     # not the reference's lattice: a 6% longer axis, or a different volume, has no basis -> None
     assert sd._rebase_like(_rot(rng) @ cell_to_Ar(53.0, 30.0, 32.0, 90, 100.0, 90), refs[0]) is None
     assert sd._rebase_like(_rot(rng) @ cell_to_Ar(50.0, 30.0, 32.0, 90, 110.0, 90), refs[0]) is None

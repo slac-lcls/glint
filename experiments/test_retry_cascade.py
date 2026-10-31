@@ -285,6 +285,36 @@ def test_primitive_blind_candidate_rescues_a_centered_reference():
     assert watchdog.stats()["n_watchdog_rescued"] == 1
 
 
+def test_centered_rescue_checks_translations_and_active_reference_convention():
+    """Volume alone cannot distinguish the named centered lattice from an equal-metric alias.
+    Blind locks and relocks are primitive references even when the stream header names a centering."""
+    ref = cell_to_Ar(60.0, 34.0, 41.0, 90.0, 105.0, 90.0)
+    drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                       use_gpu=False, retry_cascade=True, laue="2/m_uab",
+                       stream_symmetry=dict(lattice_type="monoclinic", centering="C", unique_axis="b"))
+    assert drv.grid.reference_centering == "C"
+    drv._fits = lambda q, M: True
+    alias = ref @ np.diag([0.5, 1, 1])
+    assert drv._rescue_matrix(np.zeros((1, 3)), alias, ref, drv.grid) == (None, False)
+
+    primitive_ref = ref @ np.array([[0.5, 0.5, 0], [-0.5, 0.5, 0], [0, 0, 1]])
+    drv._blind = True
+    drv._lock(primitive_ref, standardize=True)
+    assert drv.grid.reference_centering == "P"
+    smaller = primitive_ref @ np.diag([0.5, 1, 1])
+    assert drv._rescue_matrix(np.zeros((1, 3)), smaller, primitive_ref, drv.grid) == (None, False)
+
+
+def test_rebased_candidate_must_still_pass_the_fit_gate():
+    """The componentwise fit gate is basis-dependent, so check the reference-setting result too."""
+    ref = cell_to_Ar(10.0, 30.0, 100.0, 90.0, 110.0, 90.0)
+    drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                       use_gpu=False, retry_cascade=True, laue="2/m_uab")
+    candidate = ref @ np.array([[1, 0, 3], [0, 1, 0], [0, 0, 1]], float)
+    drv._fits = lambda q, M: np.allclose(M, candidate)
+    assert drv._rescue_matrix(np.zeros((1, 3)), candidate, ref, drv.grid) == (None, False)
+
+
 def test_smaller_candidate_is_refused_unless_the_header_names_a_centering():
     """Without a centering in the stream header, a candidate of 1/2, 1/3 or 1/4 the reference volume
     is a superlattice, not a primitive basis of a centered cell. Its peaks cannot tell the
@@ -529,6 +559,8 @@ TESTS = (test_fixture_is_a_real_gate_failure, test_flag_off_frame_is_missed,
          test_flag_on_frame_indexed_exactly_once, test_arms_are_complementary,
          test_setting_incompatible_blind_candidates_do_not_stop_the_cascade,
          test_primitive_blind_candidate_rescues_a_centered_reference,
+         test_centered_rescue_checks_translations_and_active_reference_convention,
+         test_rebased_candidate_must_still_pass_the_fit_gate,
          test_smaller_candidate_is_refused_unless_the_header_names_a_centering,
          test_wrong_lattice_candidate_is_refused, test_unrescued_frame_still_reaches_the_miss_buffer,
          test_watchdog_reuses_the_cascade_blind_solve,

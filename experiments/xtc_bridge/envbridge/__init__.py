@@ -54,6 +54,24 @@ class RemoteError(RuntimeError):
     """Raised in the caller when the function raised in the target env; carries the remote traceback."""
 
 
+def _conda_root() -> str:
+    """The conda install whose etc/profile.d/conda.sh activates envs, for `Env.conda` without `base`.
+
+    $CONDA_PREFIX is the ACTIVE env, which is the install itself only when base is active, and
+    $CONDA_PREFIX_1 exists only after a second activation; with one env activated directly, both
+    pointed at the env and the worker sourced a conda.sh that does not exist. $CONDA_EXE
+    (<root>/bin/conda, set by conda's shell hook) names the install, so it is tried first; then the
+    first of $CONDA_PREFIX_1 / $CONDA_PREFIX that actually holds conda.sh."""
+    exe = os.environ.get("CONDA_EXE")
+    cands = [os.path.dirname(os.path.dirname(exe))] if exe else []
+    cands += [os.environ[k] for k in ("CONDA_PREFIX_1", "CONDA_PREFIX") if os.environ.get(k)]
+    for c in cands:
+        if os.path.isfile(os.path.join(c, "etc", "profile.d", "conda.sh")):
+            return c
+    raise ValueError("no conda install found: none of $CONDA_EXE, $CONDA_PREFIX_1, $CONDA_PREFIX leads to "
+                     f"etc/profile.d/conda.sh (tried {cands or 'nothing'}); pass Env.conda(..., base=...)")
+
+
 @dataclass
 class Env:
     """How to activate the target environment: a shell prelude run before the worker starts.
@@ -99,14 +117,14 @@ class Env:
     def conda(cls, env: str, stack: str | None = None, base: str | None = None,
               pythonpath=()) -> "Env":
         """A conda env. `stack='conda1'|'conda2'` picks an LCLS psana stack; else `base` is a conda
-        install whose etc/profile.d/conda.sh is sourced (defaults to $CONDA_PREFIX_1 / `conda info`)."""
+        install whose etc/profile.d/conda.sh is sourced (default: the install found by `_conda_root`)."""
         if stack:
             src = _LCLS_STACKS.get(stack)
             if not src:
                 raise ValueError(f"unknown LCLS stack {stack!r}; use one of {sorted(_LCLS_STACKS)}")
             pre = f"source {shlex.quote(src)}"
         else:
-            base = base or os.environ.get("CONDA_PREFIX_1") or os.environ.get("CONDA_PREFIX", "")
+            base = base or _conda_root()
             pre = f"source {shlex.quote(base + '/etc/profile.d/conda.sh')}"
         # inherit_pythonpath=False: see the Env docstring. A conda env serves its packages from its own
         # site-packages, and the LCLS stacks' psconda.sh leaves behind a PYTHONPATH for the wrong

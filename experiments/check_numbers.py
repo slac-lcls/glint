@@ -2103,7 +2103,9 @@ RETIRED = [
          exempt=("retired",), clause_exempt=True),
     Rule("dropped-table-xg-known-cell",
          r"(?<![\d.,])(?:7,?660(?:\.01)?|6,?297(?:\.3)?|673\.95|559\.74)(?![\d.,])"
-         r"|(?<![\d.,])674(?:\s|~)*ms\b",
+         r"|(?<![\d.,])674(?:\s|~)*ms\b"
+         # the same means printed in seconds ("7.7~s", "0.67~s"), as the paper's section 5 prose does
+         r"|(?<![\d.,])(?:7\.66?|7\.7|0\.67|0\.674)(?:\s|~|\\,)*s\b",
          "XGANDALF with the cell (J8: 7,660 / 674 ms means, 6,297 / 560 medians) ran on the dropped table's "
          "set; its keys were retired 2026-10-29",
          "a known-cell XGANDALF figure measured on a real run (r0016)",

@@ -243,6 +243,10 @@ INJECTIONS = [
     ("dropped-table-xg-known-cell", "XGANDALF, default sampling & 96 & 111 & 397 & 7,660 & one instance",
      "MOSFLM & 35 & 35 & --- & 3,674 & one core"),
     ("dropped-table-xg-known-cell", "7,660 and 674~ms on one EPYC~7702 node", "on one EPYC~7702 node"),
+    # the same means in seconds, as section 5 prints them; the ms-only pattern let this live sentence pass
+    ("dropped-table-xg-known-cell", "with the cell XGANDALF takes 7.7~s and 0.67~s per frame",
+     "with the cell XGANDALF takes 0.45~s per frame on r0016"),
+    ("dropped-table-xg-known-cell", "a mean of 0.674 s per frame", "a mean of 0.674 mm per pixel"),
     ("dropped-table-indexamajig", "the frames take 605~ms at 45 of 120 (a different harness",
      "682, 605 and 577 for the three DIALS rows with the cell"),
     ("dropped-table-indexamajig", "the settings tested leave a 30--50-fold gap", "the settings tested leave a gap"),

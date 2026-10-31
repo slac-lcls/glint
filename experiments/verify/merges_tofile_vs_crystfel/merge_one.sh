@@ -7,7 +7,10 @@ set -uo pipefail
 source "${VERIFY_DIR:?set VERIFY_DIR to experiments/verify}/merges_tofile_vs_crystfel/config.sh"
 STREAM=$1 KEYS=$2 SEED=$3 FIRST=$4 MDIR=$5 SYM=$6 CELLFILE=$7 NJ=$8; shift 8
 mkdir -p "$MDIR" && cd "$MDIR" || exit 1
-python "$TOOLS_HOME/merge_tools.py" subset "$STREAM" "$KEYS" "$SEED" "$FIRST" in.stream > subset.log 2>&1
+# a failed earlier attempt can leave in.stream behind; remove it so a failed subset cannot be merged in its place
+rm -f in.stream in.stream.missing
+python "$TOOLS_HOME/merge_tools.py" subset "$STREAM" "$KEYS" "$SEED" "$FIRST" in.stream > subset.log 2>&1 \
+    || { echo "subset failed: $MDIR (see subset.log)" >&2; exit 1; }
 # PAIRED-SPLIT GUARD. merge_tools.py:168 writes in.stream.missing listing keys of the common
 # set C that this arm does not have. For a `common*` merge that is fatal, not cosmetic: partialator
 # splits into alternating halves by chunk ORDER, so one absent key shifts every later frame to the
@@ -48,9 +51,13 @@ if [ -n "$SPLITARG" ]; then
 else
     H1=merged.hkl1; H2=merged.hkl2; echo "paired on: order-based halves (no custom split)"
 fi
+# these merges are whole arms, never a deliberately tiny subset, so a failed statistics command is an error: exit
+# before the cleanup, so the caller's xargs guard sees it and no split is averaged without its numbers
+stats_failed() { echo "$1 failed: $MDIR (see $2)" >&2; exit 5; }
 for fom in CC CCstar Rsplit; do
     run "$CFBIN/compare_hkl" "$H1" "$H2" -y "$SYM" -p "$CELLFILE" --fom=$fom --nshells=10 \
-        --shell-file=shells_$fom.dat > compare_$fom.log 2>&1
+        --shell-file=shells_$fom.dat > compare_$fom.log 2>&1 || stats_failed compare_hkl compare_$fom.log
 done
-run "$CFBIN/check_hkl" merged.hkl -y "$SYM" -p "$CELLFILE" --nshells=10 --shell-file=shells_check.dat > check.log 2>&1
+run "$CFBIN/check_hkl" merged.hkl -y "$SYM" -p "$CELLFILE" --nshells=10 --shell-file=shells_check.dat > check.log 2>&1 \
+    || stats_failed check_hkl check.log
 rm -rf in.stream pr-logs                                   # the subset is regenerable from the arm stream + keys + seed

@@ -46,6 +46,13 @@ and CCP4 builds are read from `/sdf/group/lcls/ds`; raw data from `/sdf/data/lcl
 checks, and `qframes_to_cxi.py`, the CXI writer of `r0278_r0058_crystfel_cell`. Each is a recorded run's file
 with only its pinned-tree path changed to `VERIFY_GLINT`; the sbatch files check their md5.
 
+`qframes_to_cxi.py` writes ONE wavelength into the .geom, and its `<prefix>_qeff.txt` holds the input q
+vectors of the on-panel peaks, not q re-derived from the CXI coordinates. The two agree only when every frame
+of the set has that wavelength. r0058's per-event wavelengths spread 0.8% around the median the writer uses,
+so for r0058 the `_qeff.txt` file is not what indexamajig saw; `r0278_r0058_crystfel_cell` compares cells
+from the streams and does not read `_qeff.txt`. The file is left unchanged because its md5 pins it to the
+recorded run.
+
 ## Checks
 
 Keys not yet on main come from #264 (the r0016 rate and fast XGANDALF) and from the real-run FACTS bank

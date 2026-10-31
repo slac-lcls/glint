@@ -28,14 +28,17 @@ for D in $DATASETS; do
     aside "$OUT/$D/CF.stream"; SECONDS=0
     run $CFBIN/indexamajig -i "$LIST" -o "$OUT/$D/CF.stream" --peaks=cxi -g "$GEOM" -p "$CELLFILE" \
         $CF_INDEX $INTEG $IDXX -j 64 --wait-for-file=0 > "$OUT/$D/idx_CF.log" 2>&1
-    echo "CF exit $?  ${SECONDS} s"; grep "^Final:" "$OUT/$D/idx_CF.log"
-    python "$TOOLS_HOME/merge_tools.py" keys "$OUT/$D/CF.stream" "$OUT/$D/CF.keys"
+    rc=$?; echo "CF exit $rc  ${SECONDS} s"; grep "^Final:" "$OUT/$D/idx_CF.log"
+    # a failed run can leave a partial stream: stop before keys are made from it, so the afterok jobs never start
+    [ $rc -eq 0 ] || { echo "$D: CF indexamajig failed (exit $rc), see idx_CF.log"; exit 1; }
+    python "$TOOLS_HOME/merge_tools.py" keys "$OUT/$D/CF.stream" "$OUT/$D/CF.keys" || { echo "$D: CF keys failed"; exit 1; }
     case " $CFNR_DATASETS " in *" $D "*)                  # sensitivity arm: the same + --no-revalidate
         aside "$OUT/$D/CFnr.stream"; SECONDS=0
         run $CFBIN/indexamajig -i "$LIST" -o "$OUT/$D/CFnr.stream" --peaks=cxi -g "$GEOM" -p "$CELLFILE" \
             $CF_INDEX $INTEG --no-revalidate -j 64 --wait-for-file=0 > "$OUT/$D/idx_CFnr.log" 2>&1
-        echo "CFnr exit $?  ${SECONDS} s"; grep "^Final:" "$OUT/$D/idx_CFnr.log"
-        python "$TOOLS_HOME/merge_tools.py" keys "$OUT/$D/CFnr.stream" "$OUT/$D/CFnr.keys" ;;
+        rc=$?; echo "CFnr exit $rc  ${SECONDS} s"; grep "^Final:" "$OUT/$D/idx_CFnr.log"
+        [ $rc -eq 0 ] || { echo "$D: CFnr indexamajig failed (exit $rc), see idx_CFnr.log"; exit 1; }
+        python "$TOOLS_HOME/merge_tools.py" keys "$OUT/$D/CFnr.stream" "$OUT/$D/CFnr.keys" || { echo "$D: CFnr keys failed"; exit 1; } ;;
     esac
 done
 echo "end $(date -u +%FT%TZ)"

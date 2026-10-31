@@ -61,6 +61,15 @@ same = sum(1 for k, c in enumerate(live_cells) if c is not None and len(c) == le
 print(f"[dryrun] live decided={res['decided']}@{res['pushed']} support {res['support']} | replay "
       f"{rep['decided']}@{rep['pushed']} support {rep['support']} | cells identical on {same}/"
       f"{sum(c is not None for c in live_cells)} pushed frames", flush=True)
+# the dry run exists to prove this agreement, so a mismatch fails it before the downstream steps run
+diff = [k for k in ("decided", "pushed", "support") if res[k] != rep[k]]
+if not ((res["M"] is None and rep["M"] is None) or
+        (res["M"] is not None and rep["M"] is not None and C.same_lattice(res["M"], rep["M"]))):
+    diff.append("decided cell")
+if same != sum(c is not None for c in live_cells):
+    diff.append("per-frame cells")
+if diff:
+    sys.exit(f"[dryrun] live and replay differ on {diff}")
 
 py = sys.executable
 subprocess.check_call([py, "-u", os.path.join(HERE, "stop_scramble.py"), "0", "1", "--G", "5", "--groups", "2,2,2",

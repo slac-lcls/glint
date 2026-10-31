@@ -317,6 +317,8 @@ def cmd_record(mdir, tag, frac, seed, perm, merger):
     for w in ("auto", "fixed"):
         if os.path.isdir(os.path.join(mdir, w)):
             rec[w] = stats_block(os.path.join(mdir, w))
+    sf = os.path.join(mdir, "stats_failed.txt")              # statistics commands that ran and returned non-zero
+    rec["stats_failed"] = [ln.split()[0] for ln in open(sf) if ln.strip()] if os.path.exists(sf) else []
     json.dump(rec, open(os.path.join(mdir, "record.json"), "w"), indent=1)
     f = rec.get("fixed") or rec.get("auto") or {}
     print(f"{tag} {merger} perm={perm} frac={frac} seed={seed}: frames {rec.get('frames')} crystals {rec.get('crystals')}"
@@ -432,6 +434,13 @@ def cmd_collect(root):
          "CC1/2, CC*, Rsplit: compare_hkl --fom=CC|CCstar|Rsplit on the half-sets; completeness, multiplicity, <I/sigma>,",
          "unique: check_hkl on the full merge. d(CC*>=0.5): high-resolution edge of the last of the 10 shells, from low",
          "resolution, before shell CC1/2 drops below 0.143.", ""]
+    bad = [r for r in recs if r.get("stats_failed")]
+    if bad:                                                   # _ms drops their missing values from the medians
+        L += [f"{len(bad)} merge(s) had a statistics command return non-zero; their missing values are left out of "
+              "the medians below, so those cells summarise fewer seeds:"] + \
+             [f"- {r['input']} {r['merger']} perm={r['perm']} frac={r['frac']} seed={r['seed']}: "
+              f"{', '.join(r['stats_failed'])}" for r in bad] + [""]
+        print(f"collect: {len(bad)} merge(s) with a failed statistics command (listed in the summary)")
     analysis = {}
     for inp in sorted({g[0] for g in groups}):
         for merger in ("partialator", "process_hkl"):

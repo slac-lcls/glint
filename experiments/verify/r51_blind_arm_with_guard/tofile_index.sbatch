@@ -29,7 +29,10 @@ idx_file() {   # LIST SOL OUTSTREAM LOG [extra flags...]
         $FILE_INDEX --fromfile-input-file="$sol" $INTEG $IDXX "$@" -j 32 --wait-for-file=0 > "$log" 2>&1
     local rc=$?
     echo "$(basename "$out") exit $rc  ${SECONDS} s  $(grep '^Final:' "$log")"
-    python "$TOOLS_HOME/merge_tools.py" keys "$out" "${out%.stream}.keys"
+    # exit the JOB, not only the function: a partial stream must not feed the common set, the nulls or the
+    # afterok merges
+    [ $rc -eq 0 ] || { echo "$(basename "$out"): indexamajig failed (exit $rc), see $log"; exit 1; }
+    python "$TOOLS_HOME/merge_tools.py" keys "$out" "${out%.stream}.keys" || { echo "$(basename "$out"): keys failed"; exit 1; }
 }
 
 for D in $DATASETS; do

@@ -7,10 +7,12 @@ hybrid_index(frames) at its defaults. Adds hybrid_index(frames, Mc_known=ProK), 
 target cell as DIALS's K arms, and the three arms again on the azimuth-scrambled lists (the null).
 Saves each frame's M (real basis, columns; NaN when None); stills_score.py applies the gate."""
 import argparse
+import glob
 import hashlib
 import json
 import os
 import platform
+import re
 import sys
 import time
 
@@ -81,10 +83,23 @@ def arm_hyb(frames, Mc_known=None):
     return [r["M"] for r in results], np.array([wall]), stats
 
 
+def glint_env_names(tree):
+    """Every environment variable the glint package reads (os.environ.get / getenv / setdefault / [...]), found by
+    scanning its source, so a tuning variable such as GLINT_CONSENSUS_MIN_FRAC cannot change between a cached
+    arm and a new one unnoticed."""
+    pat = re.compile(r"""os\.(?:environ\.get|getenv|environ\.setdefault)\(\s*["']([A-Z0-9_]+)|os\.environ\[["']([A-Z0-9_]+)""")
+    names = set()
+    for p in glob.glob(os.path.join(tree, "glint", "**", "*.py"), recursive=True):
+        names.update(a or b for a, b in pat.findall(open(p).read()))
+    return sorted(names)
+
+
 def _match(prov):
     """The provenance fields a cached arm must share with this invocation to be reused: the input hashes
-    (not their paths), the commit, the GPU and the GLINT settings read from the environment."""
-    env = {k: v for k, v in (prov.get("env") or {}).items() if k != "PYTHONPATH"}
+    (not their paths), the commit, the GPU and the settings read from the environment. Unset variables are
+    dropped, so an arm recorded with a shorter variable list still matches when nothing else was set."""
+    env = {k: v for k, v in (prov.get("env") or {}).items()
+           if v is not None and k not in ("PYTHONPATH", "CUDA_VISIBLE_DEVICES")}
     return dict(commit=prov.get("commit"), gpu=prov.get("gpu"), env=env,
                 inputs=list((prov.get("npz_sha256") or {}).values()))
 
@@ -101,7 +116,8 @@ def main():
     prov = dict(argv=sys.argv, tree=tree, commit=commit, host=platform.node(), torch=torch.__version__,
                 cuda=torch.cuda.is_available(),
                 gpu=torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-                env={k: os.environ.get(k) for k in ("STEPS", "TOL", "REFINER", "QDIST", "OMP_NUM_THREADS", "PYTHONPATH")},
+                env={k: os.environ.get(k) for k in sorted(set(glint_env_names(tree)) | {
+                    "STEPS", "TOL", "REFINER", "QDIST", "OMP_NUM_THREADS", "PYTHONPATH"})},
                 npz_sha256={p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in (a.npz, a.npz_null)},
                 time=time.strftime("%Y-%m-%dT%H:%M:%S"))
     print("glint_samepeaks", json.dumps(prov), flush=True)

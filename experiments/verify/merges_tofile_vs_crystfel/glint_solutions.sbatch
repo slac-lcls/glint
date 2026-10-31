@@ -34,11 +34,15 @@ for D in $DATASETS; do
     SECONDS=0
     run python -m glint.glint_cli --images "$LIST" --geom "$GEOM" --peakfinder stored --gate strict --lattice "$LATT" \
         --tofile "$OUT/$D/GLb.sol" -o "$OUT/$D/GLb_orient.stream" > "$OUT/$D/GLb_glint.log" 2>&1
-    echo "GLb exit $?  ${SECONDS} s"; tail -12 "$OUT/$D/GLb_glint.log"
+    rc=$?; echo "GLb exit $rc  ${SECONDS} s"; tail -12 "$OUT/$D/GLb_glint.log"
+    # a failed run can leave a partial .sol; stop so the afterok indexing and merges never start on it
+    [ $rc -eq 0 ] || { echo "$D: GLINT GLb failed (exit $rc), see GLb_glint.log"; exit 1; }
     SECONDS=0
     run python -m glint.glint_cli --images "$LIST" --geom "$GEOM" --peakfinder stored --gate strict --lattice "$LATT" \
         --cell $CELL --tofile "$OUT/$D/GLk.sol" -o "$OUT/$D/GLk_orient.stream" > "$OUT/$D/GLk_glint.log" 2>&1
-    echo "GLk exit $?  ${SECONDS} s"; tail -12 "$OUT/$D/GLk_glint.log"
+    rc=$?; echo "GLk exit $rc  ${SECONDS} s"; tail -12 "$OUT/$D/GLk_glint.log"
+    # a failed run can leave a partial .sol; stop so the afterok indexing and merges never start on it
+    [ $rc -eq 0 ] || { echo "$D: GLINT GLk failed (exit $rc), see GLk_glint.log"; exit 1; }
     for A in GLb GLk; do
         [ -s "$OUT/$D/$A.sol" ] && python "$TOOLS_HOME/merge_tools.py" cellcheck "$OUT/$D/$A.sol" "$CELL" "$OUT/$D/${A}_cellcheck.json"
     done

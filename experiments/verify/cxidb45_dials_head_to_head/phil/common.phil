@@ -1,0 +1,19 @@
+# Every arm. dials.stills_process program defaults otherwise (fft1d, stills refinement weighting,
+# beam/detector fixed, refine_all_candidates, candidate_outlier_rejection, hit finder >= 16 spots).
+dispatch {
+  integrate = False      # no pixels: indexing on identical peaks
+  squash_errors = True
+}
+output {
+  composite_output = False
+  experiments_filename = None
+  strong_filename = None
+  indexed_filename = None
+  refined_experiments_filename = None
+  integrated_filename = None
+  integrated_experiments_filename = None
+  profile_filename = None
+  integration_pickle = None
+  coset_filename = None
+  coset_experiments_filename = None
+}

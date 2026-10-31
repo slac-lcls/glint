@@ -326,6 +326,33 @@ check("Env.spack with spaces in setup and env path activates",
                         "envbridge._selftest:add", 2, 2)) == 4)
 check("Env.spack leaves a multi-word spec unquoted (spack syntax)",
       Env.spack(spec="py-numpy %gcc", setup="/s").prelude.endswith("spack load py-numpy %gcc"))
+
+# the default conda base. With one env activated directly (`conda activate <env>` from a shell where
+# base was never active) CONDA_PREFIX is that ENV and CONDA_PREFIX_1 is unset, so the old guess sourced
+# <env>/etc/profile.d/conda.sh, which does not exist. CONDA_EXE names the install.
+_conda_keys = ("CONDA_EXE", "CONDA_PREFIX_1", "CONDA_PREFIX")
+_saved = {k: os.environ.pop(k, None) for k in _conda_keys}
+try:
+    os.makedirs(os.path.join(_envp, "bin"), exist_ok=True)          # an env: no etc/profile.d/conda.sh
+    os.environ.update(CONDA_EXE=os.path.join(_fk, "bin", "conda"), CONDA_PREFIX=_envp)
+    _pre = _try(lambda: Env.conda(_envp).prelude)
+    check("Env.conda without base, env activated directly: sources the install's conda.sh, not the env's",
+          isinstance(_pre, str) and _pre.startswith(f"source {shlex.quote(os.path.join(_fk, 'etc', 'profile.d', 'conda.sh'))} "))
+    check("...and that env activates end to end",
+          _try(lambda: call(Env.conda(_envp), "envbridge._selftest:add", 3, 3)) == 6)
+    del os.environ["CONDA_EXE"]                                     # no CONDA_EXE: the first prefix holding conda.sh
+    os.environ["CONDA_PREFIX_1"] = _fk
+    check("without CONDA_EXE, the prefix that holds conda.sh is used",
+          _try(lambda: Env.conda(_envp).prelude.startswith(
+              f"source {shlex.quote(os.path.join(_fk, 'etc', 'profile.d', 'conda.sh'))} ")) is True)
+    del os.environ["CONDA_PREFIX_1"]                                # only the env itself: refuse, do not guess
+    _e = _try(lambda: Env.conda(_envp))
+    check("no conda install found: ValueError naming base=", isinstance(_e, ValueError) and "base=" in str(_e))
+finally:
+    for k, v in _saved.items():
+        os.environ.pop(k, None)
+        if v is not None:
+            os.environ[k] = v
 shutil.rmtree(_fk, ignore_errors=True)
 
 # a user dict holding the array marker key is refused at encode (the decoder would misread it)

@@ -755,8 +755,8 @@ def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
                 if int(round(abs(np.linalg.det(T)))) != n:
                     continue
                 BM = M @ T
-                Lb = np.linalg.norm(BM, axis=0)
-                err = (np.abs(Lb - Lr) / Lr).sum() + np.abs((BM.T @ BM) / np.outer(Lb, Lb) - Cr).sum()
+                Lbest = np.linalg.norm(BM, axis=0)
+                err = (np.abs(Lbest - Lr) / Lr).sum() + np.abs((BM.T @ BM) / np.outer(Lbest, Lbest) - Cr).sum()
                 if err < best_err:
                     best, best_err = BM, err
     if best is None:

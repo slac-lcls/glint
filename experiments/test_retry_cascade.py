@@ -248,7 +248,8 @@ def test_primitive_blind_candidate_rescues_a_centered_reference():
     def run(retry_cascade, adaptive_relock):
         drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
                            use_gpu=False, retry_cascade=retry_cascade, adaptive_relock=adaptive_relock,
-                           laue="2/m_uab")
+                           laue="2/m_uab", stream_symmetry=dict(lattice_type="monoclinic", centering="C",
+                                                                unique_axis="b"))
         drv._blind_index = lambda q, k: [(primitive.copy(), 0.9)]
         q = frame_on(primitive, rng)
         seen = {}
@@ -282,6 +283,29 @@ def test_primitive_blind_candidate_rescues_a_centered_reference():
     assert cascade.stats()["n_cascade_rescued"] == 1
     watchdog = run(False, True)
     assert watchdog.stats()["n_watchdog_rescued"] == 1
+
+
+def test_smaller_candidate_is_refused_unless_the_header_names_a_centering():
+    """Without a centering in the stream header, a candidate of 1/2, 1/3 or 1/4 the reference volume
+    is a superlattice, not a primitive basis of a centered cell. Its peaks cannot tell the
+    metric-equal index-n sublattices apart (the index-2 alias case), so neither the cascade nor the
+    watchdog may rebase it into the reference and integrate it."""
+    ref = cell_to_Ar(50.0, 30.0, 32.0, 90.0, 100.0, 90.0)
+    rng = np.random.default_rng(SEED + 32)
+    for T in (np.diag([0.5, 1, 1]), np.diag([1, 0.5, 1]), np.diag([1 / 3, 1, 1]),
+              np.array([[0.5, 0.5, 0], [-0.5, 0.5, 0], [0, 0, 1]])):
+        small = ref @ T
+        assert sd._rebase_like(small, ref) is not None, "fixture: an integer basis to the reference exists"
+        for sym in (None, dict(lattice_type="monoclinic", centering="P", unique_axis="b")):
+            for retry_cascade, adaptive_relock in ((True, False), (False, True)):
+                drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                                   use_gpu=False, retry_cascade=retry_cascade,
+                                   adaptive_relock=adaptive_relock, laue="2/m_uab", stream_symmetry=sym)
+                drv._blind_index = lambda q, k, small=small: [(small.copy(), 0.9)]
+                drv._fits = lambda q, M, small=small: same_lattice(M, small)   # only the candidate fits
+                _load(drv, [frame_on(small, rng)])
+                drv.flush()
+                assert drv.n_indexed == 0, (T.round(3).tolist(), sym, retry_cascade)
 
 
 def test_wrong_lattice_candidate_is_refused():
@@ -505,6 +529,7 @@ TESTS = (test_fixture_is_a_real_gate_failure, test_flag_off_frame_is_missed,
          test_flag_on_frame_indexed_exactly_once, test_arms_are_complementary,
          test_setting_incompatible_blind_candidates_do_not_stop_the_cascade,
          test_primitive_blind_candidate_rescues_a_centered_reference,
+         test_smaller_candidate_is_refused_unless_the_header_names_a_centering,
          test_wrong_lattice_candidate_is_refused, test_unrescued_frame_still_reaches_the_miss_buffer,
          test_watchdog_reuses_the_cascade_blind_solve,
          test_one_blind_solve_even_when_the_fanout_raises,

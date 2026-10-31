@@ -2717,6 +2717,20 @@ class StreamDriver:
         return (same_lattice(M if lattice_matrix is None else lattice_matrix, Mk)
                 and (fit_checked or self._fits(q, M)))
 
+    def _centering_index(self):
+        """Lattice points per conventional cell, from the stream header's centering: 2 for A, B, C or
+        I, 4 for F, 3 for R or H on hexagonal (triple-cell) axes, else 1 -- including when no
+        centering is given, so an unknown centering never admits a smaller primitive candidate."""
+        cen = str(self.stream_symmetry.get("centering") or "P").strip().upper()
+        if cen in ("A", "B", "C", "I"):
+            return 2
+        if cen == "F":
+            return 4
+        lattice = str(self.stream_symmetry.get("lattice_type") or "").strip().lower()
+        if cen in ("R", "H") and lattice == "hexagonal":
+            return 3
+        return 1
+
     def _rescue_matrix(self, q, M, Mk, grid):
         """Return a blind rescue candidate and whether it is reference-set, or None if it cannot match."""
         M = np.asarray(M, float)
@@ -2726,9 +2740,13 @@ class StreamDriver:
         if ref is None:
             return (M, False) if same_lattice(M, Mk) else (None, False)
         same = same_lattice(M, Mk)
+        # A smaller primitive candidate is accepted only for a reference whose header NAMES its
+        # centering, and only at that centering's index. Inferred from the volume ratio alone, a P
+        # reference would take a 1/2, 1/3 or 1/4-volume superlattice, whose peaks cannot tell the
+        # metric-equal index-n sublattices apart: the index-2 alias case.
         ratio = abs(np.linalg.det(ref)) / abs(np.linalg.det(M))
-        n = int(round(ratio))
-        centered = n in (2, 3, 4) and abs(ratio - n) <= 0.1 * n
+        n = self._centering_index()
+        centered = n > 1 and abs(ratio - n) <= 0.1 * n
         if not same and not centered:
             return None, False
         if not self._setting_imposed():

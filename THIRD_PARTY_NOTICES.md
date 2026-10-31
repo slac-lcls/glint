@@ -171,8 +171,7 @@ scikit-learn, joblib (BSD-3-Clause), matplotlib (PSF-based), pydantic, pytest (M
 **Research-path dependencies with UNRESOLVED licences** (no source copied here; none distributed;
 import sites per entry): **LUTE** (`slac-lcls/lute` — the
 in-tree `lute/` directory is GLINT's own task package that installs *into* an external LUTE
-checkout), **envbridge** (SLAC cross-conda bridge, used by `experiments/xtc_bridge/`),
-**radial_integration** (S3DF tool referenced by radial benchmarks; also imported by the shipped
+checkout), **radial_integration** (S3DF tool referenced by radial benchmarks; also imported by the shipped
 `glint/gpu_pool.py` under a guarded `try`/`except` that falls back silently, so it is used only
 when a local checkout is present — its source is never copied or distributed), **krtc** (Kerberos ticket
 helper used by `experiments/elog_query.py`), and **peaknet** together with its pretrained weights
@@ -180,6 +179,10 @@ helper used by `experiments/elog_query.py`), and **peaknet** together with its p
 in `experiments/peaknet/build_peaknet.py`; the weights carry their own, also unresolved,
 terms). No published licence was verified for any of these; resolve before moving any of them
 into a distributed path.
+
+**envbridge** (`experiments/xtc_bridge/envbridge/`, the cross-conda bridge used by `--psana 2`) is not
+third-party: it is SLAC code by GLINT's author, copied from `slac-lcls/drp-benchmarks` (`envbridge/`
+@ 5cd09f8, declared BSD-3-Clause) and covered here by `LICENSE.md`. Not distributed (`experiments/`).
 
 **Linked at build time by two first-party benchmark drivers** (`experiments/xgandalf/xg_driver.cpp`,
 `ffbidx_driver.cpp`): libxgandalf (**GPL-3.0-or-later**), Eigen (MPL-2.0), ffbidx C API

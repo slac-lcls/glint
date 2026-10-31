@@ -2749,19 +2749,14 @@ class StreamDriver:
         centered = n > 1 and abs(ratio - n) <= 0.1 * n
         if not same and not centered:
             return None, False
-        if not self._setting_imposed():
-            rebased = _rebase_like(M, ref)
-            if rebased is None:
-                self.n_setting_refused = getattr(self, "n_setting_refused", 0) + 1
-                return None, False
-            return ((rebased, True) if same_lattice(rebased, Mk) else (None, False))
-        if same:
+        if self._setting_imposed() and same:
             return M, False
         rebased = _rebase_like(M, ref)
         if rebased is None:
             self.n_setting_refused = getattr(self, "n_setting_refused", 0) + 1
             return None, False
-        return ((rebased, True) if same_lattice(rebased, Mk) else (None, False))
+        return ((rebased, True) if same_lattice(rebased, Mk) and self._fits(q, rebased)
+                else (None, False))
 
     def _cascade_retry(self, slots):
         """glint#75: run the measured retry arms on frames that fit NO active cell, integrating any

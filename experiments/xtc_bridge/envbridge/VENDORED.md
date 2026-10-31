@@ -44,5 +44,9 @@ behave as before; `glint_xtc.py --bridge-timeout` sets it (default: no limit).
   wrapper (which started another worker, without end);
 - `Env.conda` and `Env.spack` shell-quote the conda base, the env name or path, and spack's setup
   script, so a path with a space activates; a spack `spec=` stays unquoted, since it is spack syntax.
+- `Env.conda` without `base` finds the conda install from `$CONDA_EXE`, then the first of
+  `$CONDA_PREFIX_1` / `$CONDA_PREFIX` that holds `etc/profile.d/conda.sh`, and raises `ValueError`
+  when none does. Upstream took `$CONDA_PREFIX_1` or else `$CONDA_PREFIX`, which with one env
+  activated directly is the env itself, so the worker sourced a `conda.sh` that does not exist.
 
 API and design notes: the upstream README. Tests: `../test_envbridge_local.py`.

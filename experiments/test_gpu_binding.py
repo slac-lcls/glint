@@ -247,7 +247,25 @@ fake_psana1 = types.ModuleType("xtc_qreader_psana1")
 fake_psana1.run_to_qframes_psana1 = lambda *a, **k: at_reader("psana1")
 fake_envbridge = types.ModuleType("envbridge")
 fake_envbridge.Env = types.SimpleNamespace(conda=lambda *a, **k: types.SimpleNamespace(args=a, **k))
-fake_envbridge.call = lambda env, fn, *a, **k: at_reader("psana2", env)
+
+
+class FakeWorker:
+    """envbridge.Worker as glint_xtc uses it since #275: a context manager whose call() runs the reader."""
+
+    def __init__(self, env, **kw):
+        self.env = env
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def call(self, fn, *a, **k):
+        return at_reader("psana2", self.env)
+
+
+fake_envbridge.Worker = FakeWorker
 
 MASK = "3"   # unusual on purpose: a stray write of "0" must show as a change
 host = __import__("socket").gethostname()

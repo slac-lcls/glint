@@ -20,7 +20,7 @@ from scipy.spatial import cKDTree
 
 from .index import IndexResult, _triplets, detect_batch, refine, search_basis
 from .lattice import reduced_params
-from .running_consensus import consensus_accept
+from .running_consensus import consensus_accept, consensus_failed_tests
 from .peakfind import find_peaks_classical
 from .transform import fft_volume
 
@@ -368,7 +368,7 @@ def index_shots_batch_known(gs, qmaxs, M_ref, n="auto", min_len=3.0, topk=12,
     return out
 
 
-def _grp_reduced(reps, RP, rtol, ctol, vtol):
+def _grp_reduced(reps, RP, rtol, ctol, vtol, runner_out=None):
     """Greedy same_lattice grouping over (rep_index, weight) pairs using cached RP[idx]=((l,c),det).
 
     Returns [rep_index, total_weight, member_indices] for the winner, plus the runner-up weight.
@@ -455,6 +455,8 @@ def _grp_reduced(reps, RP, rtol, ctol, vtol):
         else:
             groups.append([idx, w, [idx]])
     ranked = sorted(groups, key=lambda g: g[1], reverse=True)
+    if runner_out is not None and len(ranked) > 1:
+        runner_out.append(ranked[1])                          # for the refusal log; no effect on the vote
     return ranked[0], (ranked[1][1] if len(ranked) > 1 else 0)
 
 
@@ -486,18 +488,34 @@ def _rep_of(valid, ridx, members, medoid):
     return valid[ridx] if med is None else med
 
 
+def _fill_detail(detail, valid, rep, cnt, runner, runner_grp, min_support, min_frac, min_lead, min_gap,
+                 medoid):
+    """What `consensus_cell(..., detail=)` reports. It reads the vote and never changes it."""
+    detail.update(support=int(cnt), runner=int(runner), n_valid=len(valid), min_support=min_support,
+                  min_frac=min_frac, min_lead=min_lead, min_gap=min_gap,
+                  failed=consensus_failed_tests(cnt, runner, len(valid), min_support, min_frac, min_lead,
+                                                min_gap),
+                  cell=[float(x) for x in reduced_params(rep)[0]], runner_cell=None)
+    if detail["failed"] and runner_grp:                       # the runner-up's medoid costs, so only on a refusal
+        r = _rep_of(valid, runner_grp[0][0], runner_grp[0][2], medoid)
+        detail["runner_cell"] = [float(x) for x in reduced_params(r)[0]]
+
+
 def _consensus_exact(valid, min_support, rtol, ctol, vtol, min_frac=0.0, min_lead=1.0,
-                     min_gap=0, medoid=True):
+                     min_gap=0, medoid=True, detail=None):
     """One Buerger reduction per hypothesis, then greedy same_lattice grouping (reference / CONSENSUS_EXACT=1)."""
     RP = [(reduced_params(M), abs(np.linalg.det(M))) for M in valid]
-    (ridx, cnt, mem), runner = _grp_reduced(list(enumerate([1] * len(valid))), RP, rtol, ctol, vtol)
+    runner_grp = []
+    (ridx, cnt, mem), runner = _grp_reduced(list(enumerate([1] * len(valid))), RP, rtol, ctol, vtol, runner_grp)
     ok = _accept(cnt, runner, len(valid), min_support, min_frac, min_lead, min_gap)
     rep = _rep_of(valid, ridx, mem, medoid)
+    if detail is not None:
+        _fill_detail(detail, valid, rep, cnt, runner, runner_grp, min_support, min_frac, min_lead, min_gap, medoid)
     return (rep if ok else None), cnt
 
 
 def _consensus_fast(valid, min_support, rtol, ctol, vtol, min_frac=0.0, min_lead=1.0,
-                    min_gap=0, medoid=True, sig_tol=0.5):
+                    min_gap=0, medoid=True, sig_tol=0.5, detail=None):
     """Bucket hypotheses by a cheap rotation/perm-invariant signature (sqrt-eig of the Gram G=M^T M, no
     Buerger), run ONE reduced_params per bucket, then group the bucket reps weighted by bucket count.
     ~10x fewer Buerger reductions; sig_tol keeps genuinely-distinct lattices in separate buckets."""
@@ -513,9 +531,12 @@ def _consensus_fast(valid, min_support, rtol, ctol, vtol, min_frac=0.0, min_lead
             b[1] += 1
     reps = [tuple(buckets[k]) for k in order]                 # [(rep_index, count), ...]
     RP = {idx: (reduced_params(valid[idx]), abs(np.linalg.det(valid[idx]))) for idx, _ in reps}
-    (ridx, cnt, mem), runner = _grp_reduced(reps, RP, rtol, ctol, vtol)
+    runner_grp = []
+    (ridx, cnt, mem), runner = _grp_reduced(reps, RP, rtol, ctol, vtol, runner_grp)
     ok = _accept(cnt, runner, len(valid), min_support, min_frac, min_lead, min_gap)
     rep = _rep_of(valid, ridx, mem, medoid)
+    if detail is not None:
+        _fill_detail(detail, valid, rep, cnt, runner, runner_grp, min_support, min_frac, min_lead, min_gap, medoid)
     return (rep if ok else None), cnt
 
 
@@ -547,8 +568,11 @@ def group_medoid(cells):
 
 
 def consensus_cell(Ms, min_support=3, rtol=0.05, ctol=0.06, vtol=0.10, min_frac=0.0,
-                   min_lead=1.0, min_gap=0, medoid=True):
+                   min_lead=1.0, min_gap=0, medoid=True, detail=None):
     """Group recovered bases by shared lattice; return (representative M, support).
+
+    Pass a dict as `detail` to have it filled with the leader, the runner-up and the tests that
+    failed, for the log; the returned cell and support do not depend on it.
 
     min_frac / min_lead default to OFF (0.0 / 1.0), so every existing caller keeps its exact
     behaviour; see _accept for what they test and why an absolute min_support alone is not enough
@@ -564,9 +588,9 @@ def consensus_cell(Ms, min_support=3, rtol=0.05, ctol=0.06, vtol=0.10, min_frac=
         return None, 0
     if os.environ.get("CONSENSUS_FAST", "0") == "1" and len(valid) > 8:
         return _consensus_fast(valid, min_support, rtol, ctol, vtol, min_frac, min_lead, min_gap,
-                               medoid)
+                               medoid, detail=detail)
     return _consensus_exact(valid, min_support, rtol, ctol, vtol, min_frac, min_lead, min_gap,
-                            medoid)
+                            medoid, detail=detail)
 
 
 def index_known(g, qmax, M_ref, tol_frac=0.02, topk=15, min_inlier_frac=0.5):

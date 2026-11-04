@@ -20,6 +20,7 @@ from functools import partial
 from glint.glint_fast import GATE_FRAC, GATE_MIN, index_blind_fast, index_blind_nbest, load, matched_strict
 from glint.replica_gpu import index_known_gpu_cell
 from glint.multishot import consensus_cell, group_medoid, same_lattice
+from glint.running_consensus import refusal_reason
 # The pooled-vote acceptance gate (min_frac / min_lead, env-overridable) LIVES in glint.multishot
 # next to consensus_cell, so torch-free code can read it; re-exported here because callers and
 # experiments/test_consensus_gate.py import it from this module (and rebind it here for A/Bs --
@@ -214,6 +215,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     n_blind = sum(1 for nb in NB if nb)
 
     n_pool = n_refine = 0
+    consensus_detail = {}              # filled by the vote; the known-cell path leaves it empty
     vote_idx = list(range(n))          # bound on BOTH branches; the known-cell path never votes
     if Mc_known is not None:
         Mc, support = np.asarray(Mc_known, float), -1
@@ -241,7 +243,8 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
         # rescued onto that wrong cell -- observed on mfxx49820 r0016, which reported "95% indexed"
         # against a doubled-c lattice. Gate on the SHARE of the pool and on the margin over the
         # runner-up as well. Both are no-ops on the small-N regime the benchmarks use.
-        Mc, support = consensus_cell(pool, min_frac=CONSENSUS_MIN_FRAC, min_lead=CONSENSUS_MIN_LEAD)
+        Mc, support = consensus_cell(pool, min_frac=CONSENSUS_MIN_FRAC, min_lead=CONSENSUS_MIN_LEAD,
+                                     detail=consensus_detail)
         n_pool = len(pool)
         # TRIAGE-THEN-REFINE. Deciding on 32 frames and REPORTING a cell derived from 32 frames are
         # separate choices, and only the first needs to be small. Measured on mfxx49820 r0016 with
@@ -385,7 +388,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
              "n_pool": n_pool, "support_frac": (support / n_pool) if n_pool else None,
              "n_voters": len(vote_idx) if Mc_known is None else 0, "triage_topk": triage_topk,
              "n_refine": n_refine,
-             "consensus_refused": bool(Mc is None and n_pool)}
+             "consensus_refused": bool(Mc is None and n_pool), "consensus_detail": consensus_detail}
     if esc_stats is not None:
         stats.update(esc_stats)
     return results, stats
@@ -445,8 +448,15 @@ def _report(stats, out):
     if stats.get("consensus_refused"):
         # Loud on purpose: this is the run reporting that it does NOT have a cell, and every
         # subsequent frame fell back to its own top-1 rather than being rescued onto a shared one.
-        print(f"  consensus REFUSED  : best cluster {stats['support']}{share} -- below the "
-              f"min_frac/min_lead gate; per-frame top-1 fallback, NO rescue")
+        detail = stats.get("consensus_detail")
+        if detail and detail["failed"]:
+            why = refusal_reason(detail)
+        elif detail:
+            why = "alias gate refused the consensus cell"
+        else:
+            why = "no valid cell in the pool"
+        print(f"  consensus REFUSED  : best cluster {stats['support']}{share} -- {why}; "
+              f"per-frame top-1 fallback, NO rescue")
     else:
         print(f"  consensus cell     : {stats['edges']} A  support {stats['support']}{share}")
     if stats.get("n_nbest"):

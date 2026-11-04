@@ -169,16 +169,50 @@ def consensus_accept(win, runner, n_pool, min_support=3, min_frac=0.0, min_lead=
     buys is the bulk: r0016's locks sit at a MEDIAN pool of 2480. 48 is already too low (5 of 400
     clean orders diverge); 72 and 96 are both bit-identical.
     """
+    return not consensus_failed_tests(win, runner, n_pool, min_support, min_frac, min_lead, min_gap,
+                                      pool_switch)
+
+
+def consensus_failed_tests(win, runner, n_pool, min_support=3, min_frac=0.0, min_lead=1.0, min_gap=0,
+                           pool_switch=0):
+    """Names of the tests `consensus_accept` fails, in its order; empty means accepted.
+
+    This is the rule itself, so a log line built from it cannot disagree with the decision.
+    """
+    failed = []
     if win < min_support:
-        return False
+        failed.append("min_support")
     scale_tests = n_pool >= pool_switch if pool_switch > 0 else True
     if scale_tests and min_frac > 0.0 and win < min_frac * n_pool:
-        return False
+        failed.append("min_frac")
     if scale_tests and min_lead > 1.0 and runner > 0 and win < min_lead * runner:
-        return False
+        failed.append("min_lead")
     if min_gap > 0 and (win - runner) < min_gap:
-        return False
-    return True
+        failed.append("min_gap")
+    return failed
+
+
+def _fmt_cell(edges):
+    return "/".join(f"{x:.1f}" for x in edges) + " A"
+
+
+def refusal_reason(detail):
+    """One line saying which tests refused a cluster, from `consensus_cell(..., detail=)`."""
+    win, runner, n_pool = detail["support"], detail["runner"], detail["n_valid"]
+    parts = []
+    for name in detail["failed"]:
+        if name == "min_support":
+            parts.append(f"min_support: {win} < {detail['min_support']}")
+        elif name == "min_frac":
+            parts.append(f"min_frac: share {100 * win / n_pool:.1f}% < {100 * detail['min_frac']:.1f}%")
+        elif name == "min_lead":
+            parts.append(f"min_lead: lead {win / runner:.2f} < {detail['min_lead']:.2f}")
+        elif name == "min_gap":
+            parts.append(f"min_gap: gap {win - runner} < {detail['min_gap']}")
+    head = f"cluster at {_fmt_cell(detail['cell'])}; failed " + ", ".join(parts)
+    if detail.get("runner_cell") is None:
+        return head + "; no runner-up"
+    return head + f"; runner-up {runner} at {_fmt_cell(detail['runner_cell'])}"
 
 
 class RunningConsensus:

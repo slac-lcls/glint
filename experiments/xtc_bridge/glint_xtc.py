@@ -13,8 +13,8 @@ The two data eras are NOT symmetric, and the driver hides the difference:
     conda2 via envbridge and only the q-vectors cross the pickle-free wire.
 
 Both paths share the same peak-find + q core (xtc_core) and end at the same GLINT blind hybrid_index
--> CrystFEL .stream. The psana2 path needs envbridge in THIS env:
-  pip install 'git+https://github.com/slac-lcls/drp-benchmarks.git#subdirectory=envbridge'
+-> CrystFEL .stream. The psana2 path uses envbridge, vendored in ./envbridge (from
+slac-lcls/drp-benchmarks), so nothing extra needs installing.
 
 The read and index halves are factored into read_qframes() / index_and_write() so glint_xtc_mpi.py can
 run this same body sharded across MPI ranks; main() is just the single-process (rank 0 of 1) case.
@@ -56,6 +56,10 @@ def build_parser():
                          "2 = LCLS-II xtc2, read in conda2 over envbridge. Default 1.")
     ap.add_argument("--reader-env", default="xpp_drp_gpu_311",
                     help="--psana 2 only: conda2 env with psana2 + cupy that does the peak-finding")
+    ap.add_argument("--bridge-timeout", type=float, default=0.0,
+                    help="--psana 2 only: seconds to wait for the reader to return, 0 = no limit "
+                         "(default). The reader reads the whole run in one call, which can take "
+                         "hours; a reader that crashes still ends the run with an error.")
     ap.add_argument("--gpu-calib", action="store_true",
                     help="calibrate on the GPU instead of det.calib (psana1 + Epix10ka only). "
                          "det.calib is 97.7%% of an event on this route; the device path reproduces "
@@ -157,18 +161,11 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
             gpu_calib=args.gpu_calib, **pf_kw)
     # LCLS-II: psana2 cannot co-import with torch -- read in conda2 over the bridge.
     if args.gpu_calib:
-        # Checked BEFORE the envbridge import, so an unsupported combination reports itself rather
-        # than sending the user off to install a package that would not have helped.
         # The psana2 reader runs in a conda2 env over envbridge, and only the peak COORDINATES cross
         # back. Device calibration there would have to live on the far side of the bridge, in that
         # env's cupy, which is a different piece of work than this flag.
         sys.exit("--gpu-calib is psana1-only so far (the psana2 reader runs over envbridge in conda2)")
-    try:
-        import envbridge
-    except ImportError:
-        sys.exit("--psana 2 needs envbridge in this env. Install it:\n"
-                 "  pip install 'git+https://github.com/slac-lcls/drp-benchmarks.git#subdirectory=envbridge'\n"
-                 "  (or put a checkout on PYTHONPATH)")
+    import envbridge          # vendored next to this script (./envbridge)
     # the conda2 worker must import xtc_qreader (this dir); it loads peakfinder_v4 by file path,
     # so the glint package need not be importable there.
     bridge_dir = str(Path(__file__).resolve().parent)
@@ -179,12 +176,16 @@ def read_qframes(args, rank=0, nranks=1, verbose=True):
         sys.exit("--calib-dir is psana1-only (psana2 takes its calibration from calibconst; use "
                  "--geom to override the geometry)")
     geom = str(Path(args.geom).resolve()) if args.geom else None   # the worker's cwd is not ours
-    return envbridge.call(
-        reader_env, "xtc_qreader:run_to_qframes",
-        args.exp, args.run, args.det, args.zdist, args.wavelength, args.energy_det,
-        args.min_peaks, args.max_events, rank, nranks, args.peakfinder,
-        args.min_pix, args.son_min, args.thr_high, args.thr_low, args.pf8_min_snr,
-        geom, args.pf8_thr_adu)
+    # The activation keeps envbridge's 120 s limit; the call itself is bounded only by
+    # --bridge-timeout, because one call reads the whole run (a 120 s cap ended any longer run).
+    call_timeout = args.bridge_timeout if args.bridge_timeout > 0 else None
+    with envbridge.Worker(reader_env, call_timeout=call_timeout) as w:
+        return w.call(
+            "xtc_qreader:run_to_qframes",
+            args.exp, args.run, args.det, args.zdist, args.wavelength, args.energy_det,
+            args.min_peaks, args.max_events, rank, nranks, args.peakfinder,
+            args.min_pix, args.son_min, args.thr_high, args.thr_low, args.pf8_min_snr,
+            geom, args.pf8_thr_adu)
 
 
 def stream_geometry(geom_text, zdist):

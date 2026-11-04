@@ -5,7 +5,7 @@ then GLINT's real hybrid_index -- but points envbridge at a SYNTHETIC reader in 
 Env.shell, no conda activation) whose q come from a planted lysozyme cell. So it proves: the envbridge
 call marshals a list of numpy arrays back correctly, and the driver's indexing half recovers the cell.
 
-    PYTHONPATH=<envbridge checkout>:$PYTHONPATH python end_to_end_test.py     # needs envbridge + torch
+    python end_to_end_test.py     # needs torch; envbridge is vendored in ./envbridge
 
 The psana half (xtc_qreader: reading xtc, per-pixel-coord q, zdist/cframe geometry) is validated
 separately on real data -- the gate in the README.
@@ -21,12 +21,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))      # repo root for `glint`
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))      # experiments/ for test_geom_bridge
 
-try:
-    import envbridge
-except ImportError:
-    sys.exit("envbridge not found; pip install "
-             "'git+https://github.com/slac-lcls/drp-benchmarks.git#subdirectory=envbridge' "
-             "(or put a checkout on PYTHONPATH)")
+sys.path.insert(0, str(Path(__file__).resolve().parent))         # the vendored ./envbridge
+import envbridge
 
 from test_geom_bridge import LYSO
 

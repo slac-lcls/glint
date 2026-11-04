@@ -177,8 +177,26 @@ class _Env:
         return ("env", env)
 
 
+worker_timeouts = []
+
+
+class _Worker:
+    def __init__(self, env, timeout=120.0, call_timeout="same"):
+        worker_timeouts.append(call_timeout)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        pass
+
+    def call(self, fn, *args):
+        calls.append((fn, args))
+        return {"qframes": [], "events": []}
+
+
 eb.Env = _Env
-eb.call = lambda env, fn, *args: calls.append((fn, args)) or {"qframes": [], "events": []}
+eb.Worker = _Worker
 sys.modules["envbridge"] = eb
 
 a = ap.parse_args(base + ["--psana", "2", "--geom", geom, "--peakfinder", "pf8", "--pf8-thr-adu", "5000"])
@@ -193,6 +211,15 @@ check("bridge gets geom (absolute) and the floor as the last two args",
 a = ap.parse_args(base + ["--psana", "2"])
 calls.clear(); glint_xtc.read_qframes(a, verbose=False)
 check("no --geom: bridge gets (None, None)", calls and calls[-1][1][-2:] == (None, None))
+check("--bridge-timeout defaults to no limit on the reader call", worker_timeouts[-1] is None,
+      repr(worker_timeouts[-1]))
+a = ap.parse_args(base + ["--psana", "2", "--bridge-timeout", "21600"])
+glint_xtc.read_qframes(a, verbose=False)
+check("--bridge-timeout 21600 reaches the worker", worker_timeouts[-1] == 21600.0, repr(worker_timeouts[-1]))
+_launch = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "lute",
+                            "glint_launch.sh")).read()
+check("lute/glint_launch.sh forwards --bridge-timeout on the xtc route",
+      " --bridge-timeout " in _launch.split("XTC_FLAGS=", 1)[1].split('"')[1])
 a = ap.parse_args(base + ["--psana", "2", "--calib-dir", tmp])
 try:
     glint_xtc.read_qframes(a, verbose=False)

@@ -473,6 +473,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_consensus_gate_constants.py
 
+      # The refusal log names the test that failed and the runner-up, from the rule itself; numpy half
+      # plus a torch half that self-skips.
+      - name: experiments/test_consensus_refusal_log.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_consensus_refusal_log.py
+
       # Re-derives the sequential-stop FACTS (seqstop_median_lock, seqstop_false_locks,
       # poolgate_clean_lock_max, poolgate_clean_maxpool) by replaying RunningConsensus over the cached
       # cxidb-120 N-best (nbest_120.npz) in deposition order and 400 seeded random orders, ~2 s,

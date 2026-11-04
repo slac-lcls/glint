@@ -228,6 +228,28 @@ def _fires(text: str, rule_name: str) -> bool:
 
 # (rule name, text that MUST fire, text that must NOT)
 INJECTIONS = [
+    # the dropped section 5 table's values, retired 2026-10-29: the live sentences as the paper had them,
+    # then the same sentence on the 480-frame figures
+    ("dropped-table-xg32-fps",
+     "XGANDALF on 32 CPU cores processes 22.3 frames per second at the same yield",
+     "XGANDALF on 32 CPU cores takes 56.41 ms per frame with a work queue"),
+    ("dropped-table-xg32-ms", "an effective 44.87~ms per frame", "an effective 56.41~ms per frame"),
+    # the verifier README's record row, marked retired in the same clause, is not a reuse
+    ("dropped-table-xg32-ms", "| not in FACTS | `P32_120` 22.287 frames/s (44.87 ms effective per frame);",
+     "| not in FACTS (retired 2026-10-29) | `P32_120` 22.287 frames/s (44.87 ms effective per frame);"),
+    ("dropped-table-blind-over-32core", "and the A100 39, 1.75 times as many", "and the A100 39, 2.2 times as many"),
+    ("dropped-table-xg-1core-mean", "fast execution takes 1,138~ms (median; mean 1,392) on the same core",
+     "fast execution takes 452~ms (median) on the same core"),
+    ("dropped-table-xg-known-cell", "XGANDALF, default sampling & 96 & 111 & 397 & 7,660 & one instance",
+     "MOSFLM & 35 & 35 & --- & 3,674 & one core"),
+    ("dropped-table-xg-known-cell", "7,660 and 674~ms on one EPYC~7702 node", "on one EPYC~7702 node"),
+    # the same means in seconds, as section 5 prints them; the ms-only pattern let this live sentence pass
+    ("dropped-table-xg-known-cell", "with the cell XGANDALF takes 7.7~s and 0.67~s per frame",
+     "with the cell XGANDALF takes 0.45~s per frame on r0016"),
+    ("dropped-table-xg-known-cell", "a mean of 0.674 s per frame", "a mean of 0.674 mm per pixel"),
+    ("dropped-table-indexamajig", "the frames take 605~ms at 45 of 120 (a different harness",
+     "682, 605 and 577 for the three DIALS rows with the cell"),
+    ("dropped-table-indexamajig", "the settings tested leave a 30--50-fold gap", "the settings tested leave a gap"),
     ("jungfrau-93pct",
      r"Jungfrau-4M & lysozyme & tetragonal & $93\%$ blind (support $54/60$) & --- \\",
      # the corrected row, plus enough trailing float to reach cxidb-45's legitimate 93% footnote
@@ -518,6 +540,22 @@ def _required_fires(text: str, name: str) -> bool:
     return any(f"[REQUIRED/{name}]" in f for f in _cn.check_required(Path("probe.tex"), text))
 
 
+def test_fast_execution_rules_accept_the_r0016_comparison():
+    """The fast-execution rules tie a mention to the r0016 comparison (1,340 against 543 of 2,228, a sixteenth
+    of the time), so a sentence carrying those numbers must satisfy all three. The cxidb-17 comparison (96 and 88
+    of 120, ~40x, 7:3 at p = 0.344) was retired as keys on 31 Oct but is still accepted as literal text, because
+    the submitted manuscript prints it. A bare mention with neither set must still fire."""
+    r0016 = ("On 2,228 frames of a free-electron laser run GLINT indexes 1,340 and one fast-execution XGANDALF "
+             "instance 543, in a sixteenth of the time per frame.")
+    cxidb = ("On cxidb-17 one fast-execution XGANDALF instance indexes 88/120 (96/120 correct cell) against the "
+             "defaults' 86/120 and 94/120, about 40 times slower; 7:3 discordant, p = 0.344.")
+    bare = "One fast-execution XGANDALF instance is quick."
+    for name in ("xgandalf-fast-accuracy-facts", "xgandalf-fast-speedup-facts", "xgandalf-fast-mcnemar-facts"):
+        assert not _required_fires(r0016, name), name
+        assert not _required_fires(cxidb, name), name
+        assert _required_fires(bare, name), name
+
+
 def _jungfrau_row(**edit) -> str:
     v = dict(MERGE_RENDERED, **edit)
     return (f"Jungfrau-4M lysozyme & {v['jungfrau_final_of1563']} & ${v['jungfrau_ccstar']}$ & "
@@ -629,6 +667,20 @@ def _arith(**overrides):
 
 # (what a careless edit does, the substring the guard must answer with)
 ARITHMETIC_PERTURBATIONS = [
+    # The real-run head-to-head (J7, J19), one perturbation per guard.
+    ({"j7_r0016_glint_only": 830},                    "pairing no longer adds up"),
+    ({"j7_r0016_glint_path_rescue": 535},             "paths no longer add up"),
+    ({"j7_r0016_xgandalf_over_glint_median": 21},     "j7_r0016_xgandalf_over_glint_median"),
+    ({"j19_r0016_mosflm_only": 2},                    "mosflm / GLINT pairing"),
+    ({"j7_r0016_xgandalf_fast_lattice": 500},         "j7_r0016_xgandalf_fast_strict exceeds"),
+    ({"j19_r0016_asdf_cell_lattice": 700},            "j19_r0016_asdf_cell_strict exceeds"),
+    # The data-set table (J3), one perturbation per guard.
+    ({"j3_r51_val7_at_cap": 12000},                   "j3_r51_val7_at_cap"),
+    ({"j3_cxidb17_120_npk_median": 600.0},            "j3_cxidb17_120_npk_median"),
+    ({"j3_r51_val5_frames": 12000},                   "j3_r51_val5_frames"),
+    # The full-socket XGANDALF block (480 frames).
+    ({"j6_xgandalf_fast_queue480_effective_ms": 60.0}, "j6_glint_blind_over_queue480"),
+    ({"merge_r51guard_cf_d_splits": 11},              "merge_r51guard_cf_d_splits"),
     ({"jungfrau_final_of1563": 1520},                 "must nest"),
     ({"fused_strict_of120": 81},                      "fused_strict_of120"),
     ({"indexing_rate": "79/115"},                     "fused_strict_of120"),
@@ -741,6 +793,74 @@ ARITHMETIC_PERTURBATIONS = [
     # outside, not by nudging toward the measured value.
     ({"sf_ceiling_of120": 95},                        "solved + selection-miss"),
     ({"sf_ceiling_of120": 5},                         "solved + selection-miss"),
+    # THE REAL-RUN BLOCKS (merges through CrystFEL, per-frame indexer, stopping rule, cxidb-45
+    # head-to-head, r51 sweep, CrystFEL's most common cell): one perturbation per guard. The 54 and
+    # 4.2 cases are the two rounding traps the exact percentage check exists for: 123/230 = 53.48
+    # printed as 53.5 and rounded again, and round(4.25, 1) == 4.2 where 17/400 is 4.3 half up.
+    ({"merge_r0016_cchalf_diff": 0.0568},             "merge_r0016_cchalf_diff = "),
+    ({"merge_r194_glint_minus_null": 0.2177},         "merge_r194_glint_minus_null = "),
+    ({"merge_r0016_cf_minus_null": 0.2905},           "merge_r0016_cf_minus_null = "),
+    ({"merge_r0016_cchalf_diff_pos": 6},              "not the 10 splits"),
+    ({"merge_r194_cchalf_diff_pos": 2, "merge_r194_cchalf_diff_neg": 8}, "meets the detection rule"),
+    ({"merge_r194_glint_accepted_pct": 54},           "merge_r194_glint_accepted_pct = "),
+    ({"merge_shuffled_checked_of": 1777},             "merge_shuffled_checked_of must be"),
+    ({"merge_r51_correct_lattice": 260},              "merge_r51_correct_lattice_pct = "),
+    ({"merge_r51_top_group": 700, "merge_r51_top_group_pct": 2.2}, "would NOT decline"),
+    ({"r0016_sf_bin_60_99_pct": 46},                  "r0016_sf_bin_60_99_pct = "),
+    ({"r0016_sf_bin_40_59_strict": 158},              "peak bins sum"),
+    ({"r0016_sf_bin_6_9_frames": 240.5},              "must be a whole count"),
+    ({"r0016_known_strict_pct": 56},                  "r0016_known_strict_pct = "),
+    ({"pk45_sf_known_pct": 88},                       "pk45_sf_known_pct = "),
+    ({"r0278_vote_pool": 1786},                       "r0278_vote_pool"),
+    ({"decide_scr_wald_hi_pct": 0.136},               "decide_scr_wald_hi_pct = "),
+    ({"decide_scr_at_support3": 9},                   "decide_scr_at_support3 exceeds"),
+    ({"decide_rand_r0058_wrong": 18},                 "correct + wrong"),
+    ({"decide_rand_r0058_wrong_pct": 4.2},            "decide_rand_r0058_wrong_pct = "),
+    ({"decide_rand_r0058_correct_min": 384},          "8-seed range"),
+    ({"pk45_strict_min_matched": 42},                 "pk45_strict_min_matched"),
+    ({"pk45_dials_xfel_pct": 74.5},                   "pk45_dials_xfel_pct = "),
+    ({"pk45_mcnemar_glint_only": 139},                "paired split"),
+    ({"pk45_mcnemar_p": 8.3e-31},                     "pk45_mcnemar_p = "),
+    ({"r51_sweep_hi_rsplit_spread": 8.91},            "r51_sweep_hi_rsplit_spread = "),
+    ({"r51_sweep_hi_cchalf": 0.3700},                 "outside its own seed range"),
+    ({"r51_sweep_hi_frames": 250},                    "whole stream"),
+    ({"cfmode_r0278_support_pct": 1.3},               "cfmode_r0278_support_pct = "),
+    ({"cfmode_r0058_null_max_group": 15},             "no longer confirms"),
+    # THE SEVENTH REAL-RUN BLOCK (asdf and MOSFLM through CrystFEL, the r51 re-run with the solution-file
+    # guard, the order replays at eight random states): one perturbation per guard.
+    ({"asdf_frames": 119},                            "keys count 120 frames"),
+    ({"mosflm_cell_nopeaks_strict_of120": 121},       "is not a count within mosflm_frames"),
+    ({"asdf_null_cell_alloff_strict_of120": 1},       "quotes both nulls as 0"),
+    ({"asdf_blind_nopeaks_strict_of120": 2},          "asdf blind finds no correct"),
+    ({"asdf_cell_on_strict_pct": 35.9},               "asdf_cell_on_strict_pct = "),
+    ({"mosflm_blind_on_strict_pct": 22.6},            "mosflm_blind_on_strict_pct = "),
+    ({"mosflm_cell_on_strict_pct": 29.1},             "mosflm_cell_on_strict_pct = "),
+    ({"merge_r51guard_cchalf_diff": -0.0151},         "merge_r51guard_cchalf_diff = "),
+    ({"merge_r51guard_glint_minus_null": 0.2207},     "merge_r51guard_glint_minus_null = "),
+    ({"merge_r51guard_cf_minus_null": 0.2058},        "merge_r51guard_cf_minus_null = "),
+    ({"merge_r51guard_known_cchalf_diff": 0.0076},    "merge_r51guard_known_cchalf_diff = "),
+    ({"merge_r51guard_cchalf_diff_pos": 4},           "merge_r51guard_cchalf_diff_pos + "),
+    ({"merge_r51guard_known_cchalf_diff_pos": 1, "merge_r51guard_known_cchalf_diff_neg": 9,
+      "merge_r51guard_known_cf_cchalf_sd": 0.002},    "known-cell GLINT - CrystFEL CC1/2 difference now meets"),
+    ({"merge_r51guard_accepted_pct": 10.1},           "merge_r51guard_accepted_pct = "),
+    ({"merge_r51guard_misorient_le1deg_pct": 98.4},   "merge_r51guard_misorient_le1deg_pct = "),
+    ({"merge_r51guard_ref_lattice": 2409},            "exceeds the merge_r51guard_solutions"),
+    ({"merge_r51guard_ref_lattice": 251},             "differs from merge_r51_correct_lattice"),
+    ({"merge_r51guard_shuffled_accepted": 1},         "none of the shuffled solutions"),
+    ({"seqstop8_trials": 3201},                       "must be the 8 sets"),
+    ({"seqstop8_false_seed3": 1},                     "per-seed false decisions sum"),
+    ({"seqstop8_decided": 2},                         "seqstop8_decided <= seqstop8_trials"),
+    ({"seqstop8_false_upper95_pct": 0.25},            "Clopper-Pearson bound for 3 of 3200"),
+    ({"seqstop8_full_rule_false": 4},                 "same outcome on every order"),
+    ({"seqstop8_median_lock_min": 6.5},               "seqstop_median_lock (6) is no longer inside"),
+    ({"seqstop8_false_seed0": 1, "seqstop8_false_seed1": 1, "seqstop8_false_seed2": 1, "seqstop8_false_seed3": 1,
+      "seqstop8_false_seed7": 1, "seqstop8_false_seed11": 1, "seqstop8_false_seed42": 1,
+      "seqstop8_false_seed2024": 1, "seqstop8_false": 8},
+                                                      "seqstop_false_locks (0) is no longer inside"),
+    ({"poolgate8_gaponly_decided_min": 368},          "poolgate8_gaponly_decided_min (368) exceeds"),
+    ({"poolgate8_gaponly_wrong_max": 200},            "poolgate_bad_wrong_gaponly (194) is now inside"),
+    ({"poolgate8_gated_true": 4},                     "poolgate8_gated_decided must be"),
+    ({"poolgate8_gated_decided_max": 2},              "cannot come from 8 sets"),
 ]
 
 
@@ -1420,6 +1540,7 @@ def test_new_required_rules_stay_silent_without_their_trigger():
 
 if __name__ == "__main__":
     tests = (test_closed_form_mle_matches_brute_force,
+             test_fast_execution_rules_accept_the_r0016_comparison,
              test_mcnemar_exact_past_1023_discordant_pairs,
              test_bounds_ordered_and_bracket_the_estimate,
              test_zero_discordant_pairs_is_not_certainty,

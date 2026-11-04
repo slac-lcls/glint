@@ -153,6 +153,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_device_selection.py
 
+      # glint_xtc_mpi never writes CUDA_VISIBLE_DEVICES (the launcher owns placement, glint#256 review), and
+      # stops when a rank has no GPU or two ranks resolve to one GPU. main() runs as rank 0 and rank 1 of a
+      # simulated job through the real reader dispatch, with stand-in mpi4py/cupy/torch, so it runs here.
+      - name: experiments/test_gpu_binding.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_gpu_binding.py
+
       # Un-assembled multi-panel input integrates slab-locally via the .geom's integer dimN keys
       # (glint#148): 4 panels sharing 2 slabs, each recovering its OWN planted flux; the 4-D
       # event+panel path; the no-mapping refusal; and the window-exceeds-slab mismatch error.

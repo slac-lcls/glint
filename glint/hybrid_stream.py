@@ -449,7 +449,12 @@ def _report(stats, out):
         # Loud on purpose: this is the run reporting that it does NOT have a cell, and every
         # subsequent frame fell back to its own top-1 rather than being rescued onto a shared one.
         detail = stats.get("consensus_detail")
-        why = refusal_reason(detail) if detail else "no valid cell in the pool"
+        if detail and detail["failed"]:
+            why = refusal_reason(detail)
+        elif detail:
+            why = "alias gate refused the consensus cell"
+        else:
+            why = "no valid cell in the pool"
         print(f"  consensus REFUSED  : best cluster {stats['support']}{share} -- {why}; "
               f"per-frame top-1 fallback, NO rescue")
     else:

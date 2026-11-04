@@ -740,6 +740,11 @@ jobs:
       # safe -- orthogonal cell AND L0 * (the frame's largest |q|) <= KC_ADAPT_L0Q (25). Lysozyme / cxidb-17 stays on
       # it; 100x120x150 A at 1.8 A gets the full grid (7/16 orientation-correct on 149370e, >= 14/16 required). Also a
       # mixed-grid batch and the CUDA-graph path's grid-keyed cache (stand-in graph on CPU). Self-skips below 1.12.
+      # The _report half, which prints the refusal line, needs torch; the CPU job skips it.
+      - name: experiments/test_consensus_refusal_log.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_consensus_refusal_log.py
+
       - name: experiments/test_adaptive_grid_basin.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_adaptive_grid_basin.py

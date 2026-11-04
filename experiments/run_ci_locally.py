@@ -99,7 +99,7 @@ STEPS = [
     "experiments/test_fp32_b32_033_rule.py",
     "experiments/test_gate_constants_dedup.py",
     "experiments/test_consensus_gate_constants.py",
-    "experiments/test_consensus_refusal_log.py",
+    "experiments/test_consensus_refusal_log.py",     # also in the torch-CPU job, where its _report half runs
     "experiments/test_seqstop_replay.py",
     "experiments/test_consensus_voter_set.py",
     "experiments/test_same_lattice_symmetry.py",

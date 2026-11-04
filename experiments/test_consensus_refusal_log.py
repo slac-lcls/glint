@@ -9,7 +9,8 @@ Checked here:
   * the rule is unchanged: consensus_accept agrees with a literal copy of the old body on a grid;
   * passing detail= does not change the returned cell or support, on either consensus path;
   * the detail and the message name exactly the tests that failed, and the runner-up's count and cell;
-  * _report prints it (torch half, skips where glint.hybrid_stream cannot import).
+  * _report prints it, and names an alias-gate veto as such (torch half, skips where glint.hybrid_stream
+    cannot import; it runs in the torch-CPU job).
 
   PYTHONPATH=. python experiments/test_consensus_refusal_log.py     # exit 0 = all pass
 """
@@ -157,6 +158,23 @@ def report_half():
     check("names min_lead and the runner-up", "min_lead: lead 1.20 < 1.50" in line and "runner-up 50" in line, line)
     check("still says what the run did next", "per-frame top-1 fallback, NO rescue" in line, line)
     check("the old wording is gone", "min_frac/min_lead gate" not in line, line)
+
+    def report_line(detail):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            _report(dict(stats, consensus_detail=detail), "x.stream")
+        return next((ln for ln in buf.getvalue().splitlines() if "consensus REFUSED" in ln), "")
+
+    # The vote accepted, then alias_gate.confirm_frames returned None: no statistical test failed.
+    d_ok = {}
+    Mc, _ = consensus_cell(pool(rng, (60, (40.0, 60.0, 90.0)), (10, (33.0, 47.0, 75.0))),
+                           min_frac=0.02, min_lead=1.5, detail=d_ok)
+    check("the planted pool passes the vote", Mc is not None and d_ok["failed"] == [])
+    line = report_line(d_ok)
+    check("an alias veto is named, and no statistical test is blamed",
+          "alias gate refused" in line and "failed" not in line and "runner-up" not in line, line)
+    line = report_line({})
+    check("an empty detail says the pool held no valid cell", "no valid cell in the pool" in line, line)
 
 
 if __name__ == "__main__":

@@ -822,8 +822,9 @@ The serial GLINT integration does not have to wait for it.
     torch's UUID (torch >= 2.5; the S3DF envs have 2.1 and 1.11) if CuPy is missing. The wrapper
     stops with the launch fix if a rank sees no GPU, or if two ranks on a node resolve to the same
     GPU, unless `--share-gpu` says they share it on purpose. If neither library can identify the
-    device, ranks on a node are compared by their masks' first device. Rank 0 logs hostname, rank,
-    mask and GPU for every rank. `--gpus-per-node` is removed.
+    device, two or more such ranks on a node also stop the run unless `--share-gpu`: different mask
+    strings can name the same GPU, so masks are not compared. Rank 0 logs hostname, rank, mask and
+    GPU for every rank. `--gpus-per-node` is removed.
   - **Checked on hardware.** S3DF job 40623083 ran on 2× A100 in both conda1 envs
     (`experiments/xtc_bridge/placement_validation/`):
     - one GPU per task runs, and two tasks on one GPU, or both seeing both GPUs, stop;

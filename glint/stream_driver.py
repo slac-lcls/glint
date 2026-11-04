@@ -814,7 +814,8 @@ def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
 
 
 def _has_centering_translations(M, ref, centering):
-    """Whether the candidate basis contains the named conventional-cell translations."""
+    """Whether the candidate basis contains the named conventional-cell translations of `ref`,
+    which must share M's orientation (a basis rebased from M, not a stored reference)."""
     translations = {
         "A": ((0, 0.5, 0.5),),
         "B": ((0.5, 0, 0.5),),
@@ -2824,13 +2825,14 @@ class StreamDriver:
         centered = n > 1 and abs(ratio - n) <= 0.1 * n
         if not same and not centered:
             return None, False
-        if centered and not _has_centering_translations(M, ref, centering):
-            return None, False
         if self._setting_imposed() and same:
             return M, False
         rebased = _rebase_like(M, ref)
         if rebased is None:
             self.n_setting_refused = getattr(self, "n_setting_refused", 0) + 1
+            return None, False
+        # Against the rebased basis, not ref: M carries this frame's orientation and ref does not.
+        if centered and not _has_centering_translations(M, rebased, centering):
             return None, False
         return ((rebased, True) if same_lattice(rebased, Mk) and self._fits(q, rebased)
                 else (None, False))

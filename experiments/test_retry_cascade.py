@@ -298,6 +298,13 @@ def test_centered_rescue_checks_translations_and_active_reference_convention():
     assert drv._rescue_matrix(np.zeros((1, 3)), alias, ref, drv.grid) == (None, False)
 
     primitive_ref = ref @ np.array([[0.5, 0.5, 0], [-0.5, 0.5, 0], [0, 0, 1]])
+    # A blind candidate carries its frame's orientation, which the stored reference does not.
+    rotation, _ = np.linalg.qr(np.random.default_rng(0).normal(size=(3, 3)))
+    rotation = rotation * np.sign(np.linalg.det(rotation))
+    assert drv._rescue_matrix(np.zeros((1, 3)), rotation @ alias, ref, drv.grid) == (None, False)
+    rescued, reference_setting = drv._rescue_matrix(np.zeros((1, 3)), rotation @ primitive_ref, ref, drv.grid)
+    assert reference_setting and same_lattice(rescued, ref)
+
     drv._blind = True
     drv._lock(primitive_ref, standardize=True)
     assert drv.grid.reference_centering == "P"

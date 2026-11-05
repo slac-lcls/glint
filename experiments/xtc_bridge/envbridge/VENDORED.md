@@ -4,6 +4,9 @@ Copied from `slac-lcls/drp-benchmarks`, directory `envbridge/envbridge/`, at com
 (includes drp-benchmarks#34, the conda PYTHONPATH fix). Same author as GLINT; covered by GLINT's
 `LICENSE.md`. Vendored so that `glint_xtc.py --psana 2` works without access to drp-benchmarks.
 
+Running psana1 and psana2 as separate processes joined by a socket goes back to Mona's
+[xtc1to2](https://github.com/monarin/xtc1to2) (2022). The idea carried over; no code did.
+
 Changes from upstream:
 
 **`Worker(..., call_timeout=...)`.** Upstream bounds every call by the

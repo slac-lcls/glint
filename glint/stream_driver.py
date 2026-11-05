@@ -656,7 +656,7 @@ def _relabel_like(M, ref):
     return out
 
 
-def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
+def _rebase_like(M, ref, ltol=0.03, ctol=0.03, centering=None):
     """Put a BLIND basis in the reference's setting by an integer change of basis (glint#188).
 
     A blind candidate comes through primitivize(buerger_reduce(...)), so it can differ from the
@@ -674,6 +674,8 @@ def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
     Cholesky factor of `M.T @ M`; vectors outside the length window are never materialized, and the
     search keeps only the current basis in memory. Matching signed permutations are checked first,
     which avoids enumerating large ellipsoids for elongated cells already in an equivalent setting.
+    When `centering` is supplied, metric matches are filtered before ranking so the selected basis
+    contains the reference's named conventional-cell translations.
 
     Returns M @ T, or None when no such T exists: the candidate is then not the reference's lattice at
     this tolerance, and the caller refuses the frame instead of integrating it in a guessed setting."""
@@ -695,7 +697,8 @@ def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
                 LB = np.linalg.norm(B, axis=0)
                 CB = (B.T @ B) / np.outer(LB, LB)
                 if (np.all(np.abs(LB - Lr) <= 1e-10 * Lr)
-                        and np.all(np.abs(CB - Cr) <= 1e-10)):
+                        and np.all(np.abs(CB - Cr) <= 1e-10)
+                        and (centering is None or _has_centering_translations(M, B, centering))):
                     return B if np.linalg.det(B) * dR > 0 else -B
     try:
         U = np.linalg.cholesky(M.T @ M).T
@@ -804,6 +807,8 @@ def _rebase_like(M, ref, ltol=0.03, ctol=0.03):
                 if int(round(abs(np.linalg.det(T)))) != n:
                     continue
                 BM = M @ T
+                if centering is not None and not _has_centering_translations(M, BM, centering):
+                    continue
                 Lbest = np.linalg.norm(BM, axis=0)
                 err = (np.abs(Lbest - Lr) / Lr).sum() + np.abs((BM.T @ BM) / np.outer(Lbest, Lbest) - Cr).sum()
                 if err < best_err:
@@ -2342,10 +2347,6 @@ class StreamDriver:
                 continue
             self.n_pl_found += 1
             rec = self._pl_record(i, q, v, resid, kept=None, M1=M)
-            nd, no = (rec["n1"], rec["m2"]) if rec["dominant"] == "first" else (rec["m2"], rec["n1"])
-            if not self._gate_count(nd, len(q) - no):
-                still.append(i)                             # a double hit, but the stronger lattice is too weak even alone
-                continue
             grid, acc = self._cell_sink(k)
             if rec["dominant"] != "first":                  # the residual held the stronger crystal: keep THAT one,
                 M2 = _rebase_like(np.asarray(v["M2"], float), grid.Mc_ref) if not self._setting_imposed() \
@@ -2354,6 +2355,12 @@ class StreamDriver:
                     self.n_setting_refused = getattr(self, "n_setting_refused", 0) + 1     # change (glint#188)
                     still.append(i)
                     continue
+                v = dict(v, M2=M2)
+                rec = self._pl_record(i, q, v, resid, kept=None, M1=M)
+            nd, no = (rec["n1"], rec["m2"]) if rec["dominant"] == "first" else (rec["m2"], rec["n1"])
+            if not self._gate_count(nd, len(q) - no):
+                still.append(i)                             # a double hit, but the stronger lattice is too weak even alone
+                continue
             rec["kept"] = rec["dominant"]
             self._pl_v[i] = (v, resid, M)                   # _integrate_one must not search this frame again
             self.n_pl_rescued += 1
@@ -2827,12 +2834,9 @@ class StreamDriver:
             return None, False
         if self._setting_imposed() and same:
             return M, False
-        rebased = _rebase_like(M, ref)
+        rebased = _rebase_like(M, ref, centering=centering if centered else None)
         if rebased is None:
             self.n_setting_refused = getattr(self, "n_setting_refused", 0) + 1
-            return None, False
-        # Against the rebased basis, not ref: M carries this frame's orientation and ref does not.
-        if centered and not _has_centering_translations(M, rebased, centering):
             return None, False
         return ((rebased, True) if same_lattice(rebased, Mk) and self._fits(q, rebased)
                 else (None, False))

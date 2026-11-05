@@ -36,6 +36,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
 
 import glint.stream_driver as sd                                             # noqa: E402
+from glint.lattice import cell_to_Ar                                          # noqa: E402
 from glint.multilattice import deflate_peaks, misorientation_deg              # noqa: E402
 from glint.stream_driver import StreamDriver                                  # noqa: E402
 from test_cell_registry import (A, B, CLEN, DMIN, NPX, PANELS, SEED, WAVE,  # noqa: E402
@@ -220,6 +221,36 @@ def test_stronger_second_lattice_is_the_one_kept():
     assert drv._pl_v[0] is None, "the slot's cache is cleared by the flush"
     st = drv.stats()
     assert (st["n_per_lattice_rescued"], st["n_per_lattice_swapped"]) == (1, 1), st
+
+
+def test_swapped_rescue_rechecks_claims_after_rebasing():
+    """A candidate's componentwise inlier count can shrink in the reference setting."""
+    ref = cell_to_Ar(10.0, 30.0, 100.0, 90.0, 110.0, 90.0)
+    shear = np.array([[1, 0, 3], [0, 1, 0], [0, 0, 1]], float)
+    candidate = ref @ shear
+    rebased = sd._rebase_like(candidate, ref)
+    assert rebased is not None and np.allclose(rebased.T @ rebased, ref.T @ ref, rtol=1e-8, atol=1e-8)
+
+    hkl = np.column_stack((np.arange(20), 2 * np.arange(20), -np.arange(20))).astype(float)
+    residual = (hkl + np.array([0.04, 0.0, -0.14])) @ np.linalg.inv(candidate)
+    first = np.arange(1, 16, 3, dtype=float).reshape(5, 1) * np.array([[1.0, 2.0, -1.0]]) @ np.linalg.inv(ref)
+    q = np.concatenate((first, residual))
+    assert _inliers(residual, candidate) == 20
+    assert _inliers(residual, rebased) == 0
+
+    drv, _ = _driver(ref, per_lattice=True, events=True, min_inliers=10, min_inlier_frac=0.15,
+                     laue="2/m_uab")
+    drv._q[0] = q
+    drv._rej[0] = (ref, 0, 5)
+    drv._pl_n = 1
+    verdict = dict(accepted=True, M2=candidate, misorientation=40.0)
+    drv._second_lattice = lambda q, M: (verdict, residual)
+    assert drv._per_lattice_rescue([0]) == [0]
+    rec = drv._pl[0]
+    assert (rec["m2"], rec["dominant"], rec["kept"]) == (0, "first", None), rec
+    assert np.isclose(rec["frac_per_lattice"], 5 / len(q)), rec
+    assert drv.stats()["n_per_lattice_rescued"] == 0
+    assert drv.n_indexed == 0
 
 
 def test_double_hit_of_two_weak_crystals_is_not_rescued():
@@ -457,6 +488,7 @@ TESTS = [test_signature_defaults_and_validation,
          test_no_second_lattice_no_rescue,
          test_mosaic_clone_is_not_a_second_lattice,
          test_stronger_second_lattice_is_the_one_kept,
+         test_swapped_rescue_rechecks_claims_after_rebasing,
          test_double_hit_of_two_weak_crystals_is_not_rescued,
          test_accepted_frame_qc_reads_the_per_lattice_fraction,
          test_qc_never_credits_the_weaker_lattice,

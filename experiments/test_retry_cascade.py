@@ -311,6 +311,18 @@ def test_centered_rescue_checks_translations_and_active_reference_convention():
     smaller = primitive_ref @ np.diag([0.5, 1, 1])
     assert drv._rescue_matrix(np.zeros((1, 3)), smaller, primitive_ref, drv.grid) == (None, False)
 
+    ref = cell_to_Ar(20.0, 30.0, 20.0, 90.0, 90.0, 90.0)
+    sym = dict(lattice_type="orthorhombic", centering="C", unique_axis="*")
+    drv = StreamDriver(ref, PANELS, CLEN, WAVE, (NPX, NPX), dtype=np.uint16, B=8, dmin=DMIN,
+                       use_gpu=False, retry_cascade=True, stream_symmetry=sym)
+    drv._fits = lambda q, M: True
+    primitive = ref @ np.array([[0.5, 0.5, 0], [-0.5, 0.5, 0], [0, 0, 1]], float)
+    unfiltered = sd._rebase_like(primitive, ref)
+    assert unfiltered is not None and not sd._has_centering_translations(primitive, unfiltered, "C")
+    rescued, reference_setting = drv._rescue_matrix(np.zeros((1, 3)), primitive, ref, drv.grid)
+    assert reference_setting and rescued is not None and same_lattice(rescued, ref)
+    assert sd._has_centering_translations(primitive, rescued, "C")
+
 
 def test_rebased_candidate_must_still_pass_the_fit_gate():
     """The componentwise fit gate is basis-dependent, so check the reference-setting result too."""

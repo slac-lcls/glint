@@ -829,7 +829,37 @@ The serial GLINT integration does not have to wait for it.
     (`experiments/xtc_bridge/placement_validation/`):
     - one GPU per task runs, and two tasks on one GPU, or both seeing both GPUs, stop;
     - `--share-gpu` runs;
-    - each rank's reader child lands on the rank's GPU.
+    - each rank's **conda1 child** lands on the rank's GPU. That probe spawns `sys.executable`
+      (`placement_validation/probe_placement.py:33-35`), so it is a child in the *parent's*
+      environment and says nothing about the conda2 reader — @monarin's caveat on glint#256.
+  - **Checked through the real conda2 reader** (S3DF jobs 43534733 and 43534839, 6 Nov 2026, `d7fce31`,
+    real XTC2 `mfx101343025` r194, `srun --mpi=pmix`). The worker is started the way `glint_xtc.py`
+    starts it — `envbridge.Env.conda(stack="conda2")` + `envbridge.Worker` — and is asked what device
+    it holds:
+    - 1 rank, `--gpus-per-task=1`: the worker is genuinely conda2 (`xpp_drp_gpu_311`, python 3.11.14,
+      CuPy 13.6.0, psana importable) and **resolves to the rank's GPU**;
+    - 2 ranks, `--gpus-per-task=1` on 2× A100: both ranks report the identical mask `'0'` while on
+      **different** physical GPUs, and each rank's conda2 worker resolves to its own rank's GPU — the
+      case that makes identity, not the mask string, the only workable check;
+    - 2 ranks on one GPU without `--share-gpu` stop; with `--share-gpu` they run;
+    - behind a shifted mask the worker resolves to a **non-zero** physical GPU rather than `cuda:0`.
+
+    GLINT left `CUDA_VISIBLE_DEVICES` unchanged in every case.
+
+    **What this does not establish.** Identity comes from `cupy.cuda.Device(0).pci_bus_id`, which
+    queries the device without creating a context, so `nvidia-smi --query-compute-apps` reported no
+    process on any GPU in any of these runs. The claim is therefore that parent and worker **resolve
+    to the same physical GPU**, not that the reader **allocates** there under load.
+
+    The `PS_PARALLEL` override is exercised: with the launcher exporting `PS_PARALLEL=mpi`
+    (job 43536000) the conda2 worker inherits `mpi`, and with nothing exported it inherits nothing,
+    so `xtc_qreader.py:46-50` has something real to override. That probe reads the value *before*
+    importing psana, so the post-import `"none"` is still source-verified rather than observed.
+
+    The "both ranks see both GPUs" case is **not** re-checked here. It was written into the 2-GPU run
+    and did not test what it was meant to: the step reported the mask `'1'` rather than `'0,1'`, so it
+    degenerated into a second copy of "two ranks on one GPU". Job 40623083 above covers that case at
+    the conda1 level; through the conda2 reader it remains unverified.
 
     Under `--gpus-per-task=1` both tasks see the mask `'0'` on different GPUs, so the check has to
     use identity, not the string.

@@ -2339,9 +2339,19 @@ class StreamDriver:
                 self.n_pl_null_tested += 1
                 if vn["accepted"]:
                     self.n_pl_null_found += 1
-                    m2n = self._inliers(rs, np.asarray(vn["M2"], float))
-                    nd, no = (n1, m2n) if n1 >= m2n else (m2n, n1)
-                    self.n_pl_null_rescued += bool(self._gate_count(nd, len(q) - no))
+                    M2n = np.asarray(vn["M2"], float)
+                    m2n = self._inliers(rs, M2n)
+                    if m2n > n1:
+                        gridn, _ = self._cell_sink(k)
+                        if not self._setting_imposed():
+                            M2n = _rebase_like(M2n, gridn.Mc_ref)
+                        if M2n is None:
+                            m2n = None
+                        else:
+                            m2n = self._inliers(rs, M2n)
+                    if m2n is not None:
+                        nd, no = (n1, m2n) if n1 >= m2n else (m2n, n1)
+                        self.n_pl_null_rescued += bool(self._gate_count(nd, len(q) - no))
             if not v["accepted"]:
                 still.append(i)
                 continue

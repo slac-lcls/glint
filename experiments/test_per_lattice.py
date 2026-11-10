@@ -253,6 +253,42 @@ def test_swapped_rescue_rechecks_claims_after_rebasing():
     assert drv.n_indexed == 0
 
 
+def test_scrambled_control_rechecks_setting_and_claims_after_rebasing():
+    import glint.multilattice as ml
+
+    ref = cell_to_Ar(10.0, 30.0, 100.0, 90.0, 110.0, 90.0)
+    shear = np.array([[1, 0, 3], [0, 1, 0], [0, 0, 1]], float)
+    candidates = (ref @ shear, ref * 1.1)
+    assert sd._rebase_like(candidates[0], ref) is not None
+    assert sd._rebase_like(candidates[1], ref) is None
+
+    hkl = np.column_stack((np.arange(20), 2 * np.arange(20), -np.arange(20))).astype(float)
+    first = np.arange(1, 16, 3, dtype=float).reshape(5, 1) * np.array([[1.0, 2.0, -1.0]]) @ np.linalg.inv(ref)
+    original_scramble = ml.scramble_azimuth
+    original_verdict = ml.second_lattice_verdict
+    try:
+        for candidate in candidates:
+            residual = (hkl + np.array([0.04, 0.0, -0.14])) @ np.linalg.inv(candidate)
+            q = np.concatenate((first, residual))
+            drv, _ = _driver(ref, per_lattice=True, events=True, min_inliers=10, min_inlier_frac=0.15,
+                             laue="2/m_uab")
+            drv._q[0] = q
+            drv._rej[0] = (ref, 0, 5)
+            drv._sl_index = lambda: None
+            drv._second_lattice = lambda q, M, r=residual: (
+                dict(accepted=False, M2=candidate, misorientation=40.0), r)
+            ml.scramble_azimuth = lambda resid, rng: resid
+            ml.second_lattice_verdict = lambda *args, M2=candidate, **kwargs: (
+                dict(accepted=True, M2=M2, misorientation=40.0))
+            assert drv._per_lattice_rescue([0]) == [0]
+            stats = drv.stats()
+            assert stats["n_pl_null"] == 1 and stats["pl_null_found_rate"] == 1.0, stats
+            assert stats["pl_null_rescued_rate"] == 0.0, stats
+    finally:
+        ml.scramble_azimuth = original_scramble
+        ml.second_lattice_verdict = original_verdict
+
+
 def test_double_hit_of_two_weak_crystals_is_not_rescued():
     fx = _find(lambda f: f.misorientation >= 15 and max(f.n1, f.m2) < 10 and min(f.n1, f.m2) >= 6,
                SEED + 21, n1=7, n2=8, noise=40)
@@ -489,6 +525,7 @@ TESTS = [test_signature_defaults_and_validation,
          test_mosaic_clone_is_not_a_second_lattice,
          test_stronger_second_lattice_is_the_one_kept,
          test_swapped_rescue_rechecks_claims_after_rebasing,
+         test_scrambled_control_rechecks_setting_and_claims_after_rebasing,
          test_double_hit_of_two_weak_crystals_is_not_rescued,
          test_accepted_frame_qc_reads_the_per_lattice_fraction,
          test_qc_never_credits_the_weaker_lattice,

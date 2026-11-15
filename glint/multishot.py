@@ -368,10 +368,12 @@ def index_shots_batch_known(gs, qmaxs, M_ref, n="auto", min_len=3.0, topk=12,
     return out
 
 
-def _grp_reduced(reps, RP, rtol, ctol, vtol, runner_out=None):
+def _grp_reduced(reps, RP, rtol, ctol, vtol, runner_out=None, groups_out=None):
     """Greedy same_lattice grouping over (rep_index, weight) pairs using cached RP[idx]=((l,c),det).
 
     Returns [rep_index, total_weight, member_indices] for the winner, plus the runner-up weight.
+    `groups_out`, if a list, receives every group in rank order (the winner first) -- the refusal path
+    in glint.alias_fold needs the third cluster too, which `runner_out` (runner-up only) drops.
 
     The runner-up is what tells a decisive lock from a coin-flip between two near-equal clusters --
     the winner's own count cannot, and `max()` alone threw that information away. MEMBERSHIP is kept
@@ -457,6 +459,8 @@ def _grp_reduced(reps, RP, rtol, ctol, vtol, runner_out=None):
     ranked = sorted(groups, key=lambda g: g[1], reverse=True)
     if runner_out is not None and len(ranked) > 1:
         runner_out.append(ranked[1])                          # for the refusal log; no effect on the vote
+    if groups_out is not None:
+        groups_out.extend(ranked)                             # EVERY group, ranked; read by glint.alias_fold
     return ranked[0], (ranked[1][1] if len(ranked) > 1 else 0)
 
 

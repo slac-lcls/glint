@@ -165,7 +165,8 @@ def _escalation_config(escalate):
     return cfg
 
 def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, cascade=None,
-                 alias_gate=None, triage_topk=None, escalate=None, select="first", laue=None):
+                 alias_gate=None, triage_topk=None, escalate=None, select="first", laue=None,
+                 alias_fold=False):
     """Fully-blind hybrid. (1) N-BEST blind-index every frame (top-`nbest` distinct cells, not just
     argmax). (2) consensus over the POOLED N-best hypotheses (aliases scatter, truth clusters ->
     sturdier cell). (3) per frame pick the highest-scored N-best cell consistent with the consensus
@@ -198,6 +199,8 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
     experiments/select_matched/ for the preregistered check. It costs one known-cell search per frame."""
     if select not in SELECTS:
         raise ValueError(f"hybrid_index(select=...): one of {SELECTS}, got {select!r}")
+    if alias_fold and alias_gate is None:
+        raise ValueError("hybrid_index(alias_fold=True) needs an alias_gate to decide the pairs")
     esc_cfg = _escalation_config(escalate)
     # Drop NaN/inf and zero-length rows (glint.geom.q_rows_ok) once, here, so the N-best, the rescue, the
     # gates and the written peaks all see the same rows. One NaN row (a peak on no .geom panel, kept by the
@@ -237,6 +240,7 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
             from glint.warmup_batch import triage_order            # the SAME selector streaming uses
             vote_idx = triage_order([len(q) for q in frames], int(triage_topk), floor=1)
         pool = [c for i in vote_idx for c, _ in NB[i]]
+        pool_fid = [i for i in vote_idx for _ in NB[i]]       # which frame each hypothesis came from
         # A bare min_support=3 is an ABSOLUTE floor, and this pool is not a fixed size: it is
         # n_frames x nbest. At 120 frames that is 360 hypotheses; at 2200 it is ~6300, where a
         # 23-cluster (0.4% of the pool) clears 3 by chance and every downstream frame then gets
@@ -246,6 +250,19 @@ def hybrid_index(frames, images=None, Mc_known=None, warmup=True, nbest=3, casca
         Mc, support = consensus_cell(pool, min_frac=CONSENSUS_MIN_FRAC, min_lead=CONSENSUS_MIN_LEAD,
                                      detail=consensus_detail)
         n_pool = len(pool)
+        # OPT-IN (alias_fold=True): a refusal whose ONLY failed test is the runner-up ratio may be a
+        # lattice tied with its own index-2 relative on the same frames -- one population split in two
+        # groups because the vote groups by volume. glint.alias_fold asks the alias gate which of the
+        # pair is the lattice, drops the other, and re-applies the same acceptance rule. Default off:
+        # without it this path is unchanged.
+        if alias_fold and Mc is None and consensus_detail.get("failed") == ["min_lead"]:
+            from glint.alias_fold import fold_alias_relatives
+            Mf, sf, fold_info = fold_alias_relatives(
+                pool, pool_fid, frames, alias_gate, min_frac=CONSENSUS_MIN_FRAC,
+                min_lead=CONSENSUS_MIN_LEAD)
+            consensus_detail["alias_fold"] = fold_info
+            if Mf is not None:
+                Mc, support = Mf, sf
         # TRIAGE-THEN-REFINE. Deciding on 32 frames and REPORTING a cell derived from 32 frames are
         # separate choices, and only the first needs to be small. Measured on mfxx49820 r0016 with
         # the good geometry: the triaged vote's cell came out 37.9/79.6/81.0 against the full vote's

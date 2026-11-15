@@ -46,6 +46,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_alias_gate.py
 
+      # glint.alias_fold, the opt-in refusal fold (hybrid_index(alias_fold=True)). The helper tests are
+      # torch-free; the hybrid_index wiring tests SKIP here and run in the torch-CPU job below.
+      - name: experiments/test_alias_fold.py
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_alias_fold.py
+
       - name: experiments/test_pf8_thr_adu.py
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_pf8_thr_adu.py
@@ -732,6 +738,10 @@ jobs:
       - name: experiments/test_live_gate_floor.py (real frames, CPU torch)
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_live_gate_floor.py
+
+      - name: experiments/test_alias_fold.py (hybrid_index wiring, CPU torch)
+        if: ${{ !cancelled() }}
+        run: PYTHONPATH=. python experiments/test_alias_fold.py
 
       # glint_cli --gate: with --cell every frame is registered and same_lattice cannot fail, so --gate strict
       # applies the paper's scoring bar to what is WRITTEN. Synthetic frames, 30 real cxidb-17 frames against

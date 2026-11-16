@@ -55,13 +55,17 @@ def _is_relative(rep_lead, det_lead, rep_g, det_g, max_index, vtol):
 
 def fold_alias_relatives(pool, pool_fid, frames, gate, min_support=3, min_frac=0.0, min_lead=1.0,
                          min_gap=0, rtol=0.05, ctol=0.06, vtol=0.10, medoid=True, max_groups=6,
-                         min_shared=0.5):
+                         min_shared=0.5, max_gate_frames=200):
     """Re-decide a refused vote after removing alias relatives the gate can tell apart.
 
     pool       hypotheses as handed to consensus_cell (None entries allowed, dropped as there).
     pool_fid   the frame index each hypothesis came from, parallel to `pool`.
     frames     the frames' reciprocal peaks, indexed by pool_fid.
     gate       an AliasGate; its thresholds are used, its adopt flag is not.
+    max_gate_frames  the gate scores at most this many shared frames, evenly spaced over them in frame
+               order (deterministic). tightness enumerates the node grid per call, ~0.2 s per frame for
+               the pair on a 56/70/102 A cell at |q| <= 0.5, so an uncapped 1000-frame pair costs minutes.
+               None = all.
 
     Returns (Mc or None, support, info). `info["pairs"]` records every relative examined and why it was
     or was not dropped; `info["failed"]` is the acceptance rule's verdict after the fold."""
@@ -109,6 +113,10 @@ def fold_alias_relatives(pool, pool_fid, frames, gate, min_support=3, min_frac=0
                 rec["outcome"] = "not on the same frames"
                 info["pairs"].append(rec)
                 continue
+            if max_gate_frames and len(shared) > max_gate_frames:
+                pick = np.linspace(0, len(shared) - 1, int(max_gate_frames)).round().astype(int)
+                shared = [shared[k] for k in np.unique(pick)]
+            rec["gated_frames"] = len(shared)
             g_strict.confirm_frames(R0, [(frames[f], valid[F0[f]]) for f in shared])
             v0 = g_strict.info["verdict"]; rec["leader_gate"] = dict(g_strict.info)
             g_strict.confirm_frames(Rj, [(frames[f], valid[Fj[f]]) for f in shared])

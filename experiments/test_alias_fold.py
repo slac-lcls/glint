@@ -129,6 +129,15 @@ def test_unrelated_runner_is_not_folded():
     assert Mc is None and info["pairs"] == [], info
 
 
+def test_gate_frame_cap_is_respected_and_still_decides():
+    frames, nb = _scenario(np.random.default_rng(SEED + 8))
+    pool, fid = _pool(nb)
+    Mc, _, info = fold_alias_relatives(pool, fid, frames, AliasGate(), max_gate_frames=8, **LEAD)
+    assert info["pairs"][0]["gated_frames"] == 8, info["pairs"]
+    assert info["pairs"][0]["shared"] == 19, info["pairs"]
+    assert Mc is not None and same_lattice(Mc, M_TRUE), info
+
+
 def test_dropped_votes_still_count_in_the_pool():
     """min_frac keeps the full pool as its denominator: folding never shrinks the lottery it guards."""
     frames, nb = _scenario(np.random.default_rng(SEED + 5))

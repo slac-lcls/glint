@@ -1294,6 +1294,20 @@ FACTS: dict[str, float | str] = {
     "j6_xgandalf_fast_queue480_effective_ms": 56.41,  # Q32_480
     "j6_glint_blind_over_queue480":        2.2,   # queue480_effective_ms / blind_ms = 56.41 / 25.7 = 2.195
     "xgandalf_fast_1core_mean_ms":       1392.2,  # S1_120 mean; the median is xgandalf_fast_1core_ms
+    # --- Banked 17 Nov 2026 on S.M.'s instruction, from [1a3166] ---
+    # GLINT's blind time on the UNBARRED 480-frame set, measured by e33437 on 3 Nov as arm 2 of the
+    # 31 Oct re-timing task. This is the denominator j6_glint_blind_over_queue480 lacked: that key
+    # divides a 480-frame numerator (56.41) by the 120-frame blind_ms (25.7). See the WARNING below.
+    "blind_480_ms":                      26.014,  # strict 366/480; +1.2% of blind_ms 25.7
+    "blind_r349_ms":                     26.061,  # strict 626/816; +1.4%
+    # The like-for-like J6 ratios: numerator AND denominator both on the 480-frame set.
+    "j6_ratio_480_likeforlike":            2.17,  # 56.41 / 26.014 = 2.168  (queue, Q32_480)
+    "j6_ratio_480_static_likeforlike":     1.90,  # 49.34 / 26.014 = 1.897  (static split, P32_480)
+    # ⚠ WARNING, NOT A CORRECTION: "j6_glint_blind_over_queue480" = 2.2 above is ARITHMETICALLY
+    # UNSOUND -- its own comment shows 56.41 / 25.7, a 480-frame numerator over a 120-frame
+    # denominator. The sound value is j6_ratio_480_likeforlike = 2.17, i.e. the published figure is
+    # right to within 1.4%. The banked 2.2 is LEFT UNCHANGED here on purpose: changing a banked
+    # value is a different act from adding keys, and S.M. authorised the latter. His call.
     # XGANDALF with the lysozyme cell, called directly on one AMD EPYC 7702 node (sdfrome080), 120 cxidb-17
     # frames, default (h1_A) and fast-execution (h1_B) sampling, scored with GLINT's gate. Times per frame are
     # the harness's; mean and median both kept. indexamajig with --no-retry --no-refine --no-check-cell, fast
@@ -1310,6 +1324,24 @@ FACTS: dict[str, float | str] = {
     "j8_indexamajig_fast_allflags_ms":         605.48,   # mean (median 502.5)
     "j8_indexamajig_fast_allflags_strict":     45,
     "j8_indexamajig_allflags_ms":              5114.87,  # mean (median 4293.0), default sampling
+    # --- J8 on RUN 349, the unbarred 816-frame set. Banked 17 Nov 2026 on S.M.'s instruction,
+    # from [1a3166]; S.M. moved J8's R1 headline onto run 349 on 16 Nov so the headline no longer
+    # rests on the barred cxidb-17 120-frame set. results/J8_r349.md, results/J8.md.
+    # ⚠ The yields are NOT equal on run 349 (275 -> 259 of 816) where they were on the 120 set
+    # (45 and 45), so the ratio is never to be written "at equal yield" (S.M.'s ruling, 28 Oct).
+    "j8_r349_indexamajig_default_ms":          20346.0,  # h2_1_on, mean (median 14116); 275/816 strict
+    "j8_r349_indexamajig_default_strict":          275,
+    "j8_r349_indexamajig_flags_off_ms":         5102.0,  # h2_2_off, mean (median 4458); 256/816 strict
+    "j8_r349_indexamajig_flags_off_strict":        256,
+    "j8_r349_indexamajig_fast_allflags_ms":      643.0,  # h2_7_off_fast, mean (median 562); 259/816 strict
+    "j8_r349_indexamajig_fast_allflags_strict":    259,
+    "j8_r349_flags_time_ratio":                   31.6,  # 20346 / 643, at 275/816 -> 259/816 strict
+    "j8_r349_xg_published_harness_ms":          7818.0,  # h1_A, mean (median 6850); 677/816 strict
+    "j8_r349_xg_published_harness_strict":         677,
+    "j8_r349_xg_fast_sampling_ms":               640.0,  # h1_B, mean (median 560); 647/816 strict
+    "j8_r349_xg_fast_sampling_strict":             647,
+    "j8_r349_sampling_time_ratio":                12.2,  # 7818 / 640, at 677/816 -> 647/816 strict
+    "j8_r349_null_strict":                           3,  # of 816 -- reported as 3/816, NEVER "zero"
     # Gevorkov et al. 2019 report 19-106 ms with the cell supplied: 5114.87 / 106 = 48 and 605.48 / 19 = 32,
     # the "30-50-fold gap".
     # asdf and MOSFLM correct-cell (lattice) counts beside the strict counts above, same runs.

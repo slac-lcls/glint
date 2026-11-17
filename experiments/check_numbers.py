@@ -1292,7 +1292,9 @@ FACTS: dict[str, float | str] = {
     "j6_xgandalf_fast_32core_strict_of480": 340,   # P32_480 (Q32_480 the same)
     "j6_glint_blind_over_32core":         1.75,   # blind_fps / j6_xgandalf_fast_32core_fps = 39.0 / 22.287
     "j6_xgandalf_fast_queue480_effective_ms": 56.41,  # Q32_480
-    "j6_glint_blind_over_queue480":        2.2,   # queue480_effective_ms / blind_ms = 56.41 / 25.7 = 2.195
+    "j6_glint_blind_over_queue480":        2.17,  # queue480_effective_ms / blind_480_ms = 56.41 / 26.014 = 2.168
+    # (was 2.2 = 56.41 / 25.7, a 480-frame numerator over the 120-frame blind_ms; corrected to the
+    # like-for-like value 17 Nov 2026 on S.M.'s instruction. Equals j6_ratio_480_likeforlike.)
     "xgandalf_fast_1core_mean_ms":       1392.2,  # S1_120 mean; the median is xgandalf_fast_1core_ms
     # --- Banked 17 Nov 2026 on S.M.'s instruction, from [1a3166] ---
     # GLINT's blind time on the UNBARRED 480-frame set, measured by e33437 on 3 Nov as arm 2 of the
@@ -1303,11 +1305,8 @@ FACTS: dict[str, float | str] = {
     # The like-for-like J6 ratios: numerator AND denominator both on the 480-frame set.
     "j6_ratio_480_likeforlike":            2.17,  # 56.41 / 26.014 = 2.168  (queue, Q32_480)
     "j6_ratio_480_static_likeforlike":     1.90,  # 49.34 / 26.014 = 1.897  (static split, P32_480)
-    # ⚠ WARNING, NOT A CORRECTION: "j6_glint_blind_over_queue480" = 2.2 above is ARITHMETICALLY
-    # UNSOUND -- its own comment shows 56.41 / 25.7, a 480-frame numerator over a 120-frame
-    # denominator. The sound value is j6_ratio_480_likeforlike = 2.17, i.e. the published figure is
-    # right to within 1.4%. The banked 2.2 is LEFT UNCHANGED here on purpose: changing a banked
-    # value is a different act from adding keys, and S.M. authorised the latter. His call.
+    # j6_glint_blind_over_queue480 above was 2.2 (56.41 / 25.7, mixed 480/120 frames); S.M. had it
+    # corrected to 2.17 on 17 Nov 2026, the like-for-like value. The old 2.2 was within 1.4%.
     # XGANDALF with the lysozyme cell, called directly on one AMD EPYC 7702 node (sdfrome080), 120 cxidb-17
     # frames, default (h1_A) and fast-execution (h1_B) sampling, scored with GLINT's gate. Times per frame are
     # the harness's; mean and median both kept. indexamajig with --no-retry --no-refine --no-check-cell, fast
@@ -4011,7 +4010,9 @@ def check_arithmetic() -> list[str]:
     for key, value, nd in (
             ("j6_glint_blind_over_32core", float(F["blind_fps"]) / float(F["j6_xgandalf_fast_32core_fps"]), 2),
             ("j6_glint_blind_over_queue480",
-             float(F["j6_xgandalf_fast_queue480_effective_ms"]) / float(F["blind_ms"]), 1),
+             float(F["j6_xgandalf_fast_queue480_effective_ms"]) / float(F["blind_480_ms"]), 2),
+            ("j6_ratio_480_likeforlike",
+             float(F["j6_xgandalf_fast_queue480_effective_ms"]) / float(F["blind_480_ms"]), 2),
             ("j6_xgandalf_fast_32core_effective_ms", 1000.0 / float(F["j6_xgandalf_fast_32core_fps"]), 2)):
         if round(value, nd) != float(F[key]):
             bad.append(f"  FACTS: {key} = {F[key]}, but its parts give {value:.4f} ({round(value, nd)} at the "

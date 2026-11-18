@@ -442,6 +442,23 @@ def _floor_note(stats):
     return f"; floor {fl[0]:g} n + {fl[1]:g}" + (f" + {fl[2]:g} sqrt(n)" if len(fl) > 2 else "")
 
 
+def _alias_fold_note(stats):
+    """One log line when the opt-in refusal fold ran (hybrid_index(alias_fold=True)), '' when it did not.
+    It says what the fold examined and dropped, so a cell accepted only after a fold is visible in the log."""
+    fold = (stats.get("consensus_detail") or {}).get("alias_fold")
+    if not fold:
+        return ""
+    pairs = fold.get("pairs", [])
+    drops = [p["outcome"] for p in pairs if p["outcome"] in ("relative dropped", "leader dropped")]
+    if not drops:
+        return (f"  alias fold         : ran on the min_lead refusal, {len(pairs)} alias relative(s) considered, "
+                f"none dropped; the refusal stands")
+    what = ", ".join(f"{drops.count(o)} {o}" for o in ("relative dropped", "leader dropped") if o in drops)
+    end = "the vote then accepted" if not stats.get("consensus_refused") else "the vote still refuses"
+    return (f"  alias fold         : ran on the min_lead refusal, {len(pairs)} alias relative(s) considered, "
+            f"{what} by the alias gate; {end}")
+
+
 def _written_note(stats):
     note = written_note(stats)
     if note:
@@ -476,6 +493,9 @@ def _report(stats, out):
               f"per-frame top-1 fallback, NO rescue")
     else:
         print(f"  consensus cell     : {stats['edges']} A  support {stats['support']}{share}")
+    fold_note = _alias_fold_note(stats)
+    if fold_note:
+        print(fold_note)
     if stats.get("n_nbest"):
         print(f"  N-best recovered   : {stats['n_nbest']} (consensus-consistent non-top-1 hypothesis)")
     if stats.get("select") == "matched":

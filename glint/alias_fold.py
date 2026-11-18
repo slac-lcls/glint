@@ -27,7 +27,15 @@ never runs on an accepted vote (the post-accept gate in hybrid_index covers that
 when any test other than min_lead failed. Off unless hybrid_index(alias_fold=True), which also needs an
 alias_gate.
 
-Measured: nothing on real data yet. The unit tests in experiments/test_alias_fold.py are synthetic.
+Measured on real data (November 2026). Two runs that accept without it, mfxx49820 r0016 on the
+refined geometry and cxidb-17 run 349: with the gate and the fold switched on, the decision, the support and
+the frames indexed are the same as without them, and forcing the fold on the accepted pool returns the same
+cell. One run that refuses on min_lead alone: the fold dropped the leader's index-2 relatives, the same
+acceptance rule then accepted, and the cell is the one nbest=1 finds; with the frame labels shuffled the
+fold did not fire. Index 3 and 4 relatives are untested on real data. The unit tests in
+experiments/test_alias_fold.py are synthetic.
+
+When the fold runs, the hybrid summary prints one "alias fold" line (hybrid_stream._alias_fold_note).
 """
 import numpy as np
 

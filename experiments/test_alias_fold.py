@@ -198,6 +198,20 @@ def test_hybrid_alias_fold_accepts():
     assert all(r["M"] is not None and same_lattice(r["M"], M_TRUE) for r in results)
 
 
+def test_alias_fold_log_line():
+    """The summary says when a fold ran and what it did; without a fold it says nothing."""
+    hs = _hs()
+    frames, nb = _scenario(np.random.default_rng(SEED + 6))
+    _, off = _run_hybrid(frames, nb)
+    assert hs._alias_fold_note(off) == ""
+    _, on = _run_hybrid(frames, nb, alias_gate=AliasGate(), alias_fold=True)
+    note = hs._alias_fold_note(on)
+    assert "alias fold" in note and "1 relative dropped" in note and "then accepted" in note, note
+    stood = {"consensus_refused": True,
+             "consensus_detail": {"alias_fold": {"pairs": [{"outcome": "undecided (leader confirm, relative confirm)"}]}}}
+    assert "none dropped" in hs._alias_fold_note(stood)
+
+
 def test_hybrid_alias_fold_needs_a_gate():
     frames, nb = _scenario(np.random.default_rng(SEED + 7))
     try:

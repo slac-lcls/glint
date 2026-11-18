@@ -35,6 +35,7 @@ CI = ROOT / ".github" / "workflows" / "ci.yml"
 # needs pytest+pydantic and is likewise CI's business.
 STEPS = [
     "experiments/test_alias_gate.py",
+    "experiments/test_alias_fold.py",                # hybrid wiring tests SKIP here (no torch)
     "experiments/test_pf8_thr_adu.py",
     "experiments/test_asic_seam_mask.py",
     "experiments/test_peakfinder_mask.py",

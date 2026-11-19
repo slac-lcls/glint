@@ -1,0 +1,3 @@
+#!/bin/bash
+#SBATCH -A m5149 -C cpu -q regular -N 1 -t 03:00:00 -J subsample33 -o /pscratch/sd/k/kmdalton/cxidb_45/work/probe/subsample/run33_%j.out
+PYTHONNOUSERSITE=1 /pscratch/sd/k/kmdalton/glint/.mamba/envs/glint/bin/python -u /pscratch/sd/k/kmdalton/cxidb_45/work/probe/subsample/subsample.py --work /pscratch/sd/k/kmdalton/cxidb_33/work --cell 79.2,79.2,37.9,90,90,90 --dmin 1.9 --nshell 12 --outer 2.046,1.957 --sizes 500,1000,2000,4000,8000,16000,32000,64000 --reps 5 --workers 12 --threads 8 --out /pscratch/sd/k/kmdalton/cxidb_45/work/probe/subsample/cxidb33 --tmp /pscratch/sd/k/kmdalton/cxidb_45/work/probe/subsample/tmp33

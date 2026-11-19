@@ -20,3 +20,5 @@ experiments/yuan/data/**/crystal_*.npz
 # macOS Finder metadata (recreated on any directory you browse)
 .DS_Store
 .claude/
+# snakemake state and logs
+.snakemake/

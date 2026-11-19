@@ -213,6 +213,22 @@ def main():
                     help="--integrate annulus background estimator: clipmean (default, MAD-clipped "
                          "mean), median (what shipped before glint#131 -- use it to reproduce "
                          "pre-#131 intensities), mean (unbiased but not robust; diagnostic)")
+    ap.add_argument("--integrator", choices=("box", "profile"), default="box",
+                    help="--integrate method: box (default; box sum minus annulus background) or profile "
+                         "(the laue-dials Poisson profile fit: elliptical Gaussian profiles pooled from each "
+                         "spot's k nearest strong neighbours, batched on the GPU; glint.profile_integrate)")
+    ap.add_argument("--adu-per-photon", type=float, default=None,
+                    help="--integrate: detector gain; frames are divided by it before integration so I and "
+                         "sigma are in photons (both integrators assume Poisson counts). Default: none")
+    ap.add_argument("--profile-radius", type=int, default=None,
+                    help="--integrator profile: window radius in px (default: per frame, half the 20th "
+                         "percentile of nearest-neighbour prediction spacing, as laue-dials)")
+    ap.add_argument("--profile-knn", type=int, default=5,
+                    help="--integrator profile: strong neighbours pooled per profile (default 5)")
+    ap.add_argument("--profile-maxiter", type=int, default=2,
+                    help="--integrator profile: fit iterations (default 2)")
+    ap.add_argument("--profile-batch", type=int, default=8,
+                    help="--integrator profile: frames per device batch (default 8)")
     ap.add_argument("--tofile", metavar="SOL",
                     help="WRITE a CrystFEL --indexing=file solution file (the refined-merge handoff): "
                          "run 'indexamajig --indexing=file --fromfile-input-file=SOL --tolerance=10,10,10,3' "
@@ -303,6 +319,9 @@ def main():
             ap.error("--integrate requires --geom (and --image-dir for the frame images)")
         from glint.predict import write_stream_integrated
         _ev_axis = _EVENT_AXIS[args.event_axis]
+        _ikw = dict(integrator=args.integrator, adu_per_photon=args.adu_per_photon,
+                    profile_kw=dict(radius=args.profile_radius, k=args.profile_knn,
+                                    maxiter=args.profile_maxiter, batch=args.profile_batch))
         if args.images:                                          # stacked .cxi: read data[event] directly (self-contained)
             from glint.predict import integrate_cxi
             from glint.lute_bridge import parse_geom as _pg
@@ -316,7 +335,7 @@ def main():
                         r.setdefault("centering", centering)
             nint, tot = integrate_cxi(results, args.geom, wavelength_A=args.wavelength,
                                       dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
-                                      data_key=args.data_path, event_axis=_ev_axis)
+                                      data_key=args.data_path, event_axis=_ev_axis, **_ikw)
             _panels, _g = _pg(args.geom)
             _pnames = [p["name"] for p in _panels]
             # integrate_cxi gives each integrated frame its own photon_eV / clen_m, and its chunk header
@@ -337,7 +356,7 @@ def main():
             nint, tot = integrate_frames(results, geomd, image_dir=args.image_dir,
                                          data_path=args.data_path,          # None -> the .geom 'data =' key (glint#143)
                                          dmin=args.int_dmin, tol=args.int_tol, bg_mode=args.bg_mode,
-                                         event_axis=_ev_axis, wavelength_A=args.wavelength)
+                                         event_axis=_ev_axis, wavelength_A=args.wavelength, **_ikw)
             _pnames = list(geomd.get("panels", {}).keys())
             stats["n_written"] = write_stream_integrated(
                 results, args.out, geom_text=open(args.geom).read(),

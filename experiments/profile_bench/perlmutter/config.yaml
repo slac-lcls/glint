@@ -1,0 +1,20 @@
+# Snakemake workflow profile for NERSC Perlmutter: every rule but the local ones is its own slurm
+# job in the shared QOS. CPU steps bill m5149; GPU steps (resources gpu=1) bill m5149_g on one A100
+# with the 32 cores the GPU shared queue requires per GPU; memory must fit those 32 cores (~56 GB).
+#
+#   snakemake -s Snakefile --configfile config.yaml --workflow-profile perlmutter
+executor: slurm
+jobs: 60
+latency-wait: 60
+retries: 1
+keep-going: true
+rerun-incomplete: true
+default-resources:
+  slurm_account: m5149
+  constraint: cpu
+  qos: shared
+  runtime: 60
+  mem_mb: 1900
+set-resources:
+  index_integrate: {slurm_account: m5149_g, constraint: gpu, cpus_per_gpu: 32, mem_mb: 50000}
+slurm-logdir: /pscratch/sd/k/kmdalton/cxidb_33/logs/slurm

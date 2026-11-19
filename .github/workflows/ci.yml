@@ -692,6 +692,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: PYTHONPATH=. python experiments/test_nbest_prefix.py
 
+      # glint.profile_integrate against the laue-dials code it ports, fetched at the pinned commit
+      # (no upstream source is stored here; THIRD_PARTY_NOTICES.md). Masks, panel-edge windows, auto
+      # radius, the early stop and a failed frame, on CPU torch; agreement to 1e-8 relative.
+      - name: experiments/test_profile_integrate.py
+        if: ${{ !cancelled() }}
+        run: |
+          curl -sfL -o "$RUNNER_TEMP/ld_integration.py" \
+            https://raw.githubusercontent.com/rs-station/laue-dials/d57f96ee35540016834223975bf5f2311e74619b/src/laue_dials/algorithms/integration.py
+          LAUE_DIALS_INTEGRATION="$RUNNER_TEMP/ld_integration.py" PYTHONPATH=. python experiments/test_profile_integrate.py
+
       # The blind searches score out a basis the anneal flattened (glint_fast.plausible_t, has_cell's rule on the
       # device): the rule agrees with has_cell, and every cell index_blind_nbest returns on 12 real frames passes it.
       - name: experiments/test_blind_plausible.py

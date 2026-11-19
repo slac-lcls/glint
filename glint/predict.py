@@ -1071,8 +1071,52 @@ def _load_image(path, data_path, event=0, n_panels=1, event_axis=None, panel_sla
     return a
 
 
+INTEGRATORS = ("box", "profile")
+
+
+def _check_integrator(integrator):
+    if integrator not in INTEGRATORS:
+        raise ValueError(f"integrator must be one of {INTEGRATORS}, got {integrator!r}")
+
+
+def _check_gain(adu_per_photon):
+    if adu_per_photon is not None and not (np.isfinite(adu_per_photon) and adu_per_photon > 0):
+        raise ValueError(f"adu_per_photon must be a finite positive number, got {adu_per_photon!r}")
+
+
+class _ProfileQueue:
+    """Frames waiting for the batched profile fit. ``add`` queues one result's frame and prediction
+    and fits a full batch when there is one; ``flush`` fits the rest. Each returns (n_frames,
+    n_reflections) integrated, and the results are updated in place exactly as the box path does.
+    The frames are kept until their batch is fitted, so peak memory is one batch of frames."""
+
+    def __init__(self, panels, profile_kw=None):
+        self.panels, self.kw = panels, dict(profile_kw or {})
+        self.batch = int(self.kw.get("batch", 8))
+        self.items = []
+
+    def add(self, r, frame, pred):
+        self.items.append((r, np.asarray(frame), pred))
+        return self.flush() if len(self.items) >= self.batch else (0, 0)
+
+    def flush(self):
+        from glint.profile_integrate import profile_integrate_frames
+        if not self.items:
+            return 0, 0
+        rs, frames, preds = zip(*self.items)
+        self.items = []
+        out = profile_integrate_frames(list(frames), list(preds), self.panels, **self.kw)
+        n = tot = 0
+        for r, pred, (I, sig, peak, bg) in zip(rs, preds, out):
+            keep = np.isfinite(I) & np.isfinite(sig) & (sig > 0)   # non-positive I kept: glint#130
+            r.update(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=peak[keep], bg=bg[keep])
+            n += 1; tot += int(keep.sum())
+        return n, tot
+
+
 def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol=0.006,
-                     bg_mode="clipmean", event_axis=None, wavelength_A=None):
+                     bg_mode="clipmean", event_axis=None, wavelength_A=None, integrator="box",
+                     profile_kw=None, adu_per_photon=None):
     """Native predict + box-integrate (the fast, self-contained QC path; for the best MERGE use
     ``glint --fromfile`` -> CrystFEL refine). For each result carrying an orientation ``M``: load the
     frame image (``image_dir/<basename(image)>`` at the geom ``data`` path), predict on-detector spots,
@@ -1091,7 +1135,18 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
     predicted at. This function used to read only
     ``geom['wavelength_A']``: with an HDF5-path ``photon_energy`` in the .geom (None there) it died
     inside predict_spots after indexing had run, and with a literal one that ``--wavelength``
-    overrode it predicted at the .geom energy, off the spots the frames were indexed from."""
+    overrode it predicted at the .geom energy, off the spots the frames were indexed from.
+
+    ``integrator`` is ``"box"`` (``integrate_spots``, the default) or ``"profile"``, the laue-dials
+    profile fit (``glint.profile_integrate``). The profile fit queues frames and fits them in
+    device batches, with ``profile_kw`` passed to ``profile_integrate_frames``.
+
+    ``adu_per_photon`` divides each frame by the detector gain before it is integrated, so I and
+    sigma come out in photons. Both integrators put a Poisson variance on the counts they are given;
+    handed ADU at gain g, sigma comes out sqrt(g) too small. None (default) integrates the pixels
+    as they are."""
+    _check_integrator(integrator)
+    _check_gain(adu_per_photon)
     lam = wavelength_A if wavelength_A is not None else geom.get("wavelength_A")
     if lam is None or not (np.isfinite(lam) and lam > 0):
         raise ValueError(
@@ -1107,6 +1162,7 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
     if data_path is None:
         data_path = geom.get("global", {}).get("data", "/data/data")
     n = tot = 0
+    pending = _ProfileQueue(panels, profile_kw) if integrator == "profile" else None
     for r in results:
         M = r.get("M")
         if M is None:
@@ -1115,6 +1171,12 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
                           data_path, r.get("event", 0),       # THIS result's event, not frame 0 (glint#136)
                           n_panels=len(panels), event_axis=event_axis, panel_slabs=panel_slabs)
         pred = predict_spots(M, panels, clen, lam, dmin=dmin, tol=tol)
+        if adu_per_photon:
+            img = np.asarray(img, np.float32) / np.float32(adu_per_photon)
+        if pending is not None:
+            n_, t_ = pending.add(r, img, pred)
+            n += n_; tot += t_
+            continue
         if img.ndim == 3:                             # un-assembled panel stack -> slab-local (glint#148)
             I, sig, peak, bg = integrate_spots_stack(img, pred, panels, bg_mode=bg_mode)
         else:
@@ -1128,12 +1190,15 @@ def integrate_frames(results, geom, image_dir=".", data_path=None, dmin=2.0, tol
         keep = np.isfinite(I) & np.isfinite(sig) & (sig > 0)
         r.update(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=peak[keep], bg=bg[keep])
         n += 1; tot += int(keep.sum())
+    if pending is not None:
+        n_, t_ = pending.flush()
+        n += n_; tot += t_
     return n, tot
 
 
 def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, half=3, clen_scale=None,
                   sym_refine=None, sym_refine_tol=0.02, bg_mode="clipmean", data_key=None,
-                  event_axis=None):
+                  event_axis=None, integrator="box", profile_kw=None, adu_per_photon=None):
     """Self-contained native integrate for a STACKED .cxi -- the ``--images`` merge path, no CrystFEL.
 
     LAYOUT. The frame for event ``ev`` is ``data[ev]`` of a 3-D ``(event, ss, fs)`` stack -- the
@@ -1176,7 +1241,13 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
     2.1 A (partialator, default 10 cycles; the older 0.90/39% figure was a --iterations=1 under-converged
     merge, glint#129) -- on par with a CrystFEL/xgandalf run on the same frames (CC*=0.930 / Rsplit=34.9%)
     -- with peak search, indexing AND integration all in GLINT. For the best (prediction-refined) merge,
-    hand orientations to CrystFEL via ``write_solution_file``."""
+    hand orientations to CrystFEL via ``write_solution_file``.
+
+    ``integrator``/``profile_kw``: as for ``integrate_frames``. ``"profile"`` swaps the box sum for
+    the laue-dials profile fit, batched on the device. ``adu_per_photon``: as for
+    ``integrate_frames``."""
+    _check_integrator(integrator)
+    _check_gain(adu_per_photon)
     import h5py
     from glint.lute_bridge import parse_geom as _parse_geom, lambda_from_eV, _meta, HC_EV_A
     panels, glob = _parse_geom(geom_path)
@@ -1196,6 +1267,7 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
             h = handles[p] = h5py.File(p, "r")
         return h
     n = tot = 0
+    pending = _ProfileQueue(panels, profile_kw) if integrator == "profile" else None
     try:
         for r in results:
             if r.get("M") is None:
@@ -1261,9 +1333,17 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
                     f"{frame.shape} -- an un-assembled per-event panel stack -- and integrate_cxi "
                     f"integrates one assembled 2-D frame per event (glint#148). Use the --peaks "
                     f"route with integer dimN keys in the .geom for slab-local integration.")
-            I, sig, peak, bg = integrate_spots(frame, pred, half=half, bg_mode=bg_mode)
-            keep = np.isfinite(I) & np.isfinite(sig) & (sig > 0)   # non-positive I kept: glint#130
-            r.update(M=M, pred=pred[keep], I=I[keep], sigma=sig[keep], peak=peak[keep], bg=bg[keep])  # store canonical M so the stream cell matches the hkl
+            if adu_per_photon:
+                frame = frame / np.float32(adu_per_photon)
+            r["M"] = M                    # canonical M, so the stream cell matches the hkl
+            if pending is not None:
+                n_, t_ = pending.add(r, frame, pred)
+                n += n_; tot += t_
+            else:
+                I, sig, peak, bg = integrate_spots(frame, pred, half=half, bg_mode=bg_mode)
+                keep = np.isfinite(I) & np.isfinite(sig) & (sig > 0)   # non-positive I kept: glint#130
+                r.update(pred=pred[keep], I=I[keep], sigma=sig[keep], peak=peak[keep], bg=bg[keep])
+                n += 1; tot += int(keep.sum())
             # ...and this event's energy and camera length, for its stream chunk header. Without them
             # the writer used its run-level kwargs, which the CLI fills from the .geom: a placeholder
             # 9392.70 eV / 0.15 m when the .geom names HDF5 paths. clen_m is the .geom clen resolved
@@ -1274,7 +1354,9 @@ def integrate_cxi(results, geom_path, wavelength_A=None, dmin=2.0, tol=0.006, ha
             r["clen_m"] = clen_m
             if eV_used is not None:
                 r["photon_eV"] = eV_used
-            n += 1; tot += int(keep.sum())
+        if pending is not None:
+            n_, t_ = pending.flush()
+            n += n_; tot += t_
     finally:
         for h in handles.values():
             h.close()

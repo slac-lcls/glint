@@ -45,6 +45,39 @@ five modes, the bank split and the `npix_min` boundary. Where psana *is* availab
 additionally compares at full detector size and re-derives the goldens, so a stale golden file is
 caught rather than trusted.
 
+### laue-dials profile-fitting integrator — MIT
+
+`glint/profile_integrate.py` is a port of `laue_dials.algorithms.integration.Integrator` and of the
+per-image driver around it in `laue_dials.command_line.integrate` (rs-station/laue-dials, commit
+`d57f96ee35540016834223975bf5f2311e74619b`). It is a translation from numpy to batched torch, so it
+reproduces the upstream algorithm step by step, and it is covered by the upstream licence:
+
+> The MIT License (MIT)
+>
+> Copyright is specified by a research agreement between Harvard University and
+> the University of Chicago.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+
+No upstream source file is stored in this tree. `experiments/test_profile_integrate.py` checks the
+port against the upstream module, fetched at that commit by the torch-CPU CI job.
+
 ---
 
 ## 2. Original code written with reference to third-party source

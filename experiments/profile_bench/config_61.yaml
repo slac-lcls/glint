@@ -1,0 +1,44 @@
+# CXIDB 61 (Stem domain of human POMGnT1, SeMet; SACLA BL3, MPCCD, 13 keV; Yamashita et al. 2017
+# IUCrJ, Se-SAD from 13,000 patterns, 1.40 A, PDB 5XFC). Picked for its anomalous signal: the
+# energy is above the Se K edge (12.66 keV), and the model has 6 SeMet. Same detector distance as
+# CXIDB 45, so the corner is 1.06 A and the data, to ~1.4 A, are not edge-limited.
+# See config.yaml for what each key means.
+data: /pscratch/sd/k/kmdalton/cxidb_61
+geom: metadata/mpccd-optimized.geom         # the refined geometry the publication used
+raw_dir: raw/Stem
+run_glob: 'run*'            # all 54 files (18 runs x 3 parts), ~144 GiB: the anomalous signal needs every image
+wavelength: 0.9528          # 13012.8 eV, the mean over 34,616 frames of 53 run files (sd 15.9 eV)
+merge_runtime: 480
+merge_mem_mb: 120000
+refine_runtime: 240
+report_mem_mb: 120000
+
+glint: /pscratch/sd/k/kmdalton/glint
+python: /pscratch/sd/k/kmdalton/glint/.mamba/envs/glint/bin/python
+crystfel_bin: /pscratch/sd/k/kmdalton/glint/.mamba/envs/crystfel/bin
+
+reference_pdb: reference/5XFC.pdb
+rfree_mtz: reference/r-free-flags.mtz
+
+# GLINT writes an orthorhombic cell as a <= b <= c, so the streams and merges are in (53.75, 71.21,
+# 91.05). The model is the standard P 21 21 2 setting, c the shortest axis: its (h, k, l) is GLINT's
+# (k, l, h), a cyclic permutation, so the hand and the Bijvoet pairs are kept.
+cell: [53.75, 71.21, 91.05, 90, 90, 90]
+model_cell: [71.21, 91.05, 53.75, 90, 90, 90]
+reindex: k,l,h
+lattice: oP
+space_group: P 21 21 2      # the model's setting; applies after the merge
+adu_per_photon: 10          # deposit README: 1 photon = 10 counts
+sig_floor: 10
+abs_thr: 100
+dmin: 1.06                  # integration / merging limit: the detector corner
+tol: 0.001                  # Ewald gate, 1/A: keeps 94% of the integrated intensity on a tol 0.002 pilot (run297134-1), with half its predictions
+
+integrators: [box, profile, crystfel]
+crystfel_lattice: oP
+crystfel_integration: rings-nocen
+crystfel_int_radius: 4,6,8  # the authors', from the deposit's stream
+point_group: '222'          # no inversion: Bijvoet mates stay apart
+partialator_iterations: 1
+min_cchalf: 0.3
+refine_cycles: 5

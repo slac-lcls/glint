@@ -1,0 +1,275 @@
+# GLINT box integration vs the laue-dials profile fit (glint.profile_integrate) vs CrystFEL's rings, end to end on real
+# SFX data: CXIDB 33 Dataset A (HEWL, SACLA, 7 keV), merged with partialator, refined with torchref
+# against 4YOP, and scored on Rwork/Rfree and on the S/Cl anomalous difference peaks.
+#
+#   snakemake -s Snakefile --configfile config.yaml -j 10 --resources gpu=2
+#   snakemake -s Snakefile --configfile config.yaml --workflow-profile perlmutter   # one slurm job a step
+#
+# Re-running is incremental: start it while the 243 GB download is still landing and it processes
+# the runs already on disk; run it again later and only the new runs, and everything downstream of
+# them, are redone. `--config runs=[run179641,run179651]` pins the run list.
+import glob
+import os
+import re
+
+DATA = config["data"]
+HERE = workflow.basedir
+# PYTHONNOUSERSITE: a ~/.local/lib/pythonX.Y can shadow the env's own packages (pandas, gemmi, rs)
+PY = f"PYTHONNOUSERSITE=1 PYTHONPATH={config['glint']} {config['python']} -u"
+PM = f"{config['data']}/work/partialator"      # the abismal merges and refinements stay in work/merge, work/refine
+INTEG = config["integrators"]
+GLINT_INTEG = [i for i in INTEG if i != "crystfel"]      # the arms index_integrate.py writes
+CELL = " ".join(str(c) for c in config["cell"])
+# The merges are in GLINT's setting (CELL); everything after the merge is in the reference model's
+# (MCELL, config[space_group]), reached with config[reindex]. The same unless config says otherwise.
+MCELL = " ".join(str(c) for c in config.get("model_cell", config["cell"]))
+REINDEX = config.get("reindex", "h,k,l")
+W = f"{DATA}/work"
+RAW = f"{DATA}/{config['raw_dir']}"
+
+
+def _runs():
+    if "runs" in config:
+        return list(config["runs"])
+    if "md5" not in config:           # a deposit with no checksum list: every complete file on disk
+        return sorted(os.path.basename(p)[:-3] for p in glob.glob(f"{RAW}/{config.get('run_glob', '*')}.h5"))
+    names = [ln.split()[1][:-3] for ln in open(f"{DATA}/{config['md5']}") if ln.strip()]
+    return [r for r in names if os.path.exists(f"{RAW}/{r}.h5")]
+
+
+RUNS = _runs()
+localrules: all, fetch, geom, rfree
+WAVELENGTH = config["wavelength"]
+
+
+rule all:
+    input:
+        f"{PM}/report/summary.json",
+
+
+if "url" in config:
+    rule fetch:
+        """Stream-extract the deposit's tar (no second copy on disk). Skips members already present."""
+        output:
+            touch(f"{RAW}/.complete"),
+        log:
+            f"{DATA}/logs/fetch.log",
+        shell:
+            "{config[python]} -I {HERE}/fetch_tar.py {config[url]} {RAW} > {log} 2>&1"
+
+
+if "md5" in config:
+    rule md5:
+        input:
+            f"{RAW}/{{run}}.h5",
+        output:
+            f"{W}/md5/{{run}}.ok",
+        resources:
+            runtime=20,
+        shell:
+            "cd {RAW} && grep ' {wildcards.run}.h5$' {DATA}/{config[md5]} | md5sum -c - > {output}"
+
+
+rule geom:
+    input:
+        f"{DATA}/{config['geom']}",
+    output:
+        f"{W}/A.geom",
+    shell:
+        "sed -e 's#^data = .*#data = /entry_1/data_1/data#' "
+        "-e 's#^photon_energy = .*#photon_energy = /LCLS/photon_energy_eV#' {input} > {output}"
+
+
+rule stack:
+    """(event, ss, fs) int16 lzf copy of a Cheetah per-tag run file, one chunk per event."""
+    input:
+        raw=f"{RAW}/{{run}}.h5",
+        ok=[f"{W}/md5/{{run}}.ok"] if "md5" in config else [],
+    output:
+        f"{W}/stacked/{{run}}.h5",
+    resources:
+        runtime=30,
+        mem_mb=1900,        # Perlmutter's shared QOS gives 1905 MB a core; more bills extra cores
+    shell:
+        "{config[python]} -I {HERE}/stack_sacla.py {input.raw} {output}"
+
+
+rule peaks:
+    """GLINT v4 peak finding on the host CPU."""
+    input:
+        img=f"{W}/stacked/{{run}}.h5",
+        geom=f"{W}/A.geom",
+    output:
+        f"{W}/peaks/{{run}}.npz",
+    log:
+        f"{W}/logs/peaks_{{run}}.log",
+    threads: 1
+    resources:
+        runtime=60,
+        mem_mb=1900,        # 0.78 GB measured
+    shell:
+        "OMP_NUM_THREADS=1 {PY} {HERE}/find_peaks.py --images {input.img} --geom {input.geom} -o {output} "
+        "--sig-floor {config[sig_floor]} --abs-thr {config[abs_thr]} > {log} 2>&1"
+
+
+rule index_integrate:
+    """Index once on the GPU, then integrate the same orientations with every GLINT integrator."""
+    input:
+        peaks=f"{W}/peaks/{{run}}.npz",
+        img=f"{W}/stacked/{{run}}.h5",
+        geom=f"{W}/A.geom",
+    output:
+        streams=[f"{W}/streams/{i}/{{run}}.stream" for i in GLINT_INTEG],
+        log=f"{W}/streams/{{run}}.json",
+    log:
+        f"{W}/logs/index_integrate_{{run}}.log",
+    params:
+        integ=",".join(GLINT_INTEG),
+    resources:
+        gpu=1,
+        runtime=60,
+    shell:
+        "{HERE}/perlmutter/with_gpu.sh env {PY} {HERE}/index_integrate.py --peaks {input.peaks} --images {input.img} --geom {input.geom} "
+        "--cell {CELL} --lattice {config[lattice]} --out-dir {W}/streams --name {wildcards.run} "
+        "--integrators {params.integ} --adu-per-photon {config[adu_per_photon]} "
+        "--dmin {config[dmin]} --tol {config[tol]} > {log} 2>&1"
+
+
+rule crystfel_integrate:
+    """CrystFEL's integrator on the orientations index_integrate found, read back from the first GLINT
+    arm's stream, at the same excitation-error gate. Reads the raw files with the deposit's geometry."""
+    input:
+        stream=f"{W}/streams/{GLINT_INTEG[0]}/{{run}}.stream",
+        stack=f"{W}/stacked/{{run}}.h5",
+        raw=f"{RAW}/{{run}}.h5",
+        geom=f"{DATA}/{config['geom']}",
+    output:
+        stream=f"{W}/streams/crystfel/{{run}}.stream",
+        log=f"{W}/streams/crystfel/{{run}}.json",
+    log:
+        f"{W}/logs/crystfel_integrate_{{run}}.log",
+    threads: 16
+    resources:
+        runtime=60,
+        mem_mb=30000,
+    shell:
+        "{PY} {HERE}/crystfel_integrate.py {input.stream} --stack {input.stack} --raw {input.raw} --geom {input.geom} "
+        "--crystfel-bin {config[crystfel_bin]} --lattice {config[crystfel_lattice]} --tol {config[tol]} "
+        "--integration {config[crystfel_integration]} --int-radius {config[crystfel_int_radius]} "
+        "-j {threads} -o {output.stream} > {log} 2>&1"
+
+
+rule merge:
+    """partialator, anomalous (point group 422 keeps Bijvoet mates apart), the same settings for every
+    arm. Unity model: GLINT's streams carry a placeholder profile radius, bandwidth and divergence, so
+    xsphere's partialities would be meaningless. Writes half-datasets (.hkl1, .hkl2) as well."""
+    input:
+        lambda w: expand(f"{W}/streams/{w.integ}/{{run}}.stream", run=RUNS),
+    output:
+        hkl=f"{PM}/merge/{{integ}}/merged.hkl",
+        hkl1=f"{PM}/merge/{{integ}}/merged.hkl1",
+        hkl2=f"{PM}/merge/{{integ}}/merged.hkl2",
+    log:
+        f"{W}/logs/partialator_{{integ}}.log",
+    threads: 64
+    resources:
+        runtime=config["merge_runtime"],
+        mem_mb=config["merge_mem_mb"],
+    shell:
+        "cd {PM}/merge/{wildcards.integ} && cat {input} > all.stream && "
+        "{config[crystfel_bin]}/partialator -i all.stream -o merged.hkl -y {config[point_group]} "
+        "--model=unity --iterations={config[partialator_iterations]} --no-logs -j {threads} > {log} 2>&1 && "
+        "rm all.stream"
+
+
+rule resolution_cut:
+    """The limit both arms are compared at, from CC1/2 >= config[min_cchalf] (cchalf_cut.py)."""
+    input:
+        expand(f"{PM}/merge/{{integ}}/merged.{{half}}", integ=INTEG, half=["hkl1", "hkl2"]),
+    output:
+        f"{PM}/merge/cut.json",
+    params:
+        integ=",".join(INTEG),
+    resources:
+        mem_mb=4000,
+    shell:
+        "{PY} {HERE}/cchalf_cut.py {PM}/merge --integrators {params.integ} --cell {MCELL} "
+        "--sg '{config[space_group]}' --reindex {REINDEX} --min {config[min_cchalf]} -o {output}"
+
+
+rule to_mtz:
+    """French-Wilson after the cut, so nothing past the limit changes the reflections that survive."""
+    input:
+        hkl=f"{PM}/merge/{{integ}}/merged.hkl",
+        cut=f"{PM}/merge/cut.json",
+    output:
+        f"{PM}/merge/{{integ}}/merged.mtz",
+    log:
+        f"{W}/logs/to_mtz_{{integ}}.log",
+    resources:
+        mem_mb=32000,       # French-Wilson on ~0.2 M merged reflections OOMs at 4 GB
+    shell:
+        "{PY} {HERE}/hkl_to_mtz.py {input.hkl} -o {output} --cell {MCELL} --sg '{config[space_group]}' --reindex {REINDEX} "
+        "--dmin $({PY} -c \"import json;print(json.load(open('{input.cut}'))['common'])\") > {log} 2>&1"
+
+
+rule rfree:
+    """The R-free flags both arms share: one per ASU index to 1.0 A, 10% free."""
+    output:
+        f"{DATA}/{config['rfree_mtz']}",
+    shell:
+        "{PY} {HERE}/make_rfree.py -o {output} --cell {MCELL} --sg '{config[space_group]}'"
+
+
+rule refine:
+    """torchref: B reset to 20, rigid body, then scale + isotropic ADP cycles (refine_torchref.py).
+    ~2 min on 8 CPU cores for HEWL to 1.9 A, so no GPU."""
+    input:
+        mtz=f"{PM}/merge/{{integ}}/merged.mtz",
+        pdb=f"{DATA}/{config['reference_pdb']}",
+        rfree=f"{DATA}/{config['rfree_mtz']}",
+        cut=f"{PM}/merge/cut.json",
+    output:
+        pdb=f"{PM}/refine/{{integ}}/refined.pdb",
+        mtz=f"{PM}/refine/{{integ}}/refined.mtz",
+        stats=f"{PM}/refine/{{integ}}/stats.json",
+    log:
+        f"{W}/logs/refine_{{integ}}.log",
+    threads: 8
+    resources:
+        runtime=config["refine_runtime"],
+        mem_mb=16000,
+    shell:
+        "TORCHREF_NUM_THREADS={threads} {PY} {HERE}/refine_torchref.py --mtz {input.mtz} --flags {input.rfree} --pdb {input.pdb} "
+        "--wavelength {WAVELENGTH} --dmin $({PY} -c \"import json;print(json.load(open('{input.cut}'))['common'])\") --cycles {config[refine_cycles]} "
+        "--device cpu -o {PM}/refine/{wildcards.integ} > {log} 2>&1"
+
+
+rule anom_peaks:
+    input:
+        mtz=f"{PM}/refine/{{integ}}/refined.mtz",
+        pdb=f"{PM}/refine/{{integ}}/refined.pdb",
+    output:
+        f"{PM}/refine/{{integ}}/anom_peaks.json",
+    shell:
+        "{PY} {HERE}/anom_peaks.py {input.mtz} {input.pdb} -o {output}"
+
+
+rule report:
+    input:
+        runs=expand(f"{W}/streams/{{run}}.json", run=RUNS),
+        refine=expand(f"{PM}/refine/{{integ}}/stats.json", integ=INTEG),
+        anom=expand(f"{PM}/refine/{{integ}}/anom_peaks.json", integ=INTEG),
+        streams=expand(f"{W}/streams/{{integ}}/{{run}}.stream", integ=INTEG, run=RUNS),
+    output:
+        f"{PM}/report/summary.json",
+    params:
+        integ=",".join(INTEG),
+    log:
+        f"{W}/logs/report.log",
+    resources:
+        runtime=60,
+        mem_mb=config["report_mem_mb"],      # ~5 GB a arm per 41 M observations
+    shell:
+        "{PY} {HERE}/report.py --work {W} --refine-dir {PM}/refine --integrators {params.integ} "
+        "--cell {MCELL} --sg '{config[space_group]}' --reindex {REINDEX} --dmin {config[dmin]} --runs {RUNS} --pdb {DATA}/{config[reference_pdb]} -o {output} > {log} 2>&1"

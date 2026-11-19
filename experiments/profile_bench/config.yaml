@@ -1,0 +1,40 @@
+# CXIDB 33 (HEWL, SACLA BL3, MPCCD, 7 keV; Nakane et al. 2015 native S/Cl SAD), Dataset A.
+# Every path below that is not under the repository is site-specific: edit `data` and the tool paths.
+# These are NERSC Perlmutter's; the envs are micromamba envs in the checkout (.mamba/, see README).
+data: /pscratch/sd/k/kmdalton/cxidb_33
+url: https://www.cxidb.org/data/33/cxidb_33_DatasetA.h5.tar
+md5: metadata/Dataset_A.md5sum              # relative to data; from cxidb_33_metadata.tar.gz
+geom: metadata/Dataset_A-opt.geom           # the deposit's refined geometry
+raw_dir: raw/A
+wavelength: 1.7684          # 7011 eV; mean over the run files' photon_energy_ev
+merge_runtime: 240
+merge_mem_mb: 120000
+refine_runtime: 60
+report_mem_mb: 48000
+# runs: [run179641, ...]                    # default: every run in the md5 list that is on disk
+
+glint: /pscratch/sd/k/kmdalton/glint
+python: /pscratch/sd/k/kmdalton/glint/.mamba/envs/glint/bin/python   # torch, GLINT, torchref, rs, gemmi
+crystfel_bin: /pscratch/sd/k/kmdalton/glint/.mamba/envs/crystfel/bin   # CrystFEL 0.13.0, built from source (README)
+
+# reference model and the R-free flags both arms share (make_rfree.py)
+reference_pdb: reference/4YOP.pdb
+rfree_mtz: reference/r-free-flags.mtz
+
+cell: [79.2, 79.2, 37.9, 90, 90, 90]
+lattice: tP
+space_group: P 43 21 2
+adu_per_photon: 10          # deposit README: 1 photon = 10 counts
+sig_floor: 10               # v4 finder, detector units (= 1 photon)
+abs_thr: 100                # v4 finder, detector units (= 10 photons)
+dmin: 1.9                   # integration / merging limit; the detector corner is 1.92 A, but the data stop at ~1.96 A (HANDOFF)
+tol: 0.002                  # Ewald gate, 1/A (found spots: 95% < 0.00084, 99% < 0.0014)
+
+integrators: [box, profile, crystfel]
+crystfel_lattice: tPc       # the crystfel arm replays GLINT's orientations (crystfel_integrate.py)
+crystfel_integration: rings-nocen
+crystfel_int_radius: 4,5,7  # CrystFEL's defaults; the paper does not report its radii
+point_group: '422'          # no inversion: Bijvoet mates stay apart
+partialator_iterations: 1
+min_cchalf: 0.3             # reported resolution limit: both arms cut where the worse one falls below this
+refine_cycles: 5

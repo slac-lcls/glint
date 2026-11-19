@@ -173,7 +173,8 @@ check("every keep-rule in predict.py enforces the sigma guards",
       all("np.isfinite(sig)" in l and "(sig > 0)" in l for l in keeps), keeps)
 check("no keep-rule in predict.py selects on the sign of I",
       all("(I > 0)" not in l and "I>0" not in l for l in keeps), keeps)
-check("both integration entry points were updated, not just one", len(keeps) == 2, len(keeps))
+# integrate_frames, integrate_cxi, and the batched profile-fit queue (_ProfileQueue) both share
+check("every integration entry point was updated, not just one", len(keeps) == 3, len(keeps))
 
 # --- the escape hatch has to be REACHABLE, not just implemented -----------------------
 # `bg_mode="median"` is the ONLY way to reproduce any intensity GLINT produced before #131.

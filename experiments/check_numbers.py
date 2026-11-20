@@ -1076,6 +1076,17 @@ FACTS: dict[str, float | str] = {
     "pk45_dials_xfel_lengate":        682,
     "pk45_dials_defaults_lengate":    605,
     "pk45_dials_grid_refined_lengate": 577,
+    # DIALS from the IMAGES on one cxidb-45 file, run296940-0 (452 hits). A different input and a
+    # different frame set from the 907 peak-list rows above, so the two are not compared with each other.
+    # stills_process on the stream geometry, refinement on files 0 and 1 (830 lattices, levels 0 and 1),
+    # then file 0 reprocessed on the refined geometry: Slurm job 44163902, 10 Nov 2026, DIALS
+    # 3.dev.1332-g3e144e7ea, cell 68.5 68.5 108.4 as supplied to DIALS. The count is DIALS's own success,
+    # frames with a refine_start record in the job's per-frame debug files (425 of them integrate); it is
+    # not the strict criterion. Recounted 20 Nov 2026 from the copy in
+    # jac_r1_jobs_20261015/dials_stage1/outputs_20261110 on S3DF. Wilson 95% interval 92.0-96.2.
+    "pk45_img_frames":                452,
+    "pk45_img_dials_indexed":         427,
+    "pk45_img_dials_indexed_pct":    94.5,
 
     # r51: merge statistics against frames merged, on LUTE's CrystFEL stream -------------------------
     # mfx100848724 r51, LUTE's CrystFEL 0.10.2 stream (251 frames, 280 crystals). Merged whole in stream
@@ -3822,6 +3833,7 @@ def check_arithmetic() -> list[str]:
                    "max(gate_min, ceil(gate_frac * pk45_peaks_per_frame))")
     for arm in ("glint_perframe", "glint_consensus", "dials_xfel", "dials_maxcell200"):
         pct_exact(f"pk45_{arm}_pct", f"pk45_{arm}_strict", "pk45_frames", 1)
+    pct_exact("pk45_img_dials_indexed_pct", "pk45_img_dials_indexed", "pk45_img_frames", 1)
     g_only, d_only = whole("pk45_mcnemar_glint_only"), whole("pk45_mcnemar_dials_only")
     if g_only - d_only != whole("pk45_glint_consensus_strict") - whole("pk45_dials_xfel_strict"):
         bad.append(f"  FACTS: the paired split {g_only}/{d_only} implies a margin of {g_only - d_only}, "
